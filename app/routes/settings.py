@@ -109,10 +109,16 @@ def save():
         lot_dir=pick("lot_dir"),
         auto_import=bool(body["auto_import"]) if "auto_import" in body else None,
         spec_url=pick("spec_sheet_url"),
-        position=pick("position"))
+        position=pick("position"),
+        # 置き場所を**変えるとき**だけ要る。値は保存も応答もしない
+        password=pick("password"))
     if not result.ok:
-        # 入力の形の誤り。**サーバの状態は動いていない**
-        return jsonify(_error(result.reason, result.message)), 400
+        # 断りの種別を HTTP に写す(設計.md §1)。
+        #   400 … 入力の形が違う。**サーバの状態は動いていない**
+        #   403 … 管理者パスワードが要る / 合っていない
+        status = (403 if result.reason == settings_presenter.REFUSE_NEED_PASSWORD
+                  else 400)
+        return jsonify(_error(result.reason, result.message)), status
 
     log.info("設定を保存しました: %s", ", ".join(sorted(body)))
     state = settings_presenter.to_dict(

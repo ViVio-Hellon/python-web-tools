@@ -141,6 +141,24 @@ class BalanceTests(unittest.TestCase):
                     self.assertIn("[hidden]", found.group("rest"),
                                   "閉じたときに消える書き方にしてください")
 
+    def test_hiddenは必ず隠れる(self) -> None:
+        """`display:flex` などは `[hidden]` の既定より強い。
+
+        ブラウザ内蔵の `display:none` は**こちらが書いた指定より弱い**
+        ので、`display` を持つ class の要素に `hidden` を付けても
+        隠れません。しかも**壊れたようには見えない**(出たままなだけ)
+        ので、書き忘れても気づけません。
+
+        実際に出ていました ── `.st` / `.filterbar` / `.card .pad` /
+        `.modal__col` / `.btn-row`(管理者パスワードの欄)。
+        class ごとに書き足すのをやめて、土台で1回だけ強く決めます。
+        """
+        base = (_ROOT / "app" / "static" / "css" / "base.css").read_text(
+            encoding="utf-8")
+        self.assertRegex(
+            base, r"\[hidden\]\s*\{\s*display:\s*none\s*!important",
+            "base.css の [hidden] { display: none !important } が要ります")
+
     def test_タグの釣り合いが取れている(self) -> None:
         for path in sorted(TEMPLATES.glob("*.html")):
             with self.subTest(template=path.name):

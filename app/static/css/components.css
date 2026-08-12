@@ -127,7 +127,11 @@ a.btn { text-decoration: none; }
   background: color-mix(in srgb, var(--mat-lower) 17%, var(--surface)); filter: none;
 }
 
-.btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* `.btn[hidden]` と同じ理由。`display:flex` は `[hidden]` の既定
+   (`display:none`)より強いので、戻しておかないと**隠したつもりの列が
+   出たまま**になる(管理者パスワードの欄がそれで最初から見えていた) */
+.btn-row[hidden] { display: none; }
 
 /* 押せない理由を必ず添える。押してから叱られるのを避ける */
 .why { font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; line-height: 1.55; }

@@ -25,6 +25,9 @@ from typing import Any, Optional
 from .. import (admin_password, config, data_sync, floor_plan, jobs,
                 lot_browse_session, lot_query, source_db, spec_sheet,
                 user_settings)
+from ..logging_utils import get_logger
+
+log = get_logger("presenters.settings")
 
 # 状態の重さ。画面はこの値で色と記号を決める
 OK = "ok"          # 問題なし
@@ -737,11 +740,54 @@ class SaveResult:
 # 断りの種類。**文言から推し量らない**
 REFUSE_BAD_INPUT = "bad_input"
 REFUSE_NOT_LISTED = "not_listed"
+REFUSE_NEED_PASSWORD = "need_password"
+
+
+# ------------------------------------------------------------------
+# 管理者パスワードで守る設定
+#
+# 【なぜ置き場所だけなのか】
+# 置き場所を変えると、**このツールが読み書きする相手そのもの**が
+# 変わります。取り込みは総入れ替えなので、間違った先を指したまま
+# 取り込むと手元の中身が入れ替わり、書き戻し(`outbox_sync`)も
+# そちらへ行きます。押し間違いが**別のファイルを書き換える**ところ
+# まで届く設定は、ここだけです。
+#
+# 自動取り込み・拠点・仕様書URL・よく使う条件は、間違えても
+# その端末の見え方が変わるだけなので守りません。**守る対象を
+# 増やすほど、現場はパスワードを紙に貼る**ようになります。
+#
+# これはUIガードで、権限ではありません。誰がその端末を使えるかは
+# `access_control`(アクセス権限マスタ)が決めます。
+PROTECTED_LABELS = {
+    "master_dir": "梱包資材マスタの置き場所",
+    "lot_dir": "仕掛台帳の置き場所",
+}
+
+
+def _protected_changes(master_dir: Optional[str],
+                       lot_dir: Optional[str]) -> list[str]:
+    """今回**本当に変わる**置き場所の名前。
+
+    値が変わらない保存で聞かないのは、設定画面が置き場所を毎回
+    まとめて送るためです。拠点を選び直しただけでパスワードを聞かれると、
+    現場は「何をしても聞かれる」と受け取り、パスワードそのものが
+    形骸化します。
+    """
+    now = {
+        "master_dir": _typed(config.KEY_MASTER_DB_DIR, config.master_db_dir(),
+                             config.KEY_ACCDB_DIR_LEGACY),
+        "lot_dir": _typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
+    }
+    sent = {"master_dir": master_dir, "lot_dir": lot_dir}
+    return [PROTECTED_LABELS[key] for key, value in sent.items()
+            if value is not None and value.strip() != now[key]]
 
 
 def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
          auto_import: Optional[bool] = None, spec_url: Optional[str] = None,
-         position: Optional[str] = None) -> SaveResult:
+         position: Optional[str] = None,
+         password: Optional[str] = None) -> SaveResult:
     """設定を保存する。**渡されたものだけ**を触る。
 
     `None` は「この項目は今回いじらない」の意味。画面が一部だけ送って
@@ -749,6 +795,10 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
 
     置き場所の空文字は「既定に戻す」で、そのまま保存してよい
     (`config.master_db_dir()` が既定値を返すようになる)。
+
+    置き場所を**変えるとき**だけ管理者パスワードが要ります
+    (`PROTECTED_LABELS` の説明を参照)。関門をここに置くのは、
+    画面からもスクリプトからも同じ道を通すためです。
     """
     if spec_url is not None:
         problem = spec_sheet.template_problem(spec_url)
@@ -765,6 +815,22 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
                 False,
                 f"拠点は {' / '.join(allowed)} から選んでください。",
                 REFUSE_NOT_LISTED)
+
+    # **書く前に通す関門。** ここより下で1つでも書いてしまうと、
+    # 断ったのに一部だけ変わった状態が残る
+    changing = _protected_changes(master_dir, lot_dir)
+    if changing:
+        if not admin_password.verify(str(password or "")):
+            # 合っていないのか、そもそも送っていないのかは言い分けない
+            # ── 総当たりの手がかりになる。**何が要るか**だけを言う
+            log.warning("置き場所の変更を断りました(管理者パスワード): %s",
+                        " / ".join(changing))
+            return SaveResult(
+                False,
+                f"{' と '.join(changing)}を変えるには管理者パスワードが要ります。",
+                REFUSE_NEED_PASSWORD)
+        log.info("置き場所を変えます(管理者パスワード確認済み): %s",
+                 " / ".join(changing))
 
     if master_dir is not None:
         user_settings.save(config.KEY_MASTER_DB_DIR, master_dir.strip())

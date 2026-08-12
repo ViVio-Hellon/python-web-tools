@@ -169,18 +169,21 @@ class StatusTests(PresenterTestCase):
 class SettingsTests(PresenterTestCase):
     def test_保存すると次から使われる(self) -> None:
         other = Path(tempfile.mkdtemp(prefix="data_test2_"))
-        presenter.save(master_dir=str(other), lot_dir=str(other), auto_import=False)
+        presenter.save(master_dir=str(other), lot_dir=str(other), auto_import=False,
+                       password=config.ADMIN_PASSWORD)
         view = presenter.build()
         self.assertEqual(view.master_dir, str(other))
         self.assertFalse(view.auto_import)
 
     def test_空にすると既定に戻る(self) -> None:
-        presenter.save(master_dir="", lot_dir="", auto_import=True)
+        presenter.save(master_dir="", lot_dir="", auto_import=True,
+                       password=config.ADMIN_PASSWORD)
         self.assertEqual(presenter.build().master_dir, str(config.DEFAULT_MASTER_DB_DIR))
 
     def test_前後の空白は落とす(self) -> None:
         other = Path(tempfile.mkdtemp(prefix="data_test3_"))
-        presenter.save(master_dir=f"  {other}  ", lot_dir="", auto_import=True)
+        presenter.save(master_dir=f"  {other}  ", lot_dir="", auto_import=True,
+                       password=config.ADMIN_PASSWORD)
         self.assertEqual(presenter.build().master_dir, str(other))
 
 
@@ -270,17 +273,17 @@ class PathStyleTests(PresenterTestCase):
 
     def test_相対はアプリのフォルダから見る(self) -> None:
         """起点が「いまの作業フォルダ」だと、起動の仕方で行き先が変わる。"""
-        presenter.save(master_dir="data/src")
+        presenter.save(master_dir="data/src", password=config.ADMIN_PASSWORD)
         self.assertEqual(config.master_db_dir(), config.BASE_DIR / "data" / "src")
 
     def test_絶対はそのまま(self) -> None:
         other = Path(tempfile.mkdtemp(prefix="abs_"))
-        presenter.save(master_dir=str(other))
+        presenter.save(master_dir=str(other), password=config.ADMIN_PASSWORD)
         self.assertEqual(config.master_db_dir(), other)
 
     def test_打った形のまま画面に戻す(self) -> None:
         """絶対に直して返すと、相対で書いたはずの字が消える。"""
-        presenter.save(master_dir="data/src")
+        presenter.save(master_dir="data/src", password=config.ADMIN_PASSWORD)
         view = presenter.build()
         self.assertEqual(view.master_dir, "data/src")
         # **実際に見に行く先**も併せて出す
@@ -290,20 +293,20 @@ class PathStyleTests(PresenterTestCase):
     def test_絶対のときは行き先を二重に出さない(self) -> None:
         """同じものが2行あると、違うものに見える。"""
         other = Path(tempfile.mkdtemp(prefix="abs2_"))
-        presenter.save(master_dir=str(other))
+        presenter.save(master_dir=str(other), password=config.ADMIN_PASSWORD)
         state = presenter.to_dict(presenter.build())
         self.assertEqual(state["master_dir"], str(other))
         self.assertEqual(state["master_dir_real"], "")
 
     def test_仕掛台帳も同じ書き方(self) -> None:
-        presenter.save(lot_dir="../共有/台帳")
+        presenter.save(lot_dir="../共有/台帳", password=config.ADMIN_PASSWORD)
         self.assertEqual(config.lot_db_dir(),
                          config.BASE_DIR / ".." / "共有" / "台帳")
 
     def test_引用符を付けて貼っても通る(self) -> None:
         """エクスプローラの「パスのコピー」は `"` で囲んで返す。"""
         other = Path(tempfile.mkdtemp(prefix="quoted_"))
-        presenter.save(master_dir=f'"{other}"')
+        presenter.save(master_dir=f'"{other}"', password=config.ADMIN_PASSWORD)
         self.assertEqual(config.master_db_dir(), other)
 
 
@@ -531,6 +534,7 @@ class SettingsApiTests(DataWebTestCase):
         (other / config.LOT_DB_FILES["仕掛ロット"]).write_bytes(b"")
         body = self.client.post("/api/settings/save", headers=self.auth(), json={
             "master_dir": str(other), "lot_dir": str(other), "auto_import": False,
+            "password": config.ADMIN_PASSWORD,
         }).get_json()
         self.assertEqual(body["master_dir"], str(other))
         self.assertFalse(body["auto_import"])
@@ -540,6 +544,128 @@ class SettingsApiTests(DataWebTestCase):
         body = self.client.get("/api/settings/state", headers=self.auth()).get_json()
         self.assertIn("sections", body)
         self.assertIn("level_label", body)
+
+
+
+# ==================================================================
+# 置き場所は管理者パスワードで守る
+#
+# 置き場所を変えると、このツールが読み書きする相手そのものが変わる。
+# 取り込みは総入れ替えなので、間違った先を指したまま取り込むと手元の
+# 中身が入れ替わり、書き戻しもそちらへ行く。押し間違いが**別のファイルを
+# 書き換える**ところまで届く設定は、いまここだけ。
+# ==================================================================
+class PathPasswordTests(PresenterTestCase):
+    def other(self) -> Path:
+        return Path(tempfile.mkdtemp(prefix="guard_"))
+
+    def test_パスワード無しでは変えられない(self) -> None:
+        before = presenter.build().master_dir
+        result = presenter.save(master_dir=str(self.other()))
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, presenter.REFUSE_NEED_PASSWORD)
+        self.assertEqual(presenter.build().master_dir, before)
+
+    def test_違うパスワードでは変えられない(self) -> None:
+        before = presenter.build().master_dir
+        result = presenter.save(master_dir=str(self.other()),
+                                password="ちがうもの")
+        self.assertEqual(result.reason, presenter.REFUSE_NEED_PASSWORD)
+        self.assertEqual(presenter.build().master_dir, before)
+
+    def test_合っていれば変えられる(self) -> None:
+        other = self.other()
+        result = presenter.save(master_dir=str(other),
+                                password=config.ADMIN_PASSWORD)
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(presenter.build().master_dir, str(other))
+
+    def test_断ったときは1つも書いていない(self) -> None:
+        """関門は**書く前**。一部だけ変わった状態を残さない。"""
+        other = self.other()
+        before = presenter.build()
+        presenter.save(master_dir=str(other), lot_dir=str(other),
+                       auto_import=not before.auto_import)
+        view = presenter.build()
+        self.assertEqual(view.master_dir, before.master_dir)
+        self.assertEqual(view.lot_dir, before.lot_dir)
+        # 同じ本文に入っていた「守らない設定」も巻き添えで書かない
+        self.assertEqual(view.auto_import, before.auto_import)
+
+    def test_変えない保存では聞かない(self) -> None:
+        """設定画面は置き場所を毎回まとめて送る。
+
+        変わらない値まで聞くと「何をしても聞かれる」になり、
+        パスワードそのものが形骸化する。
+        """
+        view = presenter.build()
+        result = presenter.save(master_dir=view.master_dir,
+                                lot_dir=view.lot_dir)
+        self.assertTrue(result.ok, result.message)
+
+    def test_守らない設定は聞かない(self) -> None:
+        """拠点・自動取り込み・仕様書URLは、間違えても見え方が変わるだけ。"""
+        result = presenter.save(auto_import=False)
+        self.assertTrue(result.ok, result.message)
+
+    def test_既定に戻すのも変更(self) -> None:
+        """空にすると既定へ戻る。**戻すのも行き先が変わること**。"""
+        other = self.other()
+        presenter.save(master_dir=str(other), password=config.ADMIN_PASSWORD)
+        result = presenter.save(master_dir="")
+        self.assertEqual(result.reason, presenter.REFUSE_NEED_PASSWORD)
+        self.assertEqual(presenter.build().master_dir, str(other))
+
+    def test_変えたパスワードで通る(self) -> None:
+        """この端末で変えてあれば、そちらで通る(既定では通らない)。"""
+        from packaging_tool import admin_password
+        changed = admin_password.change(config.ADMIN_PASSWORD,
+                                        "あたらしい値", "あたらしい値")
+        self.assertTrue(changed.ok, changed.message)
+        self.addCleanup(admin_password.reset, "あたらしい値")
+
+        other = self.other()
+        self.assertEqual(
+            presenter.save(master_dir=str(other),
+                           password=config.ADMIN_PASSWORD).reason,
+            presenter.REFUSE_NEED_PASSWORD)
+        self.assertTrue(presenter.save(master_dir=str(other),
+                                       password="あたらしい値").ok)
+
+
+class PathPasswordApiTests(DataWebTestCase):
+    """断りの種別を HTTP に写す(設計.md §1)。403 = 許されていない。"""
+
+    def save(self, **body):
+        return self.client.post("/api/settings/save", headers=self.auth(),
+                                json=body)
+
+    def test_パスワード無しは403(self) -> None:
+        other = Path(tempfile.mkdtemp(prefix="guardapi_"))
+        res = self.save(master_dir=str(other))
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         presenter.REFUSE_NEED_PASSWORD)
+
+    def test_合っていれば通る(self) -> None:
+        other = Path(tempfile.mkdtemp(prefix="guardapi2_"))
+        res = self.save(master_dir=str(other),
+                        password=config.ADMIN_PASSWORD)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["master_dir"], str(other))
+
+    def test_入力の形の誤りは400のまま(self) -> None:
+        """**種別で言い分ける。** 403と400を1つにまとめない。"""
+        res = self.save(position="そんな拠点は無い")
+        self.assertEqual(res.status_code, 400)
+
+    def test_返す本文にパスワードは入らない(self) -> None:
+        other = Path(tempfile.mkdtemp(prefix="guardapi3_"))
+        body = self.save(master_dir=str(other),
+                         password=config.ADMIN_PASSWORD).get_json()
+        self.assertNotIn("password", body)
+        self.assertNotIn(config.ADMIN_PASSWORD,
+                         str(body))
 
 
 if __name__ == "__main__":

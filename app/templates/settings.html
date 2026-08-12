@@ -273,12 +273,27 @@
                {% if not state.lot_dir_real %}hidden{% endif %}
         >→ {{ state.lot_dir_real }}</small>
       </div>
+      {# 置き場所を**変えるとき**だけ要る。押す前から出すと、変えない人まで
+         打つことになるので、断られてから出す(理由はサーバが持つ) #}
+      <div class="btn-row" style="margin-top:8px" id="pathAuth" hidden>
+        <label for="pathPassword">管理者パスワード</label>
+        <input class="input" id="pathPassword" type="password"
+               autocomplete="current-password"
+               aria-describedby="pathWhy">
+      </div>
+      <p class="status status--warn" id="pathWhy" hidden></p>
       <div class="btn-row" style="margin-top:8px">
         <button class="btn btn--commit" type="button" id="savePaths">置き場所を保存</button>
       </div>
       <p class="why">
         読むのは <b>sqlite3</b> ファイル({{ suffixes }})です。
         空にすると既定の共有フォルダに戻ります。
+      </p>
+      <p class="why">
+        置き場所を<b>変える</b>ときは管理者パスワードが要ります
+        ── 変えると、このツールが読み書きする相手そのものが変わり、
+        取り込みは<b>総入れ替え</b>だからです。
+        変えないで保存するときは要りません。
       </p>
       <p class="why">
         道は<b>2通り</b>で書けます。

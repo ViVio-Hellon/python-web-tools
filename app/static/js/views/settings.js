@@ -323,6 +323,7 @@ export function start(state, jobState, masterFrame) {
                     "filterRows", "filterEmpty", "saveBehavior",
                     "admNow", "admNew", "admConfirm", "admSave", "admReset",
                     "admWhy", "adminState",
+                    "pathAuth", "pathPassword", "pathWhy",
                     "writeBack", "recompute", "savePaths", "refresh",
                     "job", "jobLabel", "jobState", "jobPct", "jobBar",
                     "jobMessage", "jobSummary", "jobLanes", "recentRows", "recentEmpty",
@@ -355,15 +356,33 @@ export function start(state, jobState, masterFrame) {
 
   // 置き場所と動作は**別々に保存する**。片方を直したいだけのときに
   // もう片方まで送ると、他のタブで変えた値を上書きしてしまう
+  // 置き場所を**変えるとき**だけ管理者パスワードが要る。要るかどうかを
+  // 画面で判断しない ── 「変わったか」はサーバが持っている値との
+  // 比べ合わせで、画面が持っているのは打ち込み中の文字だけ
   el.savePaths.addEventListener("click", async () => {
+    el.pathWhy.hidden = true;
+    const body = {
+      master_dir: el.masterDir.value,
+      lot_dir: el.lotDir.value,
+    };
+    // 欄が出ているあいだだけ送る。**打っていないのに送らない**
+    if (!el.pathAuth.hidden) body.password = el.pathPassword.value;
     try {
       // 保存しただけで終わらせず、その設定で何が見つかるかまで出す
-      renderStatus(await api.post("/api/settings/save", {
-        master_dir: el.masterDir.value,
-        lot_dir: el.lotDir.value,
-      }));
+      renderStatus(await api.post("/api/settings/save", body));
+      // 打った値は残さない。肩越しに見られる時間を短くする
+      el.pathPassword.value = "";
+      el.pathAuth.hidden = true;
       toast("置き場所を保存しました。次の取り込みから使われます", "ok");
     } catch (err) {
+      if (err.code === "need_password") {
+        // 押す前から欄を出さないので、断られてから開く。理由はサーバが持つ
+        el.pathAuth.hidden = false;
+        el.pathWhy.hidden = false;
+        el.pathWhy.textContent = err.message;
+        el.pathPassword.focus();
+        return;
+      }
       toastError(err);
     }
   });
