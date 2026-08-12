@@ -228,5 +228,67 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('id="tab-master"', html)
 
 
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class CreateTableApiTests(MasterApiTests):
+    """取り込み元にまだ無い表を、画面から作る。
+
+    アクセス権限が無いあいだは**どの端末も現場モードだけ**になる。
+    「モードが切り替わらない」としか見えないので、作る手立てが画面に
+    要る(`master_admin.creatable_tables`)。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from tests.test_master_admin import source_without
+        source_without(self.src, "アクセス権限")
+
+    def test_無い表も一覧に出る(self) -> None:
+        found = {t["table"]: t for t in self.browse()["tables"]}
+        self.assertTrue(found["アクセス権限"]["missing"])
+
+    def test_開いても故障扱いにしない(self) -> None:
+        page = self.browse(table="アクセス権限")["page"]
+        self.assertTrue(page["missing"])
+        self.assertEqual(page["error"], "")
+        self.assertIn("現場モードだけ", page["why"])
+
+    def test_作れる(self) -> None:
+        res = self.post("table/create", {"table": "アクセス権限"})
+        self.assertEqual(res.status_code, 200)
+        page = res.get_json()["page"]
+        # 作ったあとは**そのまま行を足せる状態**で返る
+        self.assertFalse(page["missing"])
+        self.assertTrue(page["editable"])
+        self.assertEqual(page["total"], 0)
+
+    def test_もうあれば409(self) -> None:
+        """先を越された。`row/save` の「その行はもう無い」と同じ種類。"""
+        self.post("table/create", {"table": "アクセス権限"})
+        res = self.post("table/create", {"table": "アクセス権限"})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_ALREADY)
+
+    def test_上流の表は422(self) -> None:
+        res = self.post("table/create", {"table": "PalletMaster"})
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_NOT_CREATABLE)
+
+    def test_権限が無ければ403(self) -> None:
+        self.only_field()
+        res = self.post("table/create", {"table": "アクセス権限"})
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_NOT_ALLOWED)
+
+    def test_断ったときも画面ぜんぶを返す(self) -> None:
+        self.only_field()
+        body = self.post("table/create", {"table": "アクセス権限"}).get_json()
+        self.assertIn("tables", body)
+        self.assertIn("page", body)
+
+
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()

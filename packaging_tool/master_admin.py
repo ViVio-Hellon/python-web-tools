@@ -116,6 +116,122 @@ REFUSE_BAD_VALUE = "bad_value"          # 入れた値の形が違う
 REFUSE_NO_SOURCE = "no_source"          # 取り込み元に届かない
 REFUSE_NO_ROW = "no_row"                # その行がもう無い
 REFUSE_WRITE_FAILED = "write_failed"    # 書けなかった
+REFUSE_NOT_CREATABLE = "not_creatable"  # この表は作る表ではない
+REFUSE_ALREADY = "already"              # もうある
+
+
+# ==================================================================
+# 取り込み元に作ってよい表
+# ==================================================================
+# **このツールが後から足した表だけ**を作る。
+#
+# 判断の出どころは `import_specs.OPTIONAL_TABLES` ── 「取り込み元に
+# 無くても失敗にしない表」は、上流(資材課)が持っていない表、つまり
+# このツールが持ち込んだ表だからです。同じ事実を2か所に持たないので、
+# ここで別の一覧は作りません。
+#
+# 逆に PalletMaster のような上流の表は作りません。無いのは資材課側の
+# 事情(ファイルが違う・移された)で、空の表を作ってしまうと**その事情が
+# 「0件」という形に化けて**、原因を探せなくなります。
+def creatable_tables() -> frozenset[str]:
+    return frozenset(t for t in import_specs.OPTIONAL_TABLES if t in BY_TABLE)
+
+
+def can_create(table: str) -> bool:
+    return table in creatable_tables()
+
+
+def _create_why(table: str) -> str:
+    """その表が取り込み元に無いことの意味と、次にできること。"""
+    if table == "アクセス権限":
+        return ("この表がまだ取り込み元にありません。無いあいだは"
+                "**どの端末も現場モードだけ**になります"
+                "(締め出さないための既定です)。"
+                "ここで作ると、誰がどのモードを使えるかを決められます。")
+    return "この表がまだ取り込み元にありません。ここで作れます。"
+
+
+def _ddl_for(conn: sqlite3.Connection, table: str) -> str:
+    """取り込み元へ作る `CREATE TABLE` 文。
+
+    **列の定義は手元のスキーマ(`schema.sql`)から引きます。**
+    ここに書き写すと、`schema.sql` を直したときに片方だけ古くなり、
+    「作った表に取り込めない」という形でしか気づけなくなります。
+
+    【NOT NULL は既定値の無い列にだけ付ける】
+    手元では「空欄で入れてよい」列にも `NOT NULL DEFAULT ''` を付けて
+    います(空とNULLの2通りを持たないため)。取り込み元は違います ──
+    `_clean` は空欄を**NULL**にして書くので、そのまま写すと
+    「ログインIDを空にした行」(=どのIDでもよい、という権限の書き方)が
+    入らなくなります。
+
+    残すのは `columns()` が必須と見なす列だけ、つまり**画面が空欄を
+    断る列だけ**です。同じ判断を2つ持つと、画面は通したのに書き込みが
+    落ちる、という食い違いが生まれます。
+    """
+    rows = list(conn.execute(
+        f"PRAGMA table_info({source_db.quote_identifier(table)})"))
+    if not rows:
+        raise ValueError(f"手元のスキーマに {table} がありません")
+    parts: list[str] = []
+    for row in rows:
+        piece = [source_db.quote_identifier(row["name"]), str(row["type"])]
+        if row["pk"]:
+            piece.append("PRIMARY KEY")
+        if row["notnull"] and row["dflt_value"] is None:
+            piece.append("NOT NULL")
+        if row["dflt_value"] is not None:
+            # PRAGMA が返す既定値は**SQLの字面のまま**(`''` や `1`)
+            piece.append(f"DEFAULT {row['dflt_value']}")
+        parts.append(" ".join(piece))
+    return (f"CREATE TABLE {source_db.quote_identifier(table)} "
+            f"({', '.join(parts)})")
+
+
+def create_table(conn: sqlite3.Connection, table: str, *,
+                 path: Optional[Path] = None) -> Result:
+    """取り込み元にその表を作る。**中身は空のまま。**
+
+    行は普段どおり「1行足す」で入れます。作ることと入れることを分けて
+    あるのは、最初の1行をここで決め打ちすると、その1行が何を意味するか
+    (誰にどの権限を与えたか)が画面に現れないためです。
+    """
+    allowed, why = can_edit(conn)
+    if not allowed:
+        return Result(False, why, REFUSE_NOT_ALLOWED)
+    if not can_create(table):
+        return Result(False,
+                      f"{_label(table)}は、このツールが作る表ではありません。"
+                      "取り込み元にあるはずのものなので、"
+                      "ファイルの置き場所を確かめてください。",
+                      REFUSE_NOT_CREATABLE)
+    found = path or data_sync.find_material_db()
+    if found is None:
+        return Result(False,
+                      f"梱包資材マスタが見つかりません。"
+                      f"{config.master_db_dir()} を確かめてください。",
+                      REFUSE_NO_SOURCE)
+
+    try:
+        ddl = _ddl_for(conn, table)
+    except ValueError as exc:                    # pragma: no cover - 通常は無い
+        return Result(False, str(exc), REFUSE_NOT_CREATABLE)
+
+    try:
+        with source_db.connect(found) as src:
+            if table in src.table_names():
+                # 誰かが先に作った。**押した人には見えていない事実**
+                return Result(False,
+                              f"{_label(table)}はもう取り込み元にあります。"
+                              "一覧を出し直してください。",
+                              REFUSE_ALREADY)
+            src.execute(ddl)
+    except source_db.SourceError as exc:
+        return _write_failed(table, exc)
+
+    log.info("取り込み元に表を作りました: %s (%s)", table, found)
+    return Result(True, f"{_label(table)}を取り込み元に作りました"
+                        f"{_follow(conn, found, table)}")
 
 
 def can_edit(conn: Optional[sqlite3.Connection]) -> tuple[bool, str]:
@@ -234,11 +350,14 @@ class TableInfo:
     rows: int
     editable: bool
     why: str = ""
+    # 取り込み元に無い(が、作れる)表。**隠さずに出す**
+    missing: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {"table": self.table, "label": self.label, "mark": self.mark,
                 "note": self.note, "rows": self.rows,
-                "editable": self.editable, "why": self.why}
+                "editable": self.editable, "why": self.why,
+                "missing": self.missing}
 
 
 def tables(path: Optional[Path]) -> list[TableInfo]:
@@ -247,6 +366,10 @@ def tables(path: Optional[Path]) -> list[TableInfo]:
     直せる表だけを出すと「あるはずの表が無い」に見えます。中身を
     確かめるのは全部の表でできるので、並べたうえで直せるかどうかを
     札にします。並びは `MANAGED` が先(触る頻度の順)、残りは名前順。
+
+    **作れる表は、取り込み元に無くても並びに出します。** 出さないと
+    「無い表は画面にも無い」になり、アクセス権限を一度も入れていない
+    端末では、モードを決める場所がどこにも見えません。
     """
     if path is None:
         return []
@@ -256,6 +379,12 @@ def tables(path: Optional[Path]) -> list[TableInfo]:
     out: list[TableInfo] = []
     for managed in MANAGED:
         if managed.table not in counts:
+            if can_create(managed.table):
+                out.append(TableInfo(
+                    table=managed.table, label=managed.label,
+                    mark=managed.mark, note=managed.note, rows=0,
+                    editable=True, missing=True,
+                    why=_create_why(managed.table)))
             continue
         out.append(TableInfo(
             table=managed.table, label=managed.label, mark=managed.mark,
@@ -280,13 +409,16 @@ class Page:
     why: str = ""
     note: str = ""
     error: str = ""
+    # 取り込み元に無い(が、作れる)表
+    missing: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {"table": self.table, "label": self.label,
                 "columns": self.columns, "rows": self.rows,
                 "total": self.total, "shown": len(self.rows),
                 "editable": self.editable, "why": self.why,
-                "note": self.note, "error": self.error, "row_key": ROW_KEY}
+                "note": self.note, "error": self.error,
+                "missing": self.missing, "row_key": ROW_KEY}
 
 
 def page(path: Optional[Path], table: str, *, query: str = "",
@@ -309,6 +441,12 @@ def page(path: Optional[Path], table: str, *, query: str = "",
 
     names = source_db.columns(path, table)
     if not names:
+        if can_create(table):
+            # **断りではなく、次にできること。** ここで「ありません」と
+            # だけ言うと、直しようが無い故障に見える
+            view.missing = True
+            view.why = _create_why(table)
+            return view
         view.error = f"{table} は取り込み元にありません。"
         return view
     view.columns = names

@@ -46,6 +46,9 @@ STATUS = {
     master_admin.REFUSE_NOT_EDITABLE: 422,
     master_admin.REFUSE_NO_SOURCE: 422,
     master_admin.REFUSE_WRITE_FAILED: 422,
+    master_admin.REFUSE_NOT_CREATABLE: 422,
+    # もうある = 誰かに先を越された。`REFUSE_NO_ROW` と同じ種類の話
+    master_admin.REFUSE_ALREADY: 409,
 }
 
 
@@ -81,6 +84,17 @@ def delete_row():
     body = request.get_json(silent=True) or {}
     return _write(master_admin.delete_row(
         get_db(), _table(body), body.get("key")), body)
+
+
+@bp.post("/api/master/table/create")
+def create_table():
+    """取り込み元にその表を作る。`{"table":…}`
+
+    作れるのは、このツールが後から足した表だけ
+    (`master_admin.creatable_tables`)。
+    """
+    body = request.get_json(silent=True) or {}
+    return _write(master_admin.create_table(get_db(), _table(body)), body)
 
 
 def _table(body: dict) -> str:

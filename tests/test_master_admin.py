@@ -360,5 +360,154 @@ class GuardTests(unittest.TestCase):
             self.assertEqual(len(src.query("SELECT * FROM 表")), 2)
 
 
+
+# ==================================================================
+# 取り込み元に表を作る
+#
+# アクセス権限は**このツールが後から足した表**で、既存の梱包資材マスタ
+# には入っていない。無いあいだはどの端末も現場モードだけになるので、
+# 「モードが切り替わらない」という形でしか現れない。作る手立てを
+# 画面に置くことと、上流の表まで勝手に作らないことの両方を守る。
+# ==================================================================
+def source_without(path: Path, table: str) -> None:
+    """取り込み元からその表を落とす(まだ足していない状態を作る)。"""
+    conn = sqlite3.connect(path)
+    conn.execute(f'DROP TABLE "{table}"')
+    conn.commit()
+    conn.close()
+
+
+class CreateTableTests(MasterTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        source_without(self.src, "アクセス権限")
+
+    def test_無い表も一覧に出す(self) -> None:
+        """出さないと、モードを決める場所が画面のどこにも見えない。"""
+        found = {t.table: t for t in master_admin.tables(self.src)}
+        self.assertIn("アクセス権限", found)
+        self.assertTrue(found["アクセス権限"].missing)
+        self.assertEqual(found["アクセス権限"].rows, 0)
+
+    def test_無い表には理由が付く(self) -> None:
+        """**断りではなく、次にできること。**"""
+        found = {t.table: t for t in master_admin.tables(self.src)}
+        self.assertIn("現場モードだけ", found["アクセス権限"].why)
+
+    def test_開いても故障に見せない(self) -> None:
+        view = master_admin.page(self.src, "アクセス権限")
+        self.assertTrue(view.missing)
+        self.assertEqual(view.error, "")
+        self.assertIn("現場モードだけ", view.why)
+
+    def test_作れる(self) -> None:
+        result = master_admin.create_table(self.conn, "アクセス権限",
+                                           path=self.src)
+        self.assertTrue(result.ok, result.message)
+        self.assertIn("アクセス権限", self.source_table_names())
+
+    def test_作った表は空(self) -> None:
+        """最初の1行は普段どおり足す。誰に何を許したかを画面に出すため。"""
+        master_admin.create_table(self.conn, "アクセス権限", path=self.src)
+        self.assertEqual(self.source_rows("アクセス権限"), [])
+
+    def test_作った表へそのまま足せる(self) -> None:
+        """作って終わりにしない。**足せるところまで通ることを確かめる。**"""
+        master_admin.create_table(self.conn, "アクセス権限", path=self.src)
+        result = master_admin.add_row(
+            self.conn, "アクセス権限",
+            {"ログインID": "", "PC名": "NLM-PC-042",
+             "権限": access_control.mode_permission(modes.MATERIAL),
+             "有効": "1", "備考": ""}, path=self.src)
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(self.source_rows("アクセス権限")[0]["PC名"],
+                         "NLM-PC-042")
+
+    def test_足した権限はその場で効く(self) -> None:
+        """書いたら手元も追いつく。**直したのに効かない**を作らない。"""
+        identity = access_control.current_identity()
+        master_admin.create_table(self.conn, "アクセス権限", path=self.src)
+        master_admin.add_row(
+            self.conn, "アクセス権限",
+            {"ログインID": "", "PC名": identity.pc_name,
+             "権限": access_control.mode_permission(modes.MATERIAL),
+             "有効": "1", "備考": ""}, path=self.src)
+        grant = access_control.resolve(self.conn)
+        self.assertIn(modes.MATERIAL, grant.allowed_modes())
+
+    def test_列は手元のスキーマから来る(self) -> None:
+        """書き写すと `schema.sql` を直したとき片方だけ古くなる。"""
+        master_admin.create_table(self.conn, "アクセス権限", path=self.src)
+        local = [r["name"] for r in self.conn.execute(
+            'PRAGMA table_info("アクセス権限")')]
+        self.assertEqual(self.source_columns(), local)
+
+    def test_条件を書かない列は空欄で入る(self) -> None:
+        """空のログインIDは「どのIDでもよい」という**権限の書き方**。
+
+        手元は空とNULLの2通りを持たないため `NOT NULL DEFAULT ''` だが、
+        取り込み元へは空欄をNULLで書く。そのまま写すと、画面は通した
+        のに書き込みだけが落ちる。
+        """
+        master_admin.create_table(self.conn, "アクセス権限", path=self.src)
+        conn = sqlite3.connect(self.src)
+        try:
+            notnull = {r[1]: r[3] for r in conn.execute(
+                'PRAGMA table_info("アクセス権限")')}
+        finally:
+            conn.close()
+        self.assertFalse(notnull["ログインID"])   # 空欄で入る
+        self.assertFalse(notnull["PC名"])
+        self.assertTrue(notnull["権限"])          # 空では意味を成さない
+
+    def source_columns(self) -> list:
+        conn = sqlite3.connect(self.src)
+        try:
+            return [r[1] for r in conn.execute(
+                'PRAGMA table_info("アクセス権限")')]
+        finally:
+            conn.close()
+
+    def test_もうあれば断る(self) -> None:
+        """誰かに先を越された。押した人には見えていない事実。"""
+        master_admin.create_table(self.conn, "アクセス権限", path=self.src)
+        result = master_admin.create_table(self.conn, "アクセス権限",
+                                           path=self.src)
+        self.assertEqual(result.reason, master_admin.REFUSE_ALREADY)
+
+    def test_上流の表は作らない(self) -> None:
+        """無いのは資材課側の事情。空の表を作ると事情が「0件」に化ける。"""
+        source_without(self.src, "PalletMaster")
+        result = master_admin.create_table(self.conn, "PalletMaster",
+                                           path=self.src)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_CREATABLE)
+        self.assertNotIn("PalletMaster", self.source_table_names())
+
+    def test_上流の表は一覧にも出さない(self) -> None:
+        source_without(self.src, "PalletMaster")
+        found = {t.table for t in master_admin.tables(self.src)}
+        self.assertNotIn("PalletMaster", found)
+
+    def test_権限が無ければ作れない(self) -> None:
+        """ただし**まだ誰も登録されていないうちは塞がない**(最初の1行)。"""
+        self.conn.execute("DELETE FROM アクセス権限")
+        self.conn.execute(
+            'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
+            " VALUES ('','ほかのPC',?,1,'')",
+            (access_control.mode_permission(modes.MATERIAL),))
+        self.conn.commit()
+        result = master_admin.create_table(self.conn, "アクセス権限",
+                                           path=self.src)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_ALLOWED)
+
+    def source_table_names(self) -> set:
+        conn = sqlite3.connect(self.src)
+        try:
+            return {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            conn.close()
+
+
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()

@@ -25,7 +25,7 @@ let loaded = false;
 let editing = null;       // いま開いている行(足すときは null)
 
 const IDS = ["mTables", "mMark", "mTitle", "mCan", "mCount", "mQuery", "mFind",
-             "mAdd", "mReload", "mWhy", "mError", "mHead", "mRows", "mNote",
+             "mAdd", "mCreate", "mReload", "mWhy", "mError", "mHead", "mRows", "mNote",
              "mEdit", "mEditTitle", "mEditKind", "mEditWhy", "mEditError",
              "mFields", "mFoot", "mSave", "mDelete", "mConfirm",
              "mDeleteYes", "mDeleteNo"];
@@ -46,6 +46,7 @@ export function start(frame) {
   });
   el.mReload.addEventListener("click", () => load(view && view.table));
   el.mAdd.addEventListener("click", () => openRow(null));
+  el.mCreate.addEventListener("click", createTable);
 
   el.mRows.addEventListener("click", (event) => {
     const tr = event.target.closest("tr[data-key]");
@@ -132,10 +133,16 @@ function render(next) {
     ? `${page.shown} / ${page.total} 件` : `${page.total || 0} 件`;
 
   const editable = Boolean(view.can_edit && page.editable);
+  // 取り込み元にまだ無い表。**行を足す前に、表そのものを作る**
+  const missing = Boolean(page.missing);
   el.mCan.hidden = !view.table;
-  el.mCan.className = `st st--${editable ? "ok" : "warn"}`;
-  el.mCan.textContent = editable ? "直せます" : "見るだけ";
-  el.mAdd.disabled = !editable;
+  el.mCan.className = `st st--${missing ? "warn" : (editable ? "ok" : "warn")}`;
+  el.mCan.textContent = missing ? "まだありません" : (editable ? "直せます" : "見るだけ");
+  // 表が無いあいだは行を足せない。押せる形にしておくと、押した先で
+  // 「入れる値がありません」としか言えず、何が足りないのか分からない
+  el.mAdd.disabled = !editable || missing;
+  el.mCreate.hidden = !missing;
+  el.mCreate.disabled = !view.can_edit;
 
   showWhy();
   el.mError.hidden = !page.error;
@@ -309,4 +316,23 @@ function saveRow() {
 
 function deleteRow() {
   return void send("/api/master/row/delete", { key: Number(editing) });
+}
+
+/** 取り込み元にその表を作る。**帯の中の操作**なので、断りも帯に出す。
+
+    `send` は行の編集用で、断りを編集ダイアログの中へ出す。ここは
+    ダイアログを開かずに押すボタンなので、同じ所へ出すと**誰にも
+    見えない場所に理由が入る**。 */
+async function createTable() {
+  const table = view && view.table;
+  if (!table) return;
+  try {
+    render(await api.post("/api/master/table/create",
+                          { table, q: el.mQuery.value.trim() }));
+  } catch (err) {
+    if (err.body && err.body.page) render({ ...err.body, message: "" });
+    el.mError.hidden = false;
+    el.mError.textContent = err.message;
+    toastError(err);
+  }
 }
