@@ -667,7 +667,14 @@ def _run_length_fill_loop(
             if any(s.width == b.width and s.length == b.length and s.tag == TAG_WIDTH_FILL for s in boards):
                 continue
             # 同一サイズが上限枚数に達していれば除外
-            existing = next((s for s in boards if s.width == b.width and s.length == b.length), None)
+            # 【VBAからの修正】タグを見ずに幅・丈だけでマッチしていたため、同サイズの
+            # 「主」や「幅補填」ボードが存在すると、そちらの上限判定を誤って見てしまって
+            # いた(skipCapped)。丈補填タグの行だけを対象にする。
+            existing = next(
+                (s for s in boards if s.width == b.width and s.length == b.length
+                 and s.tag == TAG_LENGTH_FILL),
+                None,
+            )
             if existing is not None and existing.count >= LENGTH_FILL_COUNT_CAP:
                 continue
 
@@ -697,13 +704,18 @@ def _run_length_fill_loop(
             return
 
         b_short, _, bw, bl = best
-        existing = next((s for s in boards if s.width == bw and s.length == bl), None)
-        if existing is not None:
-            added_eff_l = 0
-            if existing.count < LENGTH_FILL_COUNT_CAP:
-                existing.count += 1
-                added_eff_l = min(bw, bl)
-                log.debug("丈補填(既存+1): %sx%s 計%s枚", bw, bl, existing.count)
+        # 【VBAからの修正】同サイズの「主」「幅補填」行を誤ってマージ対象にしないよう、
+        # 丈補填タグの行に限定する。上限(4枚)到達時は既存行を+1→4クランプするだけで
+        # 済ませず、新規行の作成に回す(下用側と上用側で挙動を統一)。
+        existing = next(
+            (s for s in boards if s.width == bw and s.length == bl
+             and s.tag == TAG_LENGTH_FILL),
+            None,
+        )
+        if existing is not None and existing.count < LENGTH_FILL_COUNT_CAP:
+            existing.count += 1
+            added_eff_l = min(bw, bl)
+            log.debug("丈補填(既存+1): %sx%s 計%s枚", bw, bl, existing.count)
         else:
             boards.append(SelectedBoard(width=bw, length=bl, count=1, tag=TAG_LENGTH_FILL))
             added_eff_l = b_short
@@ -842,7 +854,14 @@ def _force_add_for_length_shortage(
         lf_short, lf_long = min(cand.width, cand.length), max(cand.width, cand.length)
         if lf_short < final_gap or lf_short > final_gap * 3 or lf_long < 10:
             continue
-        existing = next((s for s in boards if s.width == cand.width and s.length == cand.length), None)
+        # 【VBAからの修正】タグを見ずに幅・丈だけでマッチしていたため、同サイズの
+        # 「主」や「幅補填」ボードが存在すると、そちらの上限/カウントを誤って見て
+        # しまっていた(lfSkipCap/lfExists)。丈補填タグの行だけを対象にする。
+        existing = next(
+            (s for s in boards if s.width == cand.width and s.length == cand.length
+             and s.tag == TAG_LENGTH_FILL),
+            None,
+        )
         if existing is not None:
             if existing.count >= LENGTH_FILL_COUNT_CAP:
                 continue
@@ -990,7 +1009,20 @@ def _recheck_width_fill_length(
             if best is None:
                 break
             best_short = min(best.width, best.length)
-            _add_or_increment(boards, best.width, best.length, TAG_LENGTH_FILL)
+            # 【VBAからの修正】タグを問わず(width,length)一致だけでマージすると、
+            # 「主」や「幅補填」ボードにこの残gap埋め分が誤って合算されていた
+            # (wfAlready)。丈補填タグの行だけを対象にし、上限到達時は新規行に回す。
+            existing = next(
+                (s for s in boards if s.width == best.width and s.length == best.length
+                 and s.tag == TAG_LENGTH_FILL),
+                None,
+            )
+            if existing is not None and existing.count < LENGTH_FILL_COUNT_CAP:
+                existing.count += 1
+                log.debug("幅補填残gap(既存+1): %sx%s 計%s枚", best.width, best.length, existing.count)
+            else:
+                boards.append(SelectedBoard(width=best.width, length=best.length, count=1, tag=TAG_LENGTH_FILL))
+                log.debug("幅補填残gap(新規): %sx%s", best.width, best.length)
             if best_short >= gap_x:
                 break
             gap_x -= best_short
@@ -1010,8 +1042,11 @@ def _pick_gap_filler(
         short, long_side = min(cand.width, cand.length), max(cand.width, cand.length)
         if short < NARROW_MIN_SHORT_SIDE or long_side < sel_max_w:
             continue
+        # 【VBAからの修正】タグを見ずに幅・丈だけでマッチしていたため、同サイズの
+        # 「主」や「幅補填」ボードが存在すると、そちらの上限判定を誤って見てしまって
+        # いた(wfSkipCap)。丈補填タグの行だけを対象にする。
         if any(b.width == cand.width and b.length == cand.length
-               and b.count >= LENGTH_FILL_COUNT_CAP for b in boards):
+               and b.tag == TAG_LENGTH_FILL and b.count >= LENGTH_FILL_COUNT_CAP for b in boards):
             continue
 
         if short <= gap_x:
@@ -1317,7 +1352,14 @@ def _run_upper_length_fill(
             effective_long = min(long_side, product.width)
             if effective_long < 10:
                 continue
-            existing = next((s for s in boards if s.width == cand.width and s.length == cand.length), None)
+            # 【VBAからの修正】タグを見ずに幅・丈だけでマッチしていたため、同サイズの
+            # 「主」や「幅補填」ボードが存在すると、そちらの上限判定を誤って見てしまって
+            # いた(ulSkipCap)。丈補填タグの行だけを対象にする(下用側と同じ考え方)。
+            existing = next(
+                (s for s in boards if s.width == cand.width and s.length == cand.length
+                 and s.tag == TAG_LENGTH_FILL),
+                None,
+            )
             if existing is not None and existing.count >= LENGTH_FILL_COUNT_CAP:
                 continue
 
@@ -1339,13 +1381,16 @@ def _run_upper_length_fill(
         # 行(丈カバーには寄与しない専用枠)に丈補填の+1が紛れ込むことがあり、
         # 実際の丈カバーが伸びないまま丈残だけが減った扱いになって、直後の
         # 「丈不足強制追加」で別ボードがさらに足される二重補填の原因になる。
+        # 【VBAからの修正】既存の丈補填行が上限(4枚)の場合、+1→4クランプするだけで
+        # 実際には枚数が増えていないのに「解消済み」と誤認していた。上限到達時は
+        # 既存行を触らず、新規の別行として追加する(下用側と同じ方針)。
         existing = next(
             (s for s in boards if s.width == best.width and s.length == best.length
              and s.tag == TAG_LENGTH_FILL),
             None,
         )
-        if existing is not None:
-            existing.count = min(existing.count + 1, LENGTH_FILL_COUNT_CAP)
+        if existing is not None and existing.count < LENGTH_FILL_COUNT_CAP:
+            existing.count += 1
             # 【VBAからの修正】丈補填ボードは短辺だけを丈方向に使う配置なので、
             # 新規追加時と同じ best_short(短辺)を減算量にする。ここを
             # _orient() の再計算結果(幅フィット優先で長辺をeffLとする
@@ -1509,11 +1554,25 @@ def _force_add_for_upper_length_shortage(
         # ギャップを埋められる最小限のサイズだけを許す(大きすぎる板は使わない)
         if short < gap or short > gap * 3 or long_side < NARROW_MIN_SHORT_SIDE:
             continue
+        # 【VBAからの修正】タグを見ずに幅・丈だけでマッチしていたため、同サイズの
+        # 「主」や「幅補填」ボードが存在すると、そちらの上限判定を誤って見てしまって
+        # いた(sfSkipCap)。丈補填タグの行だけを対象にする。
         if any(b.width == cand.width and b.length == cand.length
-               and b.count >= LENGTH_FILL_COUNT_CAP for b in boards):
+               and b.tag == TAG_LENGTH_FILL and b.count >= LENGTH_FILL_COUNT_CAP for b in boards):
             continue
-        _add_or_increment(boards, cand.width, cand.length, TAG_LENGTH_FILL)
-        log.debug("上用丈補填(小ボード): %sx%s lGap=%s", cand.width, cand.length, gap)
+        # 【VBAからの修正】同上の理由(sfExists)。丈補填タグの行だけを対象にし、
+        # 上限到達時は既存行を+1→4クランプするだけで済ませず、新規行の作成に回す。
+        existing = next(
+            (b for b in boards if b.width == cand.width and b.length == cand.length
+             and b.tag == TAG_LENGTH_FILL),
+            None,
+        )
+        if existing is not None:
+            existing.count += 1
+            log.debug("上用丈補填(小ボード既存+1): %sx%s lGap=%s", cand.width, cand.length, gap)
+        else:
+            boards.append(SelectedBoard(width=cand.width, length=cand.length, count=1, tag=TAG_LENGTH_FILL))
+            log.debug("上用丈補填(小ボード新規): %sx%s lGap=%s", cand.width, cand.length, gap)
         return
 
     # 適当な小型ボードが無ければ主ボードを増やす

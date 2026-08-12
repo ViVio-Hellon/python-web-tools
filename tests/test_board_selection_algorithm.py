@@ -554,6 +554,44 @@ class LengthFillWidthCorrectionTests(unittest.TestCase):
         self.assertEqual(boards[0].count, 3)
 
 
+class LengthFillLoopTagTests(unittest.TestCase):
+    """`_run_length_fill_loop`(丈補填反復ループ)のタグ限定バグ修正の検証。
+
+    バグの内容(RunLowerFillPhase全体精査で発覚): 候補の上限チェック
+    (skipCapped)・既存行マージ(li)がいずれもタグを見ずに幅・丈だけで
+    マッチしていたため、同サイズの「主」行が存在すると、その上限や
+    カウントを誤って見てしまっていた。
+    """
+
+    def setUp(self) -> None:
+        self.sel_max_w = 900
+
+    def test_skip_cap_check_ignores_wrong_tag_row(self):
+        """同サイズの"主"行が上限(4枚)でも、丈補填の候補選定には無関係。"""
+        boards = [SelectedBoard(300, 1000, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_MAIN)]
+        alg._run_length_fill_loop(
+            boards, [board(300, 1000)], l_gap=300, sel_max_w=self.sel_max_w,
+            fatigue_map=None, fatigue_mode=False,
+        )
+        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(length_fill_rows), 1)
+        self.assertEqual((length_fill_rows[0].width, length_fill_rows[0].length), (300, 1000))
+
+    def test_merge_does_not_touch_wrong_tag_row(self):
+        """既存行マージも"丈補填"タグの行だけを対象にする。"主"行を汚染しない。"""
+        main = SelectedBoard(300, 1000, 2, alg.TAG_MAIN)
+        boards = [main]
+        alg._run_length_fill_loop(
+            boards, [board(300, 1000)], l_gap=300, sel_max_w=self.sel_max_w,
+            fatigue_map=None, fatigue_mode=False,
+        )
+        # "主"行は汚染されず据え置き、新規の"丈補填"行が作られる
+        self.assertEqual(main.count, 2)
+        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(length_fill_rows), 1)
+        self.assertEqual(length_fill_rows[0].count, 1)
+
+
 class DropLengthFillTests(unittest.TestCase):
     def test_removes_non_width_fill_rows_when_main_covers_length(self):
         palette = make_palette(1000, 2000)
@@ -610,6 +648,30 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
         )
         self.assertEqual(len(boards), 1)
         self.assertEqual(boards[0].count, 1)
+
+    def test_ignores_capped_wrong_tag_row_when_matching_candidate(self):
+        """タグを見ずにマッチすると、同サイズの"主"行の上限を誤って見てしまう(バグ修正)。
+
+        候補(400x1000)と同じサイズの"主"行が偶然上限(4枚)に達していても、
+        丈補填の候補選定には無関係。タグ限定が無いと候補が誤って除外され、
+        代わりに主ボードが不要に増やされてしまう。
+
+        finalTotalLは全行(タグ問わず)の合計なので、決め打ちのwrong_tag_row
+        (400x1000 x4枚、有効丈換算400 → 合計1600)を加味してproduct.lengthを
+        大きめに取り、gapが300mmになるよう調整している。
+        """
+        main = SelectedBoard(width=1000, length=1600, count=1, tag=alg.TAG_MAIN)
+        wrong_tag_row = SelectedBoard(width=400, length=1000, count=alg.LENGTH_FILL_COUNT_CAP,
+                                       tag=alg.TAG_MAIN)
+        boards = [main, wrong_tag_row]
+        product = ProductSize(width=900, length=3500)
+        alg._force_add_for_length_shortage(
+            boards, self.palette, product, [board(400, 1000)], None,
+        )
+        self.assertEqual(main.count, 1)  # フォールバック(主+1枚)は発動しない
+        self.assertEqual(wrong_tag_row.count, alg.LENGTH_FILL_COUNT_CAP)  # 汚染されない
+        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(length_fill_rows), 1)
 
 
 class SelectUpperBoardsTests(unittest.TestCase):
@@ -718,13 +780,19 @@ class SelectUpperBoardsTests(unittest.TestCase):
 
     def test_length_shortage_forces_extra_main_board(self):
         # (1900-5)//300 = 6枚 = 1800 → 100mm不足。丈残100mmは400以下なので
-        # 丈補填フェーズでは主ボードを増やさないが、補填できる在庫が無いため
-        # 最後の「丈不足強制追加」で ceil(100/300)=1枚 が足される
+        # 丈補填フェーズでは主ボードを増やさない。在庫は主と同じ900x300のみだが、
+        # 【VBAからの修正】タグ限定(sfSkipCap/sfExists)により主ボードの枚数を
+        # 汚染せず、最後の「丈不足強制追加」で "丈補填" タグの別行として
+        # 追加される(主ボードの上限枚数を誤って見て「候補なし」と
+        # 誤認し、主ボードを不要に増やしてしまうことを防ぐ)。
         product = ProductSize(width=900, length=1900)
         r = alg.select_upper_boards(
             self.lower, [board(900, 300)], self.palette, product,
         )
-        self.assertEqual(r.boards[0].count, 7)
+        self.assertEqual(r.boards[0].count, 6)  # 主ボードは汚染されない
+        length_fill_rows = [b for b in r.boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(length_fill_rows), 1)
+        self.assertEqual(length_fill_rows[0].count, 1)
 
     def test_length_shortage_prefers_a_small_board_over_bumping_main(self):
         # 丈ギャップ100mmを埋められる小型在庫(100x800)があれば、
@@ -795,6 +863,59 @@ class UpperLengthFillMergeTests(unittest.TestCase):
         length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(len(length_fill_rows), 1)
         self.assertEqual((length_fill_rows[0].width, length_fill_rows[0].length), (30, 1600))
+
+    def test_candidate_search_ignores_capped_wrong_tag_row(self):
+        """候補探索の上限チェック(ulSkipCap)もタグ限定が必要(バグ修正)。
+
+        同サイズの"主"行が上限(4枚)に達していても、それは丈補填の候補選定
+        には無関係。タグを見ずにマッチすると誤って候補が除外され、
+        丈補填が一切追加されなくなってしまう。
+        """
+        # TAG_WIDTH_FILL を使うのは、_upper_total_length が幅補填行を丈合計
+        # から除外するため(丈補填以外のタグでも丈残の計算を汚さないように)
+        decoy = SelectedBoard(30, 1600, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_WIDTH_FILL)
+        boards = [self.main, decoy]
+        available = [board(30, 1600)]
+        alg._run_upper_length_fill(boards, self.product, available, None)
+
+        self.assertTrue(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
+        self.assertEqual(decoy.count, alg.LENGTH_FILL_COUNT_CAP)  # 汚染されない
+
+
+class ForceAddForUpperLengthShortageTests(unittest.TestCase):
+    """`_force_add_for_upper_length_shortage`(sfSkipCap/sfExists)のタグ限定バグ修正の検証。
+
+    バグの内容: タグを見ずに幅・丈だけでマッチしていたため、同サイズの
+    「主」や「幅補填」ボードが存在すると、その上限判定やマージ対象を
+    誤って見てしまっていた。
+    """
+
+    def setUp(self) -> None:
+        self.product = ProductSize(width=900, length=2000)
+        # 主900x190 x10 → 丈カバー1900。丈残は100
+        self.main = SelectedBoard(900, 190, 10, alg.TAG_MAIN)
+
+    def test_skip_cap_check_ignores_wrong_tag_row(self):
+        """候補と同サイズの"幅補填"行が上限でも、丈不足強制追加には無関係(sfSkipCap)。"""
+        decoy = SelectedBoard(150, 1600, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_WIDTH_FILL)
+        boards = [self.main, decoy]
+        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 1600)], None)
+
+        self.assertEqual(self.main.count, 10)  # フォールバック(主+1枚)は発動しない
+        self.assertEqual(decoy.count, alg.LENGTH_FILL_COUNT_CAP)  # 汚染されない
+        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(length_fill_rows), 1)
+
+    def test_merge_ignores_wrong_tag_row(self):
+        """マージ(sfExists)も"丈補填"タグの行だけを対象にする。"""
+        decoy = SelectedBoard(150, 1600, 1, alg.TAG_WIDTH_FILL)
+        boards = [self.main, decoy]
+        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 1600)], None)
+
+        self.assertEqual(decoy.count, 1)  # "幅補填"行は汚染されない
+        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(length_fill_rows), 1)
+        self.assertEqual(length_fill_rows[0].count, 1)
 
 
 class NarrowPaletteSelectionTests(unittest.TestCase):
@@ -1015,15 +1136,22 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
         self.product = ProductSize(width=980, length=2900)
 
     def test_short_width_fill_row_gets_more_pieces(self):
-        # 主ボード 900x1000 x2 → X方向カバー2000
-        # 幅補填 50x1000 が1枚(=1000)しかなければ、丈方向に足りないので増える
+        # 主ボード 900x1000 x2 → X方向カバー1800
+        # 幅補填 50x1000 が1枚(=1000)しかなければ、丈方向に足りないので増える。
+        # 【VBAからの修正】残りを別の小型ボードで埋める段(wfAlready)は
+        # "丈補填" タグの行だけをマージ対象にするため、候補が幅補填行自身と
+        # 同サイズ(50x1000)でも、幅補填行そのものではなく別行として
+        # "丈補填" タグで追加される。
         boards = [
             SelectedBoard(900, 1000, 2, alg.TAG_MAIN),
             SelectedBoard(50, 1000, 1, alg.TAG_WIDTH_FILL),
         ]
         alg._recheck_width_fill_length(
             boards, 1, 900, self.palette, self.product, [board(50, 1000)])
-        self.assertGreater(boards[1].count, 1)
+        self.assertEqual(boards[1].count, 1)  # 幅補填行そのものは汚染されない
+        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(length_fill_rows), 1)
+        self.assertGreater(length_fill_rows[0].count, 0)
 
     def test_row_wider_than_main_is_skipped(self):
         # 短辺が主ボードの有効幅以上なら幅補填ではないので対象外
@@ -1089,6 +1217,48 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
         alg._recheck_width_fill_length(
             boards, 1, 900, self.palette, self.product, [board(30, 800)])
         self.assertEqual(boards[1].count, 1)
+
+    def test_gap_filler_merge_ignores_wrong_tag_row(self):
+        """残gapを別の小型ボードで埋めるとき(wfAlready)もタグ限定が必要(バグ修正)。
+
+        タグを問わず(width, length)一致だけでマージすると、"主"や"幅補填"の
+        行にこの残gap埋め分が誤って合算されていた。丈補填タグの行だけを
+        対象にし、無ければ新規行を作る必要がある。
+
+        主900x1000 x2(カバー1800)、幅補填50x1700(長辺1700で残gap=100)。
+        埋め穴候補と同サイズ(150x900)の"主"行を意図的にstart_idxより前に
+        置き、丈カバレッジ再確認の対象外にしつつ、マージ検索には掛かる
+        ようにして汚染を検出する。
+        """
+        main = SelectedBoard(900, 1000, 2, alg.TAG_MAIN)
+        decoy = SelectedBoard(150, 900, 1, alg.TAG_MAIN)
+        width_fill = SelectedBoard(50, 1700, 1, alg.TAG_WIDTH_FILL)
+        boards = [main, decoy, width_fill]
+        alg._recheck_width_fill_length(
+            boards, 2, 900, self.palette, self.product, [board(150, 900)])
+        self.assertEqual(decoy.count, 1)  # "主"行は汚染されない
+        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(length_fill_rows), 1)
+        self.assertEqual(
+            (length_fill_rows[0].width, length_fill_rows[0].length, length_fill_rows[0].count),
+            (150, 900, 1),
+        )
+
+
+class PickGapFillerTagTests(unittest.TestCase):
+    """`_pick_gap_filler`(wfSkipCap)のタグ限定バグ修正の検証。"""
+
+    def test_capped_wrong_tag_row_does_not_block_candidate(self):
+        # 同サイズの"主"行が上限(4枚)でも、丈補填の候補選定には無関係
+        boards = [SelectedBoard(50, 1000, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_MAIN)]
+        best = alg._pick_gap_filler(boards, [board(50, 1000)], gap_x=500, sel_max_w=900)
+        self.assertIsNotNone(best)
+        self.assertEqual((best.width, best.length), (50, 1000))
+
+    def test_capped_length_fill_row_is_excluded(self):
+        boards = [SelectedBoard(50, 1000, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_LENGTH_FILL)]
+        best = alg._pick_gap_filler(boards, [board(50, 1000)], gap_x=500, sel_max_w=900)
+        self.assertIsNone(best)
 
 
 class AddOrIncrementTests(unittest.TestCase):
