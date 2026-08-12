@@ -272,6 +272,21 @@
         <small class="why real" id="lotDirReal"
                {% if not state.lot_dir_real %}hidden{% endif %}
         >→ {{ state.lot_dir_real }}</small>
+
+        {# 看板(在庫薄警告)マスタ。梱包資材マスタとは別ファイル
+           (Form状態管理・看板_*の8テーブル)。見つからなくても
+           在庫薄警告を使わない端末には支障が無いので、既定は
+           梱包資材マスタと同じ共有フォルダにしてある #}
+        <label for="kanbanDir">看板マスタ</label>
+        <span class="pathrow">
+          <input class="input" id="kanbanDir" value="{{ view.kanban_dir }}"
+                 spellcheck="false" autocomplete="off">
+          <button class="btn btn--find" type="button" data-browse="kanbanDir">
+            <span class="gl">▸</span>参照…</button>
+        </span>
+        <small class="why real" id="kanbanDirReal"
+               {% if not state.kanban_dir_real %}hidden{% endif %}
+        >→ {{ state.kanban_dir_real }}</small>
       </div>
       {# 置き場所を**変えるとき**だけ要る。押す前から出すと、変えない人まで
          打つことになるので、断られてから出す(理由はサーバが持つ) #}

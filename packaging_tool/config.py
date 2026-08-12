@@ -70,6 +70,26 @@ DEFAULT_MASTER_DB_DIR = Path(os.environ.get(
 MATERIAL_DB_NAME = os.environ.get("PACKAGING_TOOL_MATERIAL_DB",
                                   "梱包資材マスタ.sqlite3")
 
+# 看板(在庫薄警告)マスタの置き場所。
+#
+# Form状態管理・看板_* の8テーブルは、以前は梱包資材マスタ.sqlite3の
+# 一部として取り込む定義になっていたが、実際にはそのファイルに
+# 一度も入っておらず、取り込みのたびに「取り込めませんでした」に
+# 数えられていた(`import_specs.KANBAN_TABLES` を参照)。
+# 現場から渡された実データは**別ファイル**(看板マスタ.sqlite3)に
+# 入っていたので、そちらを見に行くように分ける。
+#
+# 既定値は梱包資材マスタと**同じ共有フォルダ**にしてある(現場の写しが
+# 同じ場所に置かれていたため)。設定画面では独立した欄で変えられる。
+DEFAULT_KANBAN_DB_DIR = Path(os.environ.get(
+    "PACKAGING_TOOL_KANBAN_DB_DIR", str(DEFAULT_MASTER_DB_DIR)))
+
+# 看板マスタのファイル名。見つからなければフォルダ内の自動判別はしない
+# (梱包資材マスタと同じフォルダに置かれることがあるため、名前の緩い
+# 一致で探すと梱包資材マスタ自身を誤って拾いかねない)。
+KANBAN_DB_NAME = os.environ.get("PACKAGING_TOOL_KANBAN_DB",
+                                "看板マスタ.sqlite3")
+
 # 仕掛台帳(ロット検索用)の置き場所。
 #   \\nlmsrvngy03\Read\【New】仕掛\台帳\
 # 共有に届かない端末では、設定画面か環境変数でローカルのコピー先を指定する。
@@ -143,12 +163,22 @@ def lot_db_dir() -> Path:
     return LOT_DB_DIR
 
 
+def kanban_db_dir() -> Path:
+    """いま使う看板マスタのフォルダ。設定画面の値を優先する。"""
+    from . import user_settings
+    configured = user_settings.get(KEY_KANBAN_DB_DIR)
+    if isinstance(configured, str) and configured.strip():
+        return resolve_dir(configured)
+    return DEFAULT_KANBAN_DB_DIR
+
+
 # `user_settings` に入れるキー
 KEY_MASTER_DB_DIR = "master_db_dir"
 # 旧名(Accessだったころ)。**読むだけ**残す ── 設定済みの端末が
 # 更新の日に置き場所を見失わないように
 KEY_ACCDB_DIR_LEGACY = "accdb_dir"
 KEY_LOT_DB_DIR = "lot_db_dir"
+KEY_KANBAN_DB_DIR = "kanban_db_dir"
 KEY_AUTO_IMPORT = "auto_import_on_start"
 
 # 包装仕様書の図面を返すURLのひな形(`{no}` が包装仕様NOに置き換わる)。

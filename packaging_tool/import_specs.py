@@ -250,6 +250,22 @@ BLANK_IS_MISSING: dict[str, tuple[str, ...]] = {
 # 案内として1行出すに留める。
 OPTIONAL_TABLES: frozenset[str] = frozenset({"アクセス権限"})
 
+# 梱包資材マスタ.sqlite3 ではなく、**看板マスタ.sqlite3(別ファイル)** から
+# 読むテーブル。以前はこの8つも `IMPORT_SPECS` の他の表と同じく梱包資材
+# マスタから読む定義になっていたが、現場の梱包資材マスタには一度も
+# 入っておらず、取り込みのたびに「取り込めませんでした」の8件に
+# 数えられていた。現場から渡された実データは看板マスタ.sqlite3という
+# 別ファイルにあったので、そちらから読むよう `data_sync.import_master`
+# 側で経路を分ける。
+#
+# `OPTIONAL_TABLES` とは別の理由付け。OPTIONAL_TABLES は「そのテーブルの
+# 機能自体を使わない端末があってよい」、こちらは「テーブルは要るが
+# 読む場所が違う」。看板マスタが見つからないときは
+# `data_sync.import_master` が1行の案内を出す(個別のテーブルごとに
+# 8件のエラーを出さない)。
+KANBAN_TABLES: frozenset[str] = frozenset(
+    config.BOARD_KANBAN_TABLES + ("看板_LS", config.TABLE_NAME_STATE))
+
 # ------------------------------------------------------------------
 # 仕掛台帳(ロット検索ページ用)の取り込み定義
 #

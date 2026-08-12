@@ -136,9 +136,11 @@ function renderStatus(state) {
   el.importWhy.textContent = state.import_reason;
   el.masterDir.value = state.master_dir;
   el.lotDir.value = state.lot_dir;
+  el.kanbanDir.value = state.kanban_dir;
   // 相対で書かれたときだけ、実際に見に行く先を出す(サーバが決める)
   showReal(el.masterDirReal, state.master_dir_real);
   showReal(el.lotDirReal, state.lot_dir_real);
+  showReal(el.kanbanDirReal, state.kanban_dir_real);
   el.autoImport.checked = state.auto_import;
   el.position.value = state.position;
   el.specUrl.value = state.spec_sheet_url;
@@ -317,8 +319,8 @@ async function startJob(path, body) {
 
 // ------------------------------------------------------------------
 export function start(state, jobState, masterFrame) {
-  for (const id of ["statusGrid", "importWhy", "masterDir", "lotDir",
-                    "masterDirReal", "lotDirReal", "autoImport",
+  for (const id of ["statusGrid", "importWhy", "masterDir", "lotDir", "kanbanDir",
+                    "masterDirReal", "lotDirReal", "kanbanDirReal", "autoImport",
                     "position", "specUrl", "specUrlProblem",
                     "filterRows", "filterEmpty", "saveBehavior",
                     "admNow", "admNew", "admConfirm", "admSave", "admReset",
@@ -364,6 +366,7 @@ export function start(state, jobState, masterFrame) {
     const body = {
       master_dir: el.masterDir.value,
       lot_dir: el.lotDir.value,
+      kanban_dir: el.kanbanDir.value,
     };
     // 欄が出ているあいだだけ送る。**打っていないのに送らない**
     if (!el.pathAuth.hidden) body.password = el.pathPassword.value;

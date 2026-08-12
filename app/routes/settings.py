@@ -107,6 +107,7 @@ def save():
     result = settings_presenter.save(
         master_dir=pick("master_dir"),
         lot_dir=pick("lot_dir"),
+        kanban_dir=pick("kanban_dir"),
         auto_import=bool(body["auto_import"]) if "auto_import" in body else None,
         spec_url=pick("spec_sheet_url"),
         position=pick("position"),

@@ -144,9 +144,11 @@ class SettingsViewModel:
     # 打たれたまま(相対で書かれていれば相対のまま)
     master_dir: str = ""
     lot_dir: str = ""
+    kanban_dir: str = ""
     # 実際に見に行く道。**相対で書いたときに「どこを見ているか」を出す**
     master_dir_real: str = ""
     lot_dir_real: str = ""
+    kanban_dir_real: str = ""
     path_base: str = ""            # 相対の起点(アプリのフォルダ)
 
     # --- 動作 ---
@@ -190,13 +192,16 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
     """
     material = _find_material()
     lots = _find_lots()
+    kanban = _find_kanban()
 
     view = SettingsViewModel(
         master_dir=_typed(config.KEY_MASTER_DB_DIR, config.master_db_dir(),
                           config.KEY_ACCDB_DIR_LEGACY),
         lot_dir=_typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
+        kanban_dir=_typed(config.KEY_KANBAN_DB_DIR, config.kanban_db_dir()),
         master_dir_real=str(config.master_db_dir()),
         lot_dir_real=str(config.lot_db_dir()),
+        kanban_dir_real=str(config.kanban_db_dir()),
         path_base=str(config.BASE_DIR),
         auto_import=bool(user_settings.get(config.KEY_AUTO_IMPORT,
                                            config.AUTO_IMPORT_DEFAULT)),
@@ -210,6 +215,7 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
     )
     view.sections = [
         _material_section(material, conn),
+        _kanban_section(kanban),
         _lot_section(lots),
         _access_section(conn, startup_modes),
         _terminal_section(),
@@ -271,6 +277,13 @@ def _find_lots() -> dict[str, Path]:
         return {}
 
 
+def _find_kanban() -> Optional[Path]:
+    try:
+        return data_sync.find_kanban_db()
+    except OSError:
+        return None
+
+
 # 置き場所を直しに行く先。**問題を見せた場所から繋ぐ**
 FIX_SOURCE = ("置き場所を直す", "source")
 
@@ -305,7 +318,12 @@ def _material_section(material: Optional[Path], conn=None) -> Section:
 
     names = found.tables
     from .. import import_specs
-    missing = [t for t in import_specs.IMPORT_SPECS
+    # 看板マスタ側のテーブル(KANBAN_TABLES)は別ファイルの持ち物なので、
+    # ここでは数えない ── 数えると、梱包資材マスタには本来入っていない
+    # 8テーブルが毎回「不足」または「未作成」に見えてしまう
+    expect = {t: v for t, v in import_specs.IMPORT_SPECS.items()
+              if t not in import_specs.KANBAN_TABLES}
+    missing = [t for t in expect
                if t not in names and t not in import_specs.OPTIONAL_TABLES]
     optional_missing = [t for t in import_specs.OPTIONAL_TABLES
                         if t not in names]
@@ -322,6 +340,51 @@ def _material_section(material: Optional[Path], conn=None) -> Section:
         section.checks.append(Check(
             "任意のテーブル", f"{len(optional_missing)}件が未作成", INFO,
             "無くても動きます: " + ", ".join(optional_missing)))
+    return section
+
+
+def _kanban_section(kanban: Optional[Path]) -> Section:
+    """看板(在庫薄警告)マスタ。梱包資材マスタとは別ファイル。
+
+    `_material_section` と同じ形にしてある(覚え直しを増やさないため)。
+    見つからないのを NG にはしない ── 分けたばかりで置き場所が
+    未設定の端末が多いうちは、**在庫薄警告を使わない端末**まで
+    「直すべき不足」に見せると本当に直すべき問題が埋もれる。
+    """
+    from .. import import_specs
+
+    section = Section("看板マスタ", mark="看")
+    if kanban is None:
+        section.checks.append(Check(
+            "ファイル", "見つかりません", WARN,
+            f"探した場所: {config.kanban_db_dir()}"
+            f"(名前は {config.KANBAN_DB_NAME}。"
+            f"拡張子 {' / '.join(source_db.SUFFIXES)} を見ます)。"
+            "在庫薄警告(Form状態管理・看板_*)を使わないなら、"
+            "このままで構いません。"))
+        section.action = FIX_SOURCE
+        return section
+
+    section.checks.append(Check("ファイル", kanban.name, OK, str(kanban)))
+
+    found = source_db.probe(kanban)
+    if not found.ok:
+        section.checks.append(Check("中身", "開けませんでした", NG,
+                                    _why_unreadable(found)))
+        section.action = FIX_SOURCE
+        return section
+    if found.opened_by != source_db.WAY_URI:
+        section.checks.append(Check(
+            "開き方", found.opened_by, WARN, _why_detoured(found)))
+
+    names = found.tables
+    missing = [t for t in import_specs.KANBAN_TABLES if t not in names]
+    if missing:
+        section.checks.append(Check(
+            "テーブル", f"{len(names)}個(不足 {len(missing)}件)", WARN,
+            "取り込む予定なのに無い: " + ", ".join(missing)))
+    else:
+        section.checks.append(Check("テーブル", f"{len(names)}個", OK))
     return section
 
 
@@ -705,12 +768,15 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         ],
         "master_dir": view.master_dir,
         "lot_dir": view.lot_dir,
+        "kanban_dir": view.kanban_dir,
         # 相対で書かれたときに「実際どこを見ているか」。同じ道なら空で返す
         # ── 同じものを2行に出すと、違うものに見える
         "master_dir_real": (view.master_dir_real
                             if view.master_dir_real != view.master_dir else ""),
         "lot_dir_real": (view.lot_dir_real
                          if view.lot_dir_real != view.lot_dir else ""),
+        "kanban_dir_real": (view.kanban_dir_real
+                            if view.kanban_dir_real != view.kanban_dir else ""),
         "path_base": view.path_base,
         "auto_import": view.auto_import,
         "position": view.position,
@@ -762,11 +828,12 @@ REFUSE_NEED_PASSWORD = "need_password"
 PROTECTED_LABELS = {
     "master_dir": "梱包資材マスタの置き場所",
     "lot_dir": "仕掛台帳の置き場所",
+    "kanban_dir": "看板マスタの置き場所",
 }
 
 
-def _protected_changes(master_dir: Optional[str],
-                       lot_dir: Optional[str]) -> list[str]:
+def _protected_changes(master_dir: Optional[str], lot_dir: Optional[str],
+                       kanban_dir: Optional[str]) -> list[str]:
     """今回**本当に変わる**置き場所の名前。
 
     値が変わらない保存で聞かないのは、設定画面が置き場所を毎回
@@ -778,8 +845,9 @@ def _protected_changes(master_dir: Optional[str],
         "master_dir": _typed(config.KEY_MASTER_DB_DIR, config.master_db_dir(),
                              config.KEY_ACCDB_DIR_LEGACY),
         "lot_dir": _typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
+        "kanban_dir": _typed(config.KEY_KANBAN_DB_DIR, config.kanban_db_dir()),
     }
-    sent = {"master_dir": master_dir, "lot_dir": lot_dir}
+    sent = {"master_dir": master_dir, "lot_dir": lot_dir, "kanban_dir": kanban_dir}
     return [PROTECTED_LABELS[key] for key, value in sent.items()
             if value is not None and value.strip() != now[key]]
 
@@ -787,7 +855,8 @@ def _protected_changes(master_dir: Optional[str],
 def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
          auto_import: Optional[bool] = None, spec_url: Optional[str] = None,
          position: Optional[str] = None,
-         password: Optional[str] = None) -> SaveResult:
+         password: Optional[str] = None,
+         kanban_dir: Optional[str] = None) -> SaveResult:
     """設定を保存する。**渡されたものだけ**を触る。
 
     `None` は「この項目は今回いじらない」の意味。画面が一部だけ送って
@@ -818,7 +887,7 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
 
     # **書く前に通す関門。** ここより下で1つでも書いてしまうと、
     # 断ったのに一部だけ変わった状態が残る
-    changing = _protected_changes(master_dir, lot_dir)
+    changing = _protected_changes(master_dir, lot_dir, kanban_dir)
     if changing:
         if not admin_password.verify(str(password or "")):
             # 合っていないのか、そもそも送っていないのかは言い分けない
@@ -836,6 +905,8 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
         user_settings.save(config.KEY_MASTER_DB_DIR, master_dir.strip())
     if lot_dir is not None:
         user_settings.save(config.KEY_LOT_DB_DIR, lot_dir.strip())
+    if kanban_dir is not None:
+        user_settings.save(config.KEY_KANBAN_DB_DIR, kanban_dir.strip())
     if auto_import is not None:
         user_settings.save(config.KEY_AUTO_IMPORT, bool(auto_import))
     if spec_url is not None:

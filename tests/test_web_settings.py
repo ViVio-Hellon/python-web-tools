@@ -52,10 +52,11 @@ class PresenterTestCase(unittest.TestCase):
         self._saved = {
             key: user_settings.get(key)
             for key in (config.KEY_MASTER_DB_DIR, config.KEY_LOT_DB_DIR,
-                        config.KEY_AUTO_IMPORT)
+                        config.KEY_KANBAN_DB_DIR, config.KEY_AUTO_IMPORT)
         }
         user_settings.save(config.KEY_MASTER_DB_DIR, str(self.dir))
         user_settings.save(config.KEY_LOT_DB_DIR, str(self.dir))
+        user_settings.save(config.KEY_KANBAN_DB_DIR, str(self.dir))
         self.addCleanup(self._restore)
 
     def _restore(self) -> None:
@@ -164,6 +165,71 @@ class StatusTests(PresenterTestCase):
         """画面側で「問題なし / 要確認」を書き分けない(設計書 §6.1)。"""
         self.assertEqual(presenter.to_dict(presenter.build())["level_label"],
                          presenter.LEVEL_LABEL)
+
+
+class KanbanSectionTests(PresenterTestCase):
+    """看板(在庫薄警告)マスタは梱包資材マスタとは別ファイル。
+
+    以前は Form状態管理・看板_* の8テーブルも「梱包資材マスタ」の面が
+    数えていたので、梱包資材マスタには本来入っていないこの8つが毎回
+    「不足」に見えていた。別の面(「看板マスタ」)で数えるようにし、
+    梱包資材マスタの面からは除外する。
+    """
+
+    def _make_kanban_file(self, tables) -> None:
+        import sqlite3
+        conn = sqlite3.connect(self.dir / config.KANBAN_DB_NAME)
+        for table in tables:
+            conn.execute(f'CREATE TABLE "{table}" (dummy TEXT)')
+        conn.commit()
+        conn.close()
+
+    def test_看板マスタの面がある(self) -> None:
+        view = presenter.build()
+        self.assertTrue(any(s.title == "看板マスタ" for s in view.sections))
+
+    def test_看板マスタが無くてもNGにしない(self) -> None:
+        """機能自体は任意ではないが、分けたばかりで置き場所が未設定の
+        端末が多いうちは NG(直すべき不足)に見せない。"""
+        section = next(s for s in presenter.build().sections
+                      if s.title == "看板マスタ")
+        self.assertNotEqual(section.level, presenter.NG)
+
+    def test_梱包資材マスタの面は看板テーブルを数えない(self) -> None:
+        """8テーブルぶんの「不足」が、梱包資材マスタ側には出ない。"""
+        (self.dir / config.MATERIAL_DB_NAME).write_text("", encoding="utf-8")
+        import sqlite3
+        conn = sqlite3.connect(self.dir / config.MATERIAL_DB_NAME)
+        conn.execute("CREATE TABLE BoardMaster (ボード幅 INTEGER)")
+        conn.commit()
+        conn.close()
+
+        from packaging_tool import import_specs
+        master = next(s for s in presenter.build().sections
+                      if s.title == "梱包資材マスタ")
+        table_check = next(c for c in master.checks if c.label == "テーブル")
+        for table in import_specs.KANBAN_TABLES:
+            self.assertNotIn(table, table_check.detail,
+                             f"{table} が梱包資材マスタの不足に出ています")
+
+    def test_看板マスタのファイルが見つかる(self) -> None:
+        from packaging_tool import import_specs
+        self._make_kanban_file(import_specs.KANBAN_TABLES)
+        section = next(s for s in presenter.build().sections
+                      if s.title == "看板マスタ")
+        file_check = next(c for c in section.checks if c.label == "ファイル")
+        self.assertEqual(file_check.level, presenter.OK)
+        table_check = next(c for c in section.checks if c.label == "テーブル")
+        self.assertEqual(table_check.level, presenter.OK)
+
+    def test_看板マスタの中で足りないテーブルを言う(self) -> None:
+        from packaging_tool import import_specs
+        self._make_kanban_file(["Form状態管理"])  # 7つ足りない状態にする
+        section = next(s for s in presenter.build().sections
+                      if s.title == "看板マスタ")
+        table_check = next(c for c in section.checks if c.label == "テーブル")
+        self.assertEqual(table_check.level, presenter.WARN)
+        self.assertIn("看板_AIM", table_check.detail)
 
 
 class SettingsTests(PresenterTestCase):
@@ -608,6 +674,20 @@ class PathPasswordTests(PresenterTestCase):
         result = presenter.save(auto_import=False)
         self.assertTrue(result.ok, result.message)
 
+    def test_看板マスタの置き場所もパスワードで守る(self) -> None:
+        """置き場所を**変えるとき**だけ管理者パスワードが要る(master_dirと同じ)。"""
+        before = presenter.build().kanban_dir
+        result = presenter.save(kanban_dir=str(self.other()))
+        self.assertEqual(result.reason, presenter.REFUSE_NEED_PASSWORD)
+        self.assertEqual(presenter.build().kanban_dir, before)
+
+    def test_看板マスタの置き場所を変えられる(self) -> None:
+        other = self.other()
+        result = presenter.save(kanban_dir=str(other),
+                                password=config.ADMIN_PASSWORD)
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(presenter.build().kanban_dir, str(other))
+
     def test_既定に戻すのも変更(self) -> None:
         """空にすると既定へ戻る。**戻すのも行き先が変わること**。"""
         other = self.other()
@@ -666,6 +746,19 @@ class PathPasswordApiTests(DataWebTestCase):
         self.assertNotIn("password", body)
         self.assertNotIn(config.ADMIN_PASSWORD,
                          str(body))
+
+    def test_看板マスタの置き場所もパスワード無しでは403(self) -> None:
+        other = Path(tempfile.mkdtemp(prefix="guardapi4_"))
+        res = self.save(kanban_dir=str(other))
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         presenter.REFUSE_NEED_PASSWORD)
+
+    def test_看板マスタの置き場所は合っていれば通る(self) -> None:
+        other = Path(tempfile.mkdtemp(prefix="guardapi5_"))
+        res = self.save(kanban_dir=str(other), password=config.ADMIN_PASSWORD)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["kanban_dir"], str(other))
 
 
 if __name__ == "__main__":

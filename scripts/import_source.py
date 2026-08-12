@@ -15,6 +15,7 @@
 
     python3 scripts/import_source.py 梱包資材マスタ.sqlite3
     python3 scripts/import_source.py --lot-dir /path/to/台帳
+    python3 scripts/import_source.py --kanban-db /path/to/看板マスタ.sqlite3
 """
 from __future__ import annotations
 
@@ -34,6 +35,8 @@ def main() -> None:
                         help="梱包資材マスタの.sqlite3(省略時は起動フォルダから探す)")
     parser.add_argument("--lot-dir", type=Path,
                         help="仕掛台帳3ファイルのあるフォルダ(省略時は設定のパス)")
+    parser.add_argument("--kanban-db", type=Path,
+                        help="看板マスタの.sqlite3(省略時は設定のパスから探す)")
     parser.add_argument("--master-only", action="store_true", help="マスタだけ取り込む")
     parser.add_argument("--lot-only", action="store_true", help="仕掛台帳だけ取り込む")
     parser.add_argument("--check", action="store_true",
@@ -55,9 +58,11 @@ def main() -> None:
         if args.lot_only:
             result = data_sync.import_lot_ledger(conn, args.lot_dir)
         elif args.master_only:
-            result = data_sync.import_master(conn, args.sqlite3_path)
+            result = data_sync.import_master(conn, args.sqlite3_path,
+                                             kanban_path=args.kanban_db)
         else:
-            result = data_sync.import_master(conn, args.sqlite3_path)
+            result = data_sync.import_master(conn, args.sqlite3_path,
+                                             kanban_path=args.kanban_db)
             result.merge(data_sync.import_lot_ledger(conn, args.lot_dir))
 
     print(result.summary())

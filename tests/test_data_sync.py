@@ -64,6 +64,28 @@ class FindFilesTests(unittest.TestCase):
     def test_missing_master(self):
         self.assertIsNone(data_sync.find_material_db(self._tmp))
 
+    def test_finds_the_kanban_master_by_its_usual_name(self):
+        (self._tmp / config.KANBAN_DB_NAME).write_text("")
+        self.assertEqual(data_sync.find_kanban_db(self._tmp).name,
+                         config.KANBAN_DB_NAME)
+
+    def test_finds_the_kanban_db_suffix_too(self):
+        (self._tmp / "看板マスタ.db").write_text("")
+        self.assertEqual(data_sync.find_kanban_db(self._tmp).name,
+                         "看板マスタ.db")
+
+    def test_missing_kanban_master(self):
+        self.assertIsNone(data_sync.find_kanban_db(self._tmp))
+
+    def test_kanban_does_not_fall_back_to_other_files(self):
+        """`find_material_db` と違い、緩い一致はしない。
+
+        既定の置き場所は梱包資材マスタと同じ共有フォルダなので、緩い
+        一致にすると梱包資材マスタ自身を誤って拾いかねない。
+        """
+        (self._tmp / config.MATERIAL_DB_NAME).write_text("")
+        self.assertIsNone(data_sync.find_kanban_db(self._tmp))
+
     def test_finds_the_three_lot_files(self):
         for name in config.LOT_DB_FILES.values():
             (self._tmp / name).write_text("")
@@ -661,3 +683,133 @@ class ConcurrentWriteBackTests(unittest.TestCase):
 
         self.assertEqual(sorted(sent), [f"L{i}" for i in range(6)])
         self.assertEqual(len(sent), len(set(sent)), f"二重送信: {sent}")
+
+
+class KanbanImportTests(unittest.TestCase):
+    """看板(在庫薄警告)マスタは梱包資材マスタとは**別ファイル**から読む。
+
+    以前はこの8テーブル(Form状態管理・看板_*)も梱包資材マスタから
+    読む定義になっていたが、現場の梱包資材マスタには一度も入っておらず、
+    取り込みのたびに「取り込めませんでした」の8件に数えられていた。
+    現場から渡された実データは看板マスタ.sqlite3という別ファイルに
+    あったので、そちらから読むように分けた。
+    """
+
+    def setUp(self) -> None:
+        from packaging_tool import user_settings
+        self.conn = make_conn()
+        self.master_dir = Path(tempfile.mkdtemp(prefix="master_"))
+        self.kanban_dir = Path(tempfile.mkdtemp(prefix="kanban_"))
+        self.master_src = self.master_dir / config.MATERIAL_DB_NAME
+        self.kanban_src = self.kanban_dir / config.KANBAN_DB_NAME
+        self._make_master(self.master_src)
+        # 既定の看板マスタの置き場所を隔離する(本物の共有フォルダを
+        # 見に行かせない。他の試験が残した設定を引き継がせない)
+        saved = user_settings.get(config.KEY_KANBAN_DB_DIR)
+        user_settings.save(config.KEY_KANBAN_DB_DIR, str(self.kanban_dir))
+        self.addCleanup(user_settings.save, config.KEY_KANBAN_DB_DIR,
+                        saved if saved is not None else "")
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def _make_master(self, path: Path) -> None:
+        """梱包資材マスタ側のテーブルだけを持つ取り込み元。
+
+        看板系テーブルはここには**入れない** ── 現場の実ファイルと
+        同じ状態(看板系は無い)を再現する。BoardMaster以外は空(0件)
+        でよい ── `import_tables` は空の結果を列の突き合わせより先に
+        `imported[table]=0` として通すので、列名を合わせる必要が無い。
+        """
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE BoardMaster (ボード幅 INTEGER, ボード丈 INTEGER,"
+                     " ボードタイプ TEXT, データラベル TEXT)")
+        conn.execute("INSERT INTO BoardMaster VALUES (900, 1800, 'ハードボード', '')")
+        for table in import_specs.IMPORT_SPECS:
+            if table in import_specs.KANBAN_TABLES or table in (
+                    "BoardMaster", *import_specs.OPTIONAL_TABLES):
+                continue
+            conn.execute(f'CREATE TABLE "{table}" (dummy TEXT)')
+        conn.commit()
+        conn.close()
+
+    def _make_kanban(self, path: Path) -> None:
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE Form状態管理 (ライン名 TEXT, 状態 TEXT)")
+        conn.execute("INSERT INTO Form状態管理 VALUES ('L1', '稼働中')")
+        for table in import_specs.KANBAN_TABLES:
+            if table == "Form状態管理":
+                continue
+            conn.execute(
+                f'CREATE TABLE "{table}" (資材 TEXT, サイズ TEXT, 欲 TEXT, 不 TEXT,'
+                " 更新日 TEXT, 発送 TEXT, 倉庫確認日時 TEXT, 常設品 TEXT)")
+            conn.execute(f'INSERT INTO "{table}" (資材, サイズ) VALUES (?, ?)',
+                        (table, "900x1800"))
+        conn.commit()
+        conn.close()
+
+    def test_kanban_tables_are_read_from_the_kanban_file(self):
+        self._make_kanban(self.kanban_src)
+        result = data_sync.import_master(
+            self.conn, self.master_src, kanban_path=self.kanban_src)
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(result.imported["BoardMaster"], 1)
+        for table in import_specs.KANBAN_TABLES:
+            self.assertEqual(result.imported.get(table), 1,
+                             f"{table} が看板マスタから取り込まれていません")
+        row = self.conn.execute(
+            "SELECT ライン名, 状態 FROM Form状態管理").fetchone()
+        self.assertEqual((row[0], row[1]), ("L1", "稼働中"))
+
+    def test_master_file_never_has_kanban_tables_and_that_is_fine(self):
+        """梱包資材マスタ側に看板テーブルが無くても`不足`エラーにしない。
+
+        以前はここが8件の "テーブル名: ...を読めませんでした" という
+        エラーになっていた(このテストが失敗していたはずの状態)。
+        """
+        self._make_kanban(self.kanban_src)
+        result = data_sync.import_master(
+            self.conn, self.master_src, kanban_path=self.kanban_src)
+        for table in import_specs.KANBAN_TABLES:
+            self.assertFalse(any(table in e for e in result.errors),
+                             f"{table} がエラーに含まれています: {result.errors}")
+
+    def test_missing_kanban_file_is_a_note_not_an_error(self):
+        """置き場所が未設定・見つからないときは、梱包資材マスタ側を
+        失敗にせず、案内を1件だけ `notes` に足す。
+
+        `kanban_path` を明示して指定したのに開けない場合は(梱包資材
+        マスタの `source_path` と同じ扱いで)テーブルごとの詳しいエラーに
+        なる ── 「置き場所が未設定」と「指定した場所が間違っている」は
+        別の状況なので、ここで確かめるのは前者(`find_kanban_db` が
+        自動探索で見つけられない場合)。
+        """
+        with mock.patch.object(data_sync, "find_kanban_db", return_value=None):
+            result = data_sync.import_master(self.conn, self.master_src)
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(result.imported["BoardMaster"], 1)
+        self.assertTrue(any(config.KANBAN_DB_NAME in n for n in result.notes),
+                        result.notes)
+        for table in import_specs.KANBAN_TABLES:
+            self.assertNotIn(table, result.imported)
+
+    def test_explicit_wrong_kanban_path_gives_detailed_errors(self):
+        """`kanban_path` を明示したのに開けないときは、テーブルごとの
+        詳しいエラーになる(梱包資材マスタの `source_path` と同じ扱い)。
+
+        明示したパスは信用して、そのまま開こうとする ──
+        `source_path` を明示したときに `find_material_db()` の
+        自動探索へ回さないのと同じ理由。
+        """
+        result = data_sync.import_master(
+            self.conn, self.master_src, kanban_path=self.kanban_dir / "無い.sqlite3")
+        self.assertFalse(result.ok)
+        for table in import_specs.KANBAN_TABLES:
+            self.assertTrue(any(table in e for e in result.errors),
+                            f"{table} の詳しいエラーがありません: {result.errors}")
+
+    def test_default_kanban_path_is_found_via_config(self):
+        """`kanban_path` を省略すると `find_kanban_db()`(設定のパス)を見る。"""
+        self._make_kanban(self.kanban_src)
+        result = data_sync.import_master(self.conn, self.master_src)
+        self.assertEqual(result.imported.get("看板_AIM"), 1)

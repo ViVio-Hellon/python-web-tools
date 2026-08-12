@@ -127,6 +127,19 @@ def find_material_db(directory: Optional[Path] = None) -> Optional[Path]:
     return None
 
 
+def find_kanban_db(directory: Optional[Path] = None) -> Optional[Path]:
+    """看板マスタの sqlite3 をフォルダから探す。
+
+    既定の置き場所は梱包資材マスタと同じ共有フォルダにしてあるため、
+    `find_material_db` と同じ「名前が合わなければフォルダ内の他の
+    sqlite3 を使う」自動判別はしない ── 同じフォルダに梱包資材マスタ
+    自身が並んでいることがあり、緩い一致だとそちらを誤って拾いかねない。
+    名前(拡張子違いは可)が一致したときだけ返す。
+    """
+    directory = Path(directory or config.kanban_db_dir())
+    return source_db.find(directory, config.KANBAN_DB_NAME)
+
+
 def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
     """仕掛台帳の3ファイルを探す。見つかったものだけ返す。
 
@@ -307,7 +320,8 @@ def import_tables(
 
 
 def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
-                  *, progress: Optional[Progress] = None,
+                  *, kanban_path: Optional[Path] = None,
+                  progress: Optional[Progress] = None,
                   progress_range: tuple[int, int] = (0, 100)) -> ImportResult:
     """梱包資材マスタを取り込む。パスを省略すると設定のフォルダから探す。
 
@@ -315,6 +329,15 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
     消えてしまわないように**、書き戻し対象のテーブルは先に送ってから
     読み直す。送れなかったときはそのテーブルだけ取り込みを見送る
     (取り込み元が正となるが、こちらの未送信分を失うほうが困る)。
+
+    【看板マスタは別ファイル】
+    `import_specs.KANBAN_TABLES`(Form状態管理・看板_*)は梱包資材マスタ
+    ではなく看板マスタ.sqlite3(`kanban_path` 省略時は
+    `find_kanban_db()`)から読む。見つからなければテーブルごとに8件の
+    エラーを出すのではなく、案内を1件だけ `notes` に足す
+    (アクセス権限と違い機能そのものが任意なわけではないが、
+    分けたばかりで置き場所が未設定の端末が多いうちは
+    「毎回失敗」に見せないため)。
     """
     path = source_path or find_material_db()
     if path is None:
@@ -325,7 +348,10 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
         return result
 
     log.info("マスタ取り込み開始: %s", path)
-    specs = dict(import_specs.IMPORT_SPECS)
+    specs = {t: s for t, s in import_specs.IMPORT_SPECS.items()
+             if t not in import_specs.KANBAN_TABLES}
+    kanban_specs = {t: s for t, s in import_specs.IMPORT_SPECS.items()
+                    if t in import_specs.KANBAN_TABLES}
     result = ImportResult()
 
     unsent = _unsent_writeback_tables(conn)
@@ -340,13 +366,35 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
                 f"({reason})")
             log.warning("%s: 未送信 %s件のため総入れ替えを見送り", table, unsent[table])
 
+    # 梱包資材マスタと看板マスタで進捗の帯を分ける(テーブル数の比で配分)
+    start_pct, end_pct = progress_range
+    split_pct = start_pct + (end_pct - start_pct) * len(specs) // max(
+        len(specs) + len(kanban_specs), 1)
+
     result = import_tables(
         conn, path, specs,
         required=import_specs.REQUIRED_KEY_COLUMNS,
         blank_is_missing=import_specs.BLANK_IS_MISSING,
         optional=import_specs.OPTIONAL_TABLES,
         fallbacks=import_specs.NULL_FALLBACKS, result=result,
-        progress=progress, progress_range=progress_range)
+        progress=progress, progress_range=(start_pct, split_pct))
+
+    kanban_source = kanban_path or find_kanban_db()
+    if kanban_source is None:
+        log.info("看板マスタが見つかりません(%s): %s",
+                 config.kanban_db_dir(), config.KANBAN_DB_NAME)
+        result.notes.append(
+            f"{config.KANBAN_DB_NAME} が見つかりません(探した場所: "
+            f"{config.kanban_db_dir()})。見つかると Form状態管理・"
+            "看板_*(在庫薄警告)の8テーブルが取り込まれます。")
+    else:
+        log.info("看板マスタ取り込み: %s", kanban_source)
+        result = import_tables(
+            conn, kanban_source, kanban_specs,
+            required=import_specs.REQUIRED_KEY_COLUMNS,
+            blank_is_missing=import_specs.BLANK_IS_MISSING,
+            fallbacks=import_specs.NULL_FALLBACKS, result=result,
+            progress=progress, progress_range=(split_pct, end_pct))
 
     # **取り込んだ行は、取り込み元から来た行。** 送り返す必要はない。
     #
@@ -688,13 +736,31 @@ def describe_environment() -> str:
     lines.append(f"  探した場所: {config.master_db_dir()}")
     if material is not None:
         # 取り込みが空になる原因はたいてい「テーブル名が違う」なので、
-        # そのファイルに実際どのテーブルがあるのかを出しておく
+        # そのファイルに実際どのテーブルがあるのかを出しておく。
+        # 看板マスタ側のテーブル(KANBAN_TABLES)は別ファイルの持ち物
+        # なので、ここには数えない(数えると毎回「不足」に見える)
         try:
             names = list_tables(material)
         except Exception:                  # noqa: BLE001 - 案内なので握る
             names = []
         if names:
-            missing = [t for t in import_specs.IMPORT_SPECS if t not in names]
+            expect = [t for t in import_specs.IMPORT_SPECS
+                      if t not in import_specs.KANBAN_TABLES]
+            missing = [t for t in expect if t not in names]
+            lines.append(f"  テーブル: {len(names)}個")
+            if missing:
+                lines.append(f"  ※取り込み対象なのに無い: {', '.join(missing)}")
+
+    kanban = find_kanban_db()
+    lines.append(f"看板マスタ: {kanban or '(見つかりません)'}")
+    lines.append(f"  探した場所: {config.kanban_db_dir()}")
+    if kanban is not None:
+        try:
+            names = list_tables(kanban)
+        except Exception:                  # noqa: BLE001 - 案内なので握る
+            names = []
+        if names:
+            missing = [t for t in import_specs.KANBAN_TABLES if t not in names]
             lines.append(f"  テーブル: {len(names)}個")
             if missing:
                 lines.append(f"  ※取り込み対象なのに無い: {', '.join(missing)}")
