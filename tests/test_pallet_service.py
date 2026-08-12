@@ -58,19 +58,25 @@ class CalcTableTests(unittest.TestCase):
         self.assertEqual(svc.calc_dake_min(300), 191)
         self.assertEqual(svc.calc_dake_min(700), 591)
         self.assertEqual(svc.calc_dake_min(6100), 5591)
-        self.assertEqual(svc.calc_dake_min(9999), 5591)  # 6100超は頭打ち
+        # 基準表に無い6100超も現物に合わせて2段延長してある
+        self.assertEqual(svc.calc_dake_min(6600), 6091)
+        self.assertEqual(svc.calc_dake_min(7100), 6591)
+        self.assertEqual(svc.calc_dake_min(9999), 6591)  # 7100超は頭打ち
 
     def test_calc_dake_max_pairs_with_min(self):
         self.assertEqual(svc.calc_dake_max(600), 590)
         self.assertEqual(svc.calc_dake_max(601), 690)
         self.assertEqual(svc.calc_dake_max(6100), 6090)
-        self.assertEqual(svc.calc_dake_max(9999), 99999)  # 6100超は上限なし
+        self.assertEqual(svc.calc_dake_max(6600), 6590)
+        self.assertEqual(svc.calc_dake_max(7100), 7090)
+        self.assertEqual(svc.calc_dake_max(9999), 99999)  # 7100超は上限なし
 
     def test_calc_haba_max_pairs_with_min(self):
         self.assertEqual(svc.calc_haba_max(150), 140)
         self.assertEqual(svc.calc_haba_max(400), 390)
         self.assertEqual(svc.calc_haba_max(1850), 1840)
-        self.assertEqual(svc.calc_haba_max(9999), 99999)  # 1850超は上限なし
+        self.assertEqual(svc.calc_haba_max(2050), 2040)
+        self.assertEqual(svc.calc_haba_max(9999), 99999)  # 2050超は上限なし
 
     def test_fit_range_can_never_invert(self):
         """適合範囲の min > max は「何を検索してもヒットしない行」を生む。
@@ -97,8 +103,25 @@ class CalcTableTests(unittest.TestCase):
         # 400以下も刻む(旧版は400以下が一括で300だった)
         self.assertEqual(svc.calc_haba_min(150), 50)
         self.assertEqual(svc.calc_haba_min(300), 241)
-        self.assertEqual(svc.calc_haba_min(1850), 1741)
-        self.assertEqual(svc.calc_haba_min(5000), 1741)  # 1850超は頭打ち
+        # 1050超も50mm刻み。1100は「1051〜1100」の帯で1041
+        self.assertEqual(svc.calc_haba_min(1100), 1041)
+        self.assertEqual(svc.calc_haba_min(1101), 1091)
+        self.assertEqual(svc.calc_haba_min(1850), 1791)
+        self.assertEqual(svc.calc_haba_min(2050), 1991)
+        self.assertEqual(svc.calc_haba_min(5000), 1991)  # 2050超は頭打ち
+
+    def test_haba_bands_are_50mm_all_the_way_up(self):
+        """1050超だけ100mm刻みで、帯が倍の幅を持っていた。
+
+        帯が広い分だけ、そのパレットには載らない小さい製品まで
+        適合と判定されていた(幅1100が1050幅と同じ下限を名乗る)。
+        全域が50mm刻み = 帯の下限-10 であることを固定する。
+        """
+        for upper in range(1100, 2051, 50):
+            self.assertEqual(svc.calc_haba_min(upper), upper - 50 - 9,
+                             f"幅{upper}の帯の下限がずれている")
+            self.assertEqual(svc.calc_haba_max(upper), upper - 10,
+                             f"幅{upper}の帯の上限がずれている")
 
     def test_calc_ashi_boundaries(self):
         self.assertEqual(svc.calc_ashi(1550), 2)
@@ -327,9 +350,14 @@ class CapToPalletTests(unittest.TestCase):
         self.assertEqual(svc.cap_to_pallet(svc.calc_dake_max(3150), 3150), 3140)
 
     def test_an_odd_size_is_capped_to_itself(self):
-        """1490のパレットが1540の製品を受けると名乗らないこと。"""
-        self.assertEqual(svc.calc_haba_max(1490), 1540)          # 表の値
-        self.assertEqual(svc.cap_to_pallet(1540, 1490), 1480)    # 頭打ち後
+        """帯の上限を名乗らせないこと。
+
+        幅の帯が50mm刻みになったので幅方向の名乗り過ぎは最大50mmに
+        縮んだが、無くなってはいない(1455のパレットは「1451〜1500」の
+        帯なので上限1490をもらう)。丈は帯が広いままなので差も大きい。
+        """
+        self.assertEqual(svc.calc_haba_max(1455), 1490)          # 表の値
+        self.assertEqual(svc.cap_to_pallet(1490, 1455), 1445)    # 頭打ち後
         self.assertEqual(svc.cap_to_pallet(svc.calc_dake_max(2970), 2970), 2960)
 
     def test_the_cap_never_exceeds_the_pallet(self):
