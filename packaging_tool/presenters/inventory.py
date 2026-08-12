@@ -19,7 +19,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .. import config, pallet_map, pallet_service
+from .. import config, pallet_service
 
 # 一覧の列。VBA `hdrStk0`〜`hdrStk6` の並びをそのまま引き継ぐ。
 #   (見出し, DBの列名, 数値か)
@@ -81,8 +81,16 @@ class MapView:
     height: float = 540.0
     positions: list[MapPosition] = field(default_factory=list)
     background: str = ""         # 背景画像のURL(無ければ空)
+    # 背景の置き方。**枠いっぱいに引き伸ばさない** ── 写真の画角は図の枠と
+    # 一致しないので、ずらし量と倍率を持って合わせこめるようにする
+    background_x: float = 0.0
+    background_y: float = 0.0
+    background_scale: float = 1.0
     # 在庫にはあるのに図に無い位置。図から押せないので気づかせる
     missing: list[str] = field(default_factory=list)
+    # 配置編集。押す前に「いま動かせるのか」が読めるように画面へ渡す
+    editing: bool = False
+    dirty: bool = False
 
     @property
     def view_box(self) -> str:
@@ -113,13 +121,21 @@ class InventoryViewModel:
 # ------------------------------------------------------------------
 def build_map(conn: sqlite3.Connection, *,
               hit: Optional[set[str]] = None,
-              active: str = "") -> MapView:
+              active: str = "", session=None) -> MapView:
     """保管位置マップを組み立てる。
 
     在庫のある棚と空の棚を見た目で分ける。空の棚まで同じ濃さで描くと、
     どこに物があるのかが図から読めない。
+
+    【図はセッションから取る】
+    `pallet_map.load()` は毎回ファイルを読みます。編集中に読み直すと
+    **まだ保存していない移動が消える**ので、セッションが抱えている
+    図をそのまま使います(`layout` の presenter と同じ)。
     """
-    plan = pallet_map.load()
+    if session is None:
+        from .. import pallet_map_session
+        session = pallet_map_session.get_session()
+    plan = session.plan
     hit = hit or set()
     counts = position_counts(conn)
 
@@ -141,7 +157,11 @@ def build_map(conn: sqlite3.Connection, *,
     return MapView(
         width=plan.width, height=plan.height, positions=positions,
         background=_background_url(plan),
+        background_x=plan.background.x,
+        background_y=plan.background.y,
+        background_scale=plan.background.scale,
         missing=plan.unknown(sorted(counts_to_names(conn))),
+        editing=session.editing, dirty=session.dirty,
     )
 
 
@@ -173,12 +193,18 @@ def _key(name: str) -> str:
 def _background_url(plan) -> str:
     """背景画像。無ければ空。
 
-    tkinter版はファイルパスを直接読んでいたが、ブラウザからは読めない。
-    サーバ経由で配る(差し替えは Phase 7 の配置編集で作る)。
+    中身(`data:` URL)は `pallet_map.json` が持っていますが、画面へは
+    **URLで渡します**。図を描き直すたびに数MBの文字列を載せると、
+    棚を1つ押すだけで応答がその分だけ重くなるためです。
+
+    以前はここが `background.path` を見ていました。`Background` に
+    `path` はありません(あるのは `image`)ので、**背景を設定しても
+    必ず空**になり、簡易在庫の図に写真が出たことは一度もありません。
+    棚検索(`presenters/layout._background_url`)は `image` を見ています。
     """
     background = getattr(plan, "background", None)
-    path = getattr(background, "path", "") if background else ""
-    return "/api/inventory/map/background" if path else ""
+    image = getattr(background, "image", "") if background else ""
+    return "/api/inventory/map/background" if image else ""
 
 
 # ------------------------------------------------------------------
@@ -280,6 +306,11 @@ def map_dict(view: MapView) -> dict[str, Any]:
         "width": view.width,
         "height": view.height,
         "background": view.background,
+        "background_x": view.background_x,
+        "background_y": view.background_y,
+        "background_scale": view.background_scale,
+        "editing": view.editing,
+        "dirty": view.dirty,
         "missing": view.missing,
         "positions": [{"name": p.name, "x": p.x, "y": p.y, "w": p.w, "h": p.h,
                        "state": p.state, "count": p.count}

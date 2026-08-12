@@ -136,6 +136,29 @@ def move():
     return _apply(session, session.move(str(body.get("name", "")), x, y))
 
 
+@bp.post("/api/layout/resize")
+def resize():
+    """置き場の大きさを変える(背景の写真に合わせこむため)。"""
+    body = request.get_json(silent=True) or {}
+    session = _session()
+    w, h = _to_float(body.get("w")), _to_float(body.get("h"))
+    if w is None or h is None:
+        return jsonify(_error("bad_size", "大きさを指定してください。")), 400
+    return _apply(session, session.resize(str(body.get("name", "")), w, h))
+
+
+@bp.post("/api/layout/background/place")
+def place_background():
+    """背景の写真をずらす・拡げ縮めする。**箱は動かさない。**"""
+    body = request.get_json(silent=True) or {}
+    session = _session()
+    x, y = _to_float(body.get("x")), _to_float(body.get("y"))
+    scale = _to_float(body.get("scale"))
+    if x is None or y is None or scale is None:
+        return jsonify(_error("bad_point", "背景の位置と倍率を指定してください。")), 400
+    return _apply(session, session.place_background(x, y, scale))
+
+
 @bp.post("/api/layout/add")
 def add():
     body = request.get_json(silent=True) or {}

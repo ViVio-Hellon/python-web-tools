@@ -11,10 +11,11 @@
   (タッチ端末があるので、これが効く)。
 */
 
-import { api } from "../api.js";
+import { api, tokenUrl } from "../api.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
+import * as mapedit from "../mapedit.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -27,6 +28,9 @@ const el = {};
 let selected = null;      // 払い出す対象の行
 let lastQuery = null;     // 「最新にする」で同じ表示を取り直すため
 let zoom = 0;             // ZOOM_STEPS の添字
+let dragger = null;       // 掴む手(`mapedit.js`)
+let lastMap = null;       // いまの図。掴んだ箱の元の大きさを引くのに要る
+let picked = "";          // 配置編集で選んでいる位置(消すときの対象)
 
 function setStatus(message, kind) {
   if (!message) { el.status.hidden = true; return; }
@@ -39,16 +43,19 @@ function setStatus(message, kind) {
 // 図
 // ------------------------------------------------------------------
 function drawMap(map) {
+  lastMap = map;
   el.map.setAttribute("viewBox", map.view_box);
   el.map.replaceChildren();
 
+  el.map.classList.toggle("map--editing", Boolean(map.editing));
+
   if (map.background) {
     const image = document.createElementNS(SVG_NS, "image");
-    image.setAttribute("href", map.background);
-    image.setAttribute("x", "0");
-    image.setAttribute("y", "0");
-    image.setAttribute("width", map.width);
-    image.setAttribute("height", map.height);
+    // **ヘッダを付けられない読み込み**なので、トークンはURLに載せる
+    image.setAttribute("href", tokenUrl(map.background));
+    // **枠いっぱいに引き伸ばさない。** 写真の画角は図の枠と一致しないので、
+    // ずらし量と倍率(`background_x/y/scale`)のとおりに置く
+    mapedit.applyBackground(image, map);
     el.map.appendChild(image);
   }
 
@@ -57,6 +64,9 @@ function drawMap(map) {
     group.setAttribute("class", `pos pos--${pos.state}`);
     group.setAttribute("tabindex", "0");
     group.setAttribute("role", "button");
+    // 掴む手(`mapedit.js`)が名前で引けるようにする
+    group.setAttribute("data-name", pos.name);
+    if (pos.name === picked) group.classList.add("is-selected");
     // 読み上げと吹き出しの両方に、押すと何が起きるかを書く
     const what = pos.count ? `${pos.count}種類` : "在庫なし";
     group.setAttribute("aria-label", `位置 ${pos.name}(${what})`);
@@ -77,11 +87,15 @@ function drawMap(map) {
     title.textContent = `位置 ${pos.name} — ${what}`;
 
     group.append(rect, text, title);
-    group.addEventListener("click", () => showPosition(pos.name));
+    // 掴みしろは**編集中だけ**。出しっぱなしにすると、見るだけのときに
+    // 「掴める」と読めてしまう
+    if (map.editing) group.appendChild(mapedit.grip(pos));
+    // 押したときの動きは掴む手が決める(動かしたのか押したのかを分ける)。
+    // キーボードは掴めないので、こちらは直に繋ぐ
     group.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        showPosition(pos.name);
+        onTapPosition(pos.name);
       }
     });
     el.map.appendChild(group);
@@ -101,6 +115,24 @@ function drawMap(map) {
     option.value = p.name;
     return option;
   }));
+
+  drawEditBar(map);
+}
+
+/** 配置編集の道具立て。**編集中だけ出す。** */
+function drawEditBar(map) {
+  if (!el.mapEditToggle) return;
+  const editing = Boolean(map.editing);
+  el.mapEditToggle.setAttribute("aria-pressed", String(editing));
+  el.mapEditToggle.classList.toggle("btn--on", editing);
+  el.mapEditBox.hidden = !editing;
+  el.mapEditState.textContent = editing ? "編集中(ドラッグで動かせます)" : "";
+  el.mapDirty.hidden = !map.dirty;
+  // 背景が無ければ合わせこむものが無い。押せるのに何も起きない欄を作らない
+  el.mapBgPlace.hidden = !map.background;
+  el.mapBgX.value = map.background_x;
+  el.mapBgY.value = map.background_y;
+  el.mapBgScale.value = map.background_scale;
 }
 
 function applyZoom(step) {
@@ -225,6 +257,55 @@ async function showPosition(name) {
   if (el.invTabs) tabs.select(el.invTabs, "list");
 }
 
+/** 図の位置を押した。**編集中は選ぶだけ**(消す対象を決める)。
+
+    編集中に一覧まで開くと、動かすつもりの操作で面が切り替わる。 */
+function onTapPosition(name) {
+  if (lastMap && lastMap.editing) {
+    picked = name;
+    for (const group of el.map.querySelectorAll(".pos")) {
+      group.classList.toggle("is-selected", group.dataset.name === name);
+    }
+    return;
+  }
+  showPosition(name);
+}
+
+/* ================================================================
+   配置編集
+
+   判断はサーバが持つ(`pallet_map_session`)。ここは掴んだ結果を送り、
+   返ってきた画面ぜんぶを描き直すだけ ── 棚検索と同じ約束。
+   ================================================================ */
+function startDragging() {
+  dragger = mapedit.attach(el.map, {
+    selector: ".pos",
+    editing: () => Boolean(lastMap && lastMap.editing),
+    find: (name) => (lastMap
+                     ? lastMap.positions.find((p) => p.name === name) || null
+                     : null),
+    onTap: onTapPosition,
+    onMove: (name, x, y) => sendMap("/api/inventory/map/move", { name, x, y }),
+    onResize: (name, w, h) => sendMap("/api/inventory/map/resize", { name, w, h }),
+  });
+}
+
+/** 図を触る操作。**返ってくるのは画面ぜんぶ**なので、そのまま描き直す。 */
+async function sendMap(path, body = {}) {
+  try {
+    const view = await api.post(path, body);
+    render(view);
+    if (view.message) toast(view.message, "ok");
+    return view;
+  } catch (err) {
+    // 断られても本文に画面ぜんぶが入っていることがある。
+    // 「断られた」と「画面が古いまま」を同時に起こさない
+    if (err.body && err.body.map) render(err.body);
+    toastError(err);
+    return null;
+  }
+}
+
 async function load() {
   if (!lastQuery) return;
   try {
@@ -309,7 +390,12 @@ export function start(state) {
                     "rw", "rl", "rqty", "rpos", "rsym", "rind", "runit", "rnote",
                     "receive", "picked", "pickWhy", "pkSize", "pkPos", "pkSym",
                     "pkStock", "iqty", "issue", "positions",
-                    "fromSelectionWhy"]) {
+                    "fromSelectionWhy",
+                    "mapEditToggle", "mapEditBox", "mapEditState", "mapDirty",
+                    "mapNewPos", "mapAddPos", "mapRemovePos",
+                    "mapBgFile", "mapClearBg", "mapBgPlace",
+                    "mapBgX", "mapBgY", "mapBgScale", "mapBgFit",
+                    "mapSave", "mapReset"]) {
     el[id] = document.getElementById(id);
   }
   el.invTabs = document.getElementById("invTabs");
@@ -323,6 +409,9 @@ export function start(state) {
   // 前に来たときの選択や検索条件がここに残っている(`nav.js`)
   selected = null;
   lastQuery = null;
+  lastMap = null;
+  picked = "";
+  dragger?.reset();
 
   applyZoom(0);
   el.zoomIn.addEventListener("click", () => applyZoom(zoom + 1));
@@ -353,6 +442,58 @@ export function start(state) {
     setStatus("", "ok");
     el.fromSelectionWhy.hidden = true;
   });
+  // --- 配置編集 ---------------------------------------------------
+  startDragging();
+  el.mapEditToggle.addEventListener("click", () => sendMap(
+    "/api/inventory/map/edit", { on: !(lastMap && lastMap.editing) }));
+  el.mapAddPos.addEventListener("click", async () => {
+    const view = await sendMap("/api/inventory/map/add",
+                               { name: el.mapNewPos.value });
+    if (view) el.mapNewPos.value = "";
+  });
+  el.mapRemovePos.addEventListener("click", () => {
+    if (!picked) {
+      toast("消す位置を図から選んでください。", "warn");
+      return;
+    }
+    sendMap("/api/inventory/map/remove", { name: picked }).then(() => {
+      picked = "";
+    });
+  });
+
+  el.mapBgFile.addEventListener("change", () => {
+    const file = el.mapBgFile.files && el.mapBgFile.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      sendMap("/api/inventory/map/background", { image: String(reader.result) });
+      el.mapBgFile.value = "";
+    };
+    reader.onerror = () => toast("画像を読めませんでした。", "warn");
+    reader.readAsDataURL(file);
+  });
+  el.mapClearBg.addEventListener("click", () =>
+    sendMap("/api/inventory/map/background", { image: "" }));
+
+  // 背景の合わせこみ。**数で入れる** ── 掴んで動かす形にすると箱を掴む
+  // 操作とぶつかり、どちらが動いたのか分からなくなる
+  const placeBg = () => sendMap("/api/inventory/map/background/place", {
+    x: el.mapBgX.value, y: el.mapBgY.value, scale: el.mapBgScale.value,
+  });
+  for (const box of [el.mapBgX, el.mapBgY, el.mapBgScale]) {
+    box.addEventListener("change", placeBg);
+  }
+  el.mapBgFit.addEventListener("click", () => sendMap(
+    "/api/inventory/map/background/place", { x: 0, y: 0, scale: 1 }));
+
+  el.mapSave.addEventListener("click", () => sendMap("/api/inventory/map/save"));
+  el.mapReset.addEventListener("click", () => {
+    // 出荷時に戻すと編集した内容は消える。取り消せないので一度確かめる
+    if (confirm("出荷時の配置に戻します。編集した内容は消えます。よろしいですか?")) {
+      sendMap("/api/inventory/map/reset");
+    }
+  });
+
   el.receive.addEventListener("click", doReceive);
   el.issue.addEventListener("click", doIssue);
   el.iqty.addEventListener("keydown", (event) => {

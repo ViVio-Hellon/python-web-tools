@@ -214,11 +214,55 @@ class LayoutSession:
         if item is None:
             return LayoutOpResult(False, f"{name} は配置図にありません。",
                                   REFUSE_NOT_LISTED)
-        x = min(max(0.0, x), max(0.0, self.plan.width - item.w))
-        y = min(max(0.0, y), max(0.0, self.plan.height - item.h))
+        from . import map_data
+        x, y = map_data.clamp_point(x, y, item.w, item.h,
+                                    self.plan.width, self.plan.height)
         if not self.plan.move_item(name, x, y):
             return LayoutOpResult(False, f"{name} を動かせませんでした。",
                                   REFUSE_FAILED)
+        self.dirty = True
+        return LayoutOpResult(True, "")
+
+    def resize(self, name: str, w: float, h: float) -> LayoutOpResult:
+        """置き場の大きさを変える(背景の写真に合わせこむため)。
+
+        出荷時の大きさは**どれも同じ四角**です。実際の棚は間口も奥行も
+        まちまちなので、写真を下敷きにすると箱だけが浮きます。
+        大きさを変えられれば、図を見た瞬間に現場と重なります。
+        """
+        if not self.editing:
+            return LayoutOpResult(False, "先に「配置編集」をONにしてください。",
+                                  REFUSE_BAD_INPUT)
+        item = self.plan.item(name)
+        if item is None:
+            return LayoutOpResult(False, f"{name} は配置図にありません。",
+                                  REFUSE_NOT_LISTED)
+        from . import map_data
+        w, h = map_data.clamp_size(w, h, self.plan.width, self.plan.height)
+        if not self.plan.resize_item(name, w, h):
+            return LayoutOpResult(False, f"{name} の大きさを変えられませんでした。",
+                                  REFUSE_FAILED)
+        # 大きくした結果、図からはみ出すことがある。動かすときと同じ枠に戻す
+        x, y = map_data.clamp_point(item.x, item.y, w, h,
+                                    self.plan.width, self.plan.height)
+        self.plan.move_item(name, x, y)
+        self.dirty = True
+        return LayoutOpResult(True, "")
+
+    def place_background(self, x: float, y: float,
+                         scale: float) -> LayoutOpResult:
+        """背景の写真そのものをずらす・拡げ縮めする。
+
+        **箱を動かさずに下敷きを合わせる**ための操作です。写真の画角は
+        図の枠と一致しないので、枠いっぱいに引き伸ばすと必ずずれます。
+        """
+        if not self.editing:
+            return LayoutOpResult(False, "先に「配置編集」をONにしてください。",
+                                  REFUSE_BAD_INPUT)
+        from . import map_data
+        self.plan.background = (self.plan.background
+                                .placed_at(x, y)
+                                .scaled_to(map_data.clamp_scale(scale)))
         self.dirty = True
         return LayoutOpResult(True, "")
 
@@ -269,9 +313,10 @@ class LayoutSession:
             return LayoutOpResult(False, "先に「配置編集」をONにしてください。",
                                   REFUSE_BAD_INPUT)
         from . import map_data
-        self.plan.background = map_data.Background(
-            image=image, x=self.plan.background.x,
-            y=self.plan.background.y, scale=self.plan.background.scale)
+        # **差し替えたら位置と倍率は初期に戻す。** 前の写真に合わせた
+        # ずらし量を新しい写真へ持ち越すと、開いた瞬間に枠の外へ出ている
+        # ことがあり、直し方が分からなくなる
+        self.plan.background = map_data.Background(image=image)
         self.dirty = True
         return LayoutOpResult(True, "背景画像を差し替えました" if image
                               else "背景画像を外しました")

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, render_template, request
 
-from packaging_tool import data_sync, pallet_map, pallet_service
+from packaging_tool import (data_sync, pallet_map_session, pallet_service)
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import inventory as inv
 
@@ -72,20 +72,169 @@ def at_position(name: str):
 def background():
     """図の背景画像。設定されていなければ 404。
 
-    サーバのファイルをそのまま返すので、**設定に書かれた1枚だけ**を返す
-    (パスを要求で受け取ると、任意のファイルを読ませることになる)。
-    """
-    from flask import send_file
+    `data:` URL をそのまま返す。**要求でパスを受け取らない**ので、
+    任意のファイルを読ませる余地が無い(`routes/layout.background` と同じ)。
 
-    plan = pallet_map.load()
-    path = getattr(plan.background, "path", "")
-    if not path:
+    以前はここが `background.path` を開こうとしていた。`Background` に
+    `path` は無い(あるのは `image`)ので、背景を設定しても必ず404で、
+    簡易在庫の図に写真が出たことは一度も無かった。
+    """
+    import base64
+    import binascii
+
+    from flask import Response
+
+    image = _map_session().plan.background.image
+    if not image or not image.startswith("data:"):
         return jsonify(_error("no_background", "背景画像は設定されていません")), 404
     try:
-        return send_file(path)
-    except OSError:
-        log.warning("背景画像を読めません: %s", path)
+        header, encoded = image.split(",", 1)
+        mimetype = header[len("data:"):].split(";")[0]
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        log.warning("背景画像を読めません(壊れた data: URL)")
         return jsonify(_error("no_background", "背景画像を読めませんでした")), 404
+    return Response(raw, mimetype=mimetype or "application/octet-stream")
+
+
+# ------------------------------------------------------------------
+# 配置編集
+#
+# 棚検索(`routes/layout.py`)と同じ約束にそろえてある。覚え直しを
+# 増やさないため、URLの形も断りの種類も同じ。
+# ------------------------------------------------------------------
+# 背景画像の上限と形式。**棚検索と同じ**(片方だけ通る画像を作らない)
+MAX_BACKGROUND_BYTES = 4 * 1024 * 1024
+ALLOWED_IMAGE_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,",
+                          "data:image/gif;base64,", "data:image/webp;base64,")
+
+
+def _map_session():
+    return pallet_map_session.get_session()
+
+
+def _map_state(result=None):
+    """図を触ったあとの**画面ぜんぶ**。どの操作の後も同じものを返す。"""
+    view = inv.initial(get_db())
+    body = inv.to_dict(view)
+    if result is not None:
+        body["message"] = result.message
+    return body
+
+
+def _map_apply(result):
+    """操作1回の結果を応答にする(`routes/layout._apply` と同じ約束)。
+
+    断ったときも**画面ぜんぶを返す**。押した拍子に図が消えると、
+    断られたのか壊れたのか区別できない。
+    """
+    if result.ok:
+        return jsonify(_map_state(result))
+    status = _MAP_STATUS.get(result.reason, 400)
+    if status == 400:
+        return jsonify(_error(result.reason, result.message)), status
+    return jsonify({**_map_state(result),
+                    "error": {"code": result.reason,
+                              "message": result.message}}), status
+
+
+# **棚検索(`routes/layout._STATUS_BY_REASON`)と同じ写し方。**
+# 同じ断りに違う番号を返すと、画面側が図ごとに書き分けることになる
+_MAP_STATUS = {
+    pallet_map_session.REFUSE_BAD_INPUT: 400,
+    pallet_map_session.REFUSE_NOT_LISTED: 400,
+    pallet_map_session.REFUSE_FAILED: 500,
+}
+
+
+@bp.post("/api/inventory/map/edit")
+def set_map_editing():
+    """配置編集の入り切り。
+
+    通常は動かせない。図はよく押す(その位置の在庫を見る)ので、
+    常時ドラッグできると見るつもりの操作で位置がずれる。
+    """
+    body = request.get_json(silent=True) or {}
+    return _map_apply(_map_session().set_editing(bool(body.get("on"))))
+
+
+@bp.post("/api/inventory/map/move")
+def move_position():
+    """保管位置を動かす。座標は**図の論理座標**(SVGの viewBox と同じ)。"""
+    body = request.get_json(silent=True) or {}
+    x, y = _to_float(body.get("x")), _to_float(body.get("y"))
+    if x is None or y is None:
+        return jsonify(_error("bad_point", "移動先を指定してください。")), 400
+    return _map_apply(_map_session().move(str(body.get("name", "")), x, y))
+
+
+@bp.post("/api/inventory/map/resize")
+def resize_position():
+    """保管位置の大きさを変える(背景の写真に合わせこむため)。"""
+    body = request.get_json(silent=True) or {}
+    w, h = _to_float(body.get("w")), _to_float(body.get("h"))
+    if w is None or h is None:
+        return jsonify(_error("bad_size", "大きさを指定してください。")), 400
+    return _map_apply(_map_session().resize(str(body.get("name", "")), w, h))
+
+
+@bp.post("/api/inventory/map/add")
+def add_position():
+    body = request.get_json(silent=True) or {}
+    return _map_apply(_map_session().add(str(body.get("name", ""))))
+
+
+@bp.post("/api/inventory/map/remove")
+def remove_position():
+    body = request.get_json(silent=True) or {}
+    return _map_apply(_map_session().remove(str(body.get("name", ""))))
+
+
+@bp.post("/api/inventory/map/background")
+def set_map_background():
+    """背景画像を差し替える。**中身を受け取る**(棚検索と同じ)。"""
+    body = request.get_json(silent=True) or {}
+    image = str(body.get("image", ""))
+    if image:
+        if not image.startswith(ALLOWED_IMAGE_PREFIXES):
+            return jsonify(_error(
+                "bad_image",
+                "画像は PNG / JPEG / GIF / WebP を選んでください。")), 400
+        if len(image) > MAX_BACKGROUND_BYTES:
+            return jsonify(_error(
+                "too_large",
+                f"画像が大きすぎます({MAX_BACKGROUND_BYTES // (1024 * 1024)}MBまで)。"
+                "縮小してから選んでください。")), 400
+    return _map_apply(_map_session().set_background(image))
+
+
+@bp.post("/api/inventory/map/background/place")
+def place_map_background():
+    """背景の写真をずらす・拡げ縮めする。**箱は動かさない。**"""
+    body = request.get_json(silent=True) or {}
+    x, y = _to_float(body.get("x")), _to_float(body.get("y"))
+    scale = _to_float(body.get("scale"))
+    if x is None or y is None or scale is None:
+        return jsonify(_error("bad_point", "背景の位置と倍率を指定してください。")), 400
+    return _map_apply(_map_session().place_background(x, y, scale))
+
+
+@bp.post("/api/inventory/map/save")
+def save_map():
+    return _map_apply(_map_session().save())
+
+
+@bp.post("/api/inventory/map/reset")
+def reset_map():
+    """出荷時の配置に戻す。編集した内容は消える。"""
+    return _map_apply(_map_session().reset())
+
+
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # ------------------------------------------------------------------

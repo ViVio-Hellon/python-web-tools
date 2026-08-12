@@ -82,6 +82,11 @@ class LayoutViewModel:
     width: float = 1000.0
     height: float = 570.0
     background: str = ""
+    # 背景の置き方。**枠いっぱいに引き伸ばさない** ── 写真の画角は図の枠と
+    # 一致しないので、ずらし量と倍率を持って合わせこめるようにする
+    background_x: float = 0.0
+    background_y: float = 0.0
+    background_scale: float = 1.0
     shelves: list[Shelf] = field(default_factory=list)
     bases: list[Shelf] = field(default_factory=list)
     areas: list[Shelf] = field(default_factory=list)
@@ -136,6 +141,9 @@ def build(conn: sqlite3.Connection, session: Any) -> LayoutViewModel:
             "ボードマスタが未取り込みです。設定画面から取り込んでください。"),
         width=plan.width, height=plan.height,
         background=_background_url(plan),
+        background_x=plan.background.x,
+        background_y=plan.background.y,
+        background_scale=plan.background.scale,
         base_point=user_settings.get_position(),
         base_points=list(plan.base_point_names),
         kind=session.kind,
@@ -217,6 +225,9 @@ def to_dict(view: LayoutViewModel) -> dict[str, Any]:
         "width": view.width,
         "height": view.height,
         "background": view.background,
+        "background_x": view.background_x,
+        "background_y": view.background_y,
+        "background_scale": view.background_scale,
         "shelves": [_shelf_dict(s) for s in view.shelves],
         "bases": [_shelf_dict(s) for s in view.bases],
         "areas": [_shelf_dict(s) for s in view.areas],

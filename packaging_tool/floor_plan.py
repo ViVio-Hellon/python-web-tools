@@ -116,6 +116,10 @@ class FloorPlan:
         return map_data.move_in((self.items, self.base_points, self.areas),
                                 name, x, y)
 
+    def resize_item(self, name: str, w: float, h: float) -> bool:
+        return map_data.resize_in((self.items, self.base_points, self.areas),
+                                  name, w, h)
+
     def add_item(self, name: str, x: float, y: float,
                  w: float = 18.0, h: float = 18.0) -> MapItem:
         item = MapItem(name=name, x=round(x, 1), y=round(y, 1), w=w, h=h)

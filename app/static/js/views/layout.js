@@ -11,10 +11,11 @@
   の変換だけで、動かしてよいかどうかも、枠に収める計算もサーバが持つ。
 */
 
-import { api } from "../api.js";
+import { api, tokenUrl } from "../api.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
+import * as mapedit from "../mapedit.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const el = {};
@@ -66,19 +67,31 @@ function renderMap(next) {
   const parts = [];
   // 背景 → 区画 → 置き場 → 拠点 の順。後に描いたものが前に来る
   if (next.background) {
-    parts.push(node("image", {
-      href: next.background, x: 0, y: 0,
-      width: next.width, height: next.height,
+    // **枠いっぱいに引き伸ばさない。** 写真の画角は図の枠と一致しないので、
+    // ずらし量と倍率(`background_x/y/scale`)のとおりに置く
+    const image = node("image", {
+      // **ヘッダを付けられない読み込み**なので、トークンはURLに載せる。
+      // 付け忘れると401で、図には枠だけが出て写真が出ない
+      href: tokenUrl(next.background),
       preserveAspectRatio: "xMidYMid meet", opacity: 0.85,
-    }));
+    });
+    mapedit.applyBackground(image, next);
+    parts.push(image);
   }
   for (const area of next.areas) parts.push(box(area, "area"));
   for (const shelf of next.shelves) {
     const group = box(shelf, `shelf shelf--${shelf.state}`);
     if (shelf.name === next.selected) group.classList.add("is-selected");
+    // 掴みしろは**編集中だけ**。出しっぱなしにすると、見るだけのときに
+    // 「掴める」と読めてしまう
+    if (next.editing) group.appendChild(mapedit.grip(shelf));
     parts.push(group);
   }
-  for (const base of next.bases) parts.push(box(base, "shelf shelf--base"));
+  for (const base of next.bases) {
+    const group = box(base, "shelf shelf--base");
+    if (next.editing) group.appendChild(mapedit.grip(base));
+    parts.push(group);
+  }
   el.map.replaceChildren(...parts);
 
   // 凡例。色の意味を figure の外に書く(色だけで伝えない)
@@ -124,6 +137,11 @@ function render(next) {
   el.editToggle.setAttribute("aria-pressed", String(next.editing));
   el.editToggle.classList.toggle("btn--on", next.editing);
   el.editBox.hidden = !next.editing;
+  // 背景が無ければ合わせこむものが無い。**押せるのに何も起きない欄を作らない**
+  el.bgPlaceBox.hidden = !next.background;
+  el.bgX.value = next.background_x;
+  el.bgY.value = next.background_y;
+  el.bgScale.value = next.background_scale;
   el.editState.textContent = next.editing ? "編集中(ドラッグで動かせます)" : "";
   el.dirtyWhy.hidden = !next.dirty;
 
@@ -192,76 +210,39 @@ async function showContents(name) {
    保つのは、掴んだ点が箱の左上へ飛ぶのを防ぐため(ずれた分だけ
    置き場が動いてしまう)。
    ================================================================ */
-let dragging = null;
+// 図の縮尺。**背景の写真に合わせこむときに要る** ── 等倍のままだと
+// 置き場1つが小さく、指で狙った場所へ置けない(簡易在庫と同じ刻み)
+const ZOOM_STEPS = [1, 1.5, 2, 3];
+let zoom = 0;
+let dragger = null;
 
-/** 画面座標を図の論理座標へ。`viewBox` の縮尺はブラウザに聞く。 */
-function toPlan(event) {
-  const rect = el.map.getBoundingClientRect();
-  const [minX, minY, width, height] = el.map.getAttribute("viewBox")
-    .split(/\s+/).map(Number);
-  return {
-    x: minX + (event.clientX - rect.left) / rect.width * width,
-    y: minY + (event.clientY - rect.top) / rect.height * height,
-  };
+function applyZoom(step) {
+  zoom = Math.max(0, Math.min(ZOOM_STEPS.length - 1, step));
+  const scale = ZOOM_STEPS[zoom];
+  el.mapWrap.style.setProperty("--zoom", scale);
+  el.zoomNow.textContent = `${Math.round(scale * 100)}%`;
+  el.zoomOut.disabled = zoom === 0;
+  el.zoomIn.disabled = zoom === ZOOM_STEPS.length - 1;
 }
 
-function onPointerDown(event) {
-  const group = event.target.closest(".shelf");
-  if (!group) return;
-  const name = group.dataset.name;
-  const isBase = group.classList.contains("shelf--base");
 
-  if (!state.editing) {
-    // 見るだけ。押した置き場の中身を出す。
-    // 拠点は「中身」を持たないので、見るだけのときは何もしない
-    if (!isBase) showContents(name);
-    return;
-  }
-  // **編集中は拠点も動かせる。** 距離=疲労度は拠点との差で決まるので、
-  // 現場で拠点が動いたら図でも直せないと、以後のスコアがずっとずれる
-  // (サーバの `plan.move_item` は最初から拠点も動かせる)
-  const shelf = (isBase ? state.bases : state.shelves)
-    .find((s) => s.name === name);
-  if (!shelf) return;
+/** 掴む手は `mapedit.js` が持つ。ここは**何を送るか**だけを決める。
 
-  const point = toPlan(event);
-  dragging = { name, isBase, dx: point.x - shelf.x, dy: point.y - shelf.y, moved: false };
-  el.map.setPointerCapture(event.pointerId);
-  event.preventDefault();
-}
-
-function onPointerMove(event) {
-  if (!dragging) return;
-  const point = toPlan(event);
-  // 動かしている最中はその場で見せる。1歩ごとにサーバへ送ると、
-  // 応答を待つあいだ箱が指から遅れる
-  const group = el.map.querySelector(`.shelf[data-name="${CSS.escape(dragging.name)}"]`);
-  if (!group) return;
-  const rect = group.querySelector("rect");
-  const text = group.querySelector("text");
-  const x = point.x - dragging.dx;
-  const y = point.y - dragging.dy;
-  rect.setAttribute("x", x);
-  rect.setAttribute("y", y);
-  text.setAttribute("x", x + Number(rect.getAttribute("width")) / 2);
-  text.setAttribute("y", y + Number(rect.getAttribute("height")) / 2);
-  dragging.moved = true;
-  dragging.last = { x, y };
-}
-
-function onPointerUp(event) {
-  if (!dragging) return;
-  const { name, isBase, moved, last } = dragging;
-  dragging = null;
-  el.map.releasePointerCapture?.(event.pointerId);
-  if (!moved || !last) {
-    // 動かさずに離したのは「押した」。中身を出す。
-    // 拠点は中身を持たないので何もしない
-    if (!isBase) showContents(name);
-    return;
-  }
-  // 枠に収めるのはサーバの仕事。返ってきた座標で描き直す
-  send("/api/layout/move", { name, x: last.x, y: last.y });
+    拠点も動かせる ── 距離=疲労度は拠点との差で決まるので、現場で拠点が
+    動いたら図でも直せないと、以後のスコアがずっとずれる。 */
+function startDragging() {
+  dragger = mapedit.attach(el.map, {
+    selector: ".shelf",
+    editing: () => Boolean(state && state.editing),
+    find: (name) => (state.shelves.find((s) => s.name === name)
+                     || state.bases.find((s) => s.name === name) || null),
+    onTap: (name, group) => {
+      // 拠点は「中身」を持たないので、押しても何も出さない
+      if (group && !group.classList.contains("shelf--base")) showContents(name);
+    },
+    onMove: (name, x, y) => send("/api/layout/move", { name, x, y }),
+    onResize: (name, w, h) => send("/api/layout/resize", { name, w, h }),
+  });
 }
 
 /* ================================================================ */
@@ -271,6 +252,8 @@ export function start(initial) {
                     "fromSelection", "handoffLabel",
                     "editToggle", "editState", "editBox", "dirtyWhy",
                     "newLabel", "addLabel", "removeLabel", "bgFile", "clearBg",
+                    "bgX", "bgY", "bgScale", "bgFit", "bgPlaceBox",
+                    "mapWrap", "zoomIn", "zoomOut", "zoomNow",
                     "save", "reset",
                     "materialsNote", "materialRows",
                     "unplacedCard", "unplacedNote", "unplacedList"]) {
@@ -279,7 +262,7 @@ export function start(initial) {
   el.layoutTabs = document.getElementById("layoutTabs");
   el.kindGroup = document.querySelector('.choose[aria-label="探す資材の種別"]');
   tabs.attachAll();
-  dragging = null;      // 再入場のたびに真っさらから(`nav.js`)
+  dragger?.reset();     // 再入場のたびに真っさらから(`nav.js`)
 
   render(initial);
 
@@ -309,10 +292,10 @@ export function start(initial) {
     send("/api/layout/from-selection"));
 
   // --- 図 ---------------------------------------------------------
-  el.map.addEventListener("pointerdown", onPointerDown);
-  el.map.addEventListener("pointermove", onPointerMove);
-  el.map.addEventListener("pointerup", onPointerUp);
-  el.map.addEventListener("pointercancel", onPointerUp);
+  startDragging();
+  applyZoom(0);
+  el.zoomIn.addEventListener("click", () => applyZoom(zoom + 1));
+  el.zoomOut.addEventListener("click", () => applyZoom(zoom - 1));
 
   // --- 配置編集 ---------------------------------------------------
   el.editToggle.addEventListener("click", () =>
@@ -343,6 +326,17 @@ export function start(initial) {
   });
   el.clearBg.addEventListener("click", () =>
     send("/api/layout/background", { image: "" }));
+
+  // 背景の合わせこみ。**数で入れる** ── 掴んで動かす形にすると箱を掴む
+  // 操作とぶつかり、どちらが動いたのか分からなくなる
+  const placeBg = () => send("/api/layout/background/place", {
+    x: el.bgX.value, y: el.bgY.value, scale: el.bgScale.value,
+  });
+  for (const box of [el.bgX, el.bgY, el.bgScale]) {
+    box.addEventListener("change", placeBg);
+  }
+  el.bgFit.addEventListener("click", () => send(
+    "/api/layout/background/place", { x: 0, y: 0, scale: 1 }));
 
   el.save.addEventListener("click", () => send("/api/layout/save"));
   el.reset.addEventListener("click", () => {

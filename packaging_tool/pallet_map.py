@@ -78,6 +78,9 @@ class PalletMap:
     def move_position(self, name: str, x: float, y: float) -> bool:
         return map_data.move_in((self.positions,), name, x, y)
 
+    def resize_position(self, name: str, w: float, h: float) -> bool:
+        return map_data.resize_in((self.positions,), name, w, h)
+
     def add_position(self, name: str, x: float, y: float,
                      w: float = NEW_POSITION_W,
                      h: float = NEW_POSITION_H) -> MapItem:

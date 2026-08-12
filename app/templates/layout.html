@@ -59,12 +59,21 @@
       <div class="filters">
         {# 通常は動かせない。図はよく押す(中身を見る)ので、常時
            ドラッグできると見るつもりの操作で置き場がずれる #}
+        {# 図の縮尺。**背景の写真に合わせこむときに要る** ── 等倍のままだと
+           置き場1つが小さく、指で狙った場所へ置けない(簡易在庫と同じ形) #}
+        <span class="zoom">
+          <button class="btn btn--zoom" type="button" id="zoomOut"
+                  aria-label="図を小さくする">−</button>
+          <span class="zoom__now" id="zoomNow">100%</span>
+          <button class="btn btn--zoom" type="button" id="zoomIn"
+                  aria-label="図を大きくする">＋</button>
+        </span>
         <button class="btn" type="button" id="editToggle"
                 aria-pressed="{{ 'true' if view.editing else 'false' }}">配置編集</button>
       </div>
     </header>
     <div class="pad">
-      <div class="mapwrap">
+      <div class="mapwrap" id="mapWrap">
         <svg id="map" viewBox="{{ view.view_box }}" role="group"
              aria-label="棚の配置図。押すとその置き場の資材を表示します"></svg>
       </div>
@@ -88,6 +97,21 @@
           <button class="btn btn--danger" type="button" id="clearBg">
             <span class="gl">×</span>背景を外す</button>
         </div>
+        {# 写真の画角は図の枠と一致しない。**箱を全部動かして合わせるより、
+           下敷きの側をずらすほうが早い**(合わせ直しても箱は壊れない) #}
+        <div class="field" id="bgPlaceBox">
+          <label for="bgScale">背景の合わせこみ</label>
+          <span class="numrow">
+            <label class="numrow__k" for="bgScale">倍率</label>
+            <input class="input input--num" id="bgScale" type="number"
+                   step="0.05" min="0.1" max="10" value="1">
+            <label class="numrow__k" for="bgX">よこ</label>
+            <input class="input input--num" id="bgX" type="number" step="1" value="0">
+            <label class="numrow__k" for="bgY">たて</label>
+            <input class="input input--num" id="bgY" type="number" step="1" value="0">
+            <button class="btn" type="button" id="bgFit">枠に合わせる</button>
+          </span>
+        </div>
         <div class="btn-row">
           <button class="btn btn--commit" type="button" id="save">
             <span class="gl">▪</span>配置を保存</button>
@@ -95,7 +119,12 @@
             <span class="gl">↺</span>出荷時に戻す</button>
         </div>
         <p class="why">
-          置き場をドラッグして動かします。<b>「配置を保存」を押すまでファイルには書きません</b> ──
+          置き場を<b>ドラッグして動かし</b>、<b>右下の角を掴んで大きさを変えます</b>。
+          背景の写真に重ならないときは、上の「背景の合わせこみ」で下敷きの側をずらしてください
+          ── 箱を全部動かすより早く、やり直しても箱の位置は壊れません。
+        </p>
+        <p class="why">
+          <b>「配置を保存」を押すまでファイルには書きません</b> ──
           間違えて動かしても、画面を開き直せば元に戻ります。
         </p>
       </div>
@@ -223,8 +252,15 @@
 {% block head %}
 <style>
   .mapwrap { width:100%; overflow:auto; max-height:56vh; }
-  #map { width:100%; height:auto; display:block; border-radius:var(--radius-xs);
+  /* 拡大したぶんは枠の中でスクロールする(ページ全体は動かさない) */
+  #map { width:calc(100% * var(--zoom, 1)); height:auto; display:block;
+         border-radius:var(--radius-xs);
          background:var(--sunken); touch-action:none; }
+  .zoom { display:inline-flex; align-items:center; gap:6px; }
+  .zoom__now { font-family:var(--mono); font-size: var(--fs-sm); color:var(--muted);
+               min-width:4em; text-align:center; }
+  .btn--zoom { min-width:36px; min-height:36px; padding:4px 10px;
+               font-size: var(--fs-lg); line-height:1; }
 
   .shelf { cursor:pointer; }
   .shelf rect { stroke-width:1; }

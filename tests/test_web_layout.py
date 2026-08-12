@@ -394,5 +394,137 @@ class MapDataTests(unittest.TestCase):
             self.assertIsNone(map_data.read_json(path))
 
 
+
+class ResizeTests(LayoutWebTestCase):
+    """置き場の大きさを変える。**背景の写真に合わせこむため。**
+
+    出荷時の大きさはどれも同じ四角だが、実際の棚は間口も奥行もまちまち。
+    写真を下敷きにすると箱だけが浮くので、大きさを変えられないと
+    「図を見た瞬間に現場と重なる」という値打ちが出ない。
+    """
+
+    def size_of(self, state, name):
+        shelf = next(s for s in state["shelves"] if s["name"] == name)
+        return (shelf["w"], shelf["h"])
+
+    def test_編集をONにするまで変えられない(self) -> None:
+        name = self.first_shelf()
+        body = self.post("/api/layout/resize", {"name": name, "w": 40, "h": 30},
+                         expect=400)
+        self.assertIn("配置編集", body["error"]["message"])
+
+    def test_大きさを変えられる(self) -> None:
+        name = self.first_shelf()
+        self.post("/api/layout/edit", {"on": True})
+        state = self.post("/api/layout/resize", {"name": name, "w": 40, "h": 30})
+        self.assertEqual(self.size_of(state, name), (40, 30))
+        self.assertTrue(state["dirty"])
+
+    def test_左上は動かない(self) -> None:
+        """掴んだ角だけが動く。どちらが動くのか分からない操作にしない。"""
+        name = self.first_shelf()
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/move", {"name": name, "x": 30, "y": 40})
+        state = self.post("/api/layout/resize", {"name": name, "w": 25, "h": 25})
+        shelf = next(s for s in state["shelves"] if s["name"] == name)
+        self.assertEqual((shelf["x"], shelf["y"]), (30, 40))
+
+    def test_掴めない大きさにはできない(self) -> None:
+        """小さくしすぎると掴めなくなり、編集モードから戻せない。"""
+        name = self.first_shelf()
+        self.post("/api/layout/edit", {"on": True})
+        state = self.post("/api/layout/resize", {"name": name, "w": 0, "h": -5})
+        w, h = self.size_of(state, name)
+        self.assertGreaterEqual(w, 1)
+        self.assertGreaterEqual(h, 1)
+
+    def test_図より大きくはできない(self) -> None:
+        """図より大きい箱は、動かしても端が見えず位置を合わせられない。"""
+        name = self.first_shelf()
+        self.post("/api/layout/edit", {"on": True})
+        state = self.post("/api/layout/resize",
+                          {"name": name, "w": 99999, "h": 99999})
+        w, h = self.size_of(state, name)
+        self.assertLessEqual(w, state["width"])
+        self.assertLessEqual(h, state["height"])
+
+    def test_大きくしてもはみ出さない(self) -> None:
+        """右下へ寄せた箱を広げると枠から出る。動かすときと同じ枠に戻す。"""
+        name = self.first_shelf()
+        self.post("/api/layout/edit", {"on": True})
+        state = self.post("/api/layout/move",
+                          {"name": name, "x": 99999, "y": 99999})
+        state = self.post("/api/layout/resize", {"name": name, "w": 80, "h": 60})
+        shelf = next(s for s in state["shelves"] if s["name"] == name)
+        self.assertLessEqual(shelf["x"] + shelf["w"], state["width"])
+        self.assertLessEqual(shelf["y"] + shelf["h"], state["height"])
+
+    def test_大きさが違えば断る(self) -> None:
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/resize",
+                  {"name": self.first_shelf(), "w": "ひろい", "h": 10},
+                  expect=400)
+
+    def test_図に無い置き場は変えられない(self) -> None:
+        # `move` と同じ断り方(`_STATUS_BY_REASON` の not_listed)
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/resize", {"name": "無い置き場", "w": 20, "h": 20},
+                  expect=400)
+
+
+class BackgroundPlaceTests(LayoutWebTestCase):
+    """背景の写真をずらす・拡げ縮めする。**箱は動かさない。**
+
+    写真の画角は図の枠と一致しないので、枠いっぱいに引き伸ばすと必ず
+    ずれる。箱を全部動かして合わせるより、下敷きの側を合わせるほうが
+    早く、やり直しても箱の位置は壊れない。
+    """
+
+    def test_編集をONにするまで動かせない(self) -> None:
+        self.post("/api/layout/background/place",
+                  {"x": 10, "y": 10, "scale": 1}, expect=400)
+
+    def test_ずらして拡げられる(self) -> None:
+        self.post("/api/layout/edit", {"on": True})
+        state = self.post("/api/layout/background/place",
+                          {"x": 12, "y": -8, "scale": 1.25})
+        self.assertEqual(state["background_x"], 12)
+        self.assertEqual(state["background_y"], -8)
+        self.assertEqual(state["background_scale"], 1.25)
+        self.assertTrue(state["dirty"])
+
+    def test_箱は動かない(self) -> None:
+        name = self.first_shelf()
+        self.post("/api/layout/edit", {"on": True})
+        before = next(s for s in self.get()["shelves"] if s["name"] == name)
+        state = self.post("/api/layout/background/place",
+                          {"x": 50, "y": 50, "scale": 2})
+        after = next(s for s in state["shelves"] if s["name"] == name)
+        self.assertEqual((after["x"], after["y"]), (before["x"], before["y"]))
+
+    def test_消える倍率にはできない(self) -> None:
+        """0倍は消えたのと同じで、戻し方が分からなくなる。"""
+        self.post("/api/layout/edit", {"on": True})
+        state = self.post("/api/layout/background/place",
+                          {"x": 0, "y": 0, "scale": 0})
+        self.assertGreater(state["background_scale"], 0)
+
+    def test_値が無ければ断る(self) -> None:
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/background/place", {"x": 1, "y": 2}, expect=400)
+
+    def test_差し替えたら合わせこみは初期に戻る(self) -> None:
+        """前の写真のずらし量を持ち越すと、枠の外に出ていることがある。"""
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/background/place",
+                  {"x": 40, "y": 40, "scale": 3})
+        state = self.post("/api/layout/background", {
+            "image": "data:image/png;base64,"
+                     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="})
+        self.assertEqual(state["background_x"], 0)
+        self.assertEqual(state["background_y"], 0)
+        self.assertEqual(state["background_scale"], 1)
+
+
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()

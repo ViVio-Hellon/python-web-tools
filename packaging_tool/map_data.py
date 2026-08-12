@@ -44,18 +44,38 @@ class MapItem:
     def moved_to(self, x: float, y: float) -> "MapItem":
         return replace(self, x=round(x, 1), y=round(y, 1))
 
+    def sized_to(self, w: float, h: float) -> "MapItem":
+        """大きさを変える。**左上は動かさない。**
+
+        中心を保って伸ばすと、掴んでいた角と反対側も動きます。
+        どちらが動くのか分からない操作は、合わせこみの邪魔になります。
+        """
+        return replace(self, w=round(w, 1), h=round(h, 1))
+
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "x": self.x, "y": self.y, "w": self.w, "h": self.h}
 
 
 @dataclass(frozen=True)
 class Background:
-    """図の下に敷く画像(あれば)。位置と倍率も持たせて合わせられるようにする。"""
+    """図の下に敷く画像(あれば)。位置と倍率も持たせて合わせられるようにする。
+
+    【なぜ位置と倍率を持つのか】
+    背景は現場を撮った写真です。撮った向き・画角は図の枠と一致しない
+    ので、**枠いっぱいに引き伸ばすと箱と棚がずれます**。写真の側を
+    ずらして拡げ縮めできれば、箱を動かさずに下敷きを合わせられます。
+    """
 
     image: str = ""
     x: float = 0.0
     y: float = 0.0
     scale: float = 1.0
+
+    def placed_at(self, x: float, y: float) -> "Background":
+        return replace(self, x=round(x, 1), y=round(y, 1))
+
+    def scaled_to(self, scale: float) -> "Background":
+        return replace(self, scale=round(scale, 3))
 
     def to_dict(self) -> dict[str, Any]:
         return {"image": self.image, "x": self.x, "y": self.y, "scale": self.scale}
@@ -82,6 +102,51 @@ def move_in(groups, name: str, x: float, y: float) -> bool:
                 group[index] = candidate.moved_to(x, y)
                 return True
     return False
+
+
+def resize_in(groups, name: str, w: float, h: float) -> bool:
+    """`groups` の中から `name` の箱を探して大きさを変える。"""
+    for group in groups:
+        for index, candidate in enumerate(group):
+            if candidate.name == name:
+                group[index] = candidate.sized_to(w, h)
+                return True
+    return False
+
+
+# ------------------------------------------------------------------
+# 合わせこみの上限・下限
+#
+# **どちらの図でも同じ**。棚検索と簡易在庫で限度が違うと、片方で
+# 作れた大きさがもう片方で直せなくなる。
+# ------------------------------------------------------------------
+# 箱の最小。これより小さいと掴めなくなり、編集モードから戻せない
+MIN_ITEM_SIZE = 4.0
+# 背景の倍率。0倍は消えたのと同じで、戻し方が分からなくなる
+MIN_BACKGROUND_SCALE = 0.1
+MAX_BACKGROUND_SCALE = 10.0
+
+
+def clamp_size(w: float, h: float, max_w: float, max_h: float
+               ) -> tuple[float, float]:
+    """箱の大きさを図の中に収める。
+
+    上は図の大きさで止めます ── 図より大きい箱は、動かしても端が
+    見えないので位置を合わせられません。
+    """
+    return (min(max(MIN_ITEM_SIZE, w), max(MIN_ITEM_SIZE, max_w)),
+            min(max(MIN_ITEM_SIZE, h), max(MIN_ITEM_SIZE, max_h)))
+
+
+def clamp_scale(scale: float) -> float:
+    return min(max(MIN_BACKGROUND_SCALE, scale), MAX_BACKGROUND_SCALE)
+
+
+def clamp_point(x: float, y: float, item_w: float, item_h: float,
+                width: float, height: float) -> tuple[float, float]:
+    """箱の左上を図の中に留める。**図の外へ出すと二度と掴めない。**"""
+    return (min(max(0.0, x), max(0.0, width - item_w)),
+            min(max(0.0, y), max(0.0, height - item_h)))
 
 
 # ------------------------------------------------------------------

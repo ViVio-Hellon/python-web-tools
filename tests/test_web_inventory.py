@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -21,7 +22,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from packaging_tool import access_control, config, db, pallet_service  # noqa: E402
+from packaging_tool import (access_control, config, db,  # noqa: E402
+                            pallet_map, pallet_map_session, pallet_service)
 from packaging_tool.presenters import inventory as presenter  # noqa: E402
 from tests import _web  # noqa: E402
 
@@ -42,6 +44,23 @@ def make_db() -> sqlite3.Connection:
     return conn
 
 
+def isolate_map(case: unittest.TestCase) -> None:
+    """図のセッションを作り直し、保存先を一時フォルダへ逃がす。
+
+    セッションは**プロセスに1つ**なので、前の試験で編集モードのまま
+    終わると次の試験がそれを引き継ぎます。保存先も逃がさないと、
+    試験を流しただけで `data/pallet_map.json` ができて、次の実行が
+    前回の編集を読みます(`test_web_layout` と同じ理由)。
+    """
+    pallet_map_session.reset_session()
+    case.addCleanup(pallet_map_session.reset_session)
+    tmp = tempfile.TemporaryDirectory()
+    case.addCleanup(tmp.cleanup)
+    saved = pallet_map.USER_PATH
+    pallet_map.USER_PATH = Path(tmp.name) / "pallet_map.json"
+    case.addCleanup(lambda: setattr(pallet_map, "USER_PATH", saved))
+
+
 def add_stock(conn, *, width=1100, length=1300, position="A1", qty=5,
               symbol="P1", industry="全面", listed=""):
     conn.execute(
@@ -58,6 +77,7 @@ def add_stock(conn, *, width=1100, length=1300, position="A1", qty=5,
 # ==================================================================
 class MapTests(unittest.TestCase):
     def setUp(self) -> None:
+        isolate_map(self)
         self.conn = make_db()
 
     def tearDown(self) -> None:
@@ -190,6 +210,7 @@ class ListTests(unittest.TestCase):
 class InventoryWebTestCase(unittest.TestCase):
     def setUp(self) -> None:
         from app.routes import inventory as routes
+        isolate_map(self)
         self.conn = _web.bind_db(self, routes)
         self.client = _web.make_client()
 
@@ -429,6 +450,210 @@ class ConflictTests(InventoryWebTestCase):
             "width": 1100, "length": 1300, "position": "A1", "qty": 99})
         self.assertEqual(rejected.status_code, 422)
         self.assertFalse(rejected.get_json()["conflict"])
+
+
+
+# ==================================================================
+# 配置編集
+#
+# 位置が増えたり動いたりしても、これまでは画面から直せなかった
+# (`pallet_map.json` を手で書き換えるしかない)。図に無い位置の在庫は
+# 図から押せないので、**気づけるのに直せない**行き止まりだった。
+#
+# 約束は棚検索(`test_web_layout` の EditTests)とそろえる。
+# ==================================================================
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class MapEditTests(InventoryWebTestCase):
+    def state(self) -> dict:
+        res = self.client.get("/api/inventory/position/A1", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        return res.get_json()["map"]
+
+    def edit(self, path: str, body: dict = None, expect: int = 200) -> dict:
+        res = self.post(f"/api/inventory/map/{path}", body or {})
+        self.assertEqual(res.status_code, expect, f"{path}: {res.get_json()}")
+        body = res.get_json()
+        return body.get("map", body)
+
+    def first(self) -> str:
+        return self.state()["positions"][0]["name"]
+
+    def find(self, state: dict, name: str) -> dict:
+        return next(p for p in state["positions"] if p["name"] == name)
+
+    # --- 編集モード ------------------------------------------------
+    def test_編集をONにするまで動かせない(self) -> None:
+        """図はよく押す(在庫を見る)。常時ドラッグできるとずれる。"""
+        name = self.first()
+        res = self.post("/api/inventory/map/move",
+                        {"name": name, "x": 10, "y": 10})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("配置編集", res.get_json()["error"]["message"])
+
+        self.edit("edit", {"on": True})
+        self.edit("move", {"name": name, "x": 10, "y": 10})
+
+    def test_編集中かどうかを画面へ渡す(self) -> None:
+        """押す前に「いま動かせるのか」が読めるようにする。"""
+        self.assertFalse(self.state()["editing"])
+        self.assertTrue(self.edit("edit", {"on": True})["editing"])
+
+    # --- 動かす ----------------------------------------------------
+    def test_動かしても保存するまでファイルに書かない(self) -> None:
+        name = self.first()
+        self.edit("edit", {"on": True})
+        state = self.edit("move", {"name": name, "x": 40, "y": 60})
+        self.assertTrue(state["dirty"])
+        self.assertFalse(pallet_map.USER_PATH.exists())
+
+        state = self.edit("save")
+        self.assertFalse(state["dirty"])
+        self.assertTrue(pallet_map.USER_PATH.exists())
+
+    def test_図の外へは出せない(self) -> None:
+        """外へ出すと二度と掴めない。"""
+        name = self.first()
+        self.edit("edit", {"on": True})
+        state = self.edit("move", {"name": name, "x": -500, "y": 99999})
+        moved = self.find(state, name)
+        self.assertGreaterEqual(moved["x"], 0)
+        self.assertLessEqual(moved["y"] + moved["h"], state["height"])
+
+    def test_編集中は読み直さない(self) -> None:
+        """まだ保存していない移動が、図を引き直すたびに消えてはいけない。"""
+        name = self.first()
+        self.edit("edit", {"on": True})
+        self.edit("move", {"name": name, "x": 33, "y": 44})
+        # 別の問い合わせ(位置で引く)を挟んでも残っている
+        self.assertEqual((self.find(self.state(), name)["x"],
+                          self.find(self.state(), name)["y"]), (33, 44))
+
+    # --- 大きさ ----------------------------------------------------
+    def test_大きさを変えられる(self) -> None:
+        name = self.first()
+        self.edit("edit", {"on": True})
+        state = self.edit("resize", {"name": name, "w": 40, "h": 30})
+        got = self.find(state, name)
+        self.assertEqual((got["w"], got["h"]), (40, 30))
+
+    def test_左上は動かない(self) -> None:
+        name = self.first()
+        self.edit("edit", {"on": True})
+        self.edit("move", {"name": name, "x": 30, "y": 40})
+        got = self.find(self.edit("resize", {"name": name, "w": 25, "h": 25}),
+                        name)
+        self.assertEqual((got["x"], got["y"]), (30, 40))
+
+    def test_掴めない大きさにはできない(self) -> None:
+        name = self.first()
+        self.edit("edit", {"on": True})
+        got = self.find(self.edit("resize", {"name": name, "w": 0, "h": -5}),
+                        name)
+        self.assertGreaterEqual(got["w"], 1)
+        self.assertGreaterEqual(got["h"], 1)
+
+    def test_編集をONにするまで大きさも変えられない(self) -> None:
+        self.edit("resize", {"name": self.first(), "w": 40, "h": 30},
+                  expect=400)
+
+    # --- 足す・消す ------------------------------------------------
+    def test_足して消せる(self) -> None:
+        self.edit("edit", {"on": True})
+        state = self.edit("add", {"name": "Z-9"})
+        self.assertIn("Z-9", [p["name"] for p in state["positions"]])
+        # 真ん中に置く。どこに出たか分からないと探すことになる
+        self.assertAlmostEqual(self.find(state, "Z-9")["x"],
+                               state["width"] / 2, delta=1)
+
+        state = self.edit("remove", {"name": "Z-9"})
+        self.assertNotIn("Z-9", [p["name"] for p in state["positions"]])
+
+    def test_同じ名前は足せない(self) -> None:
+        self.edit("edit", {"on": True})
+        self.edit("add", {"name": self.first()}, expect=400)
+
+    def test_名前が空なら足せない(self) -> None:
+        self.edit("edit", {"on": True})
+        self.edit("add", {"name": "   "}, expect=400)
+
+    def test_図に無い位置は消せない(self) -> None:
+        self.edit("edit", {"on": True})
+        self.edit("remove", {"name": "無い位置"}, expect=400)
+
+    def test_足せば在庫の位置が図から押せるようになる(self) -> None:
+        """**これが動機。** 図に無い位置の在庫は図から押せない。"""
+        add_stock(self.conn, position="Z-9")
+        self.assertIn("Z-9", self.state()["missing"])
+        self.edit("edit", {"on": True})
+        state = self.edit("add", {"name": "Z-9"})
+        self.assertNotIn("Z-9", state["missing"])
+
+    # --- 背景 ------------------------------------------------------
+    def test_背景を差し替えて合わせこめる(self) -> None:
+        self.edit("edit", {"on": True})
+        state = self.edit("background", {"image": _PNG})
+        self.assertTrue(state["background"])
+
+        state = self.edit("background/place", {"x": 12, "y": -8, "scale": 1.25})
+        self.assertEqual((state["background_x"], state["background_y"],
+                          state["background_scale"]), (12, -8, 1.25))
+
+    def test_背景を出せる(self) -> None:
+        """`background.path` を見ていたので、これまで一度も出ていなかった。"""
+        res = self.client.get("/api/inventory/map/background",
+                              headers=self.auth())
+        self.assertEqual(res.status_code, 404)
+
+        self.edit("edit", {"on": True})
+        self.edit("background", {"image": _PNG})
+        res = self.client.get("/api/inventory/map/background",
+                              headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.mimetype, "image/png")
+
+    def test_画像でなければ断る(self) -> None:
+        self.edit("edit", {"on": True})
+        self.edit("background", {"image": "data:text/html;base64,PHA+"},
+                  expect=400)
+
+    def test_箱は動かない(self) -> None:
+        name = self.first()
+        self.edit("edit", {"on": True})
+        before = self.find(self.state(), name)
+        state = self.edit("background/place", {"x": 50, "y": 50, "scale": 2})
+        after = self.find(state, name)
+        self.assertEqual((after["x"], after["y"]), (before["x"], before["y"]))
+
+    def test_消える倍率にはできない(self) -> None:
+        self.edit("edit", {"on": True})
+        state = self.edit("background/place", {"x": 0, "y": 0, "scale": 0})
+        self.assertGreater(state["background_scale"], 0)
+
+    # --- 出荷時に戻す ----------------------------------------------
+    def test_出荷時に戻せる(self) -> None:
+        name = self.first()
+        before = self.find(self.state(), name)
+        self.edit("edit", {"on": True})
+        self.edit("move", {"name": name, "x": 5, "y": 5})
+        self.edit("save")
+
+        after = self.find(self.edit("reset"), name)
+        self.assertEqual((after["x"], after["y"]),
+                         (before["x"], before["y"]))
+
+    # --- 断り方 ----------------------------------------------------
+    def test_断っても図は消えない(self) -> None:
+        """押した拍子に図が消えると、断られたのか壊れたのか分からない。"""
+        res = self.post("/api/inventory/map/move",
+                        {"name": self.first(), "x": 1, "y": 1})
+        self.assertEqual(res.status_code, 400)
+        # 400 は**サーバの状態が動いていない**ことの合図。図は前のまま
+        self.assertTrue(self.state()["positions"])
+
+
+# 1x1 の透明PNG(背景の差し替えを通すためだけのもの)
+_PNG = ("data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 
 if __name__ == "__main__":

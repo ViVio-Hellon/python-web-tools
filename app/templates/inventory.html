@@ -65,6 +65,11 @@
           <button class="btn btn--zoom" type="button" id="zoomIn"
                   aria-label="図を大きくする">＋</button>
         </span>
+        {# 位置が増えたり動いたりしたら現場で直せるようにする。
+           棚検索の配置編集と同じ約束(保存するまでファイルに触らない) #}
+        <span class="st" id="mapEditState"></span>
+        <button class="btn" type="button" id="mapEditToggle"
+                aria-pressed="false">配置編集</button>
       </header>
       <div class="pad">
         <div class="mapwrap" id="mapWrap">
@@ -75,6 +80,58 @@
           指で押しにくいときは「＋」で大きくしてください(図はスクロールできます)。
         </p>
         <p class="status status--warn" id="mapMissing" hidden></p>
+
+        {# 編集の道具は編集中だけ出す。ふだん見えていると、押せてしまう #}
+        <div id="mapEditBox" hidden>
+          <div class="field">
+            <label for="mapNewPos">保管位置を追加</label>
+            <input class="input" id="mapNewPos" style="width:10em" autocomplete="off"
+                   placeholder="A-12">
+            <button class="btn" type="button" id="mapAddPos">追加</button>
+            <button class="btn btn--danger" type="button" id="mapRemovePos">
+              <span class="gl">×</span>選んだ位置を消す</button>
+          </div>
+          <div class="field">
+            <label for="mapBgFile">背景画像</label>
+            <input class="input" id="mapBgFile" type="file"
+                   accept="image/png,image/jpeg,image/gif,image/webp">
+            <button class="btn btn--danger" type="button" id="mapClearBg">
+              <span class="gl">×</span>背景を外す</button>
+          </div>
+          {# 写真の画角は図の枠と一致しない。**箱を全部動かして合わせるより、
+             下敷きの側をずらすほうが早い**(合わせ直しても箱は壊れない) #}
+          <div class="field" id="mapBgPlace">
+            <label for="mapBgScale">背景の合わせこみ</label>
+            <span class="numrow">
+              <label class="numrow__k" for="mapBgScale">倍率</label>
+              <input class="input input--num" id="mapBgScale" type="number"
+                     step="0.05" min="0.1" max="10" value="1">
+              <label class="numrow__k" for="mapBgX">よこ</label>
+              <input class="input input--num" id="mapBgX" type="number" step="1" value="0">
+              <label class="numrow__k" for="mapBgY">たて</label>
+              <input class="input input--num" id="mapBgY" type="number" step="1" value="0">
+              <button class="btn" type="button" id="mapBgFit">枠に合わせる</button>
+            </span>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn--commit" type="button" id="mapSave">
+              <span class="gl">▪</span>配置を保存</button>
+            <button class="btn btn--danger" type="button" id="mapReset">
+              <span class="gl">↺</span>出荷時に戻す</button>
+          </div>
+          <p class="why">
+            保管位置を<b>ドラッグして動かし</b>、<b>右下の角を掴んで大きさを変えます</b>。
+            背景の写真に重ならないときは、上の「背景の合わせこみ」で下敷きの側をずらしてください
+            ── 箱を全部動かすより早く、やり直しても位置は壊れません。
+          </p>
+          <p class="why">
+            <b>「配置を保存」を押すまでファイルには書きません</b> ──
+            間違えて動かしても、画面を開き直せば元に戻ります。
+          </p>
+        </div>
+        <p class="why" id="mapDirty" hidden>
+          <b>まだ保存していない変更があります。</b>「配置を保存」を押してください。
+        </p>
       </div>
     </section>
         </section>
@@ -269,8 +326,11 @@
   /* 図。論理座標(pallet_map.json)をそのまま viewBox に載せる。
      拡大したぶんは枠の中でスクロールする(ページ全体は動かさない) */
   .mapwrap { width:100%; overflow:auto; max-height:56vh; }
+  /* `touch-action:none` はドラッグ(配置編集)に要る。付いていないと、
+     指で掴んだつもりが画面のスクロールに持っていかれる */
   #map { width:calc(100% * var(--zoom, 1)); height:auto; display:block;
-         border-radius:var(--radius-xs); background:var(--sunken); }
+         border-radius:var(--radius-xs); background:var(--sunken);
+         touch-action:none; }
 
   .zoom { display:inline-flex; align-items:center; gap:6px; margin-left:auto; }
   .zoom__now { font-family:var(--mono); font-size: var(--fs-sm); color:var(--muted);
@@ -291,6 +351,11 @@
   #map .pos--active text { fill:var(--map-active-fg); }
   #map .pos:hover rect { stroke:var(--focus); stroke-width:2; }
   #map .pos:focus-visible rect { stroke:var(--focus); stroke-width:3; }
+  #map .pos text { pointer-events:none; user-select:none; }
+  /* 編集中は掴めることを見た目でも示す(棚検索と同じ) */
+  #map.map--editing .pos { cursor:grab; }
+  #map.map--editing .pos rect { stroke-dasharray:3 2; }
+  #map .pos.is-selected rect { stroke:var(--accent); stroke-width:3; }
 
   .maplegend { display:flex; gap:10px; flex-wrap:wrap; }
   .lg { font-size: var(--fs-xs); padding:2px 9px; border-radius:var(--pill);

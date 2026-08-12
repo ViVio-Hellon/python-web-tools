@@ -235,6 +235,22 @@ a.btn { text-decoration: none; }
   text-align: right;
   width: 6em;
 }
+/* 数を並べて入れる列(背景の合わせこみなど)。
+   ラベルを短く前に置くと、どの欄が何なのかを読みながら打てる */
+.numrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.numrow[hidden] { display: none; }
+.numrow__k { font-size: var(--fs-xs); color: var(--muted); }
+
+/* 図の箱の右下に出す掴みしろ(`mapedit.js`)。
+   **編集中だけ描く** ── 出しっぱなしにすると、見るだけのときに
+   「掴める」と読めてしまう */
+.grip {
+  fill: var(--accent);
+  stroke: var(--paper);
+  stroke-width: 1;
+  cursor: nwse-resize;
+}
+
 .input:disabled { background: var(--sunken); color: var(--muted); cursor: not-allowed; }
 select.input { cursor: pointer; }
 
