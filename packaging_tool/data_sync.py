@@ -66,11 +66,15 @@ class SyncError(RuntimeError):
 
 
 # 進捗の通知先。VBA `frmProgress.UpdateProgress(pct, msg)` と同じ形
-#   progress(何%か, いま何をしているか)
-Progress = Callable[[int, str], None]
+#   progress(何%か, いま何をしているか, その段は問題なく進んでいるか)
+# 3つ目は省略可(既定True)。**文言を変えずに**「いまの段で問題が
+# 起きた」とだけ伝えたいとき(1テーブルの読み込み失敗など)に使う ──
+# 文言を変えると新しい段が始まった扱いになり、失敗した段が
+# 別の段にすり替わってしまう(`packaging_tool/jobs.py` の `_progress`)。
+Progress = Callable[..., None]
 
 
-def _noop_progress(_pct: int, _msg: str) -> None:
+def _noop_progress(_pct: int, _msg: str, ok: bool = True) -> None:
     """進捗の受け取り手がいないときの既定。"""
 
 
@@ -241,8 +245,10 @@ def import_tables(
 
     for index, (table, spec) in enumerate(specs.items()):
         # テーブル単位で進める。読み取りが一番時間を食うので、その前に出す
+        step_pct = start_pct + span * index // len(specs) if specs else start_pct
+        step_message = f"{table} を読み込み中..."
         if specs:
-            notify(start_pct + span * index // len(specs), f"{table} を読み込み中...")
+            notify(step_pct, step_message)
         try:
             rows = read_table(source_path, source_table or table)
         except SyncError as exc:
@@ -254,6 +260,10 @@ def import_tables(
                 continue
             log.warning("%s: 読み取り失敗 %s", table, exc)
             result.errors.append(f"{table}: {exc}")
+            # 段の文言(step_message)は変えず、いまの段が失敗したとだけ伝える。
+            # そうしないと、レーンの各段は最後の段しか失敗を示せず、
+            # 「取り込みは失敗したのに、どの段も完了のまま」に見える
+            notify(step_pct, step_message, ok=False)
             continue
         if not rows:
             result.imported[table] = 0
@@ -279,9 +289,11 @@ def import_tables(
                     note + f" ── {', '.join(lost_keys)} が無いので取り込みません")
                 log.warning("%s: 鍵の列が無いため取り込みを見送りました: %s",
                             table, lost_keys)
+                notify(step_pct, step_message, ok=False)
                 continue
             result.errors.append(note + " ── その列は空で取り込みます")
             log.warning("%s: 元に無い列: %s", table, missing)
+            notify(step_pct, step_message, ok=False)
 
         columns = [c[0] for c in spec]
         placeholders = ", ".join("?" for _ in columns)
@@ -309,6 +321,7 @@ def import_tables(
         except sqlite3.Error as exc:
             log.exception("%s: 取り込み中にエラー", table)
             result.errors.append(f"{table}: {exc}")
+            notify(step_pct, step_message, ok=False)
             continue
 
         result.imported[table] = imported

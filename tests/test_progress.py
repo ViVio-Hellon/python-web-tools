@@ -42,7 +42,7 @@ class ProgressCallbackTests(unittest.TestCase):
                                return_value=[{"名前": "あ"}]):
             data_sync.import_tables(
                 self.conn, Path("dummy.sqlite3"), self.specs,
-                progress=lambda pct, message: seen.append((pct, message)),
+                progress=lambda pct, message, ok=True: seen.append((pct, message)),
                 **kwargs)
         return seen
 
@@ -60,6 +60,30 @@ class ProgressCallbackTests(unittest.TestCase):
         """マスタは0-50%、仕掛台帳は50-100%、と持ち場を分ける。"""
         seen = self._import(progress_range=(50, 100))
         self.assertEqual([pct for pct, _ in seen], [50, 75, 100])
+
+    def test_a_failed_table_reports_ok_false_without_changing_message(self):
+        """1テーブルの失敗は、その段の文言を変えずに ok=False で伝える(バグ修正)。
+
+        文言を変えて知らせると `jobs.py` 側で「新しい段が始まった」と
+        誤認され、失敗した段自身ではなく次の段が失敗扱いになって
+        しまう。同じ文言のまま ok=False だけを送る必要がある。
+        """
+        seen: list[tuple[int, str, bool]] = []
+
+        def fake_read_table(_path, table):
+            if table == "甲":
+                raise data_sync.SyncError("読めません")
+            return [{"名前": "あ"}]
+
+        with mock.patch.object(data_sync, "read_table", side_effect=fake_read_table):
+            data_sync.import_tables(
+                self.conn, Path("dummy.sqlite3"), self.specs,
+                progress=lambda pct, message, ok=True: seen.append((pct, message, ok)))
+
+        self.assertEqual(seen[0], (0, "甲 を読み込み中...", True))
+        self.assertEqual(seen[1], (0, "甲 を読み込み中...", False))
+        # 乙は無事なので、段の文言は変わってもokはTrueのまま
+        self.assertEqual(seen[2], (50, "乙 を読み込み中...", True))
 
     def test_it_still_works_without_a_listener(self):
         """進捗の受け取り手がいなくても落ちない(スクリプトからの利用)。"""

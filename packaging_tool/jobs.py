@@ -177,10 +177,12 @@ class JobRegistry:
 
     def _run(self, job: Job, work) -> None:
         try:
-            result = work(lambda pct, message: self._progress(job, pct, message))
+            result = work(lambda pct, message, ok=True:
+                          self._progress(job, pct, message, ok))
         except Exception as exc:                  # noqa: BLE001 - 画面に出して続ける
             log.exception("失敗: %s id=%s", job.label, job.id)
-            self._finish(job, STATE_FAILED, ok=False, summary="", error=str(exc))
+            self._finish(job, STATE_FAILED, ok=False, summary="", error=str(exc),
+                         mark_last_step_failed=True)
         else:
             summary = (result.summary() if hasattr(result, "summary")
                        else ("" if result is None else str(result)))
@@ -188,12 +190,20 @@ class JobRegistry:
             self._finish(job, STATE_DONE if ok else STATE_FAILED,
                          ok=ok, summary=summary, error="")
 
-    def _progress(self, job: Job, pct: int, message: str) -> None:
+    def _progress(self, job: Job, pct: int, message: str, ok: bool = True) -> None:
         """作業スレッドから呼ばれる。
 
         `message` が空のときは**バーだけ**進める。仕掛台帳は3ファイルを
         続けて読むので、ファイルの切れ目で文言が消えないようにする
         (tkinter版 `DataView.set_progress` と同じ約束)。
+
+        `ok=False` は「いまの段(文言が変わっていない)で問題が起きた」
+        という報告。**段を閉じるのは次の段が始まったときだけ**なので、
+        ここでは開いたままの段に印を付けるだけにする。これが無いと、
+        1テーブルの取り込みに失敗しても、そのテーブルの段は(最後の
+        段でない限り)閉じられる瞬間に "完了" のまま残ってしまい ──
+        全体の結果は「失敗」なのに、レーンのカードは1枚も失敗を
+        指さない、という食い違いが起きる。
         """
         with self._lock:
             job.pct = max(0, min(100, int(pct)))
@@ -203,6 +213,8 @@ class JobRegistry:
                 if job.steps and job.steps[-1].running:
                     job.steps[-1].finished_at = now
                 job.steps.append(Step(label=message, started_at=now))
+            elif not ok and job.steps and job.steps[-1].running:
+                job.steps[-1].ok = False
             if message:
                 job.message = message
             # 毎回ファイルに書くと、1件ごとに進捗が来る処理で書き込みが
@@ -212,7 +224,8 @@ class JobRegistry:
                 self._persist()
 
     def _finish(self, job: Job, state: str, *, ok: bool,
-                summary: str, error: str) -> None:
+                summary: str, error: str,
+                mark_last_step_failed: bool = False) -> None:
         with self._lock:
             job.state = state
             job.ok = ok
@@ -221,10 +234,19 @@ class JobRegistry:
             job.finished_at = time.time()
             job.pct = 100 if ok else job.pct
             job.message = ""
-            # 最後の段を閉じる。**失敗したのはその段**なので、そう記す
+            # 最後の段を閉じる。段ごとの成否は基本、`_progress(ok=False)`
+            # で**その段自身が**すでに正しく記録している(丈補填の例で
+            # 言えば「失敗したテーブルの段だけが失敗」)。ここで
+            # 全体のokをそのまま被せると、失敗が別の(もっと前の)段で
+            # 起きていたときに、無関係な最後の段まで失敗扱いになってしまう。
+            #
+            # `mark_last_step_failed=True` は例外で処理そのものが落ちた
+            # ときだけ ── そのときは開いたままの段が何も報告できずに
+            # 終わったので、ここで初めて失敗と記す。
             if job.steps and job.steps[-1].running:
                 job.steps[-1].finished_at = job.finished_at
-                job.steps[-1].ok = ok
+                if mark_last_step_failed:
+                    job.steps[-1].ok = False
             self._recent.insert(0, job)
             del self._recent[self._max_recent:]
             if self._running is job:

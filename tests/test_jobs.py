@@ -102,6 +102,44 @@ class RunTests(JobTestCase):
         self.assertEqual(failed.state, jobs.STATE_FAILED)
         self.assertIn("共有フォルダ", failed.error)
 
+    def test_途中の段だけ失敗しても他の段は汚染されない(self) -> None:
+        """レーンの各段の成否が、全体の結果と食い違わないこと(バグ修正)。
+
+        1テーブルだけ読み込みに失敗しても、そのテーブルの段が最後で
+        ない限り、次の段が始まった瞬間に(成否を記さないまま)閉じられ、
+        "完了" のまま残っていた。全体は「失敗」なのにレーンのカードは
+        1枚も失敗を指さない、という食い違いが起きていた。
+        """
+        def work(progress):
+            progress(30, "甲を読み込み中...")
+            progress(30, "甲を読み込み中...", ok=False)   # 甲だけ失敗
+            progress(70, "乙を読み込み中...")
+            progress(100, "")
+            return Result(ok=False, summary="1/2テーブル")
+
+        self.registry.start("import", "取り込み", work)
+        self.wait_idle()
+        job = self.registry.recent()[0]
+        self.assertEqual(job.state, jobs.STATE_FAILED)
+        self.assertEqual(len(job.steps), 2)
+        self.assertFalse(job.steps[0].ok)   # 甲は失敗のまま
+        self.assertTrue(job.steps[1].ok)    # 乙(最後の段)は汚染されない
+
+    def test_例外で落ちると開いていた段が失敗になる(self) -> None:
+        """段が自分の成否を報告する前に丸ごと落ちたときは、開いていた
+        段を失敗と記す(段が何も言わないまま消えるほうが分かりにくい)。
+        """
+        def work(progress):
+            progress(50, "甲を読み込み中...")
+            raise RuntimeError("接続が切れました")
+
+        self.registry.start("import", "取り込み", work)
+        self.wait_idle()
+        job = self.registry.recent()[0]
+        self.assertEqual(job.state, jobs.STATE_FAILED)
+        self.assertEqual(len(job.steps), 1)
+        self.assertFalse(job.steps[0].ok)
+
     def test_okがFalseなら失敗扱い(self) -> None:
         """例外にならなくても、取り込めていなければ失敗。"""
         self.registry.start("import", "取り込み",
