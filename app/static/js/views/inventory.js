@@ -1,0 +1,361 @@
+/*
+  簡易在庫。
+
+  判断はサーバが済ませてある。ここは受け取ったものを並べ、押されたら投げるだけ。
+  「この棚は検索で当たった」「この行は払い出せる」といった判断は
+  `presenters/inventory.py` と `pallet_service.py` が返す。
+
+  【図が主役】
+  保管位置の図は `pallet_map.json` の論理座標をそのまま viewBox に載せている。
+  拡大しても文字がにじまず、押せる大きさは画面幅に追従する
+  (タッチ端末があるので、これが効く)。
+*/
+
+import { api } from "../api.js";
+import { toast, toastError } from "../toast.js";
+import * as tabs from "../tabs.js";
+import * as toggles from "../toggles.js";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// 図の縮尺。等倍だと棚1つが約22px しかなく、指では押しにくい
+// (WCAG 2.5.8 が求める 24px にも届かない)。
+// tkinter版も 0.4〜2.0 倍を持っていた(`MIN_SCALE` / `MAX_SCALE`)
+const ZOOM_STEPS = [1, 1.5, 2, 3];
+
+const el = {};
+let selected = null;      // 払い出す対象の行
+let lastQuery = null;     // 「最新にする」で同じ表示を取り直すため
+let zoom = 0;             // ZOOM_STEPS の添字
+
+function setStatus(message, kind) {
+  if (!message) { el.status.hidden = true; return; }
+  el.status.hidden = false;
+  el.status.textContent = message;
+  el.status.className = `status status--${kind}`;
+}
+
+// ------------------------------------------------------------------
+// 図
+// ------------------------------------------------------------------
+function drawMap(map) {
+  el.map.setAttribute("viewBox", map.view_box);
+  el.map.replaceChildren();
+
+  if (map.background) {
+    const image = document.createElementNS(SVG_NS, "image");
+    image.setAttribute("href", map.background);
+    image.setAttribute("x", "0");
+    image.setAttribute("y", "0");
+    image.setAttribute("width", map.width);
+    image.setAttribute("height", map.height);
+    el.map.appendChild(image);
+  }
+
+  for (const pos of map.positions) {
+    const group = document.createElementNS(SVG_NS, "g");
+    group.setAttribute("class", `pos pos--${pos.state}`);
+    group.setAttribute("tabindex", "0");
+    group.setAttribute("role", "button");
+    // 読み上げと吹き出しの両方に、押すと何が起きるかを書く
+    const what = pos.count ? `${pos.count}種類` : "在庫なし";
+    group.setAttribute("aria-label", `位置 ${pos.name}(${what})`);
+
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("x", pos.x);
+    rect.setAttribute("y", pos.y);
+    rect.setAttribute("width", pos.w);
+    rect.setAttribute("height", pos.h);
+    rect.setAttribute("rx", "2");
+
+    const text = document.createElementNS(SVG_NS, "text");
+    text.setAttribute("x", pos.x + pos.w / 2);
+    text.setAttribute("y", pos.y + pos.h / 2);
+    text.textContent = pos.name;
+
+    const title = document.createElementNS(SVG_NS, "title");
+    title.textContent = `位置 ${pos.name} — ${what}`;
+
+    group.append(rect, text, title);
+    group.addEventListener("click", () => showPosition(pos.name));
+    group.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        showPosition(pos.name);
+      }
+    });
+    el.map.appendChild(group);
+  }
+
+  // 在庫にはあるのに図に無い位置。図から押せないので黙っていない
+  el.mapMissing.hidden = !map.missing.length;
+  if (map.missing.length) {
+    el.mapMissing.textContent =
+      `図に無い位置に在庫があります: ${map.missing.join(", ")}`
+      + "(この位置は図から押せません)";
+  }
+
+  // 受入の位置欄の候補にも使う。打ち間違いを減らす
+  el.positions.replaceChildren(...map.positions.map((p) => {
+    const option = document.createElement("option");
+    option.value = p.name;
+    return option;
+  }));
+}
+
+function applyZoom(step) {
+  zoom = Math.max(0, Math.min(ZOOM_STEPS.length - 1, step));
+  const scale = ZOOM_STEPS[zoom];
+  el.mapWrap.style.setProperty("--zoom", scale);
+  el.zoomNow.textContent = `${Math.round(scale * 100)}%`;
+  el.zoomOut.disabled = zoom === 0;
+  el.zoomIn.disabled = zoom === ZOOM_STEPS.length - 1;
+  // 等倍のままだと押しにくいことに気づけないので、そのときだけ案内を出す
+  el.zoomWhy.hidden = zoom !== 0;
+}
+
+// ------------------------------------------------------------------
+// 一覧
+// ------------------------------------------------------------------
+function drawRows(view) {
+  el.rows.replaceChildren(...view.rows.map((row) => rowElement(row, view.columns)));
+  if (el.invTabs) {
+    // **開く前に何件あるかが分かる**(§2.4)
+    tabs.setBadges(el.invTabs, {
+      list: { text: view.rows.length ? String(view.rows.length) : "" },
+    });
+  }
+  el.found.textContent = view.found ? `${view.found} 件` : "";
+  el.caption.textContent = view.caption || "";
+  el.listNote.textContent = view.message || "";
+  el.listNote.hidden = !view.message;
+  clearSelection();
+}
+
+function rowElement(row, columns) {
+  const tr = document.createElement("tr");
+  tr.tabIndex = 0;
+  for (const column of columns) {
+    const td = document.createElement("td");
+    if (column.numeric) td.className = "n";
+    const value = row[column.label];
+    td.textContent = (value === "" || value === null) ? "---" : value;
+    tr.appendChild(td);
+  }
+  const pick = () => select(tr, row);
+  tr.addEventListener("click", pick);
+  tr.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); pick(); }
+  });
+  return tr;
+}
+
+// ------------------------------------------------------------------
+// 払い出しの対象
+// ------------------------------------------------------------------
+function clearSelection() {
+  selected = null;
+  for (const tr of el.rows.querySelectorAll("tr")) tr.removeAttribute("aria-selected");
+  if (el.actTabs) tabs.setBadges(el.actTabs, { issue: { text: "" } });
+  el.picked.hidden = true;
+  el.pickWhy.hidden = false;
+  el.iqty.value = "";
+  el.iqty.disabled = true;
+  el.issue.disabled = true;
+}
+
+function select(tr, row) {
+  for (const other of el.rows.querySelectorAll("tr")) other.removeAttribute("aria-selected");
+  tr.setAttribute("aria-selected", "true");
+  selected = row;
+
+  // 行を選ぶのは「これを出す」という意思表示。**入力欄が別の面に
+  // 隠れていたら開く** ── 選んだのに何も起きないように見せない
+  if (el.actTabs) {
+    tabs.select(el.actTabs, "issue");
+    tabs.setBadges(el.actTabs, { issue: { text: "選択中", level: "ok" } });
+  }
+  el.pickWhy.hidden = true;
+  el.picked.hidden = false;
+  el.pkSize.textContent = `${row["幅"]} × ${row["丈"]}`;
+  el.pkPos.textContent = row["位置"] || "---";
+  el.pkSym.textContent = row["記号"] || "---";
+  el.pkStock.textContent = row["在庫数"];
+  el.iqty.disabled = false;
+  el.iqty.max = row["在庫数"];
+  el.issue.disabled = false;
+  el.iqty.focus();
+}
+
+// ------------------------------------------------------------------
+// 通信
+// ------------------------------------------------------------------
+function render(view) {
+  drawMap(view.map);
+  drawRows(view);
+}
+
+async function runSearch() {
+  const w = el.w.value.trim();
+  const l = el.l.value.trim();
+  if (!w || !l) {
+    setStatus("幅と丈の両方を入れてください", "ng");
+    return;
+  }
+  const mode = toggles.value(el.modeGroup, "mode") || "exact";
+  lastQuery = () => api.get(
+    `/api/inventory/search?w=${encodeURIComponent(w)}&l=${encodeURIComponent(l)}&mode=${mode}`);
+  // 自分で打って探した時点で「渡されて来た」ではなくなる
+  el.fromSelectionWhy.hidden = true;
+  await load();
+}
+
+/**
+ * 図の位置を押したときに、その位置の在庫を出す。
+ *
+ * **押したのに何も起きないように見えるのが一番わるい。** 一覧は別の面に
+ * あるので、こちらから開く ── 「ここに何がある?」と押した以上、答えは
+ * その場に出す。
+ */
+async function showPosition(name) {
+  lastQuery = () => api.get(`/api/inventory/position/${encodeURIComponent(name)}`);
+  // 位置で引き直したら、渡された寸法の結果はもう出ていない
+  el.fromSelectionWhy.hidden = true;
+  await load();
+  if (el.invTabs) tabs.select(el.invTabs, "list");
+}
+
+async function load() {
+  if (!lastQuery) return;
+  try {
+    const view = await lastQuery();
+    render(view);
+    setStatus(view.message || "", view.found ? "ok" : "warn");
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+function numbers(fields) {
+  const out = {};
+  for (const [key, node] of Object.entries(fields)) {
+    const value = node.value.trim();
+    if (!/^\d+$/.test(value)) {
+      node.focus();
+      return null;
+    }
+    out[key] = Number(value);
+  }
+  return out;
+}
+
+async function doReceive() {
+  const values = numbers({ width: el.rw, length: el.rl, qty: el.rqty });
+  if (!values) { toast("幅・丈・台数は数字で入れてください", "ng"); return; }
+  if (!el.rpos.value.trim()) { el.rpos.focus(); toast("位置を入れてください", "ng"); return; }
+
+  try {
+    const body = await api.post("/api/inventory/receive", {
+      ...values,
+      position: el.rpos.value.trim(),
+      symbol: el.rsym.value.trim(),
+      industry: el.rind.value.trim(),
+      unit: el.runit.value.trim(),
+      note: el.rnote.value.trim(),
+    });
+    toast(body.message, "ok");
+    el.rqty.value = "";
+    el.rnote.value = "";
+    // 動かした先の棚を出す。登録した結果がその場で見える
+    await showPosition(el.rpos.value.trim());
+  } catch (err) {
+    afterFailure(err);
+  }
+}
+
+async function doIssue() {
+  if (!selected) return;
+  const value = el.iqty.value.trim();
+  if (!/^\d+$/.test(value)) { el.iqty.focus(); toast("数字で入れてください", "ng"); return; }
+
+  try {
+    const body = await api.post("/api/inventory/issue", {
+      width: selected.key.width,
+      length: selected.key.length,
+      position: selected.key.position,
+      qty: Number(value),
+    });
+    toast(body.message, "ok");
+    await showPosition(selected.key.position);
+  } catch (err) {
+    afterFailure(err);
+  }
+}
+
+/** 失敗の知らせ方。競合だけは表示を取り直す。 */
+function afterFailure(err) {
+  toastError(err);
+  if (err.status === 409) {
+    // 他の端末が先に動かした。古い数字のまま操作を続けさせない
+    load();
+  }
+}
+
+// ------------------------------------------------------------------
+export function start(state) {
+  for (const id of ["w", "l", "search", "clear", "status", "map", "mapMissing",
+                    "mapWrap", "zoomIn", "zoomOut", "zoomNow", "zoomWhy",
+                    "rows", "found", "caption", "listNote", "refresh",
+                    "rw", "rl", "rqty", "rpos", "rsym", "rind", "runit", "rnote",
+                    "receive", "picked", "pickWhy", "pkSize", "pkPos", "pkSym",
+                    "pkStock", "iqty", "issue", "positions",
+                    "fromSelectionWhy"]) {
+    el[id] = document.getElementById(id);
+  }
+  el.invTabs = document.getElementById("invTabs");
+  el.actTabs = document.getElementById("actTabs");
+  el.modeGroup = document.querySelector('.choose[aria-label="一致条件"]');
+  tabs.attachAll();
+  // 一致条件を変えたら、その場で引き直す。**押してから「検索」を
+  // もう一度押させない** ── 条件を変えるのは検索し直すことだから
+  toggles.attach(el.modeGroup, "mode", () => { if (lastQuery) runSearch(); });
+  // 再入場のたびに真っさらから。モジュールは使い回されるので、
+  // 前に来たときの選択や検索条件がここに残っている(`nav.js`)
+  selected = null;
+  lastQuery = null;
+
+  applyZoom(0);
+  el.zoomIn.addEventListener("click", () => applyZoom(zoom + 1));
+  el.zoomOut.addEventListener("click", () => applyZoom(zoom - 1));
+
+  render(state);
+  // 資材選択から寸法を持って来たときは、**引いたところから始まっている**
+  // (`presenters/inventory.initial`)。「最新にする」で取り直せるよう、
+  // 同じ問い合わせをここでも組んでおく
+  if (state.from_selection) {
+    const w = state.width_text, l = state.length_text;
+    lastQuery = () => api.get(
+      `/api/inventory/search?w=${encodeURIComponent(w)}&l=${encodeURIComponent(l)}&mode=exact`);
+    setStatus(state.message || "", state.found ? "ok" : "warn");
+  }
+
+  el.search.addEventListener("click", runSearch);
+  el.refresh.addEventListener("click", load);
+  for (const node of [el.w, el.l]) {
+    node.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); runSearch(); }
+    });
+  }
+  el.clear.addEventListener("click", () => {
+    el.w.value = "";
+    el.l.value = "";
+    el.w.focus();
+    setStatus("", "ok");
+    el.fromSelectionWhy.hidden = true;
+  });
+  el.receive.addEventListener("click", doReceive);
+  el.issue.addEventListener("click", doIssue);
+  el.iqty.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); doIssue(); }
+  });
+}

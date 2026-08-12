@@ -1,0 +1,353 @@
+/*
+  layout.css — 画面の骨格
+
+  ステータスリボン / 左のレール / 本体 の3つ。
+  詳細は docs/UI刷新_UIUX設計指針.md §4。
+
+  【高さの考え方】
+  現場端末はFHD(1920×1080)。ただしWindowsの表示スケールで
+  CSSピクセルの視野が変わり、本体に使える高さは 894px〜534px と1.7倍違う。
+  そこで **@media (min-height:) で分岐**する。この画面が足りなくなるのは
+  横ではなく縦なので、幅ではなく高さで分ける。
+
+  【スクロールの規則】
+  ページ全体   … スクロールしない(現在地を見失う)
+  操作カラム   … スクロールしない(見えていない操作に気づけない)
+                  → 入りきらない分は段階的開示で解く
+  結果カラム   … スクロールしてよい(図は連続した1つの対象)
+  一覧の中     … スクロールする(最低10行)
+*/
+
+/* ページ全体は動かさない。中の領域だけが動く */
+html, body { height: 100%; overflow: hidden; }
+
+/* ================================================================
+   ステータスリボン — いま何が決まっているか
+   4項目に絞ってあるのは、作業記憶に置けるまとまりが4±1だから
+   ================================================================ */
+/* **暗い帯を1本だけ通す。** 明るい面ばかりだと、どこが枠でどこが中身かが
+   面積でしか分からず、画面全体がのっぺりする。上に濃い帯があると、
+   下の作業面は明るく広く見える。
+   帯の上の部品は、うっすら白を重ねるだけで作り、寸法(--ctl-h/--ctl-r)を
+   1つに統一する ── 高さも角の丸みもばらばらだと、まとまりが読めない */
+.ribbon {
+  display: flex; align-items: center; gap: 0; flex-wrap: wrap;
+  background: linear-gradient(115deg, var(--bar-a), var(--bar-b));
+  color: var(--bar-ink);
+  padding: 0 18px;
+  min-height: 56px;
+}
+/* アプリの名前と版。帯の左端に置く ── 画面の**持ち主**を示す場所で、
+   ここだけは何を開いていても変わらない。区切りは線ではなく間隔 */
+.brand {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 6px 24px 6px 0; flex: none;
+}
+.brand__name {
+  font-size: var(--fs-md); font-weight: 700; color: var(--bar-ink);
+  letter-spacing: .01em; white-space: nowrap;
+}
+/* 版のバッジ。数字なので等幅・桁そろえ。**小さく静かに、でも常にある** ──
+   聞かれたときに読めればよく、作業のあいだ目に入る必要はない */
+.ver {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .03em;
+  line-height: 1.4; padding: 2px 7px; white-space: nowrap;
+  border-radius: var(--radius-xs);
+  background: var(--bar-face); color: var(--bar-ink);
+  border: 1px solid var(--bar-edge);
+}
+
+.ribbon__slots { display: flex; flex-wrap: wrap; align-items: center; }
+.ribbon__chips { display: flex; gap: 6px; padding: 0 14px; flex-wrap: wrap; }
+.ribbon__end { margin-left: auto; display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+
+/* 区切りは**線ではなく間隔**。4つしかないので、線で仕切らなくても
+   まとまりは読める(ゲシュタルトの近接)。線を引くと、リボンが
+   「表の1行」に見えて、値そのものより枠が目に付く */
+.slot {
+  display: flex; flex-direction: column; gap: 0;
+  padding: 6px 22px 6px 0; min-width: 104px;
+}
+.slot .k {
+  font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .04em;
+  color: var(--bar-muted); line-height: 1.45;
+}
+.slot .v {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: var(--fs-lg); font-weight: 700; line-height: 1.4;
+  letter-spacing: -.01em; color: var(--bar-ink);
+}
+/* 未設定は帯の上でも赤く出す。ただし暗い地に載るので、
+   本文用の --state-error ではなく明るい赤を使う */
+.slot .v[data-state="unset"] { color: var(--bar-alert); }
+
+/* ================================================================
+   いま動いているもの (running.js)
+
+   取り込みは数分かかる。始めた画面を離れると終わったかどうかが
+   分からなくなるので、**帯に出して、離れたまま待てるようにする**。
+
+   何も走っていないときは丸ごと消える ── ずっと居座る枠にすると、
+   「動いていない」ことを読むために毎回そこを見ることになる。
+   ================================================================ */
+.running {
+  display: flex; align-items: center; gap: 9px;
+  margin: 0 12px; padding: 6px 12px;
+  background: var(--bar-face); border: 1px solid var(--bar-edge);
+  border-radius: var(--ctl-r); min-width: 15em; max-width: 24em;
+}
+.running[hidden] { display: none; }
+
+/* 脈打つ点。**色を知覚できなくても、動いていることは動きで分かる** */
+.running__dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--bar-focus);
+  animation: running-pulse 1.4s ease-in-out infinite;
+}
+@keyframes running-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: .35; transform: scale(.72); }
+}
+
+.running__text { display: grid; gap: 1px; min-width: 0; }
+.running__text b {
+  font-size: var(--fs-sm); font-weight: 700; color: var(--bar-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.running__text small {
+  font-size: var(--fs-2xs); color: var(--bar-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* どこまで進んだか。溝は帯に沈め、伸びた分だけを明るくする */
+.running__track {
+  flex: none; width: 56px; height: 5px; border-radius: var(--pill);
+  background: var(--bar-face-on); overflow: hidden;
+}
+.running__track > i {
+  display: block; height: 100%; width: 0; border-radius: var(--pill);
+  background: var(--bar-focus); transition: width .3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .running__dot { animation: none; }
+  .running__track > i { transition: none; }
+}
+
+.role-chip {
+  font-size: var(--fs-xs); font-weight: 700; padding: 5px 12px; border-radius: var(--pill);
+  background: var(--bar-face-on); color: var(--bar-ink);
+  border: 1px solid var(--bar-edge);
+}
+.role-chip--material { background: var(--bar-face-on); color: var(--bar-ink); }
+
+/* 帯の上のボタン。**枠も色も足さず、白を薄く重ねるだけ**で作る。
+   終了だけは塊から離し、触れたときに赤くする(誤操作を避ける) */
+.ribbon .btn {
+  height: var(--ctl-h); min-height: var(--ctl-h);
+  border-radius: var(--ctl-r); padding: 0 14px;
+  background: var(--bar-face); color: var(--bar-ink);
+  border: 1px solid var(--bar-edge); box-shadow: none;
+  font-size: var(--fs-sm); font-weight: 700;
+}
+.ribbon .btn:hover:not(:disabled) {
+  background: var(--bar-face-on); filter: none; box-shadow: none;
+}
+.ribbon .btn--danger {
+  border-style: solid; color: var(--bar-muted); background: transparent;
+  border-color: var(--bar-edge);
+}
+.ribbon .btn--danger:hover:not(:disabled) {
+  background: var(--act-commit); border-color: var(--act-commit); color: var(--act-commit-fg);
+}
+.ribbon .btn:focus-visible {
+  outline: 2px solid var(--bar-focus); outline-offset: 2px; box-shadow: none;
+}
+
+/* モード切替。**権限のあるモードが2つ以上あるときだけ**出る。
+   トグルではなくセグメント(選択肢が並ぶ形)にしてあるのは、
+   いまどちらなのかと、ほかに何があるのかを同時に見せるため ──
+   トグルは「押すと何になるか」を覚えていないと読めない。
+   当たり判定は 44px(§1.2 フィッツの法則)。 */
+.modeswitch {
+  display: flex; height: var(--ctl-h); border-radius: var(--ctl-r);
+  border: 1px solid var(--bar-edge); background: var(--bar-face); overflow: hidden;
+}
+.modeswitch__btn {
+  font: inherit; font-size: var(--fs-sm); font-weight: 700; cursor: pointer;
+  height: 100%; padding: 0 16px; border: 0; border-radius: 0;
+  background: transparent; color: var(--bar-muted);
+  transition: background-color .15s ease, color .15s ease;
+}
+.modeswitch__btn + .modeswitch__btn { box-shadow: inset 1px 0 0 var(--bar-edge); }
+.modeswitch__btn:hover { color: var(--bar-ink); background: var(--bar-face-on); }
+/* いま選ばれているほうだけを塗る。帯の上なので、色を足すのではなく
+   **白を厚く重ねる** ── 帯の中で色を増やすと騒がしくなる */
+.modeswitch__btn[aria-pressed="true"] {
+  background: var(--bar-ink); color: var(--bar-a); cursor: default;
+}
+/* 資材は塗りを変えず、色相の手がかりだけを左端の細い帯で足す
+   (文字も併記してあるので、色は第2の手がかり) */
+.modeswitch__btn[data-mode="material"][aria-pressed="true"] {
+  box-shadow: inset 0 -3px 0 var(--act-select);
+}
+.modeswitch__btn[data-mode="field"][aria-pressed="true"] {
+  box-shadow: inset 0 -3px 0 var(--act-run);
+}
+.modeswitch__btn:focus-visible { outline: 2px solid var(--bar-focus); outline-offset: -2px; }
+
+/* ================================================================
+   左のレール — 7画面。並びは作業の順序
+   ================================================================ */
+.shell {
+  display: grid;
+  grid-template-columns: 236px 1fr;
+  height: calc(100vh - 56px);
+  min-height: 0;
+  gap: 14px;
+  padding: 14px 0 14px 14px;
+  background: var(--ground);
+}
+
+/* レールは**1枚のカード**。地に直接並べると、画面の端に文字が貼り付いて
+   いるように見える。浮かせると「これは道具の並び」だと形で分かる。
+   1項目は2行 ── 太字の名前と、小さな説明。名前だけだと「倉庫連携」が
+   何をする画面なのかは押すまで分からない(情報の匂い、§2.4)。
+   いま居る場所の合図は3つ ── 面の色・番号バッジの反転・太字。
+   色だけには頼らない(§3.8) */
+.rail {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 8px;
+  overflow-y: auto;
+}
+.rail ol { list-style: none; margin: 0; padding: 0; display: flex;
+           flex-direction: column; gap: 3px; }
+.rail a {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center; gap: 10px;
+  padding: 8px 9px; min-height: 46px;
+  border: 1px solid transparent; border-radius: 8px;
+  text-decoration: none; color: var(--muted);
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.rail a:hover { background: var(--raised); }
+.rail a[aria-current="page"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+.rail__text { display: grid; gap: 1px; min-width: 0; }
+.rail__text b {
+  display: block; font-size: var(--fs-sm); font-weight: 700; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rail a[aria-current="page"] .rail__text b { color: var(--accent); }
+.rail__text small {
+  display: block; font-size: var(--fs-2xs); font-weight: 600; color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 順番の番号。角の丸い正方形にすると、文字ではなく「印」に見える */
+.rail .n {
+  flex: none; width: 30px; height: 30px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: var(--fs-sm); font-weight: 700;
+  color: var(--muted); background: var(--sunken);
+}
+.rail a[aria-current="page"] .n {
+  background: var(--accent); color: #fff;
+}
+
+/* ================================================================
+   本体
+   ================================================================ */
+/* 本体も**1枚のカード**。レールと同じ持ち上げ方をすると、
+   「道具の並び」と「作業する面」が対等な2枚に見える */
+.work {
+  min-width: 0; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius) 0 0 var(--radius);
+  border-right: 0;
+  box-shadow: var(--shadow-sm);
+}
+
+/* 1カラムの画面(選定ログ・データなど) */
+.pane { padding: 18px 20px; overflow: auto; flex: 1; min-height: 0; }
+
+/* 結果と操作の2カラム(資材選択・簡易在庫・棚検索) */
+.split {
+  display: grid; grid-template-columns: 1.3fr 1fr;
+  min-height: 0; flex: 1;
+}
+.split__results {
+  padding: 18px 20px; border-right: 1px solid var(--rule);
+  min-width: 0; overflow: auto;              /* 結果は見るもの。動いてよい */
+}
+/* 操作の列は**一段沈めた地**に置く。結果と操作を分けているのは
+   罫線ではなく面の明度差 ── 線は1本引けば済むが、面は「こちら側は
+   別の役目」と面積で言う */
+.split__controls {
+  padding: 18px 20px; background: var(--sunken);
+  min-width: 0; overflow: hidden;            /* 操作は探すもの。動かさない */
+  display: flex; flex-direction: column; gap: 12px;
+  /* 中の部品が**この列の幅**で並びを決められるようにする。画面が広くても
+     この列が広いとは限らない(倉庫連携は一覧のほうを広く取っている) */
+  container: controls / inline-size;
+}
+/* 結果カラムも縦積み。**個々の margin を撒かず gap で間隔を作る**
+   ── カードを足したり順を変えたりするたびに margin を直すことになる */
+.split__results { display: flex; flex-direction: column; gap: 12px; }
+
+/* 画面ごとの列幅。**結果を広く**取るのが基本(§4.4 結果:操作 = 1.3:1)。
+   発注フォームは12項目あるので、そこだけ操作側を広く取る */
+.split--selection { grid-template-columns: 1.35fr 1fr; }
+.split--inventory { grid-template-columns: 1.3fr 1fr; }
+.split--layout    { grid-template-columns: 1.45fr 1fr; }
+/* 倉庫連携の一覧は16列ある。1.25:1 だと右端の「確認」ボタンが枠から
+   出て、押せるものがあること自体が見えなくなる */
+.split--warehouse { grid-template-columns: 1.9fr 1fr; }
+/* 操作が無い画面(資材モードの発注一覧)は一覧が全幅を使う */
+.split--onecol    { grid-template-columns: 1fr; }
+.split--onecol .split__results { border-right: 0; }
+
+.pane__head { display: flex; align-items: baseline; justify-content: space-between;
+              gap: var(--gap); }
+.pane__head h2 { font-size: var(--fs-xl); }
+
+/* ================================================================
+   高さによる段階
+   FHD の表示スケールに対応する(設計指針 §4.3)
+   ================================================================ */
+/* 〜560px = 150%相当。開くのは1枚だけ */
+.split__controls > .card { flex: none; }
+
+@media (min-height: 560px) {          /* 125%相当 */
+  .split__controls { gap: 12px; }
+}
+
+/* **基準より低い画面では、隠すより動かせるほうがまし。**
+   基準は FHD 100%(本体 894px)で、そこでは段階的開示と面(タブ)に
+   よって操作の列は収まる。1366x768 のような低い画面では入りきらない
+   ことがあり、`overflow: hidden` のままだと**下の操作が消える** ──
+   消えた操作には気づけないが、スクロールバーは「まだ下がある」と
+   言ってくれる(§4.2 の但し書き)。 */
+@media (max-height: 820px) {
+  .split__controls { overflow-y: auto; }
+}
+/* 幅の既定。画面ごとの指定(`.split--*`)があればそちらが勝つ */
+
+/* 横が狭いときは縦積みにする(想定外だが破綻はさせない) */
+@media (max-width: 1100px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { border-right: 0; border-bottom: 1px solid var(--rule); }
+  .rail ol { display: flex; overflow-x: auto; }
+  .rail a { border-left: 0; border-bottom: 3px solid transparent; white-space: nowrap; }
+  .rail a[aria-current="page"] { border-left: 0; border-bottom-color: var(--accent); }
+  .split { grid-template-columns: 1fr; }
+  .split__results { border-right: 0; border-bottom: 1px solid var(--rule); }
+}

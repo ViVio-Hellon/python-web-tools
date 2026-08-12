@@ -1,0 +1,111 @@
+/*
+  base.css — 土台
+
+  文字・間隔・見出しの基本。色は tokens.css からしか取らない。
+
+  設計の根拠は docs/UIUX設計指針.md:
+  - 8pxグリッド(ゲシュタルトの近接: 要素8px / セクション内12px / セクション間24px)
+  - 寸法・数量は等幅 + tabular-nums(1150 と 1180 の桁を揃えて読み違いを防ぐ)
+  - ホバーでしか出ない情報は作らない(タッチ端末があるため)
+
+  【書体の階層】
+  太さは 400 / 600 / 700 の3段だけ。段が多いほど「どれが重要か」が
+  伝わらなくなります。大きさで差を付けられるところは大きさで付け、
+  太さは**いま見るべきもの**に取っておきます。
+*/
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--fs-lg);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4 { margin: 0; line-height: 1.3; text-wrap: balance; }
+h1 { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.011em; }
+h2 { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.009em; }
+h3 { font-size: var(--fs-lg); font-weight: 600; letter-spacing: -.004em; }
+p  { margin: 0; }
+
+a { color: var(--accent); text-underline-offset: 2px; }
+
+/* キーボード操作の現在地を必ず見せる。
+   マウス操作では出さない(:focus-visible)ので邪魔にならない。
+   **輪郭線と柔らかい輪の二重**にする ── 細い線1本だと、
+   工場の明るい場所や暗いテーマで見落とされる */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 4px var(--focus-soft);
+}
+
+/* 寸法・数量は必ずこれ。読み違いがそのまま資材の誤発注になる */
+.num, .mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 見出しの上の小ラベル。
+   以前は総大文字 + .16em の字間だったが、日本語には大文字が無いので
+   効くのは "STEP 2" のような英数だけで、字間だけが間延びしていた。
+   字間を詰めて、色と大きさで小ラベルだと分かるようにする */
+.eyebrow {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: .06em;
+  color: var(--faint);
+}
+
+.muted { color: var(--muted); }
+
+/* 画面には出さないが読み上げには出す(状態変化の通知など) */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* 製図の寸法線。区切りに使う */
+.dimline { display: block; height: 9px; margin: 10px 0 0; position: relative; }
+.dimline::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 4px;
+  height: 1px; background: var(--rule);
+}
+.dimline::after {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 100%;
+  border-left: 1px solid var(--rule);
+  border-right: 1px solid var(--rule);
+}
+
+/* 横に長いもの(表・図・コード)は、それ自身の中で横スクロールさせる。
+   ページ本体が横に動くと現在地を見失う */
+.scroll-x { overflow-x: auto; }
+
+/* 中の領域がスクロールする画面なので、つまみは細く目立たなくする。
+   **消しはしない** ── 「まだ下がある」ことは見えていなければならない */
+* { scrollbar-width: thin; scrollbar-color: var(--rule) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--rule); border-radius: var(--pill);
+  border: 3px solid transparent; background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--field-line); background-clip: content-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

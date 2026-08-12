@@ -1,0 +1,26 @@
+{
+  "app_id": "nlm.packaging-tool",
+  "display_name": "梱包資材総合ツール",
+  "version": "2.5.3",
+  "monitor_level": 2,
+
+  "local_dir_name": "PackagingTool",
+
+  "server": {
+    "host": "127.0.0.1",
+    "port_retry": 3,
+    "roles": {
+      "field": {
+        "port": 8713
+      },
+      "material": {
+        "port": 8723
+      }
+    }
+  },
+
+  "monitoring": {
+    "health_poll_seconds": 15,
+    "job_poll_ms": 300
+  }
+}

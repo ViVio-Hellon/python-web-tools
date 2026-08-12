@@ -1,0 +1,600 @@
+"""資材配置アルゴリズム(placement_algorithm)のユニットテスト。
+
+VBA `PlaceBoardsFromList` 系の境界条件・タグ別の配置経路・
+移植時に踏襲したVBA側の既知の不具合を検証する。
+"""
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from packaging_tool import placement_algorithm as pl
+from packaging_tool.board_selection_service import Palette, ProductSize, SelectedBoard
+from packaging_tool.models import BoardModel, PlacedBoardModel
+
+LOWER = pl.CATEGORY_LOWER
+UPPER = pl.CATEGORY_UPPER
+
+
+def make_palette(width: int, length: int) -> Palette:
+    return Palette(width=width, length=length, overhang_ratio=1.10,
+                   max_width=width * 1.10, max_length=length * 1.10)
+
+
+def make_ctx(pal_w: int = 1150, pal_l: int = 2650,
+             prod_w: int = 1122, prod_l: int = 2502) -> pl.PlacementContext:
+    return pl.PlacementContext(
+        palette=make_palette(pal_w, pal_l),
+        product=ProductSize(width=prod_w, length=prod_l),
+    )
+
+
+def model(w: int, l: int, category: str = LOWER, *, count: int = 1) -> BoardModel:
+    return BoardModel(width=w, length=l, count=count,
+                      instance_id="t", board_category=category)
+
+
+def placed(x: int, y: int, w: int, l: int, category: str = LOWER,
+           *, is_fill: bool = False) -> PlacedBoardModel:
+    return PlacedBoardModel(x=x, y=y, width=w, length=l,
+                            board_category=category, is_fill_board=is_fill)
+
+
+def _check(ctx: pl.PlacementContext, place_x: int, b_short: int, limit_w: int) -> bool:
+    return pl._check_length_fill_overlap(ctx, LOWER, place_x, b_short, limit_w)
+
+
+class EvaluatePlacementTests(unittest.TestCase):
+    def test_prefers_top_left(self):
+        # 左上ほど良い(小さい)
+        self.assertLess(pl.evaluate_placement(0, 0), pl.evaluate_placement(10, 0))
+        self.assertLess(pl.evaluate_placement(0, 10), pl.evaluate_placement(10, 10))
+
+    def test_x_and_y_have_equal_weight(self):
+        self.assertEqual(pl.evaluate_placement(30, 10), pl.evaluate_placement(10, 30))
+
+
+class CanPlaceBoardAtTests(unittest.TestCase):
+    def test_upper_forbids_x_at_or_beyond_product_length(self):
+        ctx = make_ctx(prod_l=2502)
+        b = model(300, 500, UPPER)
+        self.assertTrue(pl.can_place_board_at(ctx, 2501, 0, b))
+        # x >= 製品丈 は「ちょうど」でも禁止(VBA踏襲)
+        self.assertFalse(pl.can_place_board_at(ctx, 2502, 0, b))
+
+    def test_upper_allows_width_tolerance_of_80(self):
+        ctx = make_ctx(prod_w=1122)
+        b = model(1202, 500, UPPER)  # 1122 + 80 ちょうど
+        self.assertTrue(pl.can_place_board_at(ctx, 0, 0, b))
+        self.assertFalse(pl.can_place_board_at(ctx, 1, 0, model(1203, 500, UPPER)))
+
+    def test_upper_forbids_negative_y(self):
+        ctx = make_ctx()
+        self.assertFalse(pl.can_place_board_at(ctx, 0, -1, model(300, 500, UPPER)))
+
+    def test_lower_allows_negative_y_overhang(self):
+        # overhang_ratio=1.10 → 幅300のボードは y >= -30 まで許容
+        ctx = make_ctx(pal_w=1150)
+        b = model(300, 500, LOWER)
+        self.assertTrue(pl.can_place_board_at(ctx, 0, -30, b))
+        self.assertFalse(pl.can_place_board_at(ctx, 0, -31, b))
+
+    def test_lower_caps_y_at_120_percent_of_palette_width(self):
+        ctx = make_ctx(pal_w=1000)  # 上限 = 1200
+        self.assertTrue(pl.can_place_board_at(ctx, 0, 700, model(500, 400, LOWER)))
+        self.assertFalse(pl.can_place_board_at(ctx, 0, 701, model(500, 400, LOWER)))
+
+    def test_rotation_swaps_dimensions_for_boundary_check(self):
+        ctx = make_ctx(pal_w=1000)  # 上限 = 1200
+        b = model(1300, 400, LOWER)
+        self.assertFalse(pl.can_place_board_at(ctx, 0, 0, b, rotate=False))
+        self.assertTrue(pl.can_place_board_at(ctx, 0, 0, b, rotate=True))
+
+    def test_overlap_detected_within_same_category(self):
+        ctx = make_ctx()
+        ctx.placed.append(placed(0, 0, 500, 1000, LOWER))
+        self.assertFalse(pl.can_place_board_at(ctx, 999, 499, model(300, 300, LOWER)))
+        # 端が接するだけなら重ならない
+        self.assertTrue(pl.can_place_board_at(ctx, 1000, 0, model(300, 300, LOWER)))
+        self.assertTrue(pl.can_place_board_at(ctx, 0, 500, model(300, 300, LOWER)))
+
+    def test_other_category_never_blocks(self):
+        ctx = make_ctx()
+        ctx.placed.append(placed(0, 0, 500, 1000, UPPER))
+        # 上用が同じ場所にあっても下用は置ける
+        self.assertTrue(pl.can_place_board_at(ctx, 0, 0, model(300, 300, LOWER)))
+
+
+class CanPlaceAtWithYLimitTests(unittest.TestCase):
+    def test_y_limit_is_exact_no_tolerance(self):
+        ctx = make_ctx()
+        b = model(500, 800, UPPER)
+        self.assertTrue(pl.can_place_at_with_y_limit(ctx, 0, 500, b, False, 1000))
+        self.assertFalse(pl.can_place_at_with_y_limit(ctx, 0, 501, b, False, 1000))
+
+    def test_negative_x_rejected(self):
+        ctx = make_ctx()
+        self.assertFalse(pl.can_place_at_with_y_limit(ctx, -1, 0, model(100, 100, UPPER), False, 1000))
+
+    def test_x_bound_allows_80mm_overhang(self):
+        ctx = make_ctx()
+        b = model(100, 500, UPPER)
+        # x + 丈500 <= 1000 + 80 まで許容
+        self.assertTrue(pl.can_place_at_with_y_limit_and_x_bound(ctx, 580, 0, b, False, 1000, 1000))
+        self.assertFalse(pl.can_place_at_with_y_limit_and_x_bound(ctx, 581, 0, b, False, 1000, 1000))
+
+
+class PlaceBoardAtTests(unittest.TestCase):
+    def test_custom_size_overrides_placed_dimensions_but_not_original(self):
+        ctx = make_ctx()
+        ok = pl.place_board_at(ctx, 10, 20, model(400, 1200, LOWER), rotate=True,
+                               bypass_check=True, custom_width=1150, custom_length=300)
+        self.assertTrue(ok)
+        pb = ctx.placed[0]
+        self.assertEqual((pb.width, pb.length), (1150, 300))
+        # Original は回転を反映した実寸(rotate=True → 幅=1200 丈=400)
+        self.assertEqual((pb.original_width, pb.original_length), (1200, 400))
+
+    def test_custom_size_ignored_unless_both_given(self):
+        ctx = make_ctx()
+        pl.place_board_at(ctx, 0, 0, model(400, 1200, LOWER),
+                          bypass_check=True, custom_width=999)
+        self.assertEqual((ctx.placed[0].width, ctx.placed[0].length), (400, 1200))
+
+    def test_failing_check_places_nothing(self):
+        ctx = make_ctx()
+        self.assertFalse(pl.place_board_at(ctx, -5, 0, model(400, 1200, LOWER)))
+        self.assertEqual(ctx.placed, [])
+
+    def test_bypass_check_places_out_of_bounds(self):
+        ctx = make_ctx()
+        self.assertTrue(pl.place_board_at(ctx, -5, 0, model(400, 1200, LOWER), bypass_check=True))
+        self.assertEqual(len(ctx.placed), 1)
+
+    def test_instance_id_is_unique_per_placement(self):
+        ctx = make_ctx()
+        b = model(400, 1200, LOWER)
+        pl.place_board_at(ctx, 0, 0, b, bypass_check=True)
+        pl.place_board_at(ctx, 1200, 0, b, bypass_check=True)
+        self.assertEqual([p.instance_id for p in ctx.placed], ["t_1", "t_2"])
+
+
+class TryPlaceSingleOrientationTests(unittest.TestCase):
+    def test_finds_origin_when_empty(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        got = pl.try_place_single_orientation(ctx, model(1130, 750, LOWER), False, 1e15)
+        self.assertIsNotNone(got)
+        self.assertEqual(got[:2], (0, 0))
+
+    def test_returns_none_when_width_never_fits(self):
+        ctx = make_ctx(pal_w=1000)  # 下用のY上限は1200
+        self.assertIsNone(
+            pl.try_place_single_orientation(ctx, model(1300, 400, LOWER), False, 1e15))
+
+    def test_fine_scan_snaps_flush_to_existing_board(self):
+        # 粗探索(20mm刻み)だけなら x=760 になるところを、
+        # PASS3の1mm刻み細探索で x=750 ちょうどまで詰める。
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1130, 750, LOWER))
+        got = pl.try_place_single_orientation(ctx, model(1130, 750, LOWER), False, 1e15)
+        self.assertIsNotNone(got)
+        self.assertEqual(got[:2], (750, 0))
+
+    def test_min_waste_gate_rejects_worse_positions(self):
+        # 既に (0,0) 相当のスコア0が確定していれば何も更新できない
+        ctx = make_ctx()
+        self.assertIsNone(
+            pl.try_place_single_orientation(ctx, model(1130, 750, LOWER), False, 0.0))
+
+
+class TryPlaceInsidePaletteTests(unittest.TestCase):
+    def test_picks_orientation_closest_to_target_width(self):
+        # パレット幅1150 → 幅1130の向き(距離20)を、幅750の向き(距離400)より優先
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(750, 1130, LOWER)))
+        self.assertEqual(ctx.placed[0].width, 1130)
+
+    def test_falls_back_to_other_orientation(self):
+        # 幅1300は下用上限1200を超えるので、回転した幅400が選ばれる
+        ctx = make_ctx(pal_w=1000, pal_l=2000)
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(1300, 400, LOWER)))
+        self.assertEqual(ctx.placed[0].width, 400)
+
+    def test_upper_uses_product_width_as_target(self):
+        ctx = make_ctx(pal_w=1150, prod_w=600, prod_l=2000)
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(600, 1000, UPPER)))
+        self.assertEqual(ctx.placed[0].width, 600)
+
+
+class TryPlaceUpperWithYOffsetTests(unittest.TestCase):
+    def test_places_at_given_y_and_leftmost_x(self):
+        ctx = make_ctx(prod_w=1122, prod_l=2502)
+        state = pl.RotationState()
+        self.assertTrue(
+            pl.try_place_upper_with_y_offset(ctx, model(500, 2400, UPPER), 600, state))
+        pb = ctx.placed[0]
+        self.assertEqual((pb.x, pb.y), (0, 600))
+
+    def test_rejects_when_exceeding_width_tolerance(self):
+        # y=600 + 幅700 = 1300 > 1122 + 80
+        ctx = make_ctx(prod_w=1122, prod_l=2502)
+        state = pl.RotationState()
+        self.assertFalse(
+            pl.try_place_upper_with_y_offset(ctx, model(700, 2400, UPPER), 600, state))
+
+    def test_first_rotation_is_carried_to_later_pieces(self):
+        ctx = make_ctx(prod_w=1122, prod_l=2502)
+        state = pl.RotationState()
+        pl.try_place_upper_with_y_offset(ctx, model(2400, 500, UPPER), 600, state)
+        self.assertTrue(state.first_placed)
+        # 残りY(=522)に収まるのは500側 → 回転が選ばれる
+        self.assertTrue(state.first_rotation)
+        self.assertEqual(ctx.placed[0].width, 500)
+
+
+class TryPlaceUpperLengthFillTests(unittest.TestCase):
+    def test_appends_after_main_row_at_y0(self):
+        ctx = make_ctx(prod_w=1122, prod_l=2502)
+        ctx.placed.append(placed(0, 0, 1100, 2000, UPPER))
+        self.assertTrue(pl.try_place_upper_length_fill(ctx, model(1100, 500, UPPER)))
+        pb = ctx.placed[-1]
+        self.assertEqual((pb.x, pb.y), (2000, 0))
+        # 長辺(1100)がY方向、短辺(500)がX方向
+        self.assertEqual((pb.width, pb.length), (1100, 500))
+
+    def test_ignores_non_zero_y_rows_when_computing_max_x(self):
+        ctx = make_ctx(prod_w=1122, prod_l=2502)
+        ctx.placed.append(placed(0, 0, 1100, 2000, UPPER))
+        ctx.placed.append(placed(0, 1100, 50, 2400, UPPER, is_fill=True))  # 幅補填行
+        pl.try_place_upper_length_fill(ctx, model(1100, 500, UPPER))
+        # Y=0の行だけを見るので x=2400 ではなく x=2000
+        self.assertEqual(ctx.placed[-1].x, 2000)
+
+
+class TryPlaceYCompanionTests(unittest.TestCase):
+    def test_first_fill_starts_at_gap_board_edge(self):
+        # 主ボードが2枚: y端1080のものと1130のもの → 足りない方(1080)が基準
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1130, 1000, LOWER))
+        ctx.placed.append(placed(1000, 0, 1080, 1200, LOWER))
+        self.assertTrue(pl.try_place_y_companion(ctx, model(50, 1200, LOWER)))
+        pb = ctx.placed[-1]
+        self.assertEqual((pb.x, pb.y), (1000, 1080))
+        self.assertTrue(pb.is_fill_board)
+
+    def test_length_is_clipped_to_remaining_x(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1080, 1500, LOWER))
+        pl.try_place_y_companion(ctx, model(50, 2000, LOWER))
+        # 主ボード右端1500 - 起点0 = 1500 までにカット
+        self.assertEqual(ctx.placed[-1].length, 1500)
+
+    def test_second_fill_continues_same_row(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1080, 2000, LOWER))
+        b = model(50, 800, LOWER)
+        pl.try_place_y_companion(ctx, b)
+        pl.try_place_y_companion(ctx, b)
+        first, second = ctx.placed[-2], ctx.placed[-1]
+        self.assertEqual((first.x, first.y), (0, 1080))
+        self.assertEqual((second.x, second.y), (800, 1080))
+
+    def test_new_row_when_current_row_is_full(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1080, 800, LOWER))
+        b = model(50, 800, LOWER)
+        pl.try_place_y_companion(ctx, b)   # 行を埋め切る
+        pl.try_place_y_companion(ctx, b)   # 次の行へ
+        self.assertEqual((ctx.placed[-1].x, ctx.placed[-1].y), (0, 1130))
+
+    def test_returns_false_without_main_board(self):
+        ctx = make_ctx()
+        self.assertFalse(pl.try_place_y_companion(ctx, model(50, 800, LOWER)))
+
+    def test_upper_clamps_end_x_to_product_length(self):
+        ctx = make_ctx(prod_w=1122, prod_l=1000)
+        ctx.placed.append(placed(0, 0, 1000, 1500, UPPER))  # 製品丈より長い主ボード
+        pl.try_place_y_companion(ctx, model(50, 1500, UPPER))
+        self.assertEqual(ctx.placed[-1].length, 1000)
+
+
+class GetEffectiveTagTests(unittest.TestCase):
+    def test_explicit_tag_wins(self):
+        ctx = make_ctx()
+        boards = [SelectedBoard(1130, 750, 3, "主"), SelectedBoard(50, 1200, 1, "幅補填")]
+        self.assertEqual(pl.get_effective_tag(boards, 1, LOWER, ctx), "幅補填")
+
+    def test_index_zero_never_inferred(self):
+        ctx = make_ctx()
+        boards = [SelectedBoard(50, 1200, 1, "")]
+        self.assertEqual(pl.get_effective_tag(boards, 0, LOWER, ctx), "")
+
+    def test_short_side_over_100_never_inferred(self):
+        ctx = make_ctx()
+        boards = [SelectedBoard(1130, 750, 3, ""), SelectedBoard(101, 1200, 1, "")]
+        self.assertEqual(pl.get_effective_tag(boards, 1, LOWER, ctx), "")
+
+    def test_infers_length_fill_when_main_covers_width(self):
+        # パレット幅1150、主ボードの有効幅1150 → 幅は足りている → 丈補填
+        ctx = make_ctx(pal_w=1150)
+        boards = [SelectedBoard(1150, 750, 3, ""), SelectedBoard(100, 1200, 1, "")]
+        self.assertEqual(pl.get_effective_tag(boards, 1, LOWER, ctx), "丈補填")
+
+    def test_infers_width_fill_when_main_is_narrow(self):
+        ctx = make_ctx(pal_w=1150)
+        boards = [SelectedBoard(1080, 750, 3, ""), SelectedBoard(50, 1200, 1, "")]
+        self.assertEqual(pl.get_effective_tag(boards, 1, LOWER, ctx), "幅補填")
+
+
+class SortFillBoardsTests(unittest.TestCase):
+    def test_width_fills_move_ahead_of_length_fills(self):
+        boards = [
+            SelectedBoard(1080, 750, 3, "主"),
+            SelectedBoard(500, 1200, 1, ""),   # 短辺500 > 70+5 → 丈補填側
+            SelectedBoard(50, 1200, 1, ""),    # 短辺50 <= 70+5 → 幅補填側
+        ]
+        pl.sort_fill_boards(boards, 1, 70)
+        self.assertEqual([b.width for b in boards], [1080, 50, 500])
+
+    def test_tolerance_of_5mm(self):
+        boards = [SelectedBoard(1080, 750, 3, "主"), SelectedBoard(75, 1200, 1, "")]
+        pl.sort_fill_boards(boards, 1, 70)   # 75 <= 70+5 → 幅補填のまま先頭
+        self.assertEqual(boards[1].width, 75)
+
+    def test_stable_within_each_group(self):
+        boards = [
+            SelectedBoard(1080, 750, 3, "主"),
+            SelectedBoard(30, 1200, 1, ""),
+            SelectedBoard(500, 1200, 1, ""),
+            SelectedBoard(50, 1200, 1, ""),
+        ]
+        pl.sort_fill_boards(boards, 1, 70)
+        self.assertEqual([b.width for b in boards], [1080, 30, 50, 500])
+
+    def test_noop_when_start_index_past_end(self):
+        boards = [SelectedBoard(1080, 750, 3, "主")]
+        pl.sort_fill_boards(boards, 1, 70)
+        self.assertEqual(len(boards), 1)
+
+
+class PlaceLengthFillBoardsTests(unittest.TestCase):
+    def test_fills_from_max_x_with_palette_width(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1150, 2500, LOWER))
+        boards = [SelectedBoard(1150, 2500, 1, "主"), SelectedBoard(100, 1200, 1, "丈補填")]
+        pl.place_length_fill_boards(ctx, boards, LOWER)
+        pb = ctx.placed[-1]
+        self.assertEqual((pb.x, pb.y), (2500, 0))
+        # 幅はパレット幅で固定、丈は短辺
+        self.assertEqual((pb.width, pb.length), (1150, 100))
+        self.assertTrue(pb.is_fill_board)
+
+    def test_multiple_pieces_stack_along_x(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1150, 2000, LOWER))
+        boards = [SelectedBoard(1150, 2000, 1, "主"), SelectedBoard(100, 1200, 2, "丈補填")]
+        pl.place_length_fill_boards(ctx, boards, LOWER)
+        self.assertEqual([p.x for p in ctx.placed[1:]], [2000, 2100])
+
+    def test_start_x_clears_width_fill_rows_that_stick_out(self):
+        # 起点は「同カテゴリ全ボードのX右端の最大値」なので、主ボードより
+        # 長く伸びた幅補填行があればその右端から始まる。
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1000, 2000, LOWER))
+        ctx.placed.append(placed(0, 1000, 50, 2400, LOWER, is_fill=True))
+        boards = [SelectedBoard(1000, 2000, 1, "主"), SelectedBoard(100, 1200, 1, "丈補填")]
+        pl.place_length_fill_boards(ctx, boards, LOWER)
+        self.assertEqual(ctx.placed[-1].x, 2400)
+
+
+class CheckLengthFillOverlapTests(unittest.TestCase):
+    """`_check_length_fill_overlap` 単体の検証。
+
+    `place_length_fill_boards` は起点に「全ボードのX右端の最大値」を使うため、
+    この事前チェックが False になる状況は実際には発生しない
+    (VBA版も同じ構造で、防御的なチェックとして置かれている)。
+    そのため関数単体で境界を確認する。
+    """
+
+    def test_detects_overlap_with_board_extending_past_start(self):
+        ctx = make_ctx(pal_w=1150)
+        ctx.placed.append(placed(0, 0, 1000, 2400, LOWER))
+        self.assertFalse(_check(ctx, 2000, 100, 1150))
+
+    def test_no_overlap_when_flush_to_right_edge(self):
+        ctx = make_ctx(pal_w=1150)
+        ctx.placed.append(placed(0, 0, 1000, 2400, LOWER))
+        self.assertTrue(_check(ctx, 2400, 100, 1150))
+
+    def test_other_category_ignored(self):
+        ctx = make_ctx(pal_w=1150)
+        ctx.placed.append(placed(0, 0, 1000, 2400, UPPER))
+        self.assertTrue(_check(ctx, 2000, 100, 1150))
+
+    def test_upper_uses_product_width(self):
+        ctx = make_ctx(prod_w=1122, prod_l=2502)
+        ctx.placed.append(placed(0, 0, 1122, 2000, UPPER))
+        boards = [SelectedBoard(1122, 2000, 1, "主"), SelectedBoard(100, 1200, 1, "丈補填")]
+        pl.place_length_fill_boards(ctx, boards, UPPER)
+        self.assertEqual(ctx.placed[-1].width, 1122)
+
+
+class PlaceBoardsFromListTests(unittest.TestCase):
+    def test_main_boards_tile_along_x(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        boards = [SelectedBoard(750, 1130, 3, "主")]
+        pl.place_boards_from_list(ctx, boards, LOWER)
+        self.assertEqual(len(ctx.placed), 3)
+        self.assertEqual([p.y for p in ctx.placed], [0, 0, 0])
+        self.assertEqual([p.x for p in ctx.placed], [0, 750, 1500])
+        # パレット幅1150に近い1130側がY方向に採用される
+        self.assertEqual({p.width for p in ctx.placed}, {1130})
+
+    def test_lower_boards_may_run_past_palette_length(self):
+        # 下用の `can_place_board_at` はX方向に上限を持たない(VBA踏襲)。
+        # PASS2の「既存ボード右端へのスナップ」もパレット丈で止まらないため、
+        # 選定枚数が過剰だとパレットからはみ出して並び続ける。
+        # 枚数を適正に決めるのは選定フェーズ側の責務。
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        boards = [SelectedBoard(750, 1130, 10, "主")]
+        pl.place_boards_from_list(ctx, boards, LOWER)
+        self.assertEqual(len(ctx.placed), 10)
+        self.assertEqual([p.x for p in ctx.placed[:5]], [0, 750, 1500, 2250, 3000])
+        self.assertGreater(ctx.placed[-1].x, ctx.palette.length)
+
+    def test_width_fill_is_placed_in_pass2_below_main(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        boards = [SelectedBoard(1080, 2000, 1, "主"), SelectedBoard(50, 2000, 1, "幅補填")]
+        pl.place_boards_from_list(ctx, boards, LOWER)
+        fills = [p for p in ctx.placed if p.is_fill_board]
+        self.assertEqual(len(fills), 1)
+        self.assertEqual((fills[0].x, fills[0].y), (0, 1080))
+
+    def test_length_fill_is_placed_after_pass1(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        boards = [SelectedBoard(1150, 2000, 1, "主"), SelectedBoard(100, 1150, 1, "丈補填")]
+        pl.place_boards_from_list(ctx, boards, LOWER)
+        self.assertEqual(len(ctx.placed), 2)
+        self.assertEqual((ctx.placed[1].x, ctx.placed[1].y), (2000, 0))
+
+    def test_cut_premise_tiles_short_side_along_x(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650, prod_w=1122, prod_l=2502)
+        boards = [SelectedBoard(1000, 300, 3, "カット前提")]
+        pl.place_boards_from_list(ctx, boards, LOWER)
+        self.assertEqual([p.x for p in ctx.placed], [0, 300, 600])
+        # 幅はパレット幅にカット、丈は短辺300
+        self.assertEqual({(p.width, p.length) for p in ctx.placed}, {(1150, 300)})
+
+    def test_cut_premise_stops_at_product_length(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650, prod_w=1122, prod_l=500)
+        boards = [SelectedBoard(1000, 300, 5, "カット前提")]
+        pl.place_boards_from_list(ctx, boards, LOWER)
+        self.assertEqual([p.x for p in ctx.placed], [0, 300])
+
+    def test_returns_reordered_list_without_mutating_caller(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        boards = [
+            SelectedBoard(1080, 2000, 1, "主"),
+            SelectedBoard(500, 2000, 1, "丈補填"),
+            SelectedBoard(50, 2000, 1, "幅補填"),
+        ]
+        original = list(boards)
+        result = pl.place_boards_from_list(ctx, boards, LOWER)
+        # 呼び出し側のリストは並べ替えられない
+        self.assertEqual(boards, original)
+        # 戻り値では幅補填が丈補填より前に来る
+        self.assertEqual([b.width for b in result], [1080, 50, 500])
+
+    def test_empty_list_is_noop(self):
+        ctx = make_ctx()
+        self.assertEqual(pl.place_boards_from_list(ctx, [], LOWER), [])
+        self.assertEqual(ctx.placed, [])
+
+    def test_upper_second_board_stacks_in_y(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650, prod_w=1100, prod_l=2000)
+        boards = [SelectedBoard(600, 2000, 1, "主"), SelectedBoard(450, 2000, 1, "主")]
+        pl.place_boards_from_list(ctx, boards, UPPER)
+        self.assertEqual(len(ctx.placed), 2)
+        self.assertEqual(ctx.placed[0].y, 0)
+        self.assertEqual(ctx.placed[1].y, 600)   # 1枚目の幅ぶん下へ
+
+
+class VbaQuirkTests(unittest.TestCase):
+    """VBA側の挙動をあえて踏襲している箇所の固定テスト。"""
+
+    def test_upper_y_offset_reuses_previous_board_width(self):
+        # 上用の i>0 は TryPlaceUpperWithYOffset を使うが、VBAはそこで lastB を
+        # 更新しないため、3枚目のYオフセットは「2枚目の幅」ではなく
+        # 「1枚目の幅」を足した値になる(元ツール再現のため踏襲)。
+        ctx = make_ctx(pal_w=1150, pal_l=2650, prod_w=1100, prod_l=2000)
+        boards = [
+            SelectedBoard(300, 2000, 1, "主"),
+            SelectedBoard(200, 2000, 1, "主"),
+            SelectedBoard(200, 2000, 1, "主"),
+        ]
+        pl.place_boards_from_list(ctx, boards, UPPER)
+        ys = [p.y for p in ctx.placed]
+        # 正しく積むなら [0, 300, 500] だが、1枚目の幅300が再利用され 600 になる
+        self.assertEqual(ys, [0, 300, 600])
+
+    def test_pass3_selected_boards_have_no_tag_but_still_place(self):
+        # 短辺100mm超・タグ無しは推測対象外 → 主ボード扱いで通常配置される
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        boards = [SelectedBoard(1080, 2000, 1, ""), SelectedBoard(200, 2000, 1, "")]
+        pl.place_boards_from_list(ctx, boards, LOWER)
+        self.assertEqual(len(ctx.placed), 2)
+        self.assertFalse(any(p.is_fill_board for p in ctx.placed))
+
+
+class PlaceNarrowPaletteBoardsTests(unittest.TestCase):
+    def test_centers_and_stacks_along_y(self):
+        ctx = make_ctx(pal_w=300, pal_l=2000, prod_w=280, prod_l=1900)
+        boards = [SelectedBoard(100, 1900, 1, "主"), SelectedBoard(50, 1900, 1, "幅補填")]
+        pl.place_narrow_palette_boards(ctx, boards, LOWER)
+        # 合計短辺150 → (300-150)//2 = 75 から積み上げ
+        self.assertEqual([p.y for p in ctx.placed], [75, 175])
+        self.assertEqual([p.width for p in ctx.placed], [100, 50])
+
+    def test_length_is_clipped_to_palette_length(self):
+        ctx = make_ctx(pal_w=300, pal_l=1000, prod_w=280, prod_l=950)
+        boards = [SelectedBoard(100, 1900, 1, "主")]
+        pl.place_narrow_palette_boards(ctx, boards, LOWER)
+        self.assertEqual(ctx.placed[0].length, 1000)
+
+    def test_upper_clips_to_product_length(self):
+        ctx = make_ctx(pal_w=300, pal_l=2000, prod_w=280, prod_l=900)
+        boards = [SelectedBoard(100, 1900, 1, "主")]
+        pl.place_narrow_palette_boards(ctx, boards, UPPER)
+        self.assertEqual(ctx.placed[0].length, 900)
+
+    def test_stops_at_product_length(self):
+        ctx = make_ctx(pal_w=300, pal_l=2000, prod_w=280, prod_l=500)
+        boards = [SelectedBoard(100, 400, 5, "主")]
+        pl.place_narrow_palette_boards(ctx, boards, LOWER)
+        # x=0, 400 で置いたあと x=800 >= 500 なので打ち切り
+        self.assertEqual([p.x for p in ctx.placed], [0, 400])
+
+    def test_no_negative_start_when_boards_exceed_width(self):
+        ctx = make_ctx(pal_w=300, pal_l=2000, prod_w=280, prod_l=1900)
+        boards = [SelectedBoard(200, 1900, 1, "主"), SelectedBoard(200, 1900, 1, "主")]
+        pl.place_narrow_palette_boards(ctx, boards, LOWER)
+        self.assertEqual(ctx.placed[0].y, 0)
+
+
+class AutoPlaceBoardsTests(unittest.TestCase):
+    def test_places_both_categories_independently(self):
+        lower = [SelectedBoard(750, 1130, 3, "主")]
+        upper = [SelectedBoard(600, 2000, 1, "主")]
+        ctx = pl.auto_place_boards(lower, upper, make_palette(1150, 2650),
+                                   ProductSize(width=1122, length=2502))
+        self.assertEqual(len([p for p in ctx.placed if p.board_category == LOWER]), 3)
+        self.assertEqual(len([p for p in ctx.placed if p.board_category == UPPER]), 1)
+        # 上用は下用と重なっていてよい(別レイヤ)
+        self.assertEqual(ctx.placed[-1].x, 0)
+
+    def test_narrow_flags_switch_strategy(self):
+        lower = [SelectedBoard(100, 1900, 2, "主")]
+        ctx = pl.auto_place_boards(lower, [], make_palette(300, 2000),
+                                   ProductSize(width=280, length=1900),
+                                   narrow_lower=True)
+        # 狭幅版はセンタリングされたY座標に置く(通常探索ならY=0になる)
+        self.assertEqual(ctx.placed[0].y, 100)
+
+    def test_orders_are_exposed_on_context(self):
+        lower = [SelectedBoard(1080, 2000, 1, "主"), SelectedBoard(50, 2000, 1, "幅補填")]
+        ctx = pl.auto_place_boards(lower, [], make_palette(1150, 2650),
+                                   ProductSize(width=1122, length=2502))
+        self.assertEqual(len(ctx.lower_order), 2)
+        self.assertEqual(ctx.upper_order, [])
+
+    def test_empty_selection_produces_nothing(self):
+        ctx = pl.auto_place_boards([], [], make_palette(1150, 2650),
+                                   ProductSize(width=1122, length=2502))
+        self.assertEqual(ctx.placed, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

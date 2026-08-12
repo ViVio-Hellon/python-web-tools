@@ -1,0 +1,160 @@
+"""発注のやりとり (旧 `frmSendConfirm` + `frmWarehouseOrder`)
+
+**この画面はモードで中身が変わります。**
+
+    現場モード … 発注を出す。自分が送ったものを見る(状態は動かせない)
+    資材モード … 受け取った発注を確認する。取り消しもできる
+
+VBA版は現場用と資材用が別のフォームで、確認ボタンは資材のフォームに
+しかありませんでした。現場のアプリから「確認済みにする」ができると、
+資材が実際に受け取ったかに関わらず現場の都合で確認済みにでき、
+**確認という工程そのものが意味を失います**。
+
+Web版は同じ保証を2段で作ります。
+
+1. `mode:material` の権限が無い端末には、確認・取消のエンドポイントを
+   **そもそも登録しません**(404)。守るのは「誰か」です
+2. 登録されていても、いま現場モードで見ていれば断ります(403)。
+   こちらは誤操作の防止で、1 とは目的が違うので両方置いています
+"""
+from __future__ import annotations
+
+from flask import Blueprint, jsonify, render_template, request
+
+from packaging_tool import (data_sync, modes, warehouse_service as svc,
+                            work_context)
+from packaging_tool.logging_utils import get_logger
+from packaging_tool.presenters import warehouse as presenter
+
+from .. import current_mode, get_db
+from ..shell import shell_context
+
+log = get_logger("app.routes.warehouse")
+
+# どのモードにもある部分(一覧・検索・発注)
+bp = Blueprint("warehouse", __name__)
+# **資材モードの権限がある端末にしか登録しない**部分(確認・取消)
+material_only = Blueprint("material_only", __name__)
+
+
+@material_only.before_request
+def _require_material_mode():
+    """権限があっても、いま資材モードで見ていなければ断る。
+
+    登録の可否(権限)とは別の話。資材課の人が現場モードで作業して
+    いる最中に、手が滑って確認済みにできてしまうのを防ぐ。
+    """
+    if current_mode() != modes.MATERIAL:
+        log.info("資材モードではないため断りました: %s", request.path)
+        return jsonify({"error": {
+            "code": "wrong_mode",
+            "message": "この操作は資材モードでのみ行えます。"
+                       "右上でモードを切り替えてください。"}}), 403
+    return None
+
+
+def _mode() -> str:
+    return current_mode()
+
+
+@bp.get("/warehouse")
+def page():
+    mode = _mode()
+    view = presenter.build(get_db(), mode=mode)
+    # 資材選択の「倉庫送信」が組み立てた下書き。**受け取ったら手放す**
+    # ので、開き直しても同じ発注が二重に出てくることはない
+    drafts = work_context.get_context().take_pending_orders()
+    if drafts:
+        log.info("倉庫送信の下書きを %s 行 受け取りました", len(drafts))
+    return render_template(
+        "warehouse.html",
+        state=presenter.to_dict(view),
+        columns=presenter.ORDER_VIEW,
+        action_width=presenter.ORDER_ACTION_WIDTH,
+        fields=presenter.ORDER_FIELDS,
+        date_filters=presenter.DATE_FILTERS,
+        drafts=drafts,
+        is_material=mode == modes.MATERIAL,
+        **shell_context("warehouse",
+                        badges={"warehouse": (str(view.pending), "todo")}
+                        if view.pending else None),
+    )
+
+
+@bp.get("/api/warehouse/orders")
+def orders():
+    """`?q=&period=&cancelled=`。"""
+    view = presenter.build(
+        get_db(), mode=_mode(),
+        keyword=request.args.get("q", ""),
+        date_filter=request.args.get("period", ""),
+        include_cancelled=request.args.get("cancelled") == "1")
+    return jsonify(presenter.to_dict(view))
+
+
+@bp.post("/api/warehouse/send")
+def send():
+    """発注を出す(VBA `SendWarehouseRow`)。"""
+    body = request.get_json(silent=True) or {}
+    values, problem = presenter.validate(body)
+    if problem:
+        field, message = problem
+        return jsonify({"error": {"code": "invalid", "message": message,
+                                  "field": field}}), 400
+
+    result = svc.create_order(get_db(), **values)
+    if not result.ok:
+        return jsonify({**presenter.order_dict(result),
+                        "error": {"code": "rejected",
+                                  "message": result.message}}), 422
+    log.info("発注を登録しました: 管理番号=%s", result.mgr_no)
+    # 倉庫へ届けるのが仕事なので、押した直後に送りにいく。
+    # **画面には何も出さない** ── 手元の登録はもう終わっており、
+    # 届かなくても次の「取り込み元へ反映」でまとめて送られる
+    data_sync.write_back_in_background()
+    return jsonify(presenter.order_dict(result))
+
+
+@material_only.post("/api/warehouse/cancel")
+def cancel():
+    """取り消し。
+
+    **確認と同じく、資材モードの権限がある端末にしか登録されません。**
+    VBA `frmWarehouseOrder` も確認・取り消しの両方を資材側だけに
+    置いていました。現場から状態を動かせると、資材が実際に受け取ったかに
+    関わらず現場の都合で消せてしまいます。
+
+    資材が確認したあとは資材からも取り消せません ── 受け取ったことを
+    確認したものを消すと、現物と帳簿が合わなくなります。
+    """
+    return _action(svc.cancel_order, "取消")
+
+
+@material_only.post("/api/warehouse/confirm")
+def confirm():
+    """確認済みにする(VBA `frmWarehouseOrder.btnConfirm_Click`)。
+
+    **資材モードの権限がある端末にしか登録されません。** 権限が無ければ
+    404、権限があっても現場モードで見ていれば 403。
+    """
+    return _action(svc.confirm_order, "確認")
+
+
+def _action(func, label: str):
+    body = request.get_json(silent=True) or {}
+    try:
+        mgr_no = int(body.get("mgr_no"))
+    except (TypeError, ValueError):
+        return jsonify({"error": {"code": "bad_mgr_no",
+                                  "message": "対象が指定されていません"}}), 400
+
+    result = func(get_db(), mgr_no)
+    if not result.ok:
+        # 「既に確認済み/取消済み」は、他の端末が先に動かした結果でもある。
+        # 画面を取り直せば正しい状態が見えるので 409 で返す
+        log.info("%s できませんでした: 管理番号=%s %s", label, mgr_no, result.message)
+        return jsonify({**presenter.action_dict(result),
+                        "error": {"code": "conflict",
+                                  "message": result.message}}), 409
+    log.info("%s しました: 管理番号=%s", label, mgr_no)
+    return jsonify(presenter.action_dict(result))

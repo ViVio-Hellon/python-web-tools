@@ -1,0 +1,191 @@
+"""画面の骨格 ── 入力と結果が行ったり来たりしないこと
+
+【何を守っているか】
+VBAのフォームは1本の列に「入力 → 結果 → また入力」と積まれていた。
+資材選択がその典型で、配置図(結果)がパレット・製品・ボード(入力)と
+アングル(入力)の**あいだ**に挟まっていた。図を見るには操作を全部
+スクロールして通り過ぎ、直すには戻る ── 1回直すたびに視線と手が往復する。
+
+設計指針 §4.2 が定めている形は決まっている。
+
+    結果は左(スクロールしてよい) / 操作は右(スクロールさせない)
+
+**この形は目で見ないと崩れたことに気づけない**ので、ここで機械が見る。
+「テンプレートに `.split` があるか」「結果カードが結果カラムに居るか」
+という構造の検査で、見た目そのものは Playwright の実確認が受け持つ。
+"""
+from __future__ import annotations
+
+import re
+import sys
+import unittest
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))
+
+from tests import _isolation  # noqa: E402
+
+_isolation.ensure_isolated()
+
+TEMPLATES = _ROOT / "app" / "templates"
+
+# 2カラム(結果 | 操作)にする画面と、**結果カラムに居なければならない**もの。
+# ここに挙げたものが操作カラム側に移ったら試験が落ちる
+TWO_COLUMN = {
+    "selection.html": ["planCard"],          # 配置図
+    "inventory.html": ["mapCard", "listCard"],  # 保管位置の図・在庫一覧
+    "layout.html": ["map"],                  # 配置図(SVG)
+    "warehouse.html": ["rows"],              # 発注一覧
+}
+
+# 1カラムのままでよい画面。**結果しか無い**か、設定のように
+# 順に読むものなので、左右に分ける理由がない
+ONE_COLUMN = ("log.html", "settings.html", "lot.html")
+
+
+def read(name: str) -> str:
+    return (TEMPLATES / name).read_text(encoding="utf-8")
+
+
+def block(text: str, start: str, end: str) -> str:
+    """`start` から `end` の手前までを切り出す。"""
+    i = text.index(start)
+    j = text.index(end, i)
+    return text[i:j]
+
+
+class TwoColumnTests(unittest.TestCase):
+    def test_結果と操作が左右に分かれている(self) -> None:
+        for name in TWO_COLUMN:
+            with self.subTest(screen=name):
+                text = read(name)
+                self.assertIn('class="split', text,
+                              f"{name}: 2カラムになっていません")
+                self.assertIn('split__results', text)
+                self.assertIn('split__controls', text)
+
+    def test_結果は結果カラムに居る(self) -> None:
+        """**結果が操作のあいだに挟まっていないこと。**
+
+        挟まっていると、図を見るのに操作を通り過ぎることになる。
+        """
+        for name, ids in TWO_COLUMN.items():
+            text = read(name)
+            results = block(text, 'split__results', 'split__controls')
+            for target in ids:
+                with self.subTest(screen=name, id=target):
+                    self.assertIn(f'id="{target}"', results,
+                                  f"{name}: {target} が結果カラムの外にあります")
+
+    def test_操作カラムは結果より後ろに書く(self) -> None:
+        """読み上げとタブ移動の順序も「結果 → 操作」にそろえる。"""
+        for name in TWO_COLUMN:
+            with self.subTest(screen=name):
+                text = read(name)
+                self.assertLess(text.index('split__results'),
+                                text.index('split__controls'))
+
+    def test_1カラムのままでよい画面は分けない(self) -> None:
+        """分ける理由が無いのに分けると、片側が空いて落ち着かない。"""
+        for name in ONE_COLUMN:
+            with self.subTest(screen=name):
+                self.assertNotIn('split__controls', read(name))
+
+
+class SpacingTests(unittest.TestCase):
+    """間隔は列の `gap` が作る。個々の `margin-top` を撒かない。
+
+    撒くと、カードを足したり順を変えたりするたびに margin を直すことに
+    なり、直し忘れたぶんだけ間隔が不揃いになる。
+    """
+
+    def test_列の中にmargin_topを撒かない(self) -> None:
+        for name in TWO_COLUMN:
+            with self.subTest(screen=name):
+                text = read(name)
+                columns = text[text.index('split__results'):]
+                # 未取り込みの帯だけは例外(カードではなく差し込みの警告)
+                found = [m for m in re.findall(
+                    r'<section[^>]*style="margin-top:12px"', columns)]
+                self.assertEqual(found, [], f"{name}: {found}")
+
+
+class ScrollRuleTests(unittest.TestCase):
+    """スクロールの規則(§4.2)を CSS 側で固定する。"""
+
+    def setUp(self) -> None:
+        self.css = (_ROOT / "app" / "static" / "css" / "layout.css").read_text(
+            encoding="utf-8")
+
+    def test_ページ全体はスクロールしない(self) -> None:
+        """現在地を見失う。"""
+        self.assertIn("html, body { height: 100%; overflow: hidden; }", self.css)
+
+    def test_結果カラムはスクロールしてよい(self) -> None:
+        self.assertRegex(self.css, r"\.split__results\s*\{[^}]*overflow:\s*auto")
+
+    def test_操作カラムはスクロールさせない(self) -> None:
+        """見えていない操作に気づけない。手が位置を覚えられない。"""
+        self.assertRegex(self.css, r"\.split__controls\s*\{[^}]*overflow:\s*hidden")
+
+    def test_基準より低い画面では動かせるようにする(self) -> None:
+        """**隠すより動かせるほうがまし。**
+
+        基準は FHD 100%(本体894px)で、そこでは段階的開示と面で収まる。
+        1366x768 のような低い画面では入りきらないことがあり、
+        `overflow: hidden` のままだと下の操作が消える ── 消えた操作には
+        気づけないが、スクロールバーは「まだ下がある」と言ってくれる。
+        """
+        self.assertRegex(
+            self.css,
+            r"@media \(max-height: 820px\)\s*\{[^}]*"
+            r"\.split__controls\s*\{[^}]*overflow-y:\s*auto")
+
+    def test_画面ごとにこの規則を上書きしない(self) -> None:
+        """**「入りきらない」を `overflow` で隠さない。**
+
+        簡易在庫は `overflow-y: auto` を自前で持っていて、操作の列が
+        1366幅で 121px はみ出していることを覆い隠していた。入りきらない
+        なら、面(受け入れ / 払い出し)で分けるのが答え。
+        """
+        for name in TWO_COLUMN:
+            with self.subTest(screen=name):
+                self.assertNotRegex(
+                    read(name),
+                    r"\.split__controls\s*\{[^}]*overflow[^}]*auto")
+
+
+class StepDisclosureTests(unittest.TestCase):
+    """資材選択の段階的開示。
+
+    5段すべてを開くと 1,489px になり、FHD 100%(894px)でも
+    入りきらない。開くのは**いまの段だけ**にする(§1.3)。
+    """
+
+    def setUp(self) -> None:
+        self.html = read("selection.html")
+
+    def test_いまの段以外は畳む(self) -> None:
+        self.assertIn(
+            '.step:not([data-state="current"]):not(.is-open) > .pad { display: none; }',
+            self.html)
+
+    def test_畳んだ段も見出しを押せば開く(self) -> None:
+        """直したくなったときに辿り着けなくならない。"""
+        self.assertIn('.step:not([data-state="current"]) > header { cursor: pointer; }',
+                      self.html)
+
+    def test_管理者は既定で畳む(self) -> None:
+        """日常操作ではない(§1.2「日常操作から離す」)。"""
+        self.assertIn('card--admin foldable', self.html)
+
+    def test_段の状態はサーバから来る(self) -> None:
+        """画面が条件を組み立て直さない(判断を2か所に置かない)。"""
+        for key in ("size", "boards", "angles", "outputs"):
+            with self.subTest(step=key):
+                self.assertIn(f'data-state="{{{{ step.{key}.state }}}}"', self.html)
+
+
+if __name__ == "__main__":
+    unittest.main()

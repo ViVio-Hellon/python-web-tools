@@ -1,0 +1,89 @@
+"""帳票のHTML生成(printing)のユニットテスト。
+
+印刷そのもの(OSのプリンタ)は環境依存なので、生成されるHTMLと
+ページ設定CSSだけを検証する。
+"""
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from packaging_tool import printing as p
+
+
+class PageSetupTests(unittest.TestCase):
+    def test_landscape_a4_without_margin(self):
+        css = p.PageSetup(orientation=p.LANDSCAPE, margin_mm=0).to_css()
+        self.assertIn("size: A4 landscape", css)
+        self.assertIn("margin: 0mm", css)
+
+    def test_portrait_with_margin(self):
+        css = p.PageSetup(orientation=p.PORTRAIT, margin_mm=10).to_css()
+        self.assertIn("A4 portrait", css)
+        self.assertIn("margin: 10mm", css)
+
+
+class RenderTests(unittest.TestCase):
+    def test_each_sheet_becomes_a_page(self):
+        report = p.Report(title="t")
+        report.add_sheet("<p>1</p>")
+        report.add_sheet("<p>2</p>")
+        html = p.render_html(report)
+        self.assertEqual(html.count('class="sheet"'), 2)
+        self.assertIn("page-break-after", html)
+
+    def test_title_is_escaped(self):
+        html = p.render_html(p.Report(title="<x>&"))
+        self.assertIn("&lt;x&gt;&amp;", html)
+        self.assertNotIn("<x>", html)
+
+    def test_page_setup_css_is_included(self):
+        report = p.Report(title="t", setup=p.PageSetup(orientation=p.PORTRAIT))
+        self.assertIn("A4 portrait", p.render_html(report))
+
+    def test_extra_css_is_appended(self):
+        report = p.Report(title="t", setup=p.PageSetup(extra_css=".x{color:red}"))
+        self.assertIn(".x{color:red}", p.render_html(report))
+
+    def test_screen_hint_is_not_printed(self):
+        html = p.render_html(p.Report(title="t"))
+        self.assertIn("screen-only", html)
+        self.assertIn("@media print { .screen-only { display: none; } }", html)
+
+
+class EscapeTests(unittest.TestCase):
+    def test_escapes_markup(self):
+        self.assertEqual(p.escape('<a href="x">'), "&lt;a href=&quot;x&quot;&gt;")
+
+    def test_none_becomes_blank(self):
+        self.assertEqual(p.escape(None), "")
+
+    def test_numbers_pass_through(self):
+        self.assertEqual(p.escape(1150), "1150")
+
+
+class TableTests(unittest.TestCase):
+    def test_rows_and_header(self):
+        html = p.table([[1, 2]], header=["A", "B"])
+        self.assertIn("<th>A</th>", html)
+        self.assertIn("<td>1</td>", html)
+
+    def test_widths_produce_colgroup(self):
+        html = p.table([[1]], widths=["30%"])
+        self.assertIn('<col style="width:30%">', html)
+
+    def test_cell_values_are_escaped(self):
+        self.assertIn("&lt;b&gt;", p.table([["<b>"]]))
+
+    def test_label_pairs_fill_incomplete_rows(self):
+        html = p.label_pairs([("A", 1), ("B", 2), ("C", 3)], columns=2)
+        # 3項目/2列 → 2行目は空セルで埋まる
+        self.assertEqual(html.count("<tr>"), 2)
+        self.assertIn("<td>C</td>", html)
+
+
+if __name__ == "__main__":
+    unittest.main()

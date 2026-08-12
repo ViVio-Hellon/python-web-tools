@@ -1,0 +1,651 @@
+{% extends "base.html" %}
+{% block title %}設定 — {{ display_name }}{% endblock %}
+
+{% macro checks(section) %}
+<section class="card">
+  <header>
+    <i class="ib ib--sm ib--{{ section.badge_tone }}" aria-hidden="true">{{ section.mark }}</i>
+    <h3>{{ section.title }}</h3>
+    <span class="lv lv--{{ section.level }}">{{ level_label[section.level] }}</span>
+  </header>
+  <div class="pad">
+    <dl class="checks">
+      {% for c in section.checks %}
+      <div class="check check--{{ c.level }}">
+        <dt>{{ c.label }}</dt>
+        <dd>
+          <span class="v">{{ c.value }}</span>
+          {% if c.detail %}<span class="why">{{ c.detail }}</span>{% endif %}
+        </dd>
+      </div>
+      {% endfor %}
+    </dl>
+    {# 問題を見せた面には、直す手立てが無い。**そこから繋ぐ** #}
+    {% if section.action[0] %}
+    <div class="btn-row">
+      <button class="btn btn--find" type="button" data-goto="{{ section.action[1] }}">
+        <span class="gl">▸</span>{{ section.action[0] }}
+      </button>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endmacro %}
+
+{% block content %}
+<div class="pane pane--tabbed">
+  <div class="pane__head">
+    <div>
+      <span class="eyebrow">Step 7</span>
+      <h2>設定</h2>
+    </div>
+    <div class="nextstep">
+      {# 参照するだけの操作なので枠線(§components.css の形の約束) #}
+      <button class="btn btn--find" type="button" id="refresh">
+        <span class="gl">⟳</span>状態を再確認
+      </button>
+      <p class="why">この端末の設定はすべてこの画面にあります。</p>
+    </div>
+  </div>
+
+  <span class="dimline" aria-hidden="true"></span>
+
+  {#
+    並びは**触る頻度の順**(ヒックの法則)。
+      1. いまの状態     … 何が見つかっていて、何が足りないか
+      2. 取り込みと反映 … 毎日押す
+      3. 取り込み元     … うまくいかないときだけ触る
+      4. 動作           … 拠点・自動取り込み・図面URL
+      5. よく使う条件
+      6. 最近の結果 / この端末
+    毎回押すものを上に、たまにしか触らないものを下に置く。
+  #}
+
+  {# 面で分ける。**縦に積むとスクロールが要る**(6節で 2,506px あり、
+     FHD 100% の 894px に対して 1,612px はみ出していた)。
+     並び・見出し・バッジはサーバが決めた値(`presenters/settings.py`)。
+     **中身に問題がある面は、開いていなくても見出しがそう言う** #}
+  <div class="tabs" data-tabs="settings" id="settingsTabs">
+    <div class="tabs__bar" role="tablist" aria-label="設定の面">
+      {% for key, label in tabs %}
+      {% set badge = tab_badges.get(key) %}
+      <button class="tab" type="button" role="tab" data-key="{{ key }}"
+              {% if key == default_tab %}data-default="1"{% endif %}
+              {% if badge %}data-level="{{ badge.level }}"{% endif %}
+              id="tab-{{ key }}" aria-controls="panel-{{ key }}" aria-selected="false">
+        <span class="tab__label">{{ label }}</span>
+        <span class="tab__badge" {% if badge %}data-level="{{ badge.level }}"{% else %}hidden{% endif %}>{{ badge.text if badge else "" }}</span>
+      </button>
+      {% endfor %}
+    </div>
+
+    <div class="tabs__panels">
+      <section class="tabpanel tabpanel--scroll" id="panel-run" role="tabpanel" aria-labelledby="tab-run" hidden>
+  <!-- 2. 取り込みと反映 -->
+  <section class="card">
+    <header><i class="ib ib--sm ib--accent" aria-hidden="true">取</i><h3>取り込みと反映</h3></header>
+    <div class="pad">
+      {# 進捗。ブラウザを閉じても処理は続くので、開き直すとここに戻る #}
+      <div class="job" id="job" hidden>
+        <div class="job__head">
+          <span class="job__label" id="jobLabel"></span>
+          <span class="job__state" id="jobState"></span>
+          <span class="num" id="jobPct"></span>
+        </div>
+        <div class="bar"><div class="bar__fill" id="jobBar"></div></div>
+        <p class="why" id="jobMessage"></p>
+        {# 段ごとのレーン。**どこまで終わって、いま何をしているか**を
+           1枚ずつ出す。段の数も名前もサーバが返したもの #}
+        <div class="lanes" id="jobLanes" hidden></div>
+        <pre class="job__summary" id="jobSummary" hidden></pre>
+      </div>
+
+      <p class="status status--ng" id="importWhy" {% if view.can_import %}hidden{% endif %}>
+        {{ view.import_reason }}
+      </p>
+
+      <div class="ops">
+        <div class="ops__row">
+          <span class="ops__name">取り込み元 → 手元</span>
+          <div class="btn-row">
+            {# 青(塗り)= 実行。まとめて取り込みが既定で、残る2つは
+               同じ操作の絞り込みなので中立にする(選択肢を1つに絞る) #}
+            {% for key, label, note in targets %}
+            <button class="btn {{ 'btn--run' if key == 'all' else '' }}" type="button"
+                    data-import="{{ key }}" title="{{ note }}"
+                    {% if not view.can_import %}disabled{% endif %}>{{ label }}</button>
+            {% endfor %}
+          </div>
+        </div>
+        <p class="why">元のファイルが更新されているものだけを読み直します。</p>
+
+        <div class="ops__row">
+          <span class="ops__name">手元 → 取り込み元</span>
+          <div class="btn-row">
+            {# 確定させる操作なので commit の色 #}
+            <button class="btn btn--commit" type="button" id="writeBack">取り込み元へ反映</button>
+          </div>
+        </div>
+        <p class="why">
+          倉庫発注と入出庫履歴の、まだ送っていない分を送ります。
+          登録のたびに自動でも送られるので、通常は押さなくて済みます。
+        </p>
+
+        <div class="ops__row">
+          <span class="ops__name">パレットマスタ</span>
+          <div class="btn-row">
+            <button class="btn" type="button" id="recompute">適合範囲を再計算</button>
+          </div>
+        </div>
+        <p class="why">取り込みのたびに自動で走ります。手で直したいとき用です。</p>
+      </div>
+    </div>
+  </section>
+      </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-status" role="tabpanel" aria-labelledby="tab-status" hidden>
+  <!-- 1. いまの状態 -->
+  <div class="statusgrid" id="statusGrid">
+    {% for section in view.sections %}{{ checks(section) }}{% endfor %}
+  </div>
+      </section>
+      <section class="tabpanel" id="panel-master" role="tabpanel" aria-labelledby="tab-master" hidden>
+  <!-- 3. マスタ管理 -->
+  {#
+    梱包資材マスタは、これまで起動のたびに**黙って読まれるだけ**だった。
+    中を見る手立ても、間違いを直す手立ても画面に無く、値が違っていても
+    現場には「パレットが出ない」としか見えない。
+
+    直す先は**取り込み元(共有の sqlite3)ただ1つ**。手元は総入れ替えで
+    取り込むので、手元を直しても次の取り込みで消える。
+  #}
+  <div class="masterwrap">
+    <aside class="card mtables">
+      <header>
+        <i class="ib ib--sm" aria-hidden="true">材</i>
+        <h3>梱包資材マスタ</h3>
+      </header>
+      <div class="pad">
+        <div class="mlist" id="mTables">
+          <p class="why">「マスタ管理」を開くと読み込みます。</p>
+        </div>
+      </div>
+    </aside>
+
+    <section class="card mrows">
+      <header>
+        <i class="ib ib--sm ib--accent" aria-hidden="true" id="mMark">材</i>
+        <h3 id="mTitle">梱包資材マスタ</h3>
+        <span class="st" id="mCan" hidden></span>
+        <span class="eyebrow" id="mCount"></span>
+      </header>
+      <div class="pad">
+        <div class="mbar">
+          <input class="input" id="mQuery" spellcheck="false" autocomplete="off"
+                 placeholder="どの列でもよい(例: 1100 / A-1 / ハードボード)"
+                 aria-label="行を絞り込む">
+          <button class="btn btn--find" type="button" id="mFind">
+            <span class="gl">⌕</span>絞り込む</button>
+          <button class="btn btn--run" type="button" id="mAdd" disabled>+ 行を足す</button>
+          <button class="btn btn--find" type="button" id="mReload">
+            <span class="gl">⟳</span>読み直す</button>
+        </div>
+
+        {# 直せない理由は**先に**言う。押してから断られるのは手戻り #}
+        <p class="status status--warn" id="mWhy" hidden></p>
+        <p class="status status--ng" id="mError" hidden></p>
+
+        <div class="tablewrap tablewrap--rows">
+          <table class="table">
+            <thead id="mHead"></thead>
+            <tbody id="mRows"></tbody>
+          </table>
+        </div>
+        <p class="why" id="mNote" hidden></p>
+        <p class="why" id="mSource">
+          書き先は取り込み元({{ master.source_dir }})です。
+          手元の写しではなく<b>元のファイル</b>を直すので、他の端末にも効きます。
+        </p>
+      </div>
+    </section>
+  </div>
+
+  {# 1行を開く。横に18列ある表は、表のままでは読めない。
+     直せない表・直せない端末では読むだけの姿になる #}
+  <dialog id="mEdit" class="browser meditor">
+    <form method="dialog" class="browser__head">
+      <b id="mEditTitle"></b>
+      <span class="st" id="mEditKind"></span>
+      <button class="btn btn--danger" value="cancel">閉じる</button>
+    </form>
+    <p class="status status--warn" id="mEditWhy" hidden></p>
+    <p class="status status--ng" id="mEditError" hidden></p>
+    <div class="mfields" id="mFields"></div>
+    <div class="btn-row mfoot" id="mFoot">
+      <button class="btn btn--commit" type="button" id="mSave">取り込み元へ書く</button>
+      <button class="btn btn--danger" type="button" id="mDelete">× この行を消す</button>
+    </div>
+    <div class="btn-row mfoot" id="mConfirm" hidden>
+      <span class="status status--ng" style="margin:0">
+        取り込み元から消します。戻せません。</span>
+      <button class="btn btn--danger" type="button" id="mDeleteYes">消す</button>
+      <button class="btn" type="button" id="mDeleteNo">やめる</button>
+    </div>
+  </dialog>
+      </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-source" role="tabpanel" aria-labelledby="tab-source" hidden>
+  <!-- 3. 取り込み元 -->
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">元</i>
+      <h3>取り込み元</h3>
+      <span class="lv lv--{{ view.level }}">{{ level_label[view.level] }}</span>
+      <span class="eyebrow">全ラインで共通の共有フォルダ</span>
+    </header>
+    <div class="pad">
+      <div class="paths">
+        <label for="masterDir">梱包資材マスタ</label>
+        <span class="pathrow">
+          <input class="input" id="masterDir" value="{{ view.master_dir }}"
+                 spellcheck="false" autocomplete="off">
+          <button class="btn btn--find" type="button" data-browse="masterDir">
+            <span class="gl">▸</span>参照…</button>
+        </span>
+        {# 相対で書かれたときだけ、**実際に見に行く先**を出す。
+           同じ道なら出さない ── 同じものが2行あると違うものに見える。
+           升を空けるための `<span>` は置かない ── 隠したときに
+           **以降が1升ずれる**(仕掛台帳の欄が縮んで折り返していた)。
+           位置は `.real { grid-column: 2 }` で決める #}
+        <small class="why real" id="masterDirReal"
+               {% if not state.master_dir_real %}hidden{% endif %}
+        >→ {{ state.master_dir_real }}</small>
+
+        <label for="lotDir">仕掛台帳</label>
+        <span class="pathrow">
+          <input class="input" id="lotDir" value="{{ view.lot_dir }}"
+                 spellcheck="false" autocomplete="off">
+          <button class="btn btn--find" type="button" data-browse="lotDir">
+            <span class="gl">▸</span>参照…</button>
+        </span>
+        <small class="why real" id="lotDirReal"
+               {% if not state.lot_dir_real %}hidden{% endif %}
+        >→ {{ state.lot_dir_real }}</small>
+      </div>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn btn--commit" type="button" id="savePaths">置き場所を保存</button>
+      </div>
+      <p class="why">
+        読むのは <b>sqlite3</b> ファイル({{ suffixes }})です。
+        空にすると既定の共有フォルダに戻ります。
+      </p>
+      <p class="why">
+        道は<b>2通り</b>で書けます。
+        <b>絶対</b>(<code>\\サーバ\共有\…</code> / <code>C:\data\…</code>)は
+        そのまま。<b>相対</b>(<code>data\src</code> / <code>..\共有</code>)は
+        <b>アプリのフォルダ</b>(<code>{{ state.path_base }}</code>)から
+        たどります ── 起動した場所では変わらないので、
+        フォルダごとコピーして配っても同じ場所を指し続けます。
+        相対で書くと、その下に実際の行き先が出ます。
+      </p>
+      <p class="why">
+        「参照…」は<b>このPCから見えるフォルダ</b>を出します
+        (ブラウザのファイル選択では、このPCのフォルダは選べません)。
+        <b>ファイルを押しても選べます</b> ── そのファイルの入れ物が入ります。
+      </p>
+
+      {# サーバ側のフォルダ参照。出すのはフォルダ名と、そこにある
+         取り込み元ファイルの名前だけ ── 中身を読ませる口はここに作らない #}
+      <dialog id="browser" class="browser">
+        <form method="dialog" class="browser__head">
+          <b id="browseFor"></b>
+          <input class="input" id="browsePath" spellcheck="false"
+                 autocomplete="off" aria-label="いま見ているフォルダ">
+          <button class="btn" type="button" id="browseGo">開く</button>
+          <button class="btn" type="button" id="browseUp">上へ</button>
+          <button class="btn btn--danger" value="cancel">閉じる</button>
+        </form>
+        <p class="status status--ng" id="browseNote" hidden></p>
+        <div class="tablewrap tablewrap--browse">
+          <table class="table"><tbody id="browseRows"></tbody></table>
+        </div>
+        <div class="btn-row" style="margin-top:8px">
+          <button class="btn btn--commit" type="button" id="browsePick">
+            このフォルダにする</button>
+        </div>
+      </dialog>
+    </div>
+  </section>
+      </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-behavior" role="tabpanel" aria-labelledby="tab-behavior" hidden>
+  <!-- 4. 動作 -->
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">動</i>
+      <h3>動作</h3>
+      <span class="eyebrow">この端末での振る舞い</span>
+    </header>
+    <div class="pad">
+      <div class="field">
+        <label for="position">拠点</label>
+        <select class="input" id="position" style="width:8em">
+          {% for name in view.positions %}
+          <option value="{{ name }}" {% if name == view.position %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+        <span class="why" style="margin:0">
+          疲労度の計算と棚検索の起点になります。<b>全画面で共通の1つ</b>です。
+        </span>
+      </div>
+
+      <div class="field" style="margin-top:8px">
+        <label class="checkline">
+          <input type="checkbox" id="autoImport"
+                 {% if view.auto_import %}checked{% endif %}>
+          起動時に自動で取り込む(更新されたファイルだけ)
+        </label>
+      </div>
+
+      <div class="field" style="margin-top:8px; align-items:flex-start">
+        <label for="specUrl">包装仕様書の図面URL</label>
+        <input class="input" id="specUrl" value="{{ view.spec_sheet_url }}"
+               spellcheck="false" autocomplete="off" style="flex:1 1 24em"
+               placeholder="http://nlmfangysysv:9084/…?pkgSpecNo={no}">
+      </div>
+      <p class="status status--ng" id="specUrlProblem"
+         {% if not view.spec_sheet_problem %}hidden{% endif %}
+      >{{ view.spec_sheet_problem }}</p>
+      <p class="why">
+        ロット検索に図面を出すための取得先です。
+        <b>{{ state.spec_sheet_placeholder }}</b> が包装仕様NOに置き換わります。
+        閲覧システムで「検索」を押したときにブラウザが投げているアドレス
+        (開発者ツール → ネットワーク)がそのまま使えます。空なら図面は出ません。
+      </p>
+
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn btn--commit" type="button" id="saveBehavior">動作の設定を保存</button>
+      </div>
+    </div>
+  </section>
+
+  {# 管理者パスワード。**実績パターンの保存を誤って押されない**ための
+     ガードで、誰が使えるかは アクセス権限 マスタが決める。
+     これまでは config.py か環境変数でしか変えられなかった ──
+     運用で変えられないパスワードは、実質「変えない」と同じ #}
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">鍵</i>
+      <h3>管理者パスワード</h3>
+      <span class="st st--{{ 'ok' if state.admin_custom else 'warn' }}"
+            id="adminState">{{ "変更済み" if state.admin_custom else "既定のまま" }}</span>
+    </header>
+    <div class="pad">
+      <div class="paths">
+        <label for="admNow">いまのパスワード</label>
+        <input class="input" id="admNow" type="password" autocomplete="current-password">
+        <label for="admNew">新しいパスワード</label>
+        <input class="input" id="admNew" type="password" autocomplete="new-password">
+        <label for="admConfirm">確認のためもう一度</label>
+        <input class="input" id="admConfirm" type="password" autocomplete="new-password">
+      </div>
+      <p class="status status--ng" id="admWhy" hidden></p>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn btn--commit" type="button" id="admSave">パスワードを変える</button>
+        <button class="btn btn--danger" type="button" id="admReset">既定に戻す</button>
+      </div>
+      <p class="why">
+        資材選択の<b>実績パターンの保存</b>を、誤って押されないための
+        ガードです({{ state.admin_min_length }}文字以上)。
+        <b>誰がこの端末を使えるか</b>は アクセス権限 マスタが決めます
+        ── こちらは鍵の掛かる扉ではありません。
+      </p>
+      <p class="why">
+        値は撹拌して持つので、設定ファイルを開いても読めません。
+        <b>忘れたときは</b> <code>data\user_config.json</code> の
+        <code>admin_password</code> の行を消すと既定に戻ります。
+      </p>
+    </div>
+  </section>
+      </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-filters" role="tabpanel" aria-labelledby="tab-filters" hidden>
+  <!-- 5. よく使う条件 -->
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">条</i>
+      <h3>よく使う条件</h3>
+      <span class="eyebrow">ロット検索の絞り込み</span>
+    </header>
+    <div class="pad">
+      <div class="tablewrap">
+        <table class="table">
+          <thead><tr><th class="t">名前</th><th class="t">条件</th><th></th></tr></thead>
+          {# 初回はサーバが描く。JS に任せると、開いた瞬間だけ空に見える #}
+          <tbody id="filterRows">
+            {% for f in view.lot_filters %}
+            <tr>
+              <td class="t">{{ f.name }}</td>
+              <td class="t">{{ f.conditions | join("  かつ  ") }}</td>
+              <td><button class="btn btn--danger" type="button"
+                          data-delete="{{ f.name }}">× 消す</button></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="why" id="filterEmpty" {% if view.lot_filters %}hidden{% endif %}>
+        まだありません。ロット検索で条件を組んで「この条件を保存」を押すと、
+        ここに並びます。
+      </p>
+    </div>
+  </section>
+      </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+  <!-- 6. 最近の結果 -->
+  <section class="card">
+    <header><i class="ib ib--sm" aria-hidden="true">歴</i><h3>最近の結果</h3></header>
+    <div class="pad">
+      <div class="tablewrap">
+        <table class="table">
+          <thead><tr>
+            <th>処理</th><th>状態</th><th class="n">かかった時間</th><th>内容</th>
+          </tr></thead>
+          <tbody id="recentRows"></tbody>
+        </table>
+      </div>
+      <p class="why" id="recentEmpty">まだ実行していません。</p>
+    </div>
+  </section>
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  /* 面で分けたので、**画面ごとスクロールさせない**。
+     入りきらないぶんは、いま開いている面の中だけが動く */
+  .pane--tabbed { display: flex; flex-direction: column; overflow: hidden; }
+  /* **行を長く走らせない。** 1600px の行は、端まで読んで戻るときに
+     1行ずれる。状態の4枚だけは横に並べたいので幅を切らない */
+  #panel-run > .card, #panel-source > .card,
+  #panel-behavior > .card, #panel-filters > .card,
+  #panel-history > .card { max-width: 940px; }
+  /* マスタ管理は表を並べる面。**幅を切らない**(切ると列が読めない)。
+     `:not([hidden])` が要る ── id の指定は `.tabpanel[hidden]` より強いので、
+     素で `display:flex` と書くと**閉じているはずの面が出たまま**になる
+     (取り込み元の面に重なって出た) */
+  #panel-master:not([hidden]) { display:flex; flex-direction:column; min-height:0; }
+
+    /* 状態の4枚は横に並べる。**面ごとスクロールさせず**、長いものは
+     その枠の中だけが動く(§4.2「一覧の中はスクロールしてよい」) */
+  .statusgrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px,1fr));
+                gap:12px; align-items:start; flex:1; min-height:0; }
+  .statusgrid > .card { min-height:0; max-height:100%; }
+  .statusgrid > .card > .pad { overflow:auto; min-height:0; }
+  /* 直しに行くボタンは**流れて消えない**。カードの中身は縦に長くなる
+     ことがあり、一緒に流すと「次にすること」が見えなくなる(§4.2) */
+  .statusgrid > .card > .pad > .btn-row {
+    position:sticky; bottom:0; margin-top:auto; padding-top:8px;
+    background:var(--surface);
+  }
+  /* この4枚は中身が枠を越えるので、**見出しの下に線を戻す**。
+     線が無いと、スクロールした中身が見出しの真下から生えて見える */
+  .statusgrid > .card > header {
+    padding-bottom:9px; border-bottom:1px solid var(--hairline);
+  }
+  .lv { font-size: var(--fs-xs); font-weight:600; padding:2px 9px; border-radius:var(--pill); }
+  .lv--ok   { background:var(--ok-bg);   color:var(--state-ok); }
+  .lv--warn { background:var(--warn-bg); color:var(--warn-fg); }
+  .lv--ng   { background:var(--warn-bg); color:var(--state-error);
+              border:1px solid var(--state-error); }
+  .lv--info { background:var(--act-idle); color:var(--act-idle-fg); }
+
+  .checks { margin:0; }
+  .check { display:grid; grid-template-columns:10em 1fr; gap:10px;
+           padding:5px 0; border-bottom:1px solid var(--hairline); }
+  .check:last-child { border-bottom:0; }
+  .check dt { color:var(--muted); font-size: var(--fs-sm); overflow-wrap:anywhere; }
+  .check dd { margin:0; min-width:0; }
+  .check .v { font-family:var(--mono); font-size: var(--fs-md); overflow-wrap:anywhere; }
+  .check .why { display:block; margin:2px 0 0; }
+  /* 良し悪しは色だけで伝えない。記号と文言も添える(§3.8) */
+  .check--ng .v   { color:var(--state-error); font-weight:700; }
+  .check--warn .v { color:var(--warn-fg); font-weight:700; }
+  .check--ok .v   { color:var(--state-ok); }
+
+  .ops { display:grid; gap:2px; }
+  .ops__row { display:flex; align-items:center; gap:12px; padding:6px 0; }
+  .ops__name { min-width:11em; color:var(--muted); font-size: var(--fs-sm); }
+  .ops .why { margin:0 0 8px 11.7em; }
+
+  .paths { display:grid; grid-template-columns:10em 1fr; gap:8px 12px;
+           align-items:center; }
+  .paths label { color:var(--muted); font-size: var(--fs-sm); }
+  /* 相対で書いたときの行き先。**打った字より控えめに**、でも読める。
+     位置は2列目に決め打つ ── 升を空けるための要素を置くと、隠したときに
+     以降が1升ずれる(仕掛台帳の欄が縮んで折り返していた) */
+  .paths .real { grid-column:2; margin:-4px 0 0; font-family:var(--mono);
+                 font-size: var(--fs-xs); overflow-wrap:anywhere; }
+  .paths .real[hidden] { display:none; }
+  .why code { font-family:var(--mono); font-size: var(--fs-xs);
+              padding:1px 4px; border-radius:var(--radius-xs);
+              background:var(--act-idle); }
+  .checkline { display:flex; align-items:center; gap:8px; cursor:pointer; }
+
+  /* 進捗はカードの中でもう1段くぼませる。`--raised` はライトテーマだと
+     `--surface` と同じ白なので、浮かせても区切りが出ない */
+  .job { margin-bottom:12px; padding:10px 12px; border-radius:var(--radius-sm);
+         background:var(--sunken); border:1px solid var(--rule); }
+  /* 面が足りないときに**畳むのは進捗のほう**。取り込みのボタンは
+     いつでも押せる場所に残す(§4.2 操作の面はスクロールさせない)。
+     進捗は起きたことを見るところなので、その中でなら動いてよい */
+  #panel-run > .card > .pad { flex:1; min-height:0; }
+  #panel-run .job { flex:0 1 auto; min-height:0; overflow-y:auto; }
+  #panel-run .ops { flex:none; }
+  .job__head { display:flex; align-items:baseline; gap:10px; }
+  .job__label { font-weight:700; }
+  .job__state { font-size: var(--fs-xs); font-weight:600; padding:2px 9px;
+                border-radius:var(--pill); background:var(--act-idle);
+                color:var(--muted); }
+  .job__head .num { margin-left:auto; font-family:var(--mono); }
+  .bar { height:6px; margin:8px 0 4px; border-radius:var(--pill);
+         background:var(--act-idle); overflow:hidden; }
+  .bar__fill { height:100%; width:0; border-radius:var(--pill);
+               background:var(--accent); transition:width .2s linear; }
+  .job--done   .bar__fill { background:var(--state-ok); }
+  .job--failed .bar__fill,
+  .job--interrupted .bar__fill { background:var(--state-error); }
+  /* 取り込みの結果は**機械が吐いたもの**。暗い面で読む(§4.4.2) */
+  /* 高さは9行ぶんまで。**結果の写しは読み物ではなく確認物**なので、
+     長い分は中で動かす ── ここを伸ばすと、下の取り込みボタンが
+     押せる場所から追い出される */
+  .job__summary { margin:8px 0 0; padding:11px 12px; max-height:9em; overflow:auto;
+                  font-family:var(--mono); font-size: var(--fs-xs); line-height:1.65;
+                  white-space:pre-wrap; overflow-wrap:anywhere;
+                  background:var(--night); color:var(--night-ink);
+                  border:1px solid var(--night-line);
+                  border-radius:var(--radius-xs); }
+  /* 最近の結果。状態は色だけでなく文字でも出す */
+  /* 状態ピルは共通部品(components.css の `.st`)。種別名もサーバが
+     共通の語彙(ok / ng / warn / run)で返すので、ここには何も要らない */
+  .status[hidden], .job[hidden], .job__summary[hidden] { display:none; }
+  .why[hidden] { display:none; }
+
+  /* ---- マスタ管理 ----------------------------------------------
+     左に表、右にその中身。**面ごとスクロールさせない**ので、
+     動くのは一覧の中だけ(§4.2)。表は19個あり、中身は数千行ある */
+  .masterwrap { display:grid; grid-template-columns:16em 1fr; gap:12px;
+                flex:1; min-height:0; align-items:stretch; }
+  /* `min-width:0` を落とすと、格子の枠より中身が広い側がはみ出す
+     (grid の既定は `min-width:auto`)。1366幅で面ごと横に35pxずれた */
+  .masterwrap > .card { min-width:0; min-height:0;
+                        display:flex; flex-direction:column; }
+  .masterwrap > .card > .pad { flex:1; min-height:0; display:flex;
+                               flex-direction:column; }
+  /* 見出しは `space-between` なので、放っておくと題が真ん中に流れる。
+     印と題は左でひと続き、状態と件数を右へ */
+  .masterwrap > .card > header h3 { margin-right:auto; }
+  .mlist { flex:1; min-height:0; overflow-y:auto; display:grid;
+           gap:2px; align-content:start; }
+  /* 表の1つ。**押せるものは押せる形**にする(高さ44px、§1.2) */
+  .mrow { display:grid; grid-template-columns:auto 1fr auto; gap:8px;
+          align-items:center; min-height:44px; padding:5px 9px;
+          border:1px solid transparent; border-radius:var(--radius-xs);
+          background:none; color:inherit; font:inherit; text-align:left;
+          cursor:pointer; }
+  .mrow:hover { background:var(--act-idle); }
+  .mrow[aria-current="true"] { background:var(--accent-soft);
+                               border-color:var(--accent-line); }
+  .mrow[aria-current="true"] .mrow__name { font-weight:700; color:var(--accent-ink); }
+  .mrow__name { min-width:0; overflow-wrap:anywhere; font-size: var(--fs-sm); }
+  /* 件数は情報の匂い(§2.4)。押す前に「その先に何があるか」が分かる */
+  .mrow__n { font-family:var(--mono); font-size: var(--fs-xs); color:var(--muted); }
+
+  .mbar { display:flex; gap:6px; align-items:center; flex:none;
+          margin-bottom:8px; flex-wrap:wrap; }
+  .mbar .input { flex:1 1 16em; min-width:10em; }
+  .tablewrap--rows { flex:1; min-height:0; overflow:auto; }
+  /* 値は桁をそろえる。数字の列が多い表なので、ずれると読み比べられない */
+  #mRows td { font-family:var(--mono); font-size: var(--fs-sm); white-space:nowrap; }
+  #mRows tr { cursor:pointer; }
+  #mHead th { white-space:nowrap; }
+  #mSource { flex:none; margin:6px 0 0; }
+  #mNote { flex:none; }
+
+  /* 1行を開いた姿。18列ある表は表のままでは読めない */
+  .meditor { width:min(760px, 94vw); }
+  .mfields { display:grid; grid-template-columns:9em 1fr; gap:6px 12px;
+             align-items:center; max-height:52vh; overflow-y:auto;
+             padding:2px 2px 8px; }
+  .mfields label { color:var(--muted); font-size: var(--fs-sm); overflow-wrap:anywhere; }
+  .mfields .input { width:100%; }
+  .mfields .mhint { display:block; color:var(--muted); font-size: var(--fs-xs); }
+  .mfields .mval { font-family:var(--mono); font-size: var(--fs-sm);
+                   overflow-wrap:anywhere; }
+  .mfields .req::after { content:" 必須"; color:var(--state-error);
+                         font-size: var(--fs-xs); font-weight:700; }
+  .mfoot { margin-top:10px; align-items:center; }
+  .mfoot[hidden] { display:none; }
+
+  /* フォルダ参照。パスの欄と「参照…」を1行に */
+  .pathrow { display:flex; gap:6px; align-items:center; }
+  .pathrow .input { flex:1; min-width:0; }
+
+  .browser { width:min(720px, 92vw); border:1px solid var(--rule);
+             border-radius:var(--radius); background:var(--surface);
+             color:var(--ink); padding:14px; }
+  .browser::backdrop { background:rgba(0,0,0,.4); }
+  .browser__head { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+                   margin:0 0 10px; }
+  .browser__head .input { flex:1; min-width:12em; }
+  .tablewrap--browse { max-height:46vh; overflow:auto; }
+  .browser .table td { cursor:pointer; }
+  .browser .gl { color:var(--muted); margin-right:6px; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/settings.js') }}";
+  start({{ state | tojson }}, {{ job_state | tojson }}, {{ master | tojson }});
+</script>
+{% endblock %}

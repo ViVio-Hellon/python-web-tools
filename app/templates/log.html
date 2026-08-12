@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}選定ログ — {{ display_name }}{% endblock %}
+
+{% block content %}
+<div class="pane">
+  <div class="pane__head">
+    <div>
+      <span class="eyebrow">Why</span>
+      <h2>選定ログ</h2>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn--danger" type="button" id="clear"><span class="gl">×</span>消去</button>
+    </div>
+  </div>
+  <p class="muted" style="margin-top:8px;max-width:74ch">
+    パレット検索が<b>なぜその結果になったか</b>が1行ずつ出ます。
+    思ったパレットが出てこないときは、ここに理由が書かれています。
+  </p>
+  <span class="dimline" aria-hidden="true"></span>
+
+  {# **いま**と**あの日**は別の見方。切り替えで分ける。
+     いまの分はプロセスの中、日ごとの分はファイルから読む
+     (終了しても残るので、後日の問い合わせに答えられる) #}
+  <div class="logbar">
+    <div class="btn-row" role="group" aria-label="見る範囲">
+      <button class="btn filter is-on" type="button" data-scope="live">いま</button>
+      <button class="btn filter" type="button" data-scope="days">日ごと</button>
+    </div>
+    <select class="input" id="day" style="width:15em" hidden
+            aria-label="日を選ぶ"></select>
+  </div>
+
+  <div class="logbar">
+    <div class="btn-row" role="group" aria-label="種別で絞り込む">
+      <button class="btn filter is-on" type="button" data-kind="all">すべて</button>
+      <button class="btn filter" type="button" data-kind="decide">決定</button>
+      <button class="btn filter" type="button" data-kind="exclude">除外</button>
+      <button class="btn filter" type="button" data-kind="warn">警告</button>
+    </div>
+    <label class="field" style="margin-left:auto">
+      <span>絞り込み</span>
+      <input class="input" type="search" id="q" placeholder="1150 など" style="width:14em">
+    </label>
+    <span class="muted num" id="count"></span>
+  </div>
+
+  <div class="logwrap" id="wrap">
+    {# 初回の中身はサーバが描く。JSが動く前でも読める状態にしておく
+       (設計書 §3.2「Jinja2 で骨格 + JSON API で中身」)。
+       以降の追記と絞り込みは JS が同じ形で描き替える #}
+    <ol class="loglist" id="list">
+      {% for row in initial %}
+      <li data-emphasis="{{ 'true' if row.emphasis else 'false' }}"
+          title="{{ row.who }}">
+        <span class="at">{{ row.at[11:] }}</span>
+        <span class="kind kind--{{ row.kind }}">{{ kind_label[row.kind] }}</span>
+        <span>{{ row.text }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+    <p class="empty" id="empty" {% if initial %}hidden{% endif %}>
+      まだログがありません。資材選択タブでパレット検索やボード選定を行うと、
+      その理由がここに出ます。
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  .logbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:12px 0; }
+  .filter { min-height:36px; padding:6px 12px; font-size: var(--fs-sm); }
+  .filter.is-on { background:var(--act-run); color:var(--act-run-fg); border-color:var(--act-run); }
+  /* **ログは暗い面で読む。** 触るものは明るく、機械が吐いたものは暗く。
+     明るい面ばかりの画面に暗い面が1枚あると、それだけで「ここは
+     性質が違う」と伝わる。長く読むときの目の負担も減る。
+     明暗どちらのテーマでも同じ濃さ ── ログの役割はテーマで変わらない */
+  .logwrap { border:1px solid var(--night-line); border-radius:var(--radius-xs);
+             background:var(--night); color:var(--night-ink);
+             overflow:auto; max-height:calc(100vh - 300px); }
+  .loglist { list-style:none; margin:0; padding:0; }
+  /* 時刻・種別・本文の3列。**時刻は小さく静かに** ── 作業中に読むもの
+     ではないが、後から「何時のことか」を突き合わせるのに要る */
+  .loglist li {
+    display:grid; grid-template-columns:auto 64px 1fr; gap:10px;
+    align-items:baseline;
+    padding:4px 12px; border-left:3px solid transparent;
+    font-family:var(--mono); font-size: var(--fs-sm); font-variant-numeric:tabular-nums;
+    overflow-wrap:anywhere;
+  }
+  /* 種別は**左の色帯**でも出す。読まなくても位置で見つかる */
+  .loglist li[data-kind="exclude"],
+  .loglist li[data-kind="warn"] { border-left-color:var(--night-warn);
+                                  background:var(--night-warn-bg); color:var(--night-warn); }
+  .loglist li[data-kind="decide"] { border-left-color:var(--night-ok); }
+  .loglist li[data-emphasis="true"] { font-weight:700; }
+  .at { font-size: var(--fs-2xs); color:var(--night-muted, #7f96a3); }
+  .kind { font-size: var(--fs-2xs); font-weight:800; text-align:center;
+          border-radius:var(--pill); padding:1px 0; }
+  .kind--decide  { background:#12332a; color:var(--night-ok); }
+  .kind--exclude { background:#3a2f18; color:var(--night-warn); }
+  .kind--warn    { background:#3a2f18; color:var(--night-warn); }
+  .kind--info    { background:#183642; color:#8fd4e4; }
+  .empty { padding:32px 16px; color:var(--muted); text-align:center; max-width:60ch; margin:0 auto; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/log.js') }}";
+  start({{ initial | tojson }}, {{ last_seq }});
+</script>
+{% endblock %}

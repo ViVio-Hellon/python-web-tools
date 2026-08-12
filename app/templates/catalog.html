@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>部品カタログ — 梱包資材総合ツール</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+<style>
+  .page { max-width: 1100px; margin: 0 auto; padding: 32px 24px 64px; }
+  section { margin-top: 40px; }
+  section > h2 { margin-bottom: 4px; }
+  .lede { color: var(--muted); max-width: 70ch; margin-top: 8px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 16px; }
+  .demo { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px; }
+  .swatchrow { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--hairline); }
+  .swatchrow:last-child { border-bottom: 0; }
+  .swatch { width: 44px; height: 44px; border-radius: var(--radius-xs); border: 1px solid var(--rule); flex: none; }
+  .swatchrow code { font-family: var(--mono); font-size: var(--fs-sm); }
+  .ratio { margin-left: auto; font-family: var(--mono); font-size: var(--fs-sm); font-weight: 700; }
+  .ratio.ok { color: var(--state-ok); }
+  .ratio.ng { color: var(--state-error); }
+  .summary { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 12px;
+             font-family: var(--mono); font-size: var(--fs-md); }
+  .summary b { color: var(--ink); }
+  .hit { position: relative; }
+  .hit::after {
+    content: ""; position: absolute; inset: 0;
+    outline: 1px dashed var(--state-warn); outline-offset: 0;
+    pointer-events: none;
+  }
+  .note { margin-top: 12px; font-size: var(--fs-md); color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <span class="eyebrow">Design system catalog</span>
+    <h1 style="margin-top:6px">部品カタログ</h1>
+    <p class="lede">
+      画面を作る前に、ここで部品と色を確かめます。色の直値は
+      <code>tokens.css</code> にしか無く、部品はそこからしか色を取りません。
+      いま見えているのは <b>ブラウザ(またはOS)のテーマ</b>です。
+      OSの配色をダークにすると、このページ全体がダークの値で描き直されます。
+    </p>
+  </header>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>コントラストの検査</h2>
+    <p class="lede">
+      <code>scripts/check_contrast.py</code> が3テーマすべてを機械検査した結果です。
+      文字は {{ contrast.min_text }}:1、部品の輪郭は {{ contrast.min_ui }}:1 が下限。
+      不足があるとテストが落ちます。
+    </p>
+    {% if contrast.available %}
+    <div class="summary">
+      <span>検査数 <b>{{ contrast.total }}</b></span>
+      <span>テーマ <b>{{ contrast.themes }}</b></span>
+      <span>不足 <b style="color:{{ 'var(--state-error)' if contrast.failed else 'var(--state-ok)' }}">{{ contrast.failed }}</b></span>
+    </div>
+
+    <div class="tablewrap" style="margin-top:16px; max-height:340px">
+      <table class="table">
+        <thead><tr>
+          <th>用途</th><th>地</th><th>前景</th><th class="n">比</th><th class="n">必要</th>
+        </tr></thead>
+        <tbody>
+          {% for row in contrast.rows %}
+          <tr>
+            <td>{{ row.label }}</td>
+            <td style="text-align:left"><code>--{{ row.bg }}</code></td>
+            <td style="text-align:left"><code>--{{ row.fg }}</code></td>
+            <td class="n" style="color:{{ 'var(--state-ok)' if row.ok else 'var(--state-error)' }}">{{ row.ratio }}</td>
+            <td class="n">{{ row.required }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if contrast.exceptions %}
+    <p class="note"><b>意図して下限を満たさないもの:</b></p>
+    <ul class="note">
+      {% for item in contrast.exceptions %}
+      <li>{{ item.label }} — {{ item.reason }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% else %}
+    <p class="note">検査スクリプトを読み込めませんでした。</p>
+    {% endif %}
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>ボタン — 色は操作の種類、塗りの濃さは「起こす/参照する」</h2>
+    <p class="lede">
+      色相の意味は現行の tkinter 版から引き継いでいます。変えたのは濃さだけなので、
+      「橙っぽいのが印刷」という現場の記憶がそのまま通用します。
+      <b>濃い塗り</b>は何かを起こす操作、<b>淡い塗り</b>は参照する・消す操作、
+      <b>中立</b>は押せるが主役ではないもの。色を知覚できなくても、
+      塗りの濃さと先頭の記号で種類が分かります。
+    </p>
+    <div class="demo">
+      <button class="btn btn--nav" type="button">パレットMAP<span class="gl">▸</span></button>
+      <button class="btn btn--run" type="button"><span class="gl">▶</span>ボード配置</button>
+      <button class="btn btn--print" type="button"><span class="gl">▤</span>Lot印刷</button>
+      <button class="btn btn--select" type="button"><span class="gl">⚙</span>ボード選定</button>
+      <button class="btn btn--find" type="button"><span class="gl">◎</span>パレット検索</button>
+      <button class="btn btn--danger" type="button"><span class="gl">×</span>クリア</button>
+      <button class="btn btn--commit" type="button"><span class="gl">▣</span>保存</button>
+      <button class="btn btn--on" type="button"><span class="gl">●</span>2山積</button>
+      <button class="btn btn--fatigue" type="button"><span class="gl">●</span>疲労度ON</button>
+      <button class="btn" type="button"><span class="gl">○</span>1山積</button>
+    </div>
+
+    <p class="note" style="margin-top:20px">
+      <b>取消と保存は同じ赤</b>です。どちらも取り消せない操作なので色相は正しく、
+      分けるべきなのは「取り消す(引き算)」と「書き込む(足し算)」の別。
+      濃い塗りと淡い塗りで区別します。現行版はこの2つが
+      <code>#ffc8c8</code> で<b>完全に同じ色</b>でした。
+    </p>
+
+    <h3 style="margin-top:24px">押せないとき</h3>
+    <div class="demo">
+      <button class="btn btn--run" type="button" disabled><span class="gl">▶</span>倉庫送信</button>
+    </div>
+    <p class="why">一覧の行を選ぶと押せます(発注コードと単位の取得元です)。</p>
+    <p class="note">
+      無効なボタンは<b>消さずに残し、理由を添えます</b>。消すとレイアウトが動いて
+      手が位置を覚えられません。理由を先に出すのは、押してから叱られないためです。
+    </p>
+
+    <h3 style="margin-top:24px">当たり判定</h3>
+    <div class="demo">
+      <span class="hit"><button class="btn btn--run" type="button">44px</button></span>
+      <span class="note" style="margin:0">
+        点線が実際の当たり判定(最小 44×44px)。現行版は約 90×24px でした。
+        手袋やタッチ操作を想定しています。
+      </span>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>状態</h2>
+    <p class="lede">
+      「未設定」の見落としは、以降の操作がすべて空振りする原因になります。
+      現行版はここが 3.37:1 でいちばん読みにくい表示でした。
+      左端の4pxの帯は、色を知覚できない場合の手がかりです。
+    </p>
+    <div class="grid">
+      <div class="status status--ng"><span>パレット: 未設定</span><span>— 先に確定してください</span></div>
+      <div class="status status--ok"><span>パレット確定</span><span class="num">1150 × 2650</span></div>
+    </div>
+    <div class="demo">
+      <span class="chip chip--protec">プロテックボードオーダー</span>
+      <span class="chip chip--ex">EXオーダー</span>
+      <span class="chip chip--fatigue">疲労度優先</span>
+      <span class="badge badge--done">済</span>
+      <span class="badge badge--todo">配置</span>
+      <span class="tag tag--main">主</span>
+      <span class="tag tag--fill">幅補填</span>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>入力と一覧</h2>
+    <p class="lede">
+      寸法は<b>必ず等幅+桁揃え</b>です。可変幅では 1150 と 1180 の桁がずれ、
+      一覧を縦に読むときに読み違えます。読み違いはそのまま資材の誤発注になります。
+    </p>
+    <div class="grid">
+      <div class="card card--pallet">
+        <header><h3>【パレットサイズ】</h3></header>
+        <div class="pad">
+          <div class="field">
+            <label for="w">幅</label><input id="w" class="input input--num num" value="1150">
+            <label for="l">丈</label><input id="l" class="input input--num num" value="2650">
+            <button class="btn btn--run" type="button"><span class="gl">▶</span>適用</button>
+          </div>
+          <div class="tablewrap">
+            <table class="table">
+              <thead><tr><th>業界</th><th class="n">幅</th><th class="n">丈</th><th class="n">脚</th></tr></thead>
+              <tbody>
+                <tr aria-selected="true"><td>スカシ T2</td><td class="n">1150</td><td class="n">2650</td><td class="n">4</td></tr>
+                <tr><td>一般 A1</td><td class="n">1150</td><td class="n">2700</td><td class="n">4</td></tr>
+                <tr class="is-linked"><td>タイト G1</td><td class="n">1200</td><td class="n">2650</td><td class="n">4</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="why">3行目は「配置図と連動して光っている行」の見本です。</p>
+        </div>
+      </div>
+
+      <div class="card card--lower">
+        <header><h3>【下用ボード配置】</h3><span class="eyebrow">SVG</span></header>
+        <div class="pad">
+          <svg viewBox="{{ sample_plan.view_box }}" preserveAspectRatio="xMidYMid meet"
+               style="width:100%;height:auto;background:var(--mat-lower-bg);
+                      border:1px solid var(--hairline);border-radius:var(--radius-xs)"
+               role="img" aria-label="下用ボードの配置図の見本">
+            {% if sample_plan.border %}
+            <rect x="{{ sample_plan.border.x }}" y="{{ sample_plan.border.y }}"
+                  width="{{ sample_plan.border.width }}" height="{{ sample_plan.border.height }}"
+                  fill="none" stroke="var(--mat-lower)" stroke-width="2" stroke-dasharray="6 4"/>
+            {% endif %}
+            {% for rect in sample_plan.boards %}
+            <g>
+              <rect x="{{ rect.x }}" y="{{ rect.y }}" width="{{ rect.width }}" height="{{ rect.height }}"
+                    fill="var(--mat-lower-fill)" stroke="var(--mat-lower-line)" stroke-width="1.5"/>
+              {% if rect.caption %}
+              <text x="{{ rect.x + rect.width / 2 }}" y="{{ rect.y + rect.height / 2 }}"
+                    font-size="19" text-anchor="middle" dominant-baseline="middle"
+                    fill="var(--ink)" font-family="ui-monospace,monospace">
+                {% for line in rect.caption.split('\n') %}
+                <tspan x="{{ rect.x + rect.width / 2 }}" dy="{{ 0 if loop.first else 23 }}">{{ line }}</tspan>
+                {% endfor %}
+              </text>
+              {% endif %}
+            </g>
+            {% endfor %}
+          </svg>
+          <p class="why">
+            サーバが返した描画計画(<code>presenters/render_json</code>)を
+            そのまま SVG にしたものです。色は tokens から取っているので、
+            テーマを変えると図も一緒に変わります。
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <h2>通知</h2>
+    <p class="lede">
+      作業を止めない通知はトースト、止める確認はモーダル。
+      <b>モーダルは取り消せない操作だけ</b>に使います
+      (倉庫送信・発注取消・確認済み化・ライン切替)。
+      確認が多すぎると、慣れて素通りするようになります。
+    </p>
+    <div class="grid" style="margin-top:16px">
+      <div class="toast toast--ok"><span>ボードを自動選択しました(上用2種 / 下用3種)</span></div>
+      <div class="toast toast--warn"><span>候補ボードがありません。ボード種別を確認してください</span></div>
+      <div class="toast toast--error"><span>選定でエラーが発生しました</span></div>
+      <div class="toast">
+        <span>選定内容をクリアしました</span>
+        <button class="btn" type="button" style="margin-left:auto">元に戻す</button>
+      </div>
+    </div>
+
+    <div class="offline" style="margin-top:20px; position:static">
+      <span>バックエンドに接続できません</span>
+      <button class="btn" type="button">再接続</button>
+      <button class="btn" type="button">再読込</button>
+    </div>
+    <p class="note">
+      接続が切れたら画面に明示し、次の操作を出します(基盤仕様書 2.9)。
+      黙って古い表示を出し続けるほうが危険です。
+    </p>
+  </section>
+
+</div>
+</body>
+</html>

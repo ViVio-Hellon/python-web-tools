@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""取り込み元にできてしまった**重複行**を数える / 消す
+
+【なぜ要るのか】
+VER2.2.1 より前は、取り込みのたびに書き戻し対象のテーブル
+(資材パレット注文管理 / パレット入出庫履歴)が**倍になっていました**。
+取り込みは総入れ替えで管理番号が振り直されるのに、同期記録には古い
+行IDが残るため、取り込んだ行がどれも「未送信」に見え、次の取り込みの
+前に走る書き戻しが取り込み元から来た行をもう一度送っていたためです。
+
+原因は直しましたが、**すでに増えてしまった行は残ります。**
+このスクリプトはそれを数え、頼まれれば消します。
+
+    python3 scripts/dedupe_writeback.py                # 数えるだけ(既定)
+    python3 scripts/dedupe_writeback.py --fix          # 消す(控えを取ってから)
+    python3 scripts/dedupe_writeback.py --file  X.sqlite3
+    python3 scripts/dedupe_writeback.py --table 資材パレット注文管理
+
+【何を重複とみなすか】
+**管理番号と送信IDを除いた全部の列が一致する行**です。どちらも
+「送るときに振られる番号」で、中身ではありません。一致した組の中で
+**いちばん小さい管理番号だけを残し**、残りを消します(先に入った行が
+本物で、あとから増えたのが写しだからです)。
+
+【消す前に必ず控えを取ります】
+`--fix` を付けたときだけ書き換えます。書き換える前に、同じフォルダへ
+`<名前>.bak-YYYYMMDDHHMMSS.sqlite3` として丸ごと写しを取ります。
+"""
+from __future__ import annotations
+
+import argparse
+import shutil
+import sqlite3
+import sys
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from packaging_tool import config, data_sync, source_db  # noqa: E402
+
+# 中身の比較から外す列。**送るときに振られる番号**であって中身ではない
+IGNORED = ("管理番号", "id", "送信ID")
+
+
+def duplicates(conn: sqlite3.Connection, table: str) -> tuple[list[int], int]:
+    """消してよい行のID一覧と、全体の行数を返す。"""
+    conn.row_factory = sqlite3.Row
+    quoted = source_db.quote_identifier(table)
+    rows = conn.execute(f"SELECT rowid AS __行, * FROM {quoted}").fetchall()
+    if not rows:
+        return [], 0
+    names = [n for n in rows[0].keys() if n not in IGNORED and n != "__行"]
+
+    seen: dict[tuple, int] = {}
+    drop: list[int] = []
+    for row in rows:
+        key = tuple(row[n] for n in names)
+        if key in seen:
+            drop.append(row["__行"])         # 2件目以降を消す
+        else:
+            seen[key] = row["__行"]
+    return drop, len(rows)
+
+
+def backup(path: Path) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    copy = path.with_name(f"{path.stem}.bak-{stamp}{path.suffix}")
+    shutil.copyfile(path, copy)
+    return copy
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--file", type=Path,
+                        help="梱包資材マスタの.sqlite3(省略時は設定の置き場所から探す)")
+    parser.add_argument("--table", action="append",
+                        help="見るテーブル(省略時は書き戻し対象すべて)")
+    parser.add_argument("--fix", action="store_true",
+                        help="重複を消す(付けなければ数えるだけ)")
+    args = parser.parse_args()
+
+    path = args.file or data_sync.find_material_db()
+    if path is None or not Path(path).exists():
+        print(f"梱包資材マスタが見つかりません({config.master_db_dir()})",
+              file=sys.stderr)
+        return 1
+    path = Path(path)
+    tables = args.table or [s.sqlite_table for s in data_sync.WRITEBACK_SPECS]
+
+    print(f"対象: {path}")
+    plan: dict[str, list[int]] = {}
+    conn = sqlite3.connect(path)
+    try:
+        for table in tables:
+            try:
+                drop, total = duplicates(conn, table)
+            except sqlite3.Error as exc:
+                print(f"  {table}: 見られません({exc})")
+                continue
+            plan[table] = drop
+            note = f"重複 {len(drop)}件" if drop else "重複なし"
+            print(f"  {table}: {total}件 → {note}")
+    finally:
+        conn.close()
+
+    if not any(plan.values()):
+        print("消すものはありません。")
+        return 0
+    if not args.fix:
+        print("\n数えただけです。消すには --fix を付けてください"
+              "(消す前に控えを取ります)。")
+        return 0
+
+    copy = backup(path)
+    print(f"\n控え: {copy}")
+    conn = sqlite3.connect(path)
+    try:
+        with conn:
+            for table, drop in plan.items():
+                if not drop:
+                    continue
+                quoted = source_db.quote_identifier(table)
+                conn.executemany(f"DELETE FROM {quoted} WHERE rowid = ?",
+                                 [(i,) for i in drop])
+                print(f"  {table}: {len(drop)}件 消しました")
+    finally:
+        conn.close()
+    print("終わりました。設定画面から「まとめて取り込み」を押してください。")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

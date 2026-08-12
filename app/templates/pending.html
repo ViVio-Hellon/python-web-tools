@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ screen_label }}(準備中) — {{ display_name }}{% endblock %}
+
+{% block content %}
+<div class="pane">
+  <div class="pane__head">
+    <div>
+      <span class="eyebrow">準備中</span>
+      <h2>{{ screen_label }}</h2>
+    </div>
+    {% if phase %}<span class="chip chip--info">{{ phase }} で作ります</span>{% endif %}
+  </div>
+
+  <span class="dimline" aria-hidden="true"></span>
+
+  {#
+    まだ無いことと、壊れていることは違う。
+    「押しても何も起きない」を作らないための画面なので、
+    ここでは**業務の中身をそれらしく見せない**。
+    出すのは「無い」「いつ作る」「それまでどうする」の3つだけ。
+  #}
+  {# 資材展開で渡ってきた値。画面が無いことと、渡せていないことは別。
+     ここで何も出さないと「渡らなかった」と読まれる #}
+  {% if handoff %}
+  <section class="card" style="margin-top:12px">
+    <header>
+      <h3>受け取っています</h3>
+      {% if handoff.is_ex %}<span class="chip chip--alert">EX</span>{% endif %}
+    </header>
+    <div class="pad">
+      <dl class="fields">
+        <div><dt>Lot</dt><dd>{{ handoff.lot_no }}</dd></div>
+        <div><dt>製品サイズ</dt><dd>{{ handoff.product }}</dd></div>
+        <div><dt>包装仕様NO</dt><dd>{{ handoff.packaging_spec or "---" }}</dd></div>
+      </dl>
+      <p class="why">
+        この値は画面ができるまで保持されます。ロットを引き直すと入れ替わります。
+      </p>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="card" style="margin-top:12px">
+    <header><h3>この画面はまだありません</h3></header>
+    <div class="pad">
+      {% if summary %}<p style="margin:0 0 10px">{{ summary }}</p>{% endif %}
+      {% if meanwhile %}
+      <p class="status status--warn" style="margin:0">
+        それまでは <b>tkinter版の「{{ meanwhile }}」</b>をお使いください。
+        同じデータベースを見ているので、どちらで登録しても内容は同じです。
+      </p>
+      {% endif %}
+      <p class="why">
+        Web版で使えるのは
+        {%- for item in nav %}{% if item.ready %} <a href="{{ item.url }}">{{ item.label }}</a>{% endif %}{% endfor %}
+        です。
+      </p>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  /* 準備中の画面だと一目で分かるようにする。
+     作り込んだ画面と同じ見た目にすると、動くと思って待ってしまう */
+  .pane__head .eyebrow { color: var(--warn-fg); }
+
+  .fields { display:grid; grid-template-columns:repeat(3, minmax(0,1fr));
+            gap:0 24px; margin:0; }
+  .fields > div { display:grid; grid-template-columns:7em 1fr; gap:8px;
+                  align-items:baseline; padding:4px 0;
+                  border-bottom:1px solid var(--hairline); }
+  .fields dt { color:var(--muted); font-size: var(--fs-sm); }
+  .fields dd { margin:0; font-family:var(--mono); font-size: var(--fs-md); }
+</style>
+{% endblock %}

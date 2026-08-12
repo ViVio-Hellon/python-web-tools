@@ -1,0 +1,552 @@
+"""配置図の描画計画 (VBA `MaterialMasterForm` の描画系の移植)
+
+`placement_algorithm` が決めた配置(mm単位の論理座標)を、図の上の
+座標・色・キャプションに変換する。**描き方は知らない**純粋な計算なので、
+画面なしで単体テストできる。実際に描くのはブラウザ
+(`app/static/js/svgplan.js` が SVG を組み立てる)。
+
+対応関係:
+    DetectBoardCut             -> detect_board_cut
+    GetMainBoardsBoundingBox    -> main_boards_bounding_box
+    GetNarrowPaletteBoundingBox  -> narrow_bounding_box
+    GetBoardColor                 -> board_color
+    DrawPaletteBorder              -> RenderPlan.border
+    DrawSingleBoardOnCanvas         -> build_render_plan
+    DrawFillBoardLegend              -> RenderPlan.legend
+    GetCutSummaryText                 -> cut_summary_text
+    GetCoverageDeficitText              -> coverage_deficit_text
+    DisplayInfo_Normal/_Kyoyo の配色判定  -> cut_status_color
+    CalculateUsageRatioByCategory        -> usage_ratio_by_category
+    CalculateOverhangRatio                -> overhang_ratio
+
+【InfoDisplay1(使用率/はみ出し率)の表示位置についての注記】
+    VBA原文では InfoDisplay1(使用率/はみ出し率の行)と InfoDisplay3
+    (カット+不足の行)が `DisplayInfo_Normal` 内で全く同じ座標
+    (`PaletteCanvasLower.top + PaletteCanvasLower.height + 16`)に
+    配置されており、後から追加されて幅も広い InfoDisplay3 の下に
+    InfoDisplay1 が隠れて実機では見えていなかったとみられる
+    (`DisplayInfo_Kyoyo` 側は +2 / +18 と正しく段組みされており、
+    Normalだけがこの座標指定漏れになっている)。Python版では
+    意図どおり両方とも見える形で表示する。
+
+【座標系の変換】
+    配置側は X=丈方向 / Y=幅方向 で、`PlacedBoardModel.length` がX方向、
+    `width` がY方向の寸法。画面では丈を横(左→右)、幅を縦(上→下)に描くため、
+        画面X = offset_x + board.x * scale     幅(px) = board.length * scale
+        画面Y = offset_y + board.y * scale     高さ(px) = board.width * scale
+    となる(VBA版と同じ)。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+from .models import PlacedBoardModel
+
+CATEGORY_LOWER = "下用"
+CATEGORY_UPPER = "上用"
+
+# キャンバスに対する描画領域の割合(VBA: canvasW * 0.9)
+CANVAS_FILL_RATIO = 0.9
+
+# 主ボードのバウンディングボックスに含める最小短辺(VBA: pbMinSide >= 100)
+MAIN_BOARD_MIN_SIDE = 100
+
+# カット判定の許容差(VBA `DetectBoardCut` の -3 / > 3)
+CUT_TOLERANCE = 3
+
+# キャプションを出さずに色分けだけにする閾値(px)
+THIN_LABEL_LIMIT = 15
+
+# 凡例に載せる「細すぎるボード」の閾値(px)
+LEGEND_THIN_LIMIT = 15
+
+# 色(VBAのRGB値をそのまま16進に変換)
+COLOR_LOWER = "#c8ffc8"        # RGB(200,255,200)
+COLOR_UPPER = "#ffc8c8"        # RGB(255,200,200)
+COLOR_BORDER = "#000000"
+COLOR_BOARD_OUTLINE = "#646464"  # RGB(100,100,100)
+COLOR_CUT_LINE = "#dc2800"     # RGB(220,40,0)
+COLOR_CUT_ZONE = "#ff8c1e"     # RGB(255,140,30)
+COLOR_THIN_30 = "#3c78c8"      # RGB(60,120,200)
+COLOR_THIN_50 = "#50a050"      # RGB(80,160,80)
+COLOR_THIN_100 = "#783ca0"     # RGB(120,60,160)
+COLOR_THIN_TINY = "#c83c3c"    # RGB(200,60,60)   高さ6px未満
+COLOR_THIN_SMALL = "#e67850"   # RGB(230,120,80)  高さ12px未満
+COLOR_THIN_OTHER = "#3c8c8c"   # RGB(60,140,140)
+
+
+@dataclass
+class CutInfo:
+    """VBA `DetectBoardCut` の4つのByRef出力。"""
+
+    cut_width: bool = False      # 幅(Y)方向のカットあり
+    cut_length: bool = False     # 丈(X)方向のカットあり
+    amount_width: int = 0
+    amount_length: int = 0
+
+    @property
+    def note(self) -> str:
+        """キャプションに添えるカット注記(VBA `cutNote`)。"""
+        note = ""
+        if self.cut_length:
+            note += f"←{self.amount_length}カット"
+        if self.cut_width:
+            note += f"↑{self.amount_width}カット"
+        return note
+
+
+@dataclass
+class BoundingBox:
+    min_x: int = 0
+    min_y: int = 0
+    max_x: int = 0
+    max_y: int = 0
+
+
+@dataclass
+class Rect:
+    """キャンバス上の矩形(px)。"""
+
+    x: float
+    y: float
+    width: float
+    height: float
+    fill: str
+    outline: str = ""
+    caption: str = ""
+    font_size: int = 7
+    tooltip: str = ""
+
+
+@dataclass
+class RenderPlan:
+    """1つのキャンバスに描くもの一式。"""
+
+    scale: float = 0.0
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    border: Optional[Rect] = None
+    boards: list[Rect] = field(default_factory=list)
+    cut_marks: list[Rect] = field(default_factory=list)
+    legend: list[tuple[int, str]] = field(default_factory=list)
+
+
+# ------------------------------------------------------------------
+# カット検出
+# ------------------------------------------------------------------
+def detect_board_cut(orig_w: int, orig_l: int, placed_w: int, placed_l: int) -> CutInfo:
+    """VBA `DetectBoardCut` の移植。
+
+    元寸法(`original_width`/`original_length`)と実配置寸法を比べ、
+    どちらの向きで解釈するとカット量が小さいかを判定してから
+    幅/丈それぞれのカット有無と量を返す。
+    `CUT_TOLERANCE`(3mm)以内の差はカットとみなさない。
+    """
+    info = CutInfo()
+    if orig_w <= 0 or orig_l <= 0:
+        return info
+
+    # A: 無回転 origW→placedW, origL→placedL
+    cut_y_a = orig_w - placed_w
+    cut_x_a = orig_l - placed_l
+    # B: 回転   origL→placedW, origW→placedL
+    cut_y_b = orig_l - placed_w
+    cut_x_b = orig_w - placed_l
+
+    valid_a = cut_y_a >= -CUT_TOLERANCE and cut_x_a >= -CUT_TOLERANCE
+    valid_b = cut_y_b >= -CUT_TOLERANCE and cut_x_b >= -CUT_TOLERANCE
+
+    if valid_a and valid_b:
+        # 同点ならB(回転側)を優先するのがVBAの挙動
+        use_b = abs(cut_y_b) + abs(cut_x_b) <= abs(cut_y_a) + abs(cut_x_a)
+    else:
+        use_b = valid_b
+
+    final_x, final_y = (cut_x_b, cut_y_b) if use_b else (cut_x_a, cut_y_a)
+
+    if final_x > CUT_TOLERANCE:
+        info.cut_length = True
+        info.amount_length = final_x
+    if final_y > CUT_TOLERANCE:
+        info.cut_width = True
+        info.amount_width = final_y
+    return info
+
+
+# ------------------------------------------------------------------
+# 配置後サマリ (VBA `DisplayInfo` 系。キャンバス下の「はみ出し/カット」表示)
+# ------------------------------------------------------------------
+def usage_ratio_by_category(placed: list[PlacedBoardModel], category: str,
+                            palette_w: int, palette_l: int) -> float:
+    """VBA `CalculateUsageRatioByCategory` の移植。パレット面積に対する使用率(%)。
+
+    上用/下用どちらのカテゴリでも基準は常に**パレット**のサイズ
+    (VBA原文どおり。上用の使用率も製品サイズではなくパレット面積で割る)。
+    パレットからはみ出す部分は面積に数えない(effective_l/effective_wで
+    クリップしてから面積を足す)。
+    """
+    if not placed:
+        return 0.0
+
+    total_board_area = 0.0
+    for pb in placed:
+        if pb.board_category != category:
+            continue
+        effective_l = pb.length
+        effective_w = pb.width
+        if pb.x + effective_l > palette_l:
+            effective_l = max(palette_l - pb.x, 0)
+        if pb.y + effective_w > palette_w:
+            effective_w = max(palette_w - pb.y, 0)
+        if effective_l > 0 and effective_w > 0:
+            total_board_area += effective_l * effective_w
+
+    palette_area = float(palette_w) * float(palette_l)
+    if palette_area <= 0:
+        return 0.0
+    return (total_board_area / palette_area) * 100
+
+
+def overhang_ratio(placed: list[PlacedBoardModel], category: str,
+                   palette_w: int, palette_l: int) -> float:
+    """VBA `CalculateOverhangRatio` の移植。パレット面積に対するはみ出し面積の割合(%)。"""
+    if palette_w == 0 or palette_l == 0:
+        return 0.0
+
+    total_overhang = 0.0
+    for pb in placed:
+        if pb.board_category != category:
+            continue
+        right_over = (pb.x + pb.length) - palette_l
+        bottom_over = (pb.y + pb.width) - palette_w
+        if right_over > 0:
+            total_overhang += right_over * pb.width
+        if bottom_over > 0:
+            total_overhang += bottom_over * pb.length
+        # コーナー(right_over * bottom_over)が二重計上されるため減算する
+        if right_over > 0 and bottom_over > 0:
+            total_overhang -= float(right_over) * float(bottom_over)
+
+    palette_area = float(palette_w) * float(palette_l)
+    return (total_overhang / palette_area) * 100
+
+
+# 使用率/はみ出し率ラインの背景色(VBA固定値、条件分岐なし)
+COLOR_INFO_USAGE_BG = "#ffffdc"     # RGB(255,255,220)
+
+
+def cut_summary_text(placed: list[PlacedBoardModel], category: str,
+                     base_w: int, base_l: int) -> str:
+    """VBA `GetCutSummaryText` の移植。
+
+    `base_w`/`base_l` は基準枠(下用=パレット、上用=製品)の幅・丈で、
+    `build_render_plan` に渡すものと同じ。基準枠から実際にどれだけ
+    はみ出しているか(はみ出しカット)と、ボード自体がカットされて
+    いるか(`detect_board_cut`)の両方を、そのカテゴリの最大値でまとめる。
+    """
+    max_right_over = 0
+    max_bottom_over = 0
+    max_board_cut_l = 0
+    max_board_cut_w = 0
+
+    for pb in placed:
+        if pb.board_category != category:
+            continue
+        right_over = (pb.x + pb.length) - base_l
+        bottom_over = (pb.y + pb.width) - base_w
+        max_right_over = max(max_right_over, right_over)
+        max_bottom_over = max(max_bottom_over, bottom_over)
+
+        cut = detect_board_cut(pb.original_width, pb.original_length, pb.width, pb.length)
+        max_board_cut_l = max(max_board_cut_l, cut.amount_length)
+        max_board_cut_w = max(max_board_cut_w, cut.amount_width)
+
+    parts: list[str] = []
+    if max_right_over > 0:
+        parts.append(f"はみ出し丈カット: 約{max_right_over}mm")
+    if max_bottom_over > 0:
+        parts.append(f"はみ出し幅カット: 約{max_bottom_over}mm")
+    if max_board_cut_l > CUT_TOLERANCE:
+        parts.append(f"ボード丈カット: {max_board_cut_l}mm")
+    if max_board_cut_w > CUT_TOLERANCE:
+        parts.append(f"ボード幅カット: {max_board_cut_w}mm")
+    return "  ".join(parts) if parts else "カットなし"
+
+
+def coverage_deficit_text(placed: list[PlacedBoardModel], category: str,
+                          product_w: int, product_l: int) -> str:
+    """VBA `GetCoverageDeficitText` の移植。
+
+    基準は下用/上用どちらのカテゴリでも常に**製品サイズ**
+    (VBA原文どおり。下用でもパレットサイズではなく製品サイズと比較する)。
+    """
+    max_y = 0
+    max_x = 0
+    for pb in placed:
+        if pb.board_category != category:
+            continue
+        max_y = max(max_y, pb.y + pb.width)
+        max_x = max(max_x, pb.x + pb.length)
+
+    deficit_w = product_w - max_y
+    deficit_l = product_l - max_x
+
+    if deficit_w > CUT_TOLERANCE:
+        result_w = f"幅-{deficit_w}mm"
+    elif deficit_w >= -CUT_TOLERANCE:
+        result_w = "幅OK"
+    else:
+        result_w = f"幅+{abs(deficit_w)}mm超"
+
+    if deficit_l > CUT_TOLERANCE:
+        result_l = f"丈-{deficit_l}mm"
+    elif deficit_l >= -CUT_TOLERANCE:
+        result_l = "丈OK"
+    else:
+        result_l = f"丈+{abs(deficit_l)}mm超"
+
+    return f"{result_w}  {result_l}"
+
+
+# 配置サマリの背景色/文字色(VBA `DisplayInfo_Normal`/`_Kyoyo` の3分岐)
+COLOR_INFO_DEFICIT_BG = "#fff0b4"   # RGB(255,240,180) 不足あり
+COLOR_INFO_DEFICIT_FG = "#965000"   # RGB(150,80,0)
+COLOR_INFO_CUT_BG = "#ffe6cd"       # RGB(255,230,205) カットあり
+COLOR_INFO_CUT_FG = "#b42800"       # RGB(180,40,0)
+COLOR_INFO_OK_BG = "#d7ffd7"        # RGB(215,255,215) 問題なし
+COLOR_INFO_OK_FG = "#006400"        # RGB(0,100,0)
+
+
+def cut_status_color(cut_text: str, deficit_text: str) -> tuple[str, str]:
+    """`cut_summary_text`/`coverage_deficit_text` の組み合わせから背景色・文字色を判定する。
+
+    不足(deficitに"-"が含まれる、つまり「幅-Xmm」等) > カットあり > 問題なし
+    の優先順でVBAと同じ3段階に塗り分ける。
+    """
+    if "-" in deficit_text:
+        return COLOR_INFO_DEFICIT_BG, COLOR_INFO_DEFICIT_FG
+    if cut_text != "カットなし":
+        return COLOR_INFO_CUT_BG, COLOR_INFO_CUT_FG
+    return COLOR_INFO_OK_BG, COLOR_INFO_OK_FG
+
+
+# ------------------------------------------------------------------
+# スケール・バウンディングボックス
+# ------------------------------------------------------------------
+def compute_scale(canvas_w: float, canvas_h: float, base_w: int, base_l: int) -> float:
+    """VBA の `scaleVal` 計算。丈(X)と幅(Y)で小さい方の倍率に合わせる。"""
+    if base_w <= 0 or base_l <= 0:
+        return 0.0
+    scale_x = (canvas_w * CANVAS_FILL_RATIO) / base_l
+    scale_y = (canvas_h * CANVAS_FILL_RATIO) / base_w
+    return min(scale_x, scale_y)
+
+
+def _bounding_box(
+    placed: list[PlacedBoardModel], category: str, base_l: int, base_w: int,
+    *, min_side: int,
+) -> BoundingBox:
+    """`GetMainBoardsBoundingBox` / `GetNarrowPaletteBoundingBox` の共通実装。
+
+    両者の違いは「主ボードとみなす短辺の下限」だけ(通常版は100mm以上、
+    狭幅版は下限なし)。補填ボードは、主ボードの端に接するものだけを
+    ボックスに含める(離れた補填で中央寄せが過剰にずれるのを防ぐ)。
+    """
+    main_max_x = main_max_y = 0
+    main_min_x = main_min_y = 2147483647
+
+    for pb in placed:
+        if pb.board_category != category or pb.is_fill_board:
+            continue
+        if min(pb.width, pb.length) < min_side:
+            continue
+        main_max_x = max(main_max_x, pb.x + pb.length)
+        main_max_y = max(main_max_y, pb.y + pb.width)
+        main_min_x = min(main_min_x, pb.x)
+        main_min_y = min(main_min_y, pb.y)
+
+    if main_max_x == 0 and main_max_y == 0:
+        return BoundingBox(min_x=0, min_y=0, max_x=base_l, max_y=base_w)
+
+    box = BoundingBox(
+        min_x=0 if main_min_x == 2147483647 else main_min_x,
+        min_y=0 if main_min_y == 2147483647 else main_min_y,
+        max_x=main_max_x,
+        max_y=main_max_y,
+    )
+
+    # 主ボードのX端/Y端に直接接する補填ボードのみ取り込む
+    for pb in placed:
+        if pb.board_category != category or not pb.is_fill_board:
+            continue
+        if pb.y >= main_max_y:
+            box.max_y = max(box.max_y, pb.y + pb.width)
+        if pb.x >= main_max_x:
+            box.max_x = max(box.max_x, pb.x + pb.length)
+    return box
+
+
+def main_boards_bounding_box(
+    placed: list[PlacedBoardModel], category: str, base_l: int, base_w: int,
+) -> BoundingBox:
+    """VBA `GetMainBoardsBoundingBox` の移植(短辺100mm未満は主ボード扱いしない)。"""
+    return _bounding_box(placed, category, base_l, base_w, min_side=MAIN_BOARD_MIN_SIDE)
+
+
+def narrow_bounding_box(
+    placed: list[PlacedBoardModel], category: str, base_l: int, base_w: int,
+) -> BoundingBox:
+    """VBA `GetNarrowPaletteBoundingBox` の移植(短辺の下限なし)。"""
+    return _bounding_box(placed, category, base_l, base_w, min_side=0)
+
+
+# ------------------------------------------------------------------
+# 色・キャプション
+# ------------------------------------------------------------------
+def board_color(category: str) -> str:
+    """VBA `GetBoardColor` の移植。"""
+    return COLOR_UPPER if category == CATEGORY_UPPER else COLOR_LOWER
+
+
+def thin_board_color(thin_side: int, screen_h: float) -> str:
+    """細くてキャプションが入らないボードの色分け(VBA `DrawSingleBoardOnCanvas`)。
+
+    30/50/100mmは固定色。それ以外は画面上の高さで3段階に分ける。
+    """
+    if thin_side == 30:
+        return COLOR_THIN_30
+    if thin_side == 50:
+        return COLOR_THIN_50
+    if thin_side == 100:
+        return COLOR_THIN_100
+    if screen_h < 6:
+        return COLOR_THIN_TINY
+    if screen_h < 12:
+        return COLOR_THIN_SMALL
+    return COLOR_THIN_OTHER
+
+
+def build_caption(board: PlacedBoardModel, cut: CutInfo, screen_h: float) -> tuple[str, int]:
+    """ボード上に載せる文字列とフォントサイズを決める(VBA踏襲)。
+
+    高さに応じて 2行 / 1行 / 幅のみ の3段階に切り替える。
+    """
+    cap_w = f"幅{board.width}"
+    cap_l = f"丈{board.length}"
+    note = cut.note
+
+    if screen_h >= 30:
+        caption = f"{cap_w}\n{cap_l}"
+        if note:
+            caption += f"\n{note}"
+        return caption, 7
+    if screen_h >= 14:
+        caption = f"{cap_w} {cap_l}"
+        if note:
+            caption += f" {note}"
+        return caption, 7
+    return cap_w, 6
+
+
+# ------------------------------------------------------------------
+# 描画計画の組み立て
+# ------------------------------------------------------------------
+def build_render_plan(
+    placed: list[PlacedBoardModel], category: str,
+    base_w: int, base_l: int, canvas_w: float, canvas_h: float,
+    *, narrow: bool = False,
+) -> RenderPlan:
+    """1カテゴリ分の描画計画を組み立てる。
+
+    `base_w`/`base_l` は基準枠(下用=パレット、上用=製品)の幅と丈。
+    主ボードのバウンディングボックスを使って中央寄せ補正をかけるのは
+    VBAと同じで、枠からはみ出しているときは補正しない(はみ出しを
+    そのまま見せる)。
+    """
+    plan = RenderPlan()
+    scale = compute_scale(canvas_w, canvas_h, base_w, base_l)
+    if scale <= 0:
+        return plan
+
+    offset_x = (canvas_w - base_l * scale) / 2
+    offset_y = (canvas_h - base_w * scale) / 2
+
+    plan.border = Rect(
+        x=offset_x, y=offset_y,
+        width=base_l * scale, height=base_w * scale,
+        fill="", outline=COLOR_BORDER,
+    )
+
+    box = (narrow_bounding_box if narrow else main_boards_bounding_box)(
+        placed, category, base_l, base_w)
+
+    # はみ出しあり(max > base)のときは負値になるのでシフトしない
+    if box.max_x <= base_l:
+        offset_x += (base_l - box.max_x - box.min_x) / 2 * scale
+    if box.max_y <= base_w:
+        offset_y += (base_w - box.max_y - box.min_y) / 2 * scale
+
+    plan.scale = scale
+    plan.offset_x = offset_x
+    plan.offset_y = offset_y
+
+    legend_seen: dict[int, str] = {}
+
+    for board in placed:
+        if board.board_category != category:
+            continue
+
+        px = offset_x + board.x * scale
+        py = offset_y + board.y * scale
+        screen_w = board.length * scale
+        screen_h = board.width * scale
+        thin_side = min(board.width, board.length)
+
+        cut = detect_board_cut(
+            board.original_width, board.original_length, board.width, board.length)
+        tooltip = f"幅{board.width} × 丈{board.length}"
+
+        if screen_w < THIN_LABEL_LIMIT or screen_h < THIN_LABEL_LIMIT:
+            caption, font_size = "", 7
+            fill = thin_board_color(thin_side, screen_h)
+        else:
+            caption, font_size = build_caption(board, cut, screen_h)
+            fill = board_color(board.board_category)
+
+        if board.is_fill_board and cut.note:
+            tooltip += f" / カット:{cut.note}"
+
+        plan.boards.append(Rect(
+            x=px, y=py, width=screen_w, height=screen_h,
+            fill=fill, outline=COLOR_BOARD_OUTLINE,
+            caption=caption, font_size=font_size, tooltip=tooltip,
+        ))
+
+        if thin_side * scale < LEGEND_THIN_LIMIT and thin_side not in legend_seen:
+            legend_seen[thin_side] = thin_board_color(thin_side, screen_h)
+
+        # 補填ボードはカットが無ければカット表示を出さない(VBA踏襲)
+        if board.is_fill_board and not cut.cut_length and not cut.cut_width:
+            continue
+
+        if cut.cut_length:
+            plan.cut_marks.append(Rect(
+                x=px + screen_w - 1, y=py, width=3, height=screen_h, fill=COLOR_CUT_LINE))
+            zone_w = (board.length + cut.amount_length) * scale - screen_w
+            if zone_w > 2:
+                plan.cut_marks.append(Rect(
+                    x=px + screen_w, y=py, width=zone_w, height=screen_h,
+                    fill=COLOR_CUT_ZONE, caption="|||"))
+
+        if cut.cut_width:
+            plan.cut_marks.append(Rect(
+                x=px, y=py + screen_h - 1, width=screen_w, height=3, fill=COLOR_CUT_LINE))
+            zone_h = (board.width + cut.amount_width) * scale - screen_h
+            if zone_h > 2:
+                plan.cut_marks.append(Rect(
+                    x=px, y=py + screen_h, width=screen_w, height=zone_h,
+                    fill=COLOR_CUT_ZONE, caption="==="))
+
+    plan.legend = sorted(legend_seen.items())
+    return plan

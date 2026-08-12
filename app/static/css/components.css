@@ -1,0 +1,818 @@
+/*
+  components.css — 部品
+
+  色は tokens.css からしか取らない。ここに直値を書かない。
+  見本と使い分けは `/__catalog` で確認できる。
+
+  【操作の色の約束】(現行 tkinter 版から引き継ぐ)
+    黄緑 = 別画面へ / 青 = 実行 / 赤橙 = 印刷 / 橙 = 選定
+    緑   = 検索     / 赤 = 取消・保存 / 灰 = 中立 / 紫 = 疲労度優先
+
+  色相の意味はそのまま。「橙っぽいのが印刷」という現場の記憶がそのまま
+  通用する。加えて**塗りの濃さ**を第2の手がかりにする:
+    濃い塗り = 何かを起こす(実行・保存・遷移)
+    淡い塗り = 参照する・取り消す・消す(検索・クリア・削除)
+    中立     = 押せるが主役ではないもの
+  色を知覚できなくても、塗りの濃さと先頭の記号(⌕ / × / ▪)で種類が分かる。
+
+  以前は「枠線 = 参照 / 破線枠 = 消す」だったが、枠だけのボタンは塗りの
+  ボタンと並ぶと**まだ押せないように見え**、破線は特に頼りなかった。
+  淡く塗ると、押せることと種類の両方が同時に伝わる。
+
+  造形(角丸・影・淡い塗り・太い焦点の輪)は社内の SymfoNavi Data Hub に
+  そろえてある。並べて使うものの操作を覚え直させないため。
+*/
+
+/* ================================================================
+   ボタン
+   最小 44×44px。マウス基準ではなく指基準(タッチ端末があるため)。
+   フィッツの法則: 目標が大きいほど速く正確に押せる。
+
+   【形】
+   角丸は `--radius-sm`。塗りのボタンには薄い影を1枚だけ乗せて、
+   地から浮いていることを示す ── 影は「押せる」の合図で、
+   枠線を太くするより静かに同じことを伝える。
+   押している間は 1px 沈める(触覚の代わり)。
+   ================================================================ */
+.btn {
+  font: inherit;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.2;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 15px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+  background: var(--act-idle);
+  color: var(--act-idle-fg);
+  border-color: var(--act-idle-line);
+  transition: background-color .15s ease, border-color .15s ease,
+              box-shadow .15s ease, color .15s ease, transform .08s ease;
+}
+/* `display:inline-flex` は `[hidden]` の既定(`display:none`)より強い。
+   これを戻しておかないと、隠したつもりのボタンが**押せる場所に残る** */
+.btn[hidden] { display: none; }
+.btn .gl { font-size: var(--fs-xs); line-height: 1; opacity: .8; }   /* 種類を示す記号 */
+/* リンクをボタンの見た目にしたもの。下線が残ると、同じ列に並んだ
+   ボタンの中で1つだけ字面が違って見える */
+a.btn { text-decoration: none; }
+
+.btn:hover:not(:disabled) { filter: brightness(.97); }
+.btn:active:not(:disabled) { filter: brightness(.92); transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 塗り = 何かを起こす */
+.btn--nav, .btn--run, .btn--print, .btn--select,
+.btn--commit, .btn--on, .btn--fatigue { box-shadow: 0 1px 2px rgb(21 56 77 / 14%); }
+.btn--nav     { background: var(--act-nav);     color: var(--act-nav-fg);     border-color: var(--act-nav); }
+.btn--run     { background: var(--act-run);     color: var(--act-run-fg);     border-color: var(--act-run); }
+.btn--print   { background: var(--act-print);   color: var(--act-print-fg);   border-color: var(--act-print); }
+.btn--select  { background: var(--act-select);  color: var(--act-select-fg);  border-color: var(--act-select); }
+.btn--commit  { background: var(--act-commit);  color: var(--act-commit-fg);  border-color: var(--act-commit); }
+.btn--on      { background: var(--act-on);      color: var(--act-on-fg);      border-color: var(--act-on); }
+.btn--fatigue { background: var(--act-fatigue); color: var(--act-fatigue-fg); border-color: var(--act-fatigue); }
+
+/* **淡い塗り = 参照する・消す。**
+   以前は透明地に枠線(取消は破線)だった。枠だけのボタンは、塗りの
+   ボタンと並ぶと「まだ押せない」ように見え、破線は特に頼りない。
+   淡く塗れば、色相はそのままで「押せる」ことが伝わり、塗りの濃さで
+   「起こす/参照する」の別も残る。
+   手がかりは3つ ── 塗りの濃さ・色相・先頭の記号(⌕ / ×)。 */
+.btn--find, .btn--danger, .btn--upper, .btn--lower {
+  border-style: solid; box-shadow: none;
+}
+.btn--find {
+  background: color-mix(in srgb, var(--act-find) 11%, var(--surface));
+  color: var(--act-find);
+  border-color: color-mix(in srgb, var(--act-find) 30%, var(--surface));
+}
+.btn--find:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--act-find) 18%, var(--surface)); filter: none;
+}
+/* 消す操作。保存(塗りの赤)と同じ色相のまま、塗りの濃さで区別する */
+.btn--danger {
+  background: color-mix(in srgb, var(--act-danger) 10%, var(--surface));
+  color: var(--act-danger);
+  border-color: color-mix(in srgb, var(--act-danger) 28%, var(--surface));
+}
+.btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--act-danger) 17%, var(--surface)); filter: none;
+}
+
+/* 資材の行き先。濃く塗らないのは、上用/下用が「操作の種類」ではなく
+   「どこへ入れるか」だから。塗りの列(選定・配置・保存)と同じ強さで
+   並ぶと、実行ボタンがどれか分からなくなる。
+   色は資材の意味そのもの(上用=赤系 / 下用=緑系)で、入れ替えない */
+.btn--upper {
+  background: color-mix(in srgb, var(--mat-upper) 10%, var(--surface));
+  color: var(--mat-upper);
+  border-color: color-mix(in srgb, var(--mat-upper) 28%, var(--surface));
+}
+.btn--lower {
+  background: color-mix(in srgb, var(--mat-lower) 10%, var(--surface));
+  color: var(--mat-lower);
+  border-color: color-mix(in srgb, var(--mat-lower) 28%, var(--surface));
+}
+.btn--upper:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--mat-upper) 17%, var(--surface)); filter: none;
+}
+.btn--lower:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--mat-lower) 17%, var(--surface)); filter: none;
+}
+
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* 押せない理由を必ず添える。押してから叱られるのを避ける */
+.why { font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; line-height: 1.55; }
+
+/* ================================================================
+   カード
+   ================================================================ */
+/* **線で囲まず、浮かせる。** 罫線を濃くするほど画面は「区画の集まり」に
+   見え、中身より枠が目に付く。淡い輪郭 + 薄い影 なら、境目は分かるのに
+   枠として主張しない。見出しは罫線ではなく**余白**で本文と分ける */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.card > header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--gap); padding: 8px 14px 5px;
+  position: sticky; top: 0;
+  background: var(--surface);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.card > header h3 { font-size: var(--fs-md); font-weight: 600; }
+.card .pad { padding: 2px 14px 9px; display: flex; flex-direction: column;
+             gap: var(--gap-sm); }
+/* 見出しの無いカードは上も同じだけ空ける */
+.card > .pad:first-child { padding-top: 9px; }
+
+/* **紙は2枚まで。** 本体そのものが1枚の紙なので、その中の面(タブ)で
+   更にカードを囲むと「箱の中の箱の中の箱」になり、どこが中身なのかが
+   分からなくなる。面の中で1枚だけ置くカードは、枠も影も外して
+   本体と同じ紙の続きにする。
+   ただし**並べて比べるカード**(設定の状態4枚)と、**沈んだ地の上に
+   置くカード**(操作の列)は囲んだままにする ── そちらは本当に別の紙 */
+.tabpanel > .card {
+  border: 0; box-shadow: none; background: transparent;
+}
+.tabpanel > .card > header { padding-left: 0; padding-right: 0; background: transparent; }
+.tabpanel > .card > .pad { padding-left: 0; padding-right: 0; }
+.split__controls .tabpanel > .card {
+  border: 1px solid var(--rule); box-shadow: var(--shadow-sm);
+  background: var(--surface);
+}
+.split__controls .tabpanel > .card > header { padding-left: 14px; padding-right: 14px;
+                                              background: var(--surface); }
+.split__controls .tabpanel > .card > .pad { padding-left: 14px; padding-right: 14px; }
+
+/* 資材の意味に応じた見出し色。入れ替えない */
+.card--pallet  > header h3 { color: var(--mat-pallet); }
+.card--product > header h3 { color: var(--mat-product); }
+.card--upper   > header h3 { color: var(--mat-upper); }
+.card--lower   > header h3 { color: var(--mat-lower); }
+.card--angle   > header h3 { color: var(--mat-angle); }
+
+/* ================================================================
+   状態帯
+   色を知覚できなくても分かるよう、左端に4pxの帯を付ける
+   ================================================================ */
+.status {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: var(--fs-sm); font-weight: 600; line-height: 1.5;
+  padding: 9px 12px; border-radius: var(--radius-xs);
+  border-left: 3px solid transparent;
+}
+.status--ng { background: var(--warn-bg); color: var(--warn-fg); border-left-color: var(--state-error); }
+.status--ok { background: var(--ok-bg);   color: var(--state-ok); border-left-color: var(--state-ok); }
+
+/* ================================================================
+   入力
+   輪郭は --field-line。装飾用の --rule は 1.53:1 しかなく、
+   WCAG 1.4.11 が部品に求める 3:1 を満たさない
+   ================================================================ */
+.field { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); flex-wrap: wrap; }
+.field > label { color: var(--muted); }
+
+.input {
+  font: inherit;
+  min-height: 44px;
+  padding: 6px 11px;
+  border: 1px solid var(--field-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+/* 打ち込んでいる場所は**輪郭の色**でも示す。輪だけだと、拡大表示や
+   明るい場所で薄れる */
+.input:focus, .input:focus-visible {
+  outline: 3px solid var(--focus-soft);
+  outline-offset: 0;
+  border-color: var(--focus);
+  box-shadow: none;
+}
+.input--num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  width: 6em;
+}
+.input:disabled { background: var(--sunken); color: var(--muted); cursor: not-allowed; }
+select.input { cursor: pointer; }
+
+/* ================================================================
+   一覧
+   見出しは sticky。行数が増えても何の列か分からなくならない
+   ================================================================ */
+.tablewrap {
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+}
+.table { border-collapse: collapse; width: 100%; font-size: var(--fs-sm);
+         line-height: var(--lh-tight); }
+/* 見出しは**地の色で沈める**。以前は総大文字風の字間を広げた小文字で、
+   1行が長くなるうえ本文より目立っていた。列名は探すものであって
+   読むものではないので、静かでよい */
+.table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--raised); color: var(--muted);
+  font-size: var(--fs-xs); letter-spacing: .02em; font-weight: 700;
+  text-align: right; padding: var(--cell-y) var(--cell-x); white-space: nowrap;
+  border-bottom: 1px solid var(--rule);
+}
+.table thead th:first-child { text-align: left; }
+/* **横の余白は広げない。** 列の多い一覧では1列に2px足すだけで
+   端のボタンが枠から出る。読みやすさは行の高さで稼ぐ */
+/* **行は詰める。** 押す的ではなく、目で追って選ぶものなので、
+   読める範囲まで詰めてよい ── 一度に見える行数のほうが効く
+   (`--row-h` で下限は保つので、行の高さは揃う) */
+.table tbody td {
+  height: var(--row-h);
+  padding: var(--cell-y) var(--cell-x); border-bottom: 1px solid var(--hairline);
+  text-align: right; white-space: nowrap;
+}
+.table tbody td:first-child { text-align: left; }
+.table tbody tr:last-child td { border-bottom: 0; }
+/* いま目で追っている行を薄く示す。16列あるような表では、
+   視線が横に移るあいだに1行ずれるのがいちばん多い読み違い */
+.table tbody tr:hover td { background: var(--accent-soft); }
+.table tbody tr[aria-selected="true"] { background: var(--accent-soft); }
+.table .n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* 図と一覧の相互ハイライト(ゲシュタルトの共通運命) */
+.table tbody tr.is-linked {
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ================================================================
+   小さな印
+   ================================================================ */
+.tag {
+  font-family: var(--mono); font-size: var(--fs-2xs); font-weight: 700;
+  padding: 1px 6px; border-radius: var(--pill); border: 1px solid currentColor;
+}
+.tag--main { color: var(--accent); }
+.tag--fill { color: var(--muted); }
+
+/* 在庫が薄い印。色だけで示さないよう「▲薄」の記号と併記する
+   (VBA `IsBoardLow`。在庫考慮ONのときだけ出る) */
+.thin { color: var(--state-warn); font-weight: 700; white-space: nowrap; }
+
+.chip {
+  font-size: var(--fs-xs); font-weight: 600; padding: 4px 11px; border-radius: var(--pill);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.chip::before { content: "●"; font-size: 8px; }
+.chip--protec  { background: var(--act-run);     color: var(--act-run-fg); }
+.chip--ex      { background: var(--act-commit);  color: var(--act-commit-fg); }
+.chip--fatigue { background: var(--act-fatigue); color: var(--act-fatigue-fg); }
+
+/* 見出しの横に出す標識。VBA が frame の caption に `---` でつないでいた
+   ものを切り出したもの。
+   alert は「気づかないと手戻りになる」ものだけに使う(EX・BOX実績寸法)。
+   info を同じ見た目にすると alert が効かなくなるので、点も付けない */
+.chip--alert { background: var(--warn-bg); color: var(--warn-fg);
+               border: 1px solid var(--state-error); }
+.chip--info  { background: var(--act-idle); color: var(--act-idle-fg);
+               border: 1px solid var(--act-idle-line); font-weight: 400; }
+.chip--info::before { content: none; }
+
+.badge { font-family: var(--mono); font-size: var(--fs-2xs); font-weight: 700;
+         padding: 1px 7px; border-radius: var(--pill); }
+.badge--done { background: var(--ok-bg);   color: var(--state-ok); }
+.badge--todo { background: var(--warn-bg); color: var(--warn-fg); }
+
+/* ================================================================
+   トースト — 作業を止めない通知
+   モーダルは「取り消せない操作」だけに使う
+   ================================================================ */
+.toasts {
+  position: fixed; right: 16px; bottom: 16px; z-index: 50;
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+}
+.toast {
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop);
+  padding: 12px 15px; font-size: var(--fs-md); line-height: 1.55;
+  display: flex; align-items: flex-start; gap: 10px;
+  animation: toast-in .16s ease-out;
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+.toast--ok    { border-left-color: var(--state-ok); }
+.toast--warn  { border-left-color: var(--state-warn); }
+.toast--error { border-left-color: var(--state-error); }
+.toast .btn { min-height: 32px; padding: 4px 10px; font-size: var(--fs-sm); }
+
+/* ================================================================
+   接続が切れたときの帯 (基盤仕様書 2.9)
+   ================================================================ */
+.offline {
+  position: sticky; top: 0; z-index: 40;
+  background: var(--warn-bg); color: var(--warn-fg);
+  border-bottom: 2px solid var(--state-error);
+  padding: 10px 16px; font-size: var(--fs-md); font-weight: 600;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.offline[hidden] { display: none; }
+
+/* ================================================================
+   絞り込みバー(仕掛一覧)
+
+   条件は「チップ1つ = 条件1つ」。**×で外せることが見えている**のが
+   要点で、外し方が分からない絞り込みは、絞ったまま忘れられる。
+   色はここでは意味を運ばない ── 条件の中身は文字で読む
+   ================================================================ */
+.filterbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 9px 11px; border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+.filterbar + .filterbar { margin-top: 8px; }
+.filterbar--saved { background: transparent; border-style: dashed; }
+.filterbar__title {
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: .02em; color: var(--faint);
+  white-space: nowrap;
+}
+.chipcount {
+  font-family: var(--mono); font-size: var(--fs-xs); font-weight: 700;
+  padding: 2px 8px; border-radius: var(--pill);
+  background: var(--act-idle); color: var(--muted);
+}
+.chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* 条件チップ。押せるのは × だけ(本体を押しても何も起きない) */
+.fchip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-sm); padding: 4px 5px 4px 11px; border-radius: var(--pill);
+  background: var(--surface); border: 1px solid var(--rule); color: var(--ink);
+  box-shadow: var(--shadow-sm); white-space: nowrap;
+}
+.fchip__x {
+  border: 0; background: transparent; cursor: pointer; color: var(--muted);
+  font-size: var(--fs-md); line-height: 1; padding: 2px 5px; border-radius: var(--pill);
+  transition: background-color .14s ease, color .14s ease;
+}
+.fchip__x:hover { background: var(--warn-bg); color: var(--warn-fg); }
+.fchip__x:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* よく使う条件。本体を押すと足す */
+.fchip--saved { padding-left: 5px; cursor: default; }
+.fchip__use {
+  border: 0; background: transparent; cursor: pointer; color: var(--accent);
+  font-size: var(--fs-sm); font-weight: 700; padding: 2px 8px; border-radius: var(--pill);
+}
+.fchip__use:hover { background: var(--accent-soft); }
+.fchip__use:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* 条件を足す欄と候補 */
+.suggestwrap { position: relative; flex: 1 1 22em; min-width: 16em; }
+.suggestwrap .input { width: 100%; }
+.suggest {
+  position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px);
+  margin: 0; padding: 5px; list-style: none; max-height: 15em; overflow: auto;
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop);
+}
+.suggest li { margin: 0; }
+.suggest button {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  border: 0; background: transparent; cursor: pointer; color: var(--ink);
+  font-size: var(--fs-sm); padding: 7px 9px; border-radius: var(--radius-xs);
+}
+.suggest button:hover, .suggest button.on { background: var(--accent-soft); }
+.suggest .kindmark {
+  font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .02em; color: var(--faint);
+  background: var(--sunken); border-radius: var(--pill); padding: 1px 7px;
+  white-space: nowrap;
+}
+
+/* 一覧そのもの。行数が多いので高さを切ってスクロールさせる */
+.listwrap { max-height: 46vh; margin-top: 10px; }
+.listtools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.listtools__label {
+  font-size: var(--fs-xs); font-weight: 600; letter-spacing: .02em; color: var(--faint);
+  white-space: nowrap;
+}
+
+/* 見出しを押すと並べ替え。いま何で並んでいるかは▲▼で示す
+   (色だけで示すと、並び替えたことに気づけない) */
+.table thead th button.sortbtn {
+  border: 0; background: transparent; cursor: pointer; color: inherit;
+  font: inherit; letter-spacing: inherit; padding: 0;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.table thead th button.sortbtn:hover { color: var(--accent); }
+.table thead th button.sortbtn:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 2px;
+}
+.sortmark { font-size: 9px; color: var(--accent); }
+
+/* 文字の列は左寄せ。`.table` は既定で右寄せなので、明示して戻す */
+.table thead th.t, .table tbody td.t { text-align: left; }
+
+/* 選べる行であることを示す。押した行(=作業中のロット)は左に帯を出す
+   ── 背景色だけだと、淡い色を拾えない環境で分からない */
+.table tbody tr.pickable { cursor: pointer; }
+.table tbody tr.pickable:hover { background: var(--accent-soft); }
+.table tbody tr.is-current {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+  font-weight: 700;
+}
+
+/* ================================================================
+   タブ — スクロールの代わりに面で分ける
+
+   縦に積んだものは、下にあるほど「無いもの」として扱われる。
+   スクロールしないと見えない = 見えていないあいだは思い出せない。
+   タブなら**中身を隠しても見出しは常に見えている**(設計指針 §4.2)。
+
+   守ること:
+   - 中身に問題があるタブは、開いていなくても見出しがそう言う
+   - 選ばれているタブは**下線と太字**でも分かる(色だけで伝えない §3.8)
+   - 当たり判定 44px(§1.2)
+   ================================================================ */
+.tabs { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+
+/* 下地の罫線は 1px。以前は 2px で、面を切り替える前から線が主役だった */
+.tabs__bar {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--rule);
+  padding: 0; margin: 0 0 12px;
+}
+.tab {
+  font: inherit; font-size: var(--fs-md); font-weight: 500; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 44px; padding: 8px 14px;
+  background: transparent; color: var(--muted);
+  border: 0; border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  margin-bottom: -1px;                       /* 下線を bar の罫線に重ねる */
+  transition: color .14s ease, background-color .14s ease, border-color .14s ease;
+}
+.tab:hover { color: var(--ink); background: var(--raised); }
+.tab[aria-selected="true"] {
+  color: var(--ink); font-weight: 700;
+  border-bottom-color: var(--accent);
+  background: transparent;
+}
+.tab:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* その先に何があるか(件数・状態)。**開く前に分かる**(§2.4)。
+   ふだんは輪郭を出さない ── 見出しの隣で数字が枠に囲まれていると、
+   数が多いほど画面が細かい箱で埋まる。色が要る状態のときだけ枠を足す */
+.tab__badge {
+  font-size: var(--fs-xs); font-weight: 700; line-height: 1;
+  padding: 3px 8px; border-radius: var(--pill);
+  background: var(--act-idle); color: var(--muted);
+  border: 1px solid transparent;
+}
+.tab[aria-selected="true"] .tab__badge { color: var(--ink); }
+.tab__badge[hidden] { display: none; }
+.tab__badge[data-level="ng"]   { background: var(--warn-bg); color: var(--state-error);
+                                 border-color: var(--state-error); }
+.tab__badge[data-level="warn"] { background: var(--warn-bg); color: var(--warn-fg);
+                                 border-color: var(--state-error); }
+.tab__badge[data-level="ok"]   { background: var(--ok-bg); color: var(--state-ok);
+                                 border-color: var(--state-ok); }
+
+/* 中身に問題があるタブは、開いていなくても見出しが赤い印を持つ。
+   **隠したせいで気づけなくなるなら、スクロールのほうがまだまし** */
+.tab[data-level="ng"]:not([aria-selected="true"]) { color: var(--state-error); }
+
+.tabs__panels { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tabpanel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.tabpanel[hidden] { display: none; }
+/* 入りきらないぶんは**その面の中だけ**が動く。画面ごと動かさない */
+.tabpanel--scroll { overflow: auto; }
+
+/* ================================================================
+   セグメント — 面の中の切り替え
+
+   タブを2種類に使い分ける。**画面(=面)を替えるのは下線式**、
+   **面の中で見せ方を絞るのはこちら**。同じ形が同じ意味を持つように
+   しておくと、「画面が変わるのか、絞り込みが変わるのか」が
+   押す前に分かる。
+
+   作りは「沈んだ盆に白いつまみが乗る」形。つまみが物理的に
+   動くように見えるので、選択肢が2〜4個のときに強い。
+   ================================================================ */
+.tabs--seg { flex: none; }
+.tabs--seg > .tabs__bar {
+  display: inline-flex; gap: 3px; flex-wrap: nowrap;
+  background: var(--sunken); border: 1px solid var(--rule);
+  border-radius: 9px; padding: 3px; margin: 0 0 12px;
+  align-self: flex-start;
+}
+.tabs--seg > .tabs__bar > .tab {
+  min-height: 34px; padding: 6px 15px; border: 0; border-radius: 6px;
+  margin: 0; font-size: var(--fs-sm); font-weight: 700; color: var(--muted);
+}
+.tabs--seg > .tabs__bar > .tab:hover { background: transparent; color: var(--ink); }
+.tabs--seg > .tabs__bar > .tab[aria-selected="true"] {
+  background: var(--surface); color: var(--accent);
+  box-shadow: 0 1px 3px rgb(21 56 77 / 12%);
+}
+.tabs--seg .tab__badge { padding: 2px 7px; }
+
+/* 面ではなく、ただの絞り込み(ラジオの置き換え)。JSは `.seg__btn` を
+   押されたら値を送るだけで、押せる/押せないの判断はサーバが持つ */
+.seg {
+  display: inline-flex; gap: 3px; background: var(--sunken);
+  border: 1px solid var(--rule); border-radius: 9px; padding: 3px;
+}
+.seg__btn {
+  font: inherit; font-size: var(--fs-sm); font-weight: 700; cursor: pointer;
+  min-height: 34px; padding: 6px 15px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); white-space: nowrap;
+  transition: background-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.seg__btn:hover { color: var(--ink); }
+.seg__btn[aria-pressed="true"] {
+  background: var(--surface); color: var(--accent); cursor: default;
+  box-shadow: 0 1px 3px rgb(21 56 77 / 12%);
+}
+.seg__btn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* ================================================================
+   分類バッジ — 見出しに必ず「印」を付ける
+
+   文字を読む前に「ここが節の始まり」と分かるようにする。
+   大きさは用途で4段。色は**既にある資材の色**をそのまま使うので、
+   新しい色は1つも増えない。字は1文字(上/下/ｱ/パ/製)で、
+   色を知覚できなくても字で分かる ── 色だけに頼らない(§3.8)。
+   ================================================================ */
+.ib {
+  flex: none; display: grid; place-items: center; font-style: normal;
+  font-weight: 800; letter-spacing: .02em; border-radius: 9px;
+  width: 28px; height: 28px; font-size: var(--fs-xs);
+  background: var(--sunken); color: var(--muted);
+}
+.ib--sm { width: 22px; height: 22px; font-size: var(--fs-2xs); border-radius: 6px; }
+.ib--lg { width: 34px; height: 34px; font-size: var(--fs-sm); border-radius: 10px; }
+.ib--upper   { background: var(--mat-upper-bg);  color: var(--mat-upper); }
+.ib--lower   { background: var(--mat-lower-bg);  color: var(--mat-lower); }
+.ib--angle   { background: var(--mat-angle-bg);  color: var(--mat-angle); }
+.ib--pallet  { background: var(--accent-soft);   color: var(--mat-pallet); }
+.ib--product { background: var(--warn-bg);       color: var(--mat-product); }
+.ib--accent  { background: var(--accent-soft);   color: var(--accent); }
+.ib--ok      { background: var(--ok-bg);         color: var(--state-ok); }
+.ib--ng      { background: var(--warn-bg);       color: var(--state-error); }
+/* 見出しの中に置くときは、題と縦位置をそろえる */
+.card > header > .ib { align-self: center; }
+
+/* ================================================================
+   状態ピル — 状態は文字ではなく形で
+
+   色つきの太字は、同じ行のほかの太字に埋もれる。地の形が付くと
+   「状態の欄だ」と分かり、**数を数えられる**ようになる。
+   ================================================================ */
+.st {
+  display: inline-block; padding: 3px 9px; border-radius: var(--pill);
+  font-size: var(--fs-2xs); font-weight: 800; line-height: 1.5; white-space: nowrap;
+  background: var(--act-idle); color: var(--muted);
+}
+.st--ok   { background: var(--ok-bg);     color: var(--state-ok); }
+.st--ng   { background: var(--warn-bg);   color: var(--state-error); }
+.st--warn { background: var(--warn-bg);   color: var(--warn-fg); }
+.st--run  { background: var(--accent-soft); color: var(--accent); }
+/* 走っているものは脈打つ。**動くのは実際に動いているものだけ** */
+.st--run::after {
+  content: ""; display: inline-block; width: 4px; height: 4px; margin-left: 5px;
+  border-radius: 50%; background: currentColor; vertical-align: 1px;
+  animation: st-pulse 1.2s ease-in-out infinite;
+}
+@keyframes st-pulse { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
+
+/* ================================================================
+   択一の選択カード — ラジオボタンをやめる
+
+   ラジオの丸は直径13px。フィッツの法則がいちばん嫌う的の大きさで、
+   手袋では狙えない。カードにすると的が約20倍になり、
+   **選択肢の意味を1行添えられる**ので押す前に違いが分かる。
+
+   押せる/押せないと、何が選ばれているかを決めるのはサーバ
+   (`aria-pressed` はサーバが返した値を写すだけ)。
+   ================================================================ */
+.choose { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5em, 1fr)); gap: 8px; }
+.choice {
+  position: relative; display: flex; align-items: flex-start; gap: 10px;
+  text-align: left; font: inherit; color: inherit; cursor: pointer;
+  background: var(--sunken); border: 1.5px solid var(--rule);
+  border-radius: 11px; padding: 10px 12px; min-height: 44px;
+  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+.choice:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent-line); }
+.choice[aria-pressed="true"] {
+  background: var(--accent-soft); border-color: var(--accent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.choice:disabled { opacity: .45; cursor: not-allowed; }
+.choice:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.choice__tx { display: grid; gap: 2px; min-width: 0; }
+.choice__tx b { font-size: var(--fs-md); font-weight: 700; }
+.choice[aria-pressed="true"] .choice__tx b { color: var(--accent); }
+.choice__tx small { font-size: var(--fs-2xs); color: var(--faint); line-height: 1.5; }
+.choice[aria-pressed="true"] .ib { background: var(--accent); color: var(--surface); }
+/* 選ばれていることを、色と縁のほかに**印**でも出す(§3.8) */
+.choice__ck {
+  position: absolute; top: 7px; right: 9px; width: 18px; height: 18px;
+  border-radius: 50%; display: grid; place-items: center; font-style: normal;
+  font-size: var(--fs-xs); font-weight: 800; background: var(--accent); color: var(--surface);
+  opacity: 0; transition: opacity .15s ease;
+}
+.choice[aria-pressed="true"] .choice__ck { opacity: 1; }
+
+/* ================================================================
+   暗い面 — 機械が吐いたものを読む場所
+
+   触るものは明るく、読むものは暗く。明るい面ばかりの画面に暗い面が
+   1枚あると、それだけで「ここは性質が違う」と伝わる。
+   ログを長く読むときの目の負担も減る。
+   **明暗どちらのテーマでも同じ濃さ**にしてある ── ログは
+   どちらで見ても暗い面で読むもの。
+   ================================================================ */
+.night {
+  background: var(--night); color: var(--night-ink);
+  border: 1px solid var(--night-line); border-radius: 9px;
+  font-family: var(--mono); font-size: var(--fs-xs); line-height: 1.65;
+  padding: 11px 12px; margin: 0; overflow: auto; white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* 行ごとの種別。左の色帯で、読まなくても位置で見つかる */
+.nline { display: block; padding: 1px 7px; border-left: 3px solid transparent; }
+.nline--info { color: var(--night-ink); }
+.nline--warn { color: var(--night-warn); border-left-color: var(--night-warn);
+               background: var(--night-warn-bg); }
+.nline--error{ color: var(--night-error); border-left-color: var(--night-error);
+               background: var(--night-error-bg); }
+.nline--ok   { color: var(--night-ok); border-left-color: var(--night-ok); }
+
+/* ================================================================
+   進捗レーン — 何が・どこまで
+
+   横棒1本では「どの段まで終わったか」が読めない。段ごとに1枚出し、
+   左端の色帯で状態を示す。**並んだカードの左端だけを目で追えば
+   進みぐあいが分かる**。
+   ================================================================ */
+.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(15em, 1fr)); gap: 10px; }
+.lane {
+  display: grid; gap: 6px; padding: 10px 12px;
+  background: var(--sunken); border: 1px solid var(--rule);
+  border-left: 5px solid var(--field-line); border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color .2s ease, background-color .2s ease;
+}
+.lane__h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lane__h b { font-size: var(--fs-xs); font-weight: 800; color: var(--muted); }
+.lane__name {
+  font-size: var(--fs-md); font-weight: 700; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.lane__note { font-size: var(--fs-2xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.lane--run  { border-left-color: var(--accent);   background: var(--accent-soft); }
+.lane--done { border-left-color: var(--state-ok); background: var(--ok-bg); }
+.lane--ng   { border-left-color: var(--state-error); background: var(--warn-bg); }
+.lane--run .lane__h b, .lane--done .lane__h b { color: inherit; }
+/* 並べきれなかった段。**黙って落とすと「全部出ている」に見える** */
+.lane__rest {
+  grid-column: 1 / -1; margin: 0; align-self: center;
+  font-size: var(--fs-xs); color: var(--muted);
+}
+
+/* 進捗の溝と伸びた分。伸びるところだけが動く */
+.track { height: 6px; border-radius: var(--pill); background: var(--act-idle); overflow: hidden; }
+.track > i {
+  display: block; height: 100%; width: 0; border-radius: var(--pill);
+  background: var(--accent); transition: width .3s ease;
+}
+.lane--done .track > i { background: var(--state-ok); }
+.lane--ng .track > i   { background: var(--state-error); }
+
+/* ================================================================
+   一覧の1行に主従を作る
+
+   15列を等しく並べると1列 40px しか無く、どれが行の名前なのかも
+   決まらない。太字の主情報と、その下の小さな従情報に畳めば、
+   事実を1つも減らさずに列が半分になる(倉庫連携で 15 → 8)。
+
+   **並べ替えに使う列は畳まない** ── 畳んだ値では見出しを押せない。
+   ロット一覧は8列とも並べ替えに使うので、そちらは行の高さだけを
+   そろえる(高さがまちまちだと、目が縦に走るとき行を数えられない)。
+   ================================================================ */
+/* ================================================================
+   列の多い一覧 ── **畳まずに、全部出して横に流す**
+
+   仕掛一覧は取り込んだ18列を全部出す。畳んで2段にすると畳んだ側の列で
+   並べ替えられなくなるので、畳まない。入りきらない分は横に流し、
+   **いちばん左の列(ロット番号)だけ貼り付けて**おく ── 横に流したとき、
+   どの行を見ているのかが分からなくなるのがいちばん困る。
+   ================================================================ */
+.table--dense th:first-child,
+.table--dense td:first-child {
+  position: sticky; left: 0; z-index: 2;
+  background: var(--surface);
+  /* 流れてきた列との境目。貼り付いていることが見て分かる */
+  box-shadow: 1px 0 0 var(--rule);
+}
+.table--dense thead th:first-child { z-index: 3; background: var(--raised); }
+/* 行を追っているときは、貼り付いた列も一緒に色が変わる */
+.table--dense tbody tr:hover td:first-child,
+.table--dense tbody tr.is-current td:first-child,
+.table--dense tbody tr[aria-selected="true"] td:first-child {
+  background: var(--accent-soft);
+}
+
+.table--rich { table-layout: fixed; }
+/* 2段(主/従)を入れても `--row-h` の2倍に収める。縦の余白を詰めるぶん、
+   行と行のあいだは下線で分ける ── 高さがまちまちだと、目が縦に走るとき
+   行を数えられない */
+.table--rich tbody td {
+  height: calc(var(--row-h) * 2); padding: 2px var(--cell-x); white-space: nowrap;
+}
+/* 素の文字だけの升は、はみ出す分をその場で畳む。
+   `.pri`/`.sec` を置く升は中の行が自分で畳むので触らない ──
+   ボタンを入れた升(操作)まで畳むと、押せない場所ができる */
+.table--rich tbody td.t, .table--rich tbody td.n {
+  overflow: hidden; text-overflow: ellipsis;
+}
+/* 見出しは「主 / 従」の2つ分を書くので長くなる。固定割付では幅を
+   越えても列は広がらないので、**折り返して2行にする** ── 畳んで
+   「発注コード…」にすると、従に何が入っているかが読めなくなる */
+.table--rich thead th {
+  white-space: normal; line-height: 1.3; overflow: hidden;
+}
+.pri {
+  display: block; font-size: var(--fs-sm); font-weight: 700; line-height: 1.35;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sec {
+  display: block; font-size: var(--fs-2xs); color: var(--muted); line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ================================================================
+   待機 — 無言で待たせない (busy.js)
+
+   押してから応答までのあいだ、押した本人には「効いたのか」が
+   分からない。**押したものそのものを待機の姿にする**のがいちばん
+   近くて分かりやすい。長引いたら経過秒を出す ── 何秒待っているかが
+   分かれば、待てるかどうかを自分で決められる。
+   ================================================================ */
+.btn[data-busy] { cursor: progress; }
+.btn[data-busy] > .gl { display: none; }
+.btn[data-busy]::before {
+  content: ""; width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  opacity: .85; animation: busy-spin .7s linear infinite;
+}
+@keyframes busy-spin { to { transform: rotate(360deg) } }
+/* 経過秒。400ms を超えてから出す(一瞬で終わるものに数字を出さない) */
+.btn > .elapsed {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xs); opacity: .8;
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn[data-busy]::before { animation: none; border-top-color: currentColor; opacity: .5; }
+  .st--run::after { animation: none; }
+}

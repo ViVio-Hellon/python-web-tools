@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% block title %}簡易在庫 — {{ display_name }}{% endblock %}
+
+{% block content %}
+{#
+  **結果は左、操作は右**(設計指針 §4.2)。以前は1本の列に
+
+     検索 → (図 | 一覧) → (受け入れ | 払い出し)
+
+  と積んでいた。払い出しは**上の一覧で選んだ行**を対象にするのに、
+  その欄は一覧のさらに下 ── 選ぶ・確かめる・数を入れる、のたびに
+  上下へ視線が往復する。操作を右へ寄せると、選んだ行と入力欄が
+  同時に見える。
+#}
+<div class="split split--inventory">
+
+  {# ============================================================
+     左: 結果。図と一覧
+     ============================================================ #}
+  <div class="split__results" id="resultCol">
+    <div class="pane__head">
+      <div>
+        <span class="eyebrow">Step 3</span>
+        <h2>簡易在庫</h2>
+      </div>
+      <p class="why" id="caption">{{ state.caption or "" }}</p>
+    </div>
+
+    {# 結果も面で分ける。図と一覧を縦に積むと、片方を見るのに
+       もう片方を通り過ぎることになる。見出しに件数を出すので、
+       開く前に「何件あるか」は分かる(§2.4) #}
+    <div class="tabs" data-tabs="inventory-result" id="invTabs">
+      <div class="tabs__bar" role="tablist" aria-label="結果の面">
+        <button class="tab" type="button" role="tab" data-key="map" data-default="1"
+                id="tab-map" aria-controls="panel-map" aria-selected="false">
+          <span class="tab__label">保管位置</span>
+          <span class="tab__badge" hidden></span>
+        </button>
+        <button class="tab" type="button" role="tab" data-key="list"
+                id="tab-list" aria-controls="panel-list" aria-selected="false">
+          <span class="tab__label">在庫一覧</span>
+          <span class="tab__badge" id="listTabBadge" hidden></span>
+        </button>
+      </div>
+      <div class="tabs__panels">
+        <section class="tabpanel" id="panel-map" role="tabpanel"
+                 aria-labelledby="tab-map" hidden>
+    {# 図。この画面の値打ちはここにある。押せば中身が出る #}
+    <section class="card" id="mapCard">
+      <header>
+        <i class="ib ib--sm ib--accent" aria-hidden="true">図</i>
+        <h3>保管位置</h3>
+        <span class="maplegend" aria-hidden="true">
+          <span class="lg lg--hit">検索で一致</span>
+          <span class="lg lg--active">表示中</span>
+          <span class="lg lg--idle">在庫あり</span>
+          <span class="lg lg--empty">空</span>
+        </span>
+        {# 図の縮尺。等倍だと棚1つが約22px しかなく、指では押しにくい。
+           tkinter版も 0.4〜2.0 倍の拡大を持っていた(`MIN_SCALE`/`MAX_SCALE`) #}
+        <span class="zoom">
+          <button class="btn btn--zoom" type="button" id="zoomOut"
+                  aria-label="図を小さくする">−</button>
+          <span class="zoom__now" id="zoomNow">100%</span>
+          <button class="btn btn--zoom" type="button" id="zoomIn"
+                  aria-label="図を大きくする">＋</button>
+        </span>
+      </header>
+      <div class="pad">
+        <div class="mapwrap" id="mapWrap">
+          <svg id="map" viewBox="{{ state.map.view_box }}" role="group"
+               aria-label="保管位置の図。押すとその位置の在庫を表示します"></svg>
+        </div>
+        <p class="why" id="zoomWhy" hidden>
+          指で押しにくいときは「＋」で大きくしてください(図はスクロールできます)。
+        </p>
+        <p class="status status--warn" id="mapMissing" hidden></p>
+      </div>
+    </section>
+        </section>
+        <section class="tabpanel" id="panel-list" role="tabpanel"
+                 aria-labelledby="tab-list" hidden>
+    {# 一覧 #}
+    <section class="card" id="listCard">
+      <header>
+        <i class="ib ib--sm" aria-hidden="true">庫</i>
+        <h3>在庫</h3>
+        <span class="eyebrow" id="found"></span>
+      </header>
+      <div class="pad">
+        <div class="tablewrap">
+          <table class="table">
+            <thead><tr>
+              {% for label, _, numeric in columns %}
+              <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+              {% endfor %}
+            </tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <p class="why" id="listNote">{{ state.message }}</p>
+      </div>
+    </section>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  {# ============================================================
+     右: 操作。探す → 受け入れる / 払い出す
+     **払い出しは左の一覧で選んだ行が対象**なので、選んだ行と
+     入力欄が同時に見える位置に置く
+     ============================================================ #}
+  <div class="split__controls" id="controlCol">
+    <section class="card">
+      <header>
+        <i class="ib ib--sm ib--accent" aria-hidden="true">検</i>
+        <h3>検索</h3>
+        <button class="btn btn--find" type="button" id="refresh">
+          <span class="gl">⟳</span>最新にする</button>
+      </header>
+      <div class="pad">
+      <div class="field">
+        <label for="w">幅</label>
+        <input class="input num" id="w" inputmode="numeric" style="width:6em"
+               autocomplete="off" value="{{ state.width_text }}" autofocus>
+        <span class="x">×</span>
+        <label for="l" class="sr">丈</label>
+        <input class="input num" id="l" inputmode="numeric" style="width:6em"
+               autocomplete="off" value="{{ state.length_text }}">
+        <button class="btn btn--find" type="button" id="search">
+          <span class="gl">⌕</span>検索
+        </button>
+        <button class="btn btn--danger" type="button" id="clear">
+          <span class="gl">×</span>クリア
+        </button>
+      </div>
+      {# 打っていないのに欄が埋まっている理由を書く。**書かないと、
+         前の人の打ち残しに見える**(旧版 `btnUFMAP` の受け側) #}
+      <p class="why" id="fromSelectionWhy"
+         {% if not state.from_selection %}hidden{% endif %}>
+        資材選択で決めたパレットの寸法で引いています。
+      </p>
+      {# 一致条件。**ラジオの丸は直径13px**でフィッツの法則がいちばん嫌う
+         的の大きさ ── 手袋では狙えない。カードにすると的が約20倍になり、
+         違いを1行添えられるので押す前に分かる。
+         選ばれているものは色・縁・チェックの3つで示す(§3.8) #}
+      <div class="choose" role="group" aria-label="一致条件">
+        {% for key, label, note in modes %}
+        <button class="choice" type="button" data-mode="{{ key }}"
+                aria-pressed="{{ 'true' if loop.first else 'false' }}">
+          <i class="ib ib--sm" aria-hidden="true">{{ '＝' if loop.first else '±' }}</i>
+          <span class="choice__tx"><b>{{ label }}</b><small>{{ note }}</small></span>
+          <i class="choice__ck" aria-hidden="true">✓</i>
+        </button>
+        {% endfor %}
+      </div>
+      <p class="status" id="status" hidden></p>
+      </div>
+    </section>
+
+    {# 登録は**どちらか片方**しかしない。縦に積むと、1366幅では操作の
+       列が 121px はみ出す ── 操作の列はスクロールさせない決まりなので
+       (§4.2)、択一のものは面で分ける。
+       既定は払い出し ── 探して見つけて出す、がこの画面の作業の流れで、
+       「上の一覧から選んでください」が次の一手そのものになる #}
+    <div class="tabs" data-tabs="inventory-act" id="actTabs">
+      <div class="tabs__bar" role="tablist" aria-label="登録の種類">
+        <button class="tab" type="button" role="tab" data-key="issue" data-default="1"
+                id="tab-issue" aria-controls="panel-issue" aria-selected="false">
+          <span class="tab__label">払い出し</span>
+          <span class="tab__badge" id="issueTabBadge" hidden></span>
+        </button>
+        <button class="tab" type="button" role="tab" data-key="receive"
+                id="tab-receive" aria-controls="panel-receive" aria-selected="false">
+          <span class="tab__label">受け入れ</span>
+          <span class="tab__badge" hidden></span>
+        </button>
+      </div>
+      <div class="tabs__panels">
+        <section class="tabpanel" id="panel-issue" role="tabpanel"
+                 aria-labelledby="tab-issue" hidden>
+          <section class="card">
+            <header><i class="ib ib--sm ib--upper" aria-hidden="true">払</i><h3>払い出し</h3></header>
+            <div class="pad">
+              {# 対象は一覧から選ぶ。手で打たせると、在庫に無い組み合わせを
+                 打ててしまう(強制選択機能) #}
+              <p class="status" id="pickWhy">上の一覧から払い出す行を選んでください。</p>
+              <dl class="fields" id="picked" hidden>
+                <div><dt>幅 × 丈</dt><dd id="pkSize">---</dd></div>
+                <div><dt>位置</dt><dd id="pkPos">---</dd></div>
+                <div><dt>記号</dt><dd id="pkSym">---</dd></div>
+                <div><dt>在庫数</dt><dd id="pkStock">---</dd></div>
+              </dl>
+              <div class="field" style="margin-top:10px">
+                <label for="iqty">払い出す数</label>
+                <input class="input num" id="iqty" inputmode="numeric" style="width:7em" disabled>
+                <button class="btn btn--commit" type="button" id="issue" disabled>
+                  払い出しを登録
+                </button>
+              </div>
+              <p class="why">在庫数を超える数は登録できません。</p>
+            </div>
+          </section>
+        </section>
+
+        <section class="tabpanel" id="panel-receive" role="tabpanel"
+                 aria-labelledby="tab-receive" hidden>
+          <section class="card">
+            <header><i class="ib ib--sm ib--lower" aria-hidden="true">受</i><h3>受け入れ</h3></header>
+            <div class="pad">
+              <div class="form">
+                <label for="rw">幅</label><input class="input num" id="rw" inputmode="numeric">
+                <label for="rl">丈</label><input class="input num" id="rl" inputmode="numeric">
+                <label for="rqty">台数</label><input class="input num" id="rqty" inputmode="numeric">
+                <label for="rpos">位置</label><input class="input" id="rpos" list="positions">
+                <label for="rsym">記号</label><input class="input" id="rsym" list="symbols">
+                <label for="rind">業界</label><input class="input" id="rind" list="industries">
+                <label for="runit">単位</label><input class="input" id="runit" list="units">
+                <label for="rnote">備考</label><input class="input" id="rnote">
+              </div>
+              <div class="btn-row" style="margin-top:10px">
+                <button class="btn btn--commit" type="button" id="receive">受け入れを登録</button>
+              </div>
+              <p class="why">同じ幅・丈・位置があれば足し、無ければ新しく作ります。</p>
+            </div>
+          </section>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<datalist id="positions"></datalist>
+<datalist id="symbols">
+  {% for s in symbol_presets %}<option value="{{ s }}">{% endfor %}
+</datalist>
+<datalist id="industries">
+  {% for s in industry_presets %}<option value="{{ s }}">{% endfor %}
+</datalist>
+<datalist id="units">
+  {% for s in unit_presets %}<option value="{{ s }}">{% endfor %}
+</datalist>
+{% endblock %}
+
+{% block head %}
+<style>
+  /* 受け入れの8項目。**入力欄は中身の桁数に合わせる** ── 3桁の台数に
+     300px の欄を出すと、何を入れる欄なのかが幅から読めなくなる
+     (§1.5 認識は再生に勝る。欄の形もその手がかり) */
+  .split__controls .form { grid-template-columns: 4em minmax(0,1fr) 4em minmax(0,1fr); }
+  .split__controls .form .input { max-width: 12em; }
+  .split__controls .form .input.num { max-width: 7em; }
+
+  /* 左は図と一覧を縦に。右は探す・受け入れる・払い出すを縦に。
+     どちらの列も **gap** で間隔を作る(個々の margin を撒かない) */
+  .split--inventory .split__results,
+  .split--inventory .split__controls { gap: 12px; display: flex; flex-direction: column; }
+  /* 操作の列はスクロールさせない(§4.2)。以前ここに `overflow-y: auto`
+     を置いていたが、それは「入りきらない」を隠していただけだった。
+     入りきらないぶんは面(受け入れ / 払い出し)で分ける */
+
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+  .x { color:var(--muted); font-family:var(--mono); }
+  .modes { display:flex; gap:12px; margin-left:8px; }
+  .radio { display:inline-flex; align-items:center; gap:5px; cursor:pointer;
+           font-size: var(--fs-md); }
+
+  /* 図。論理座標(pallet_map.json)をそのまま viewBox に載せる。
+     拡大したぶんは枠の中でスクロールする(ページ全体は動かさない) */
+  .mapwrap { width:100%; overflow:auto; max-height:56vh; }
+  #map { width:calc(100% * var(--zoom, 1)); height:auto; display:block;
+         border-radius:var(--radius-xs); background:var(--sunken); }
+
+  .zoom { display:inline-flex; align-items:center; gap:6px; margin-left:auto; }
+  .zoom__now { font-family:var(--mono); font-size: var(--fs-sm); color:var(--muted);
+               min-width:4em; text-align:center; }
+  .btn--zoom { min-width:36px; min-height:36px; padding:4px 10px;
+               font-size: var(--fs-lg); line-height:1; }
+  #map .pos { cursor:pointer; }
+  #map .pos rect { fill:var(--map-empty); stroke:var(--map-line); stroke-width:1; }
+  #map .pos text { fill:var(--map-empty-fg); font-size: var(--fs-xs); font-weight:700;
+                   text-anchor:middle; dominant-baseline:central;
+                   pointer-events:none; font-family:var(--sans); }
+  #map .pos--idle   rect { fill:var(--map-idle); }
+  #map .pos--idle   text { fill:var(--map-idle-fg); }
+  #map .pos--hit    rect { fill:var(--map-hit); stroke:var(--map-hit); }
+  #map .pos--hit    text { fill:var(--map-hit-fg); }
+  #map .pos--active rect { fill:var(--map-active); stroke:var(--map-active);
+                           stroke-width:2; }
+  #map .pos--active text { fill:var(--map-active-fg); }
+  #map .pos:hover rect { stroke:var(--focus); stroke-width:2; }
+  #map .pos:focus-visible rect { stroke:var(--focus); stroke-width:3; }
+
+  .maplegend { display:flex; gap:10px; flex-wrap:wrap; }
+  .lg { font-size: var(--fs-xs); padding:2px 9px; border-radius:var(--pill);
+        border:1px solid var(--map-line); }
+  .lg--hit    { background:var(--map-hit);    color:var(--map-hit-fg); }
+  .lg--active { background:var(--map-active); color:var(--map-active-fg); }
+  .lg--idle   { background:var(--map-idle);   color:var(--map-idle-fg); }
+  .lg--empty  { background:var(--map-empty);  color:var(--map-empty-fg); }
+
+  .table tbody tr { cursor:pointer; }
+  .table tbody tr[aria-selected="true"] { background:var(--accent-soft); }
+
+  .form { display:grid; grid-template-columns:5em minmax(0,1fr) 5em minmax(0,1fr);
+          gap:8px 10px; align-items:center; }
+  .form label { color:var(--muted); font-size: var(--fs-sm); text-align:right; }
+
+  .fields { display:grid; grid-template-columns:repeat(2, minmax(0,1fr));
+            gap:0 20px; margin:0; }
+  .fields > div { display:grid; grid-template-columns:6.5em 1fr; gap:8px;
+                  align-items:baseline; padding:4px 0;
+                  border-bottom:1px solid var(--hairline); }
+  .fields dt { color:var(--muted); font-size: var(--fs-sm); }
+  .fields dd { margin:0; font-family:var(--mono); font-size: var(--fs-md); }
+
+  .status[hidden], .fields[hidden], .why[hidden] { display:none; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/inventory.js') }}";
+  start({{ state | tojson }});
+</script>
+{% endblock %}

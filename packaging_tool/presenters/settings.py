@@ -1,0 +1,785 @@
+"""設定画面の表示内容
+
+**この端末の設定はここに集める。** 以前は置き場所が「データ」画面、
+拠点が資材選択と棚検索の中、と散っていた。どこで何が変えられるのかを
+探すこと自体が手間で、変えたつもりで変わっていない事故も起きる。
+
+【状態は1項目ずつ良し悪しを付けて返す】
+取り込みがうまくいかない原因はほぼ決まっている ── ファイルが
+見つからない / テーブル名が違う / 中身が sqlite3 でない。
+まとめて1つの文字列にすると「どこが問題なのか」が読み取れないので、
+項目ごとに `level` を付ける。画面はそれを記号と色にするだけで、
+**良し悪しの判断は持たない**。
+
+【直し方まで書く】
+「見つかりません」で終わらせず、`detail` に探した場所や次の一手を書く。
+現場が自分で直せなければ、結局こちらに聞くことになる。
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+from .. import (admin_password, config, data_sync, floor_plan, jobs,
+                lot_browse_session, lot_query, source_db, spec_sheet,
+                user_settings)
+
+# 状態の重さ。画面はこの値で色と記号を決める
+OK = "ok"          # 問題なし
+WARN = "warn"      # 動くが、このままだと困ることがある
+NG = "ng"          # このままでは進めない
+INFO = "info"      # 良し悪しではない事実
+
+# 「書き方のゆれ」を見出しに並べる件数。**全部は並べない**が、
+# 数は必ず言う(切ったことを黙らない)
+LOOSE_SAMPLE = 3
+
+# 見出しに出す言葉。**色だけで良し悪しを伝えない**(§3.8)。
+# 工場は照明も見え方もまちまちで、色覚特性のある人もいる
+LEVEL_LABEL = {
+    OK: "問題なし",
+    WARN: "要確認",
+    NG: "足りません",
+    INFO: "情報",
+}
+
+# 画面の面(タブ)。**縦に積むとスクロールが要る**ので面で分ける。
+#   key, 見出し, その面に載せるもの
+#
+# 並びは触る頻度の順(ヒックの法則)。毎日押す「取り込み」を先頭に、
+# うまくいかないときだけ触るものを後ろに置く。
+#
+# **問題を隠さないこと**が条件。中身に「足りません」があるタブは、
+# 開いていなくても見出しがそう言う(`tab_badges()`)── 隠したせいで
+# 気づけなくなるなら、スクロールのほうがまだましになる。
+TABS: tuple[tuple[str, str], ...] = (
+    ("run", "取り込みと反映"),
+    ("status", "いまの状態"),
+    ("master", "マスタ管理"),
+    ("source", "取り込み元"),
+    ("behavior", "動作"),
+    ("filters", "よく使う条件"),
+    ("history", "最近の結果"),
+)
+TAB_KEYS = frozenset(key for key, _ in TABS)
+# 最初に開く面。**毎日押すもの**を既定にする
+DEFAULT_TAB = "run"
+
+# 「いまの状態」の面に載せる節(`build()` が作る順)。この面だけは
+# 複数の節を束ねるので、どの節がどの面かをここで決める
+STATUS_TAB = "status"
+
+# 取り込みの対象。画面のボタンとAPIの引数がずれないよう、ここで並べる
+TARGETS: tuple[tuple[str, str, str], ...] = (
+    ("all", "まとめて取り込み", "梱包資材マスタと仕掛台帳の両方を読み直します"),
+    ("master", "マスタだけ", "梱包資材マスタ(パレット・ボード・アングル等)"),
+    ("lot", "仕掛台帳だけ", "SIKALOTNOW / SIKAHIKINOW / SIKAODRNOW の3ファイル"),
+)
+TARGET_KEYS = frozenset(key for key, _, _ in TARGETS)
+
+# 状態の表示名。ジョブの `state` から引く
+JOB_STATE_LABEL = {
+    jobs.STATE_RUNNING: "実行中",
+    jobs.STATE_DONE: "完了",
+    jobs.STATE_FAILED: "失敗",
+    jobs.STATE_INTERRUPTED: "中断",
+}
+
+# 状態ピルの種別。**共通の語彙**(components.css の `.st--*`)へ寄せる。
+# 画面ごとに別の名前を付けると、同じ状態が画面ごとに違う色になる
+JOB_STATE_KIND = {
+    jobs.STATE_RUNNING: "run",
+    jobs.STATE_DONE: "ok",
+    jobs.STATE_FAILED: "ng",
+    jobs.STATE_INTERRUPTED: "warn",
+}
+
+
+@dataclass
+class Check:
+    """状態の1項目。"""
+
+    label: str
+    value: str
+    level: str = INFO
+    detail: str = ""       # 直し方まで書く。「見つかりません」で終わらせない
+
+
+@dataclass
+class Section:
+    title: str
+    checks: list[Check] = field(default_factory=list)
+    # 見出しに置く1文字の印。**色を知覚できなくても字で分かる**ように、
+    # 分類そのものを字にする(梱包資材マスタ=「材」など)
+    mark: str = "・"
+    # 直しに行く先。**問題を見せた場所から、直せる場所へ繋ぐ。**
+    # 「見つかりません」と書いてある面には直す手立てが無いので、
+    # 利用者はタブを探し回ることになる。(文言, 行き先の面)
+    action: tuple[str, str] = ("", "")
+
+    @property
+    def level(self) -> str:
+        """このまとまりで一番重いもの。見出しに出す。"""
+        for level in (NG, WARN, OK):
+            if any(c.level == level for c in self.checks):
+                return level
+        return INFO
+
+    @property
+    def badge_tone(self) -> str:
+        """印の色。**中身の一番重い状態を見出しが背負う**(タブと同じ規則)。"""
+        return {NG: "ng", WARN: "ng", OK: "ok"}.get(self.level, "accent")
+
+
+@dataclass
+class SettingsViewModel:
+    sections: list[Section] = field(default_factory=list)
+
+    # --- 取り込み元の置き場所 ---
+    # 打たれたまま(相対で書かれていれば相対のまま)
+    master_dir: str = ""
+    lot_dir: str = ""
+    # 実際に見に行く道。**相対で書いたときに「どこを見ているか」を出す**
+    master_dir_real: str = ""
+    lot_dir_real: str = ""
+    path_base: str = ""            # 相対の起点(アプリのフォルダ)
+
+    # --- 動作 ---
+    auto_import: bool = True
+    position: str = ""
+    positions: list[str] = field(default_factory=list)
+    # 包装仕様書の図面を返すURLのひな形。空なら図面は出ない(機能を使わない)
+    spec_sheet_url: str = ""
+    spec_sheet_problem: str = ""
+    # 管理者パスワードを**この端末で変えてあるか**。値そのものは出さない
+    admin_custom: bool = False
+    admin_min_length: int = 4
+
+    # --- よく使う条件(ロット一覧) ---
+    lot_filters: list[dict[str, Any]] = field(default_factory=list)
+
+    # 取り込みができない状態なら、ボタンを押させる前に理由を出す
+    can_import: bool = True
+    import_reason: str = ""
+
+    @property
+    def level(self) -> str:
+        for level in (NG, WARN, OK):
+            if any(s.level == level for s in self.sections):
+                return level
+        return INFO
+
+
+# ------------------------------------------------------------------
+# いまの状態
+# ------------------------------------------------------------------
+def build(conn=None, startup_modes=None) -> SettingsViewModel:
+    """設定と、見つかっているファイルから画面ぜんぶを組み立てる。
+
+    `conn` を渡すと権限の節も出す。省略できるようにしてあるのは、
+    DBを開けない状態でも設定画面だけは開けるようにするため ──
+    開けなければ、置き場所を直す画面にも辿り着けない。
+
+    `startup_modes` は**起動したときに使えたモード**。いま使えるモードと
+    食い違っていたら、開き直すまで効かないことを言う(下記 `_access_section`)。
+    """
+    material = _find_material()
+    lots = _find_lots()
+
+    view = SettingsViewModel(
+        master_dir=_typed(config.KEY_MASTER_DB_DIR, config.master_db_dir(),
+                          config.KEY_ACCDB_DIR_LEGACY),
+        lot_dir=_typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
+        master_dir_real=str(config.master_db_dir()),
+        lot_dir_real=str(config.lot_db_dir()),
+        path_base=str(config.BASE_DIR),
+        auto_import=bool(user_settings.get(config.KEY_AUTO_IMPORT,
+                                           config.AUTO_IMPORT_DEFAULT)),
+        position=user_settings.get_position(),
+        positions=list(floor_plan.base_points()),
+        spec_sheet_url=spec_sheet.url_template(),
+        spec_sheet_problem=spec_sheet.template_problem(spec_sheet.url_template()),
+        admin_custom=admin_password.is_custom(),
+        admin_min_length=admin_password.MIN_LENGTH,
+        lot_filters=_lot_filters(),
+    )
+    view.sections = [
+        _material_section(material, conn),
+        _lot_section(lots),
+        _access_section(conn, startup_modes),
+        _terminal_section(),
+    ]
+
+    if material is None and not lots:
+        view.can_import = False
+        view.import_reason = ("取り込み元のファイルが1つも見つかりません。"
+                              "下の置き場所を確かめてください。")
+    return view
+
+
+def _typed(key: str, fallback: Path, *legacy: str) -> str:
+    """**打たれたままの道**を返す。相対で書いた人には相対のまま見せる。
+
+    ここで絶対に直して返すと、保存するたびに書いた形が消え、
+    「相対で書いたはずなのに絶対になっている」と読める。
+    設定が無いときだけ、いま使っている道(既定)を出す。
+    """
+    from .. import user_settings
+    for name in (key, *legacy):
+        configured = user_settings.get(name)
+        if isinstance(configured, str) and configured.strip():
+            return configured.strip()
+    return str(fallback)
+
+
+def _lot_filters() -> list[dict[str, Any]]:
+    """ロット一覧の「よく使う条件」。ここからも消せるようにする。
+
+    足すのは一覧の画面、消すのはここ、では探し回ることになるので、
+    **一覧を出すのはここ**にして、条件の中身まで見せる。
+    """
+    out: list[dict[str, Any]] = []
+    for name, items in sorted(lot_browse_session.LotBrowseSession.saved().items()):
+        labels = []
+        for item in items:
+            column = lot_query.BY_KEY.get(item.get("column", ""))
+            if column is None:
+                continue
+            labels.append(f"{column.label} {item.get('op', '')} {item.get('value', '')}")
+        out.append({"name": name, "conditions": labels})
+    return out
+
+
+def _find_material() -> Optional[Path]:
+    try:
+        return data_sync.find_material_db()
+    except OSError:
+        # 共有フォルダに届かないとき(UNCパスのタイムアウト等)。
+        # 例外を上げると画面自体が開かなくなる
+        return None
+
+
+def _find_lots() -> dict[str, Path]:
+    try:
+        return data_sync.find_lot_dbs()
+    except OSError:
+        return {}
+
+
+# 置き場所を直しに行く先。**問題を見せた場所から繋ぐ**
+FIX_SOURCE = ("置き場所を直す", "source")
+
+
+def _material_section(material: Optional[Path], conn=None) -> Section:
+    section = Section("梱包資材マスタ", mark="材")
+    _check_local_master(section, conn)
+    if material is None:
+        section.checks.append(Check(
+            "ファイル", "見つかりません", NG,
+            f"探した場所: {config.master_db_dir()}"
+            f"(名前は {config.MATERIAL_DB_NAME}。"
+            f"拡張子 {' / '.join(source_db.SUFFIXES)} を見ます)"))
+        section.action = FIX_SOURCE
+        return section
+
+    section.checks.append(Check("ファイル", material.name, OK, str(material)))
+
+    # **開けなかったときは、開いてみて分かったことを全部出す。**
+    # 「sqlite3 として読めません」だけでは、現場も私たちも直せない
+    found = source_db.probe(material)
+    if not found.ok:
+        section.checks.append(Check("中身", "開けませんでした", NG,
+                                    _why_unreadable(found)))
+        section.action = FIX_SOURCE
+        return section
+    if found.opened_by != source_db.WAY_URI:
+        # ふだんの開き方では通らなかった。動いてはいるが、置かれ方に
+        # 手当てが要る(WAL のまま共有に置かれている等)
+        section.checks.append(Check(
+            "開き方", found.opened_by, WARN, _why_detoured(found)))
+
+    names = found.tables
+    from .. import import_specs
+    missing = [t for t in import_specs.IMPORT_SPECS
+               if t not in names and t not in import_specs.OPTIONAL_TABLES]
+    optional_missing = [t for t in import_specs.OPTIONAL_TABLES
+                        if t not in names]
+    if missing:
+        # 取り込みが空になる原因はたいてい「テーブル名が違う」
+        section.checks.append(Check(
+            "テーブル", f"{len(names)}個(不足 {len(missing)}件)", WARN,
+            "取り込む予定なのに無い: " + ", ".join(missing)))
+    else:
+        section.checks.append(Check("テーブル", f"{len(names)}個", OK))
+    if optional_missing:
+        # 無くても動く表。**足りない扱いにしない** ── 毎回「要確認」が
+        # 出ると、本当に直すべき不足が埋もれる
+        section.checks.append(Check(
+            "任意のテーブル", f"{len(optional_missing)}件が未作成", INFO,
+            "無くても動きます: " + ", ".join(optional_missing)))
+    return section
+
+
+def _why_unreadable(found: "source_db.Probe") -> str:
+    """開けなかった理由と、**次にすること**。
+
+    原因はだいたい3つに絞れます。どれなのかが分かれば現場で直せます:
+    中身が別物 / 誰かが掴んでいる / WAL のまま共有に置かれている。
+    """
+    facts = [f"大きさ {found.size:,} バイト"]
+    if found.sidecars:
+        facts.append("付き添いファイル " + " / ".join(found.sidecars))
+    tried = "、".join(f"{name}={why or 'OK'}" for name, why in found.attempts)
+
+    if not found.is_sqlite:
+        return (f"先頭が sqlite3 の印ではありません({', '.join(facts)})。"
+                "名前だけ変えた別形式のファイル(Access 等)ではないか、"
+                "変換が途中で止まっていないかを確かめてください。")
+    if "wal" in found.sidecars:
+        return (f"WAL のまま置かれています({', '.join(facts)})。"
+                "共有フォルダの上では WAL のファイルは開けません。"
+                "変換したPCで `PRAGMA journal_mode=DELETE;` を実行してから"
+                "置き直してください。試した順: " + tried)
+    return (f"{', '.join(facts)}。他のアプリ(変換ツール・Access 等)が"
+            "掴んでいないか、共有フォルダの読み取り権限があるかを"
+            "確かめてください。試した順: " + tried)
+
+
+def _why_detoured(found: "source_db.Probe") -> str:
+    """ふだんの開き方では通らなかったときの言い分。**動いていても言う。**"""
+    first = next((why for name, why in found.attempts
+                  if name == source_db.WAY_URI and why), "")
+    tail = ""
+    if found.opened_by == source_db.WAY_COPY:
+        tail = ("共有の上では開けないので、読むたびに手元へ写しています"
+                "(そのぶん遅くなります)。")
+        if found.journal.lower() == "wal":
+            tail += ("元が WAL です。変換したPCで "
+                     "`PRAGMA journal_mode=DELETE;` を実行して置き直すと、"
+                     "写さずに読めるようになります。")
+    return f"ふだんの開き方は通りませんでした({first})。{tail}"
+
+
+def _check_local_master(section: Section, conn) -> None:
+    """**手元のDB**に中身が入っているか。取り込み元の有無とは別の話。
+
+    取り込み元のファイルが在って、テーブル名も合っていて、それでも
+    手元が空、ということが起きる ── まだ一度も取り込んでいない場合と、
+    取り込みが途中で転んだ場合。このとき現場には「ボード種別が出ない」
+    「パレット検索が当たらない」という形でしか表面化せず、原因に
+    辿り着けない。**最初に気づけるようにする。**
+    """
+    if conn is None:
+        return                                  # DBを開けない状態(§設定は開く)
+    # **中身が同じ行**が溜まっていないか。取り込みのたびに倍になる不具合
+    # (〜VER2.2.0)は現場から見えなかったので、こちらから言う
+    for spec in data_sync.WRITEBACK_SPECS:
+        same = data_sync.duplicate_count(conn, spec.sqlite_table,
+                                         spec.key_column)
+        if same:
+            section.checks.append(Check(
+                "同じ内容の行", f"{spec.sqlite_table} に {same}件", WARN,
+                "中身がまったく同じ行が重なっています。"
+                "`python scripts\\dedupe_writeback.py` で数えられます"
+                "(`--fix` を付けると、控えを取ってから消します)。"))
+
+    # 書き方のゆれ。**拾えてはいるが、直しておいたほうが確実**。
+    # 「5x10」と小文字で書かれた行は、そろえてから固定表に当てている
+    from .. import pallet_service
+
+    loose = pallet_service.loose_key_rows(conn)
+    if loose:
+        sample = "、".join(f"{m.raw}→{m.matched}"
+                           for m in loose[:LOOSE_SAMPLE])
+        more = f" ほか{len(loose) - LOOSE_SAMPLE}件" if len(loose) > LOOSE_SAMPLE else ""
+        section.checks.append(Check(
+            "書き方のゆれ", f"パレットマスタに {len(loose)}件", WARN,
+            f"{sample}{more}。そろえて拾っているので選定は通りますが、"
+            f"マスタ側をそろえておくと確実です。"
+            f"「適合範囲を再計算」を押すと、どの行かが全部出ます。"))
+
+    empty = data_sync.missing_master_tables(conn)
+    if empty:
+        section.checks.append(Check(
+            "手元の中身", f"{len(empty)}件が空", NG,
+            "空のまま: " + " / ".join(empty)
+            + "。「まとめて取り込み」を押してください。"))
+    else:
+        section.checks.append(Check("手元の中身", "取り込み済み", OK))
+
+
+def _lot_section(lots: dict[str, Path]) -> Section:
+    total = len(config.LOT_DB_FILES)
+    section = Section("仕掛台帳", mark="台")
+    level = OK if len(lots) == total else (WARN if lots else NG)
+    section.checks.append(Check("そろい具合", f"{len(lots)}/{total} ファイル", level))
+    for table, filename in config.LOT_DB_FILES.items():
+        found = lots.get(table)
+        section.checks.append(Check(
+            filename, str(found) if found else "見つかりません",
+            OK if found else NG))
+    section.checks.append(Check(
+        "探した場所", f"{config.lot_db_dir()} → {config.master_db_dir()}", INFO,
+        "共有フォルダに届かない端末のために、マスタのフォルダも見ます"))
+    if len(lots) < total:
+        section.action = FIX_SOURCE
+    return section
+
+
+def _access_section(conn, startup_modes=None) -> Section:
+    """この端末は誰で、何ができるか。
+
+    **権限は、通ったときより通らなかったときのほうが説明を必要とする。**
+    「資材モードが選べない」とだけ分かっても、原因がマスタ未取込なのか
+    登録漏れなのかIDの綴り違いなのかで、次にすることが全部違う。
+    そこで身元・効いた行・落ちた理由をそのまま出す。
+
+    `conn` が無い(DBを開けない)ときも画面は開く。権限の節だけが
+    「調べられませんでした」になる。
+    """
+    from .. import access_control, modes
+
+    section = Section("この端末の権限", mark="権")
+    if conn is None:
+        section.checks.append(Check("状態", "調べられませんでした", WARN,
+                                    "手元のデータベースを開けませんでした。"))
+        return section
+
+    grant = access_control.resolve(conn)
+    section.checks.append(Check(
+        "ログインID / PC名", grant.identity.label(), INFO,
+        "Windows から取った値です。画面からは変えられません。"))
+
+    labels = access_control.summarize(grant.codes)
+    section.checks.append(Check(
+        "使えるモード",
+        " / ".join(modes.label(m) for m in grant.allowed_modes()) or "なし",
+        OK if grant.allowed_modes() else NG,
+        "持っている権限: " + (", ".join(labels) if labels else "なし")))
+
+    if grant.reason:
+        # 既定へ落ちたときだけ理由を出す。落ちていなければ黙っている
+        section.checks.append(Check(
+            "権限の出どころ", "既定を使っています", WARN,
+            grant.reason + f"。{access_control.TABLE} に "
+            "ログインID または PC名 と権限コードの行を足してください。"))
+    else:
+        section.checks.append(Check(
+            "権限の出どころ", f"{access_control.TABLE} の {len(grant.matched)}行",
+            OK, " / ".join(f"{r.condition_label()} → {r.permission}"
+                           for r in grant.matched)))
+
+    # **足した権限が、開き直すまで全部は効かない。**
+    # 使えるモードは要求のたびに引き直すので切り替えは通るが、URL の登録は
+    # 起動時の権限で決まっている。マスタ管理から権限を足せるようになって
+    # (VER2.1.0)ここを踏みやすくなったので、黙っていない
+    if startup_modes is not None:
+        fresh = [m for m in grant.allowed_modes() if m not in set(startup_modes)]
+        if fresh:
+            section.checks.append(Check(
+                "開き直しが要ります",
+                " / ".join(modes.label(m) for m in fresh), WARN,
+                "起動したあとに権限が増えました。モードの切り替えはできますが、"
+                "その画面の一部は**開き直すまで出ません**"
+                "(使える画面は起動時の権限で決まります)。"
+                "アプリを終了して、もう一度起動してください。"))
+
+    for problem in access_control.problems(conn):
+        # 書いた人は効いているつもりでいる。黙って無視しない
+        section.checks.append(Check("マスタの問題", "確認してください", WARN, problem))
+
+    section.checks.append(Check(
+        "使える権限コード", str(len(access_control.permissions())), INFO,
+        " / ".join(f"{p.code} = {p.label}" for p in access_control.permissions())))
+    return section
+
+
+def _terminal_section() -> Section:
+    """この端末の事実。**設定ではない**ので変えられないが、要るとき要る。
+
+    「どのDBを見ているのか」「ログはどこか」を聞かれるたびに調べるのは
+    無駄なので、画面に出しておく。
+    """
+    import sys
+
+    from .. import app_config
+
+    section = Section("この端末", mark="端")
+    section.checks.append(Check("手元のデータベース", str(config.DB_PATH), INFO))
+    section.checks.append(Check("ログ", str(config.LOG_DIR), INFO))
+    section.checks.append(Check("読み取り方式", data_sync.backend_name(), OK,
+                                "取り込み元が sqlite3 なので、"
+                                "追加のドライバは要りません"))
+    # 版。**帯に出ているものと同じ出どころ**(`config/app.json`)。
+    # 書き方が違うと「どれが新しいか」を並べて比べられなくなるので、
+    # そのときだけ理由を添えて要確認にする
+    problem = app_config.version_problem()
+    section.checks.append(Check(
+        "バージョン", app_config.version_label(),
+        WARN if problem else INFO, problem))
+    # **どのフォルダを動かしているか。** 「入れ替えたのに古いまま」の
+    # ときに、まずここを読めば分かる ── 版が古ければ、入れ替えた先とは
+    # 別のフォルダから起動している(ショートカットの向き先が古い等)
+    section.checks.append(Check(
+        "アプリの置き場所", str(app_config.APP_ROOT), INFO,
+        "版が古いときは、入れ替えたフォルダとここが同じか確かめてください"))
+    section.checks.append(Check("Python", sys.version.split()[0], INFO))
+    return section
+
+
+# ------------------------------------------------------------------
+# 長時間処理
+# ------------------------------------------------------------------
+def job_dict(job: Optional[jobs.Job]) -> Optional[dict[str, Any]]:
+    if job is None:
+        return None
+    return {
+        "id": job.id,
+        "kind": job.kind,
+        "label": job.label,
+        "state": job.state,
+        "state_label": JOB_STATE_LABEL.get(job.state, job.state),
+        "state_kind": JOB_STATE_KIND.get(job.state, "run"),
+        "pct": job.pct,
+        "message": job.message,
+        "ok": job.ok,
+        "summary": job.summary,
+        "error": job.error,
+        "elapsed_sec": round(job.elapsed_sec, 1),
+        "running": job.is_running,
+        # 通ってきた段。**横棒1本では「どこまで終わったか」が読めない**
+        "steps": lane_steps(job.steps),
+        "steps_total": len(job.steps),
+        "steps_note": lane_note(job.steps),
+    }
+
+
+# レーンに並べる段の上限。**全部は並べない。**
+# 取り込みは19段ある。19枚のカードを一度に見ても「どこで転んだか」は
+# 読み取れないし、面がスクロールし始める(§1.4 作業記憶は4±1)。
+LANE_LIMIT = 6
+
+
+def lane_steps(steps: list[jobs.Step]) -> list[dict[str, Any]]:
+    """レーンに出す段を選ぶ。
+
+    **失敗した段は必ず出す。** 隠すと、直すべきものが見えなくなる。
+    次に「いま走っている段」、残りは新しいものから埋める ── 通り過ぎた
+    段より、いまの手前で何があったかのほうが知りたい。
+
+    段が1つしかないときは何も返さない(横棒1本で足りる)。
+    """
+    total = len(steps)
+    if total < 2:
+        return []
+
+    order: list[int] = [i for i, s in enumerate(steps) if not s.running and not s.ok]
+    order += [i for i, s in enumerate(steps) if s.running]
+    order += list(range(total - 1, -1, -1))
+
+    keep: list[int] = []
+    for index in order:
+        if index in keep:
+            continue
+        keep.append(index)
+        if len(keep) >= LANE_LIMIT:
+            break
+    keep.sort()
+    return [step_dict(steps[i], no=i + 1, total=total) for i in keep]
+
+
+def lane_note(steps: list[jobs.Step]) -> str:
+    """並べきれなかった段のこと。**黙って落とさない。**"""
+    hidden = len(steps) - len(lane_steps(steps))
+    if hidden <= 0:
+        return ""
+    failed = sum(1 for s in steps if not s.running and not s.ok)
+    shown_failed = sum(1 for d in lane_steps(steps) if d["state"] == "ng")
+    missed = failed - shown_failed
+    if missed > 0:
+        return f"ほか {hidden} 件(うち {missed} 件が失敗)"
+    return f"ほか {hidden} 件は完了しました"
+
+
+# 段の見出しに使う言い換え。進捗の文は「いま何をしているか」なので
+# 進行形で書かれている(「BoardMaster を読み込み中...」)。レーンには
+# **終わった段も並ぶ**ので、そのままだと終わったものまで動いて
+# いるように読める。動いているかどうかは状態(`state`)が持つので、
+# 見出しからは進行形を落として「何について」だけを残す。
+_STEP_TAIL = re.compile(r"\s*を?[^\sを]{0,8}?(?:中|しています)[.。…]*\s*$")
+
+
+def step_title(message: str) -> str:
+    trimmed = _STEP_TAIL.sub("", message).strip()
+    # 落とすと何も残らない文(「準備しています」)はそのまま使う
+    return trimmed or message.strip()
+
+
+def step_dict(step: jobs.Step, *, no: int = 1, total: int = 1) -> dict[str, Any]:
+    """1段。状態の語彙は共通(`.st--*` / `.lane--*`)にそろえる。"""
+    if step.running:
+        state = "run"
+    else:
+        state = "done" if step.ok else "ng"
+    return {
+        "no": no,
+        "total": total,
+        "label": step_title(step.label),
+        "state": state,
+        "state_label": {"run": "実行中", "done": "完了", "ng": "失敗"}[state],
+        "elapsed_sec": round(step.elapsed_sec, 1),
+    }
+
+
+def jobs_dict(registry: Optional[jobs.JobRegistry] = None) -> dict[str, Any]:
+    """`GET /api/jobs` が返す形。
+
+    走っているものが無くても `recent` は返す。ブラウザを開き直したときに
+    「さっきの取り込みはどうなったのか」が分かるようにするため
+    (基盤仕様書 監視レベル2)。
+    """
+    registry = registry or jobs.get_registry()
+    running = registry.running()
+    return {
+        "running": [job_dict(running)] if running else [],
+        "recent": [job_dict(job) for job in registry.recent()],
+        "busy": running is not None,
+    }
+
+
+def tab_badges(view: SettingsViewModel) -> dict[str, dict[str, str]]:
+    """タブ見出しに出す状態と件数。
+
+    **開いていないタブの問題を隠さない。** 面で分けたせいで
+    「足りません」に気づけなくなるなら、スクロールのほうがまだまし。
+    中身の一番重い状態を見出しが背負う。
+
+    件数も出す(情報の匂い、§2.4)── 押す前に、その先に何があるかが
+    分かるようにする。
+    """
+    badges: dict[str, dict[str, str]] = {}
+
+    # いまの状態: 節の中で一番重いもの。問題なしのときは黙っている
+    # (全部のタブに印が付くと、印が意味を持たなくなる)
+    if view.level in (NG, WARN):
+        badges[STATUS_TAB] = {"level": view.level, "text": LEVEL_LABEL[view.level]}
+
+    # 取り込み: 押せないなら先に言う
+    if not view.can_import:
+        badges["run"] = {"level": NG, "text": "できません"}
+
+    # 動作: 図面URLの書き方が違えば、開く前に分かるようにする
+    if view.spec_sheet_problem:
+        badges["behavior"] = {"level": WARN, "text": "要確認"}
+
+    if view.lot_filters:
+        badges["filters"] = {"level": INFO, "text": str(len(view.lot_filters))}
+    return badges
+
+
+def to_dict(view: SettingsViewModel) -> dict[str, Any]:
+    return {
+        "level": view.level,
+        "tab_badges": tab_badges(view),
+        # 文言はサーバが持つ(設計書 §4)。画面側で書き分けない
+        "level_label": LEVEL_LABEL,
+        "sections": [
+            # `mark` / `badge_tone` は見出しの印。**色を知覚できなくても
+            # 分類が字で分かる**ようにするためのもので、画面側では作れない
+            # (どの節が何の印かを知っているのはここだけ)
+            {"title": s.title, "level": s.level,
+             "mark": s.mark, "badge_tone": s.badge_tone,
+             # 直しに行く先。**問題を見せた面には直す手立てが無い**ので、
+             # そこから繋ぐ(文言も行き先もサーバが決める)
+             "action": {"label": s.action[0], "tab": s.action[1]}
+                       if s.action[0] else None,
+             "checks": [{"label": c.label, "value": c.value,
+                         "level": c.level, "detail": c.detail}
+                        for c in s.checks]}
+            for s in view.sections
+        ],
+        "master_dir": view.master_dir,
+        "lot_dir": view.lot_dir,
+        # 相対で書かれたときに「実際どこを見ているか」。同じ道なら空で返す
+        # ── 同じものを2行に出すと、違うものに見える
+        "master_dir_real": (view.master_dir_real
+                            if view.master_dir_real != view.master_dir else ""),
+        "lot_dir_real": (view.lot_dir_real
+                         if view.lot_dir_real != view.lot_dir else ""),
+        "path_base": view.path_base,
+        "auto_import": view.auto_import,
+        "position": view.position,
+        "positions": view.positions,
+        "spec_sheet_url": view.spec_sheet_url,
+        "spec_sheet_problem": view.spec_sheet_problem,
+        "spec_sheet_placeholder": spec_sheet.PLACEHOLDER,
+        # **値は返さない。** 変えてあるかどうかだけ
+        "admin_custom": view.admin_custom,
+        "admin_min_length": view.admin_min_length,
+        "lot_filters": view.lot_filters,
+        "can_import": view.can_import,
+        "import_reason": view.import_reason,
+    }
+
+
+# ------------------------------------------------------------------
+# 設定の保存
+# ------------------------------------------------------------------
+@dataclass
+class SaveResult:
+    ok: bool = True
+    message: str = ""
+    reason: str = ""
+
+
+# 断りの種類。**文言から推し量らない**
+REFUSE_BAD_INPUT = "bad_input"
+REFUSE_NOT_LISTED = "not_listed"
+
+
+def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
+         auto_import: Optional[bool] = None, spec_url: Optional[str] = None,
+         position: Optional[str] = None) -> SaveResult:
+    """設定を保存する。**渡されたものだけ**を触る。
+
+    `None` は「この項目は今回いじらない」の意味。画面が一部だけ送って
+    きたときに、送っていない項目を消さないため。
+
+    置き場所の空文字は「既定に戻す」で、そのまま保存してよい
+    (`config.master_db_dir()` が既定値を返すようになる)。
+    """
+    if spec_url is not None:
+        problem = spec_sheet.template_problem(spec_url)
+        if problem:
+            # 書けてしまってから「なぜか図面が出ない」を追うより、
+            # その場で言うほうが早い
+            return SaveResult(False, problem, REFUSE_BAD_INPUT)
+
+    if position is not None:
+        allowed = floor_plan.base_points()
+        if position not in allowed:
+            # 図に無い拠点を入れると、疲労度も棚検索も当たらなくなる
+            return SaveResult(
+                False,
+                f"拠点は {' / '.join(allowed)} から選んでください。",
+                REFUSE_NOT_LISTED)
+
+    if master_dir is not None:
+        user_settings.save(config.KEY_MASTER_DB_DIR, master_dir.strip())
+    if lot_dir is not None:
+        user_settings.save(config.KEY_LOT_DB_DIR, lot_dir.strip())
+    if auto_import is not None:
+        user_settings.save(config.KEY_AUTO_IMPORT, bool(auto_import))
+    if spec_url is not None:
+        user_settings.save(config.KEY_SPEC_SHEET_URL, spec_url.strip())
+    if position is not None:
+        user_settings.set_position(position)
+    return SaveResult(True, "設定を保存しました")
+
+
+def delete_lot_filter(name: str) -> SaveResult:
+    """よく使う条件を1つ消す。"""
+    result = lot_browse_session.get_session().delete_saved(name)
+    return SaveResult(result.ok, result.message, result.reason)

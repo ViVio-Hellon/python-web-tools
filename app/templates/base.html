@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ display_name }}{% endblock %}</title>
+{#
+  タブのアイコン。現場モードと資材モードは別ポートで、同時に開いて
+  いることがある。タブの文字は途中で切れるので、**色と文字でどちらの
+  タブか分かる**ようにしておく。
+  外部ファイルにしないのは、要求を1本減らすためと、色をモードで変えるため。
+#}
+<link rel="icon" href="data:image/svg+xml,{{ favicon | urlencode }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/layout.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body>
+
+<!--
+  アプリの外枠。
+
+  ・ステータスリボン … いま何が決まっているかを常時見せる(作業記憶を使わせない)
+  ・左のレール       … 7画面。並びは作業の順序。番号は装飾ではなく順序が実在するから
+  ・接続断の帯       … 基盤仕様書 2.9。黙って古い表示を出し続けない
+
+  情報の並び・色相の意味・作業の順序は tkinter 版から変えない。
+  詳細は docs/UIUX設計指針.md。
+-->
+
+<div class="offline" id="offline" hidden role="alert">
+  <span>バックエンドに接続できません</span>
+  <button class="btn" type="button" id="reconnect">再接続</button>
+  <button class="btn" type="button" onclick="location.reload()">再読込</button>
+</div>
+
+<header class="ribbon">
+  {#
+    アプリの名前と版。**どの画面でも消えない。**
+
+    端末はフォルダごとコピーして配るので、「その端末に入っているのは
+    どれか」を電話で聞かれることがある。画面の左上を読んでもらえば
+    答えられる。版の出どころは `config/app.json` ただ1つ。
+  #}
+  <div class="brand">
+    <b class="brand__name">{{ display_name }}</b>
+    <span class="ver" title="このアプリの版">{{ version_label }}</span>
+  </div>
+  <div class="ribbon__slots">
+    {# 値はサーバが持つ(`work_context`)。画面を移っても消えないのが要点で、
+       JSが動く前から読める #}
+    <div class="slot"><span class="k">Lot</span><span class="v" id="rb-lot">{{ ribbon.lot }}</span></div>
+    <div class="slot"><span class="k">パレット</span><span class="v" id="rb-pallet">{{ ribbon.pallet }}</span></div>
+    <div class="slot"><span class="k">製品</span><span class="v" id="rb-product">{{ ribbon.product }}</span></div>
+    <div class="slot"><span class="k">拠点</span><span class="v" id="rb-base">{{ base_point }}</span></div>
+  </div>
+  <div class="ribbon__chips" id="rb-modes">
+    {% for chip in ribbon.modes %}<span class="chip chip--{{ chip.kind }}">{{ chip.text }}</span>{% endfor %}
+  </div>
+  {#
+    いま動いているもの。**どの画面にいても見える。**
+
+    取り込みは数分かかることがあり、始めた画面(設定)を離れると
+    終わったかどうかが分からなくなる ── 戻って確かめに行くしかない。
+    帯に出しておけば、離れたまま待てる。
+
+    何も走っていないときは消える(`hidden`)。ずっと居座る枠にすると、
+    「動いていない」ことを読むために毎回そこを見ることになる。
+    中身は `jobs.js` の見張りが入れる。
+  #}
+  <div class="running" id="rb-running" hidden>
+    <span class="running__dot" aria-hidden="true"></span>
+    <span class="running__text">
+      <b id="rb-run-what"></b>
+      <small id="rb-run-how"></small>
+    </span>
+    <span class="running__track" aria-hidden="true"><i id="rb-run-fill"></i></span>
+  </div>
+  <div class="ribbon__end">
+    {# モード。**権限のあるものだけ**が選択肢になる(`アクセス権限` マスタ)。
+       1つしか持っていない端末には切替を出さない ── 押せない選択肢を
+       並べても、できないことが増えたようにしか見えない。
+       文言・選べるかどうかの判断はサーバが持つ(`shell.shell_context`) #}
+    {% if mode_options | length > 1 %}
+    <div class="modeswitch" role="group" aria-label="モード">
+      {% for m in mode_options %}
+      <button class="modeswitch__btn" type="button"
+              data-mode="{{ m.key }}" title="{{ m.detail }}"
+              aria-pressed="{{ 'true' if m.current else 'false' }}"
+              {% if m.current %}data-current="1"{% endif %}>{{ m.label }}</button>
+      {% endfor %}
+    </div>
+    {% else %}
+    <span class="role-chip role-chip--{{ mode }}"
+          {% if mode_note %}title="{{ mode_note }}"{% endif %}>{{ mode_label }}モード</span>
+    {% endif %}
+    <button class="btn btn--danger" type="button" id="quit"><span class="gl">■</span>終了</button>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="rail" aria-label="作業の順序">
+    <ol>
+      {% for item in nav %}
+      <li>
+        {# 2行。名前だけでは「倉庫連携」が何をする画面か押すまで分からない。
+           説明はサーバが持つ(`shell.NavItem.note`) #}
+        <a href="{{ item.url }}" {% if item.key == active %}aria-current="page"{% endif %}>
+          <span class="n" aria-hidden="true">{{ loop.index }}</span>
+          <span class="rail__text">
+            <b class="label">{{ item.label }}</b>
+            {% if item.note %}<small>{{ item.note }}</small>{% endif %}
+          </span>
+          {% if item.badge %}<span class="badge badge--{{ item.badge_kind }}">{{ item.badge }}</span>{% endif %}
+        </a>
+      </li>
+      {% endfor %}
+    </ol>
+  </nav>
+
+  <main class="work" id="main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+  // サーバから渡す起動時の値。JSはここ以外から設定を読まない
+  window.APP = {
+    token: {{ token | tojson }},
+    mode: {{ mode | tojson }},
+    healthPollMs: {{ health_poll_ms }},
+    logPollMs: {{ log_poll_ms }},
+    alivePollMs: {{ alive_poll_ms }}
+  };
+</script>
+<script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+{#
+  画面ごとのスクリプトは**この箱の中だけ**に置く。画面を移るとき、
+  `nav.js` はこの箱の中身を入れ替えて動かし直す(外枠のぶんは残す)。
+#}
+<div id="pagescripts" hidden>{% block scripts %}{% endblock %}</div>
+</body>
+</html>

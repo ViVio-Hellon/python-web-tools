@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}{{ '発注一覧' if is_material else '倉庫連携' }} — {{ display_name }}{% endblock %}
+
+{% block content %}
+{#
+  **一覧は左、発注フォームは右**(設計指針 §4.2)。以前は発注フォーム
+  (12項目)が一覧の**上**にあり、送ったあとの結果を見るには毎回
+  フォームを通り過ぎてスクロールしていた。横に並べれば、入れながら
+  一覧を見ていられる。
+
+  資材モードにフォームは無いので、そのときは一覧が全幅を使う。
+#}
+<div class="split {{ 'split--onecol' if is_material else 'split--warehouse' }}">
+
+  {# 左: 結果。送った / 受け取った発注の一覧 #}
+  <div class="split__results" id="resultCol">
+  <div class="pane__head">
+    <div>
+      <span class="eyebrow">{{ 'Step 1' if is_material else 'Step 4' }}</span>
+      <h2>{{ '発注一覧' if is_material else '倉庫連携' }}</h2>
+    </div>
+    <div class="nextstep">
+      <button class="btn btn--find" type="button" id="refresh">
+        <span class="gl">⟳</span>最新にする</button>
+      <p class="why" id="found"></p>
+    </div>
+  </div>
+
+
+  <section class="card">
+    <header>
+      <i class="ib ib--sm ib--accent" aria-hidden="true">注</i>
+      <h3>{{ '受け取った発注' if is_material else '送った発注' }}</h3>
+      <span class="badge badge--todo" id="pending" hidden></span>
+    </header>
+    <div class="pad">
+      <div class="field">
+        <label for="q">絞り込み</label>
+        <input class="input" id="q" style="width:16em" autocomplete="off"
+               placeholder="LotNo / 品名 / 発注コード / 用途コード / 納入先">
+        {# 期間の絞り込み。**面を替えるのではなく絞るだけ**なので
+           セグメント(沈んだ盆に白いつまみ)。下線タブは結果の面に取っておく #}
+        <span class="seg" role="group" aria-label="期間">
+          {% for key, label in date_filters %}
+          <button class="seg__btn" type="button" data-period="{{ key }}"
+                  aria-pressed="{{ 'true' if loop.first else 'false' }}">{{ label }}</button>
+          {% endfor %}
+        </span>
+        {% if is_material %}
+        <label class="radio" style="margin-left:8px">
+          <input type="checkbox" id="cancelled">取消済も出す
+        </label>
+        {% endif %}
+      </div>
+
+      {# 主(太字)と従(小さい灰色)の2行組。**どれを畳むかはサーバが
+         決める**(`presenters/warehouse.ORDER_VIEW`)ので、ここは
+         受け取った幅と見出しをそのまま置く #}
+      <div class="tablewrap" style="margin-top:10px">
+        <table class="table table--rich">
+          <colgroup>
+            {% for c in columns %}<col style="width:{{ c.width }}">{% endfor %}
+            <col style="width:{{ action_width }}">
+          </colgroup>
+          <thead><tr>
+            {% for c in columns %}
+            <th{% if c.numeric %} class="n"{% endif %} title="{{ c.label }}">{{ c.label }}</th>
+            {% endfor %}
+            <th>操作</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p class="why" id="listNote">{{ state.message }}</p>
+    </div>
+  </section>
+  </div>
+
+  {% if not is_material %}
+  {# 右: 操作。出す。**スクロールさせない** #}
+  <div class="split__controls" id="controlCol">
+  {#
+    資材モードは受け取って確認するだけなので、一覧が主役。
+    現場モードは出すのが仕事なので、発注フォームを先に置く。
+    同じ画面でも、その人の作業の順に並べる。
+  #}
+  <section class="card">
+    <header>
+      <i class="ib ib--sm ib--lower" aria-hidden="true">新</i>
+      <h3>新規発注</h3>
+      <span class="eyebrow">倉庫へ送ります</span>
+    </header>
+    <div class="pad">
+      <div class="form">
+        {% for label, key, required, numeric in fields %}
+        <label for="f-{{ key }}">
+          {{ label }}{% if required %}<span class="req" aria-label="必須">*</span>{% endif %}
+        </label>
+        <input class="input {{ 'num' if numeric else '' }}" id="f-{{ key }}"
+               {% if numeric %}inputmode="numeric"{% endif %} autocomplete="off">
+        {% endfor %}
+      </div>
+      {# 資材選択の「倉庫送信」から来た下書き。**まだ登録していない**。
+         1P0113 は角材と松板の2行になるので、1件ずつ確認して送る #}
+      {% if drafts %}
+      <div class="status status--ng" id="drafts" data-orders="{{ drafts | tojson | forceescape }}">
+        <span>資材選択から <b>{{ drafts | length }} 件</b> 届いています。
+          内容を確かめてから「倉庫へ送信」を押してください。</span>
+        <span class="draftnav" style="margin-left:auto">
+          <button class="btn" type="button" id="draftPrev">前へ</button>
+          <span id="draftPos" class="num"></span>
+          <button class="btn" type="button" id="draftNext">次へ</button>
+        </span>
+      </div>
+      {% endif %}
+      <p class="status" id="sendStatus" hidden></p>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn btn--commit" type="button" id="send">倉庫へ送信</button>
+        <button class="btn btn--danger" type="button" id="clearForm">
+          <span class="gl">×</span>入力を消す
+        </button>
+      </div>
+      <p class="why">
+        <span class="req">*</span> は必須です。送ったあとは下の一覧に出ます。
+        <b>取り消しは倉庫側の操作です</b> ── 間違えて送った場合は倉庫へ
+        連絡してください(現場から状態を動かせると、倉庫が実際に受け取ったかに
+        関わらず消せてしまうため)。
+      </p>
+    </div>
+  </section>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  /* 既定は2対。**列の幅で決める**(画面幅ではない) ── 一覧が16列あって
+     結果側を広く取っているので、画面が1920でもこの列は 660px しかない。
+     4対に詰めると入力欄が 70px になり、LotNo が読めなくなる */
+  .form { display:grid; grid-template-columns:repeat(2, 6em minmax(0,1fr));
+          gap:8px 10px; align-items:center; }
+  @container controls (min-width: 880px) {
+    .form { grid-template-columns:repeat(4, 6em minmax(0,1fr)); }
+  }
+  .form label { color:var(--muted); font-size: var(--fs-sm); text-align:right; }
+  .req { color:var(--state-error); font-weight:700; margin-left:2px; }
+
+  .modes { display:flex; gap:12px; margin-left:8px; }
+  .radio { display:inline-flex; align-items:center; gap:5px; cursor:pointer;
+           font-size: var(--fs-md); }
+
+  /* 状態ピルは共通部品(components.css の `.st`)。ここでは
+     この画面にしか無い「取消済」だけを足す ── 取り消したものは
+     線を引いて、色を知覚できなくても分かるようにする */
+  .st--off { text-decoration:line-through; }
+
+  .rowacts { display:flex; gap:6px; align-items:center; white-space:nowrap; }
+  .rowacts .btn { min-height:32px; min-width:32px; padding:5px 10px;
+                  font-size: var(--fs-sm); }
+  /* 押せない理由は**折り返してよい**。ボタンと違って切れても押せなく
+     なるものではないし、折り返さないと列からはみ出して表が横に動く */
+  .rowacts .why { white-space:normal; min-width:0; line-height:1.35; }
+  .status[hidden], .badge[hidden] { display:none; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/warehouse.js') }}";
+  start({{ state | tojson }}, {{ is_material | tojson }});
+</script>
+{% endblock %}

@@ -1,0 +1,232 @@
+"""マスタ管理の API のテスト (`app/routes/master.py`)。
+
+【ここで守りたいこと】
+1. **断りの種別が HTTP に正しく写る**(設計.md §1)。
+   400=入力の形 / 403=許されていない / 409=先を越された / 422=業務の断り
+2. **断ったときも画面ぜんぶを返す。**「断られた」と「画面が古いまま」を
+   同時に起こさない
+3. **見るのはどのモードでも通る。** 中身を確かめられることと、
+   書き換えられることは別の話
+"""
+from __future__ import annotations
+
+import sqlite3
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))
+
+from packaging_tool import (access_control, config, master_admin,  # noqa: E402
+                            modes, user_settings)
+
+try:
+    import flask  # noqa: F401
+    HAS_WEB = True
+except ImportError:                              # pragma: no cover
+    HAS_WEB = False
+
+_SKIP = "Flask が入っていないためスキップ (pip install -r requirements.txt)"
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class MasterApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from tests import _web
+        from tests.test_master_admin import make_source
+        from app.routes import master as master_routes
+
+        self.dir = Path(tempfile.mkdtemp(prefix="webmaster_"))
+        self.src = make_source(self.dir)
+        # **本物の共有フォルダを見に行かせない**
+        self._saved = user_settings.get(config.KEY_MASTER_DB_DIR)
+        user_settings.save(config.KEY_MASTER_DB_DIR, str(self.dir))
+        self.addCleanup(user_settings.save, config.KEY_MASTER_DB_DIR,
+                        self._saved or "")
+
+        self.conn = _web.bind_db(self, master_routes)
+        self.client = _web.make_client("field", port=8713)
+        self.auth = _web.auth()
+
+    # -- 道具 -------------------------------------------------------
+    def browse(self, **params):
+        res = self.client.get("/api/master/browse", query_string=params,
+                              headers=self.auth)
+        self.assertEqual(res.status_code, 200)
+        return res.get_json()
+
+    def post(self, path: str, body: dict):
+        return self.client.post(f"/api/master/{path}", json=body,
+                                headers=self.auth)
+
+    def key(self, table: str = "PalletMaster"):
+        return self.browse(table=table)["page"]["rows"][0][master_admin.ROW_KEY]
+
+    def only_field(self) -> None:
+        """この端末を現場モードだけにする。"""
+        identity = access_control.current_identity()
+        self.conn.execute(
+            'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
+            " VALUES (?,'',?,1,'')",
+            (identity.login_id, access_control.mode_permission(modes.FIELD)))
+        self.conn.commit()
+
+    # -- 見る -------------------------------------------------------
+    def test_表と中身が返る(self) -> None:
+        state = self.browse()
+        names = [t["table"] for t in state["tables"]]
+        self.assertIn("PalletMaster", names)
+        self.assertEqual(state["table"], "PalletMaster")
+        self.assertEqual(state["page"]["total"], 1)
+
+    def test_表を指定して引ける(self) -> None:
+        state = self.browse(table="BoardMaster")
+        self.assertEqual(state["table"], "BoardMaster")
+        self.assertEqual(state["page"]["total"], 2)
+
+    def test_絞り込める(self) -> None:
+        state = self.browse(table="BoardMaster", q="IK")
+        self.assertEqual(state["page"]["shown"], 1)
+
+    def test_知らない表を指定したら先頭に戻す(self) -> None:
+        """空の面を出して「自分で選べ」とするより、いちばん触る表を開く。"""
+        self.assertEqual(self.browse(table="無い表")["table"], "PalletMaster")
+
+    def test_見るのは現場モードでも通る(self) -> None:
+        self.only_field()
+        state = self.browse()
+        self.assertFalse(state["can_edit"])
+        self.assertEqual(state["page"]["total"], 1)
+        # 押す前に理由が読める
+        self.assertIn("資材", state["edit_why"])
+
+    # -- 直す -------------------------------------------------------
+    def test_直すと画面ぜんぶが返る(self) -> None:
+        res = self.post("row/save", {"table": "PalletMaster",
+                                     "key": self.key(), "values": {"位置": "B-2"}})
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual(body["page"]["rows"][0]["位置"], "B-2")
+        self.assertIn("直しました", body["message"])
+
+    def test_足せる(self) -> None:
+        res = self.post("row/add", {
+            "table": "BoardMaster",
+            "values": {"ボード幅": "1500", "ボード丈": "3000",
+                       "ボードタイプ": "プロテックボード"}})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["page"]["total"], 3)
+
+    def test_消せる(self) -> None:
+        res = self.post("row/delete", {"table": "BoardMaster",
+                                       "key": self.key("BoardMaster")})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["page"]["total"], 1)
+
+    def test_絞り込みは書いたあとも残る(self) -> None:
+        """直すたびに一覧が全件に戻ると、次の行を探し直すことになる。"""
+        res = self.post("row/save", {"table": "BoardMaster", "q": "IK",
+                                     "key": self.key("BoardMaster") + 1,
+                                     "values": {"データラベル": "x"}})
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual(body["query"], "IK")
+        self.assertEqual(body["page"]["shown"], 1)
+
+    # -- 断り -------------------------------------------------------
+    def test_入力の形が違えば400(self) -> None:
+        res = self.post("row/save", {"table": "PalletMaster",
+                                     "key": self.key(), "values": {"幅": "ひろい"}})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_BAD_VALUE)
+
+    def test_許されていなければ403(self) -> None:
+        self.only_field()
+        res = self.post("row/save", {"table": "PalletMaster",
+                                     "key": self.key(), "values": {"位置": "B"}})
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_NOT_ALLOWED)
+
+    def test_先を越されていれば409(self) -> None:
+        res = self.post("row/save", {"table": "PalletMaster", "key": 9999,
+                                     "values": {"位置": "B"}})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_NO_ROW)
+
+    def test_業務として断るなら422(self) -> None:
+        res = self.post("row/save", {"table": "PalletPatterns", "key": 1,
+                                     "values": {"使用回数": "9"}})
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_NOT_EDITABLE)
+
+    def test_断ったときも画面ぜんぶが入っている(self) -> None:
+        """「断られた」と「画面が古いまま」を同時に起こさない。"""
+        res = self.post("row/save", {"table": "PalletMaster",
+                                     "key": self.key(), "values": {"幅": "ひろい"}})
+        body = res.get_json()
+        self.assertIn("page", body)
+        self.assertEqual(body["page"]["rows"][0]["幅"], 1100)
+        self.assertEqual(body["message"], "")
+
+    def test_断ったときは何も動いていない(self) -> None:
+        self.post("row/save", {"table": "PalletMaster",
+                               "key": self.key(), "values": {"幅": "ひろい"}})
+        conn = sqlite3.connect(self.src)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT 幅 FROM PalletMaster").fetchone()[0], 1100)
+        finally:
+            conn.close()
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class SettingsPageTests(unittest.TestCase):
+    """設定画面の面として載っていること。"""
+
+    def setUp(self) -> None:
+        from tests import _web
+        from app.routes import master as master_routes
+        from app.routes import settings as settings_routes
+
+        conn = _web.bind_db(self, settings_routes)
+        _web.bind_db(self, master_routes, conn)
+        self.client = _web.make_client("field", port=8713)
+        self.auth = _web.auth()
+
+    def test_面がある(self) -> None:
+        html = self.client.get("/settings", headers=self.auth).get_data(as_text=True)
+        self.assertIn('id="tab-master"', html)
+        self.assertIn("マスタ管理", html)
+
+    def test_最初の描画では共有フォルダに触らない(self) -> None:
+        """設定画面は毎日開く。19テーブルを数え終わるのを待たせない。
+
+        面を開くまで読まないので、最初の描画に行は入っていない。
+        """
+        from packaging_tool import source_db
+
+        called = []
+        original = source_db.table_counts
+        source_db.table_counts = lambda path: called.append(path) or {}
+        self.addCleanup(setattr, source_db, "table_counts", original)
+        self.client.get("/settings", headers=self.auth)
+        self.assertEqual(called, [])
+
+    def test_資材モードでも開ける(self) -> None:
+        from tests import _web
+
+        grant = access_control.grant_of(
+            access_control.mode_permission(modes.MATERIAL))
+        client = _web.make_client("material", port=8723, grant=grant)
+        html = client.get("/settings", headers=self.auth).get_data(as_text=True)
+        self.assertIn('id="tab-master"', html)
+
+
+if __name__ == "__main__":                       # pragma: no cover
+    unittest.main()

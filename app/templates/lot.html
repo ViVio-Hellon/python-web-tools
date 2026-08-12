@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+{% block title %}ロット検索 — {{ display_name }}{% endblock %}
+
+{% block content %}
+{#
+  作業の流れどおりに上から並べる。
+
+    探す(検索欄)→ 絞る(条件)→ 見つける(一覧)→ 開く(モーダル)→ 次へ
+
+  **入口は検索欄1つ**。以前は一覧の下に「LotNo」を打つ欄が別にあり、
+  番号を知っているときにどちらへ打てばよいかを利用者が判断していた。
+  しかも打つ場所(下)と結果(さらに下)が離れていて、打つ→スクロール
+  →戻る、を繰り返すことになっていた。
+
+  結果は**前面のモーダル**に集める。縦に伸ばさないので、閉じれば
+  元の一覧がそのまま残る(現在地を見失わない)。
+#}
+<div class="pane pane--lot">
+  <div class="pane__head">
+    <div>
+      <span class="eyebrow">Step 1</span>
+      <h2>ロット検索</h2>
+    </div>
+    {# 次の一手。押せない理由はボタンの真下に置く ── 離すと、
+       押せないことに気づいたときに理由が視野の外にある #}
+    <div class="nextstep">
+      <button class="btn btn--nav" type="button" id="expand" disabled>
+        資材展開<span class="gl">▸</span>
+      </button>
+      <p class="why" id="expandWhy">先にロットを選んでください。</p>
+    </div>
+  </div>
+
+  {% if not available %}
+  <div class="status status--ng" style="margin-top:12px">
+    <span>{{ unavailable_message }}</span>
+    <a href="/settings" class="btn btn--nav" style="margin-left:auto">設定画面へ<span class="gl">▸</span></a>
+  </div>
+  {% endif %}
+
+  {# ================================================================
+     1. 探す — 主入力。画面でいちばん大きい入力欄はこれ1つだけ
+     ================================================================ #}
+  {# 未取り込みのときは、探す欄も一覧もまとめて隠す。片方だけ残ると
+     「打てるのに何も出ない」状態になる #}
+  <div class="lotwork" id="listCard">
+  <section class="card seek">
+    <div class="pad">
+      <div class="seek__main">
+        <label class="seek__label" for="listText">
+          <span class="gl" aria-hidden="true">🔎</span>ロットを探す
+        </label>
+        <input class="input seek__input" id="listText" type="search"
+               autocomplete="off" autofocus
+               placeholder="ロット番号・用途・材質・寸法…"
+               value="{{ list_view.text }}">
+        <div class="seek__size">
+          <label class="listtools__label" for="pageSize">表示件数</label>
+          <select class="input" id="pageSize">
+            {% for n in list_view.page_sizes %}
+            <option value="{{ n }}" {% if n == list_view.page_size %}selected{% endif %}>{{ n }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <p class="why seek__hint" id="searchHint">{{ list_view.search_hint }}</p>
+
+      {# 絞り込み。チップ=いま効いている条件、入力=条件を足す #}
+      <div class="filterbar">
+        <span class="filterbar__title">絞り込み</span>
+        <span class="chipcount" id="chipCount">{{ list_view.conditions | length }}件</span>
+        <div class="chips" id="chips"></div>
+        <div class="suggestwrap">
+          <input class="input" id="condInput" type="search" autocomplete="off"
+                 role="combobox" aria-expanded="false" aria-controls="suggest"
+                 placeholder="条件を追加(列名・値・保存した条件)">
+          <ul class="suggest" id="suggest" role="listbox" hidden></ul>
+        </div>
+        <button class="btn btn--select" type="button" id="saveFilter">
+          <span class="gl">+</span>この条件を保存</button>
+        <button class="btn btn--danger" type="button" id="clearFilter">
+          <span class="gl">×</span>全解除</button>
+      </div>
+      <p class="why" id="saveWhy" hidden></p>
+
+      {# よく使う条件。押すと足す、×で消す #}
+      <div class="filterbar filterbar--saved" id="savedBar" hidden>
+        <span class="filterbar__title">よく使う条件</span>
+        <div class="chips" id="savedChips"></div>
+      </div>
+    </div>
+  </section>
+
+  {# ================================================================
+     2. 見つける — 一覧。**縦に動くのはこの中だけ**
+     ================================================================ #}
+  <section class="card listcard">
+    <header>
+      <h3>仕掛一覧</h3>
+      <span class="eyebrow" id="countNote">{{ list_view.count_note }}</span>
+      <span class="why listcard__hint" id="rowHint">{{ list_view.row_hint }}</span>
+    </header>
+    <div class="tablewrap listwrap">
+      {# **取り込んだ列を全部出す**(18列)。畳むと、畳んだ側の列で
+         並べ替えられなくなる ── 18列とも並べ替えに使えることが要点。
+         入りきらない分は横に流し、ロット番号の列だけ左に貼り付けて
+         おく(横に流したときに、どの行を見ているか分からなくなるため)。
+         行の高さは `--row-h` でそろう #}
+      <table class="table table--dense" id="lotGrid">
+        <thead><tr id="lotHead"></tr></thead>
+        <tbody id="lotRows"></tbody>
+      </table>
+    </div>
+    <p class="why pad" id="listEmpty" hidden></p>
+  </section>
+  </div>
+</div>
+
+{# ==================================================================
+   3. 開く — 詳細。**スクロールした先ではなく前面に重ねる**
+
+   入力(上)と結果(下)を行き来させないため。閉じれば元の一覧が
+   そのまま残るので、次の行をすぐ開ける。
+   `<dialog>` を使うのは、Escで閉じる・背後を触れない・フォーカスが
+   中に留まる、を自前で書かずに得られるため。
+   ================================================================== #}
+<dialog class="modal" id="lotModal" aria-labelledby="modalLot">
+  <header class="modal__head">
+    <div class="modal__title">
+      <span class="eyebrow">ロット</span>
+      <h2 class="num" id="modalLot">—</h2>
+      <span class="badges" id="lotBadges"></span>
+    </div>
+    <button class="btn" type="button" id="modalClose" aria-label="閉じる">
+      <span class="gl">×</span>閉じる</button>
+  </header>
+
+  <div class="modal__body">
+    {# 左: 数値と文字。読む順は VBA のフレーム順のまま
+       (ロット情報 → 引当情報 → 受注情報) #}
+    <div class="modal__col">
+      <section class="mblock">
+        <h3 id="lotHeader">ロット情報</h3>
+        <div id="lotFields"></div>
+      </section>
+
+      <section class="mblock">
+        <h3>試験指示票</h3>
+        <div class="field" style="margin:0">
+          <button class="slip" type="button" id="slip" aria-expanded="false"
+                  aria-controls="slipWhy" disabled>---</button>
+          <span class="why" id="slipNote" style="margin:0"></span>
+        </div>
+        {# 「要」とだけ出しても、現場は正しいかどうかを確かめられない。
+           押すと判定の根拠が出る #}
+        <div class="slipwhy" id="slipWhy" hidden>
+          <ul class="checks" id="slipChecks"></ul>
+          <p class="why">
+            VBA <code>AdvanceCheck</code> の判定式:
+            <b>表面処理が免除対象でない</b> かつ(<b>板厚が薄い</b> または
+            <b>用途コードが該当</b>)
+          </p>
+        </div>
+      </section>
+
+      <section class="mblock">
+        <h3>引当情報 <span class="eyebrow" id="hikiCount"></span></h3>
+        <div class="tablewrap">
+          <table class="table">
+            <thead><tr>
+              <th>受注番号</th><th class="n">引当数量</th><th>引当調整NO</th><th class="n">引当番号</th>
+            </tr></thead>
+            <tbody id="hikiRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="mblock">
+        <h3><span id="odrHeader">受注情報</span>
+            <span class="badges" id="odrBadges"></span></h3>
+        <div id="odrFields"></div>
+        <p class="why">材質_比重: <span class="num" id="gravity">---</span></p>
+      </section>
+    </div>
+
+    {# 右: 図面。読みながら見比べるものなので、横に並べる #}
+    <div class="modal__col modal__col--spec" id="specCard" hidden>
+      <section class="mblock">
+        <h3>包装仕様書 <span class="eyebrow num" id="specNo"></span></h3>
+        <div class="specbar">
+          {# 「枠に収める」と「実寸」は片方だけが有効。押されているほうを
+             色で示す。「幅に合わせる」ではなく「収める」なのは、小さい図を
+             引き伸ばしてぼかさないため ── 縮めることしかしない #}
+          <div class="btn-row" role="group" aria-label="表示の大きさ">
+            <button class="btn btn--on" type="button" id="specFit"
+                    aria-pressed="true">枠に収める</button>
+            <button class="btn" type="button" id="specFull"
+                    aria-pressed="false">実寸</button>
+          </div>
+          <button class="btn" type="button" id="specReload"><span class="gl">↻</span>再取得</button>
+          <a class="btn btn--nav" id="specOpen" href="{{ url_hoso }}"
+             target="_blank" rel="noopener">閲覧システム<span class="gl">▸</span></a>
+        </div>
+        <div class="specview" id="specView">
+          <p class="why" id="specMsg">図面を取得しています…</p>
+        </div>
+        <p class="why" id="specSource"></p>
+      </section>
+    </div>
+  </div>
+
+  {# 読み終わった先に次の一手を置く。作業の順序と画面の順序をそろえる #}
+  <footer class="modal__foot">
+    <p class="why" id="modalWhy"></p>
+    <button class="btn btn--nav btn--primary" type="button" id="modalExpand" disabled>
+      資材展開して資材選択へ<span class="gl">▸</span>
+    </button>
+  </footer>
+</dialog>
+{% endblock %}
+
+{% block head %}
+<style>
+  /* ---- 画面の骨格。縦に動くのは一覧の中だけ ---- */
+  .pane--lot { display: flex; flex-direction: column; gap: var(--gap-sm); overflow: hidden; }
+  .lotwork { display: flex; flex-direction: column; gap: var(--gap-sm); min-height: 0; flex: 1; }
+  .lotwork[hidden] { display: none; }
+  .listcard { min-height: 0; flex: 1; }
+  /* 一覧は残りの高さを全部使う。**縦に動くのはこの中だけ**なので、
+     切って余白を残す理由がない(共通の 46vh 上限をここでは外す) */
+  .listcard .listwrap { flex: 1; min-height: 0; max-height: none; margin: 0; }
+  .listcard__hint { margin: 0 0 0 auto; }
+
+  /* ---- 主入力。画面でいちばん大きい入力欄はこれ1つ ---- */
+  .seek__main { display: flex; align-items: center; gap: 10px; }
+  .seek__label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: var(--fs-md); font-weight: 700; white-space: nowrap;
+  }
+  .seek__input {
+    flex: 1; min-width: 12em; height: 44px; font-size: var(--fs-lg);
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+  }
+  .seek__size { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .seek__size .input { width: 6em; }
+  .seek__hint { margin: 3px 0 5px; }
+
+  /* ---- モーダル ---- */
+  .modal {
+    width: min(1240px, 94vw); max-height: 92vh; padding: 0;
+    border: 1px solid var(--rule); border-radius: var(--radius);
+    background: var(--surface); color: var(--ink);
+    box-shadow: var(--shadow-pop);
+  }
+  .modal::backdrop { background: var(--scrim); backdrop-filter: blur(2px); }
+  /* **display は [open] のときだけ。** 素の `.modal` に display を書くと、
+     閉じている dialog がページ全面に居座り、下の一覧を押せなくなる
+     (dialog の既定は display:none で、それを上書きしてしまうため) */
+  .modal[open] {
+    display: flex; flex-direction: column;
+    animation: modalin .12s ease-out;
+  }
+  @keyframes modalin { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) { .modal[open] { animation: none; } }
+
+  .modal__head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; border-bottom: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  .modal__title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .modal__title h2 { font-size: var(--fs-xl); font-family: var(--mono); margin: 0; }
+  .modal__head .btn { margin-left: auto; }
+
+  .modal__body {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px; padding: 16px; overflow: auto; min-height: 0;
+  }
+  /* 図面が無いときは1カラム。ただし幅は切る ── 画面いっぱいに
+     伸ばすと見出しと値が離れすぎて、どの値がどの項目か目で追えない
+     (行長は 90文字程度までが読みやすい) */
+  .modal__body:has(> .modal__col--spec[hidden]) {
+    grid-template-columns: minmax(0, 1fr); justify-items: center;
+  }
+  .modal__body:has(> .modal__col--spec[hidden]) > .modal__col { width: min(100%, 900px); }
+  .modal__col { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+  .mblock h3 {
+    font-size: var(--fs-xs); letter-spacing: .02em; color: var(--faint);
+    font-weight: 600; margin: 0 0 7px; display: flex; align-items: baseline; gap: 8px;
+  }
+
+  .modal__foot {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; border-top: 1px solid var(--rule); background: var(--sunken);
+  }
+  .modal__foot .why { margin: 0; }
+  .modal__foot .btn { margin-left: auto; }
+  .btn--primary { min-height: 44px; font-size: var(--fs-lg); }
+
+  @media (max-width: 1100px) {
+    .modal__body { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* ---- 試験指示票 ---- */
+  .slip {
+    min-width: 5em; min-height: 36px; text-align: center; font-weight: 700;
+    font-size: var(--fs-sm); padding: 4px 10px; border-radius: var(--radius-xs); cursor: pointer;
+    font-family: inherit;
+    background: var(--act-idle); color: var(--act-idle-fg);
+    border: 1px solid var(--act-idle-line);
+  }
+  .slip:disabled { cursor: default; opacity: .7; }
+  .slip::after { content: " ▾"; font-size: var(--fs-2xs); }
+  .slip:disabled::after, .slip[aria-expanded="true"]::after { content: none; }
+  .slip[aria-expanded="true"] { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .slip[data-state="needed"] { background: var(--warn-bg); color: var(--warn-fg);
+                               border-color: var(--state-error); }
+  .slip[data-state="not"]    { background: var(--ok-bg); color: var(--state-ok);
+                               border-color: var(--state-ok); }
+
+  .slipwhy { margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm);
+             background: var(--sunken); border: 1px solid var(--rule); }
+  .slipwhy[hidden] { display: none; }
+  .checks { margin: 0 0 6px; padding: 0; list-style: none; display: grid; gap: 3px; }
+  .checks li { display: grid; grid-template-columns: 1.6em 1fr auto; gap: 8px;
+               align-items: baseline; padding: 3px 0;
+               border-bottom: 1px solid var(--hairline); font-size: var(--fs-md); }
+  .checks .mark { font-weight: 700; text-align: center; }
+  .checks li.met .mark      { color: var(--state-ok); }
+  .checks li.unmet .mark    { color: var(--muted); }
+  .checks .val { font-family: var(--mono); font-size: var(--fs-sm); color: var(--muted); }
+
+  /* ---- 項目のまとまり ----
+     12項目を等間隔に並べると「板厚」と「オーダー板厚」を取り違える(近接) */
+  .group + .group { margin-top: 10px; }
+  .group__name { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em;
+                 color: var(--muted); margin: 0 0 2px;
+                 padding-bottom: 2px; border-bottom: 1px solid var(--rule); }
+  .group--hl .group__name { color: var(--state-error);
+                            border-bottom-color: var(--state-error); }
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0,1fr));
+            gap: 0 24px; margin: 0; }
+  .fields > div { display: grid; grid-template-columns: 9.5em 1fr; gap: 8px;
+                  align-items: baseline; padding: 4px 0;
+                  border-bottom: 1px solid var(--hairline); min-width: 0; }
+  .fields > div.wide { grid-column: 1 / -1; }
+  .fields dt { color: var(--muted); font-size: var(--fs-sm); }
+  .fields dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums;
+               font-size: var(--fs-md); overflow-wrap: anywhere; }
+  .fields dd.hl { color: var(--state-error); font-weight: 700; }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; }
+  .nextstep { display: flex; flex: 0 0 auto; flex-direction: column;
+              align-items: flex-end; gap: 4px; }
+  .nextstep .why { margin: 0; text-align: right; max-width: 32ch; }
+
+  /* ---- 包装仕様書の図面 ---- */
+  .specbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+             margin-bottom: 8px; }
+  .specview { background: var(--sunken); border: 1px solid var(--rule);
+              border-radius: var(--radius-sm); padding: 8px; overflow: auto;
+              max-height: 58vh; display: grid; place-items: center;
+              min-height: 120px; }
+  .specview img, .specview iframe { display: block; background: #fff; }
+  .specview--fit img { max-width: 100%; height: auto; }
+  .specview--full img { max-width: none; }        /* 実寸。枠の中をスクロール */
+  .specview iframe { width: 100%; height: 52vh; border: 0; }
+  .specview .why { margin: 0; text-align: center; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/lot.js') }}";
+  start({ available: {{ available | tojson }},
+          list: {{ list_view | tojson }} });
+</script>
+{% endblock %}

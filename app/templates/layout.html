@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% block title %}棚検索 — {{ display_name }}{% endblock %}
+
+{% block content %}
+{#
+  **結果は左、操作は右**(設計指針 §4.2)。以前は1本の列に
+
+     検索 → 配置図 → 置き場の中身
+
+  と積んでいた。検索して図を見て、また検索する ── そのたびに図を
+  通り過ぎてスクロールで戻ることになる。図と中身を左へ、検索を
+  右へ寄せると、条件を変えながら図を見ていられる。
+#}
+<div class="split split--layout">
+
+  {# ============================================================
+     左: 結果。図と、選んだ置き場の中身
+     ============================================================ #}
+  <div class="split__results" id="resultCol">
+  <div class="pane__head">
+    <div>
+      <span class="eyebrow">Step 5</span>
+      <h2>棚検索</h2>
+    </div>
+  </div>
+
+  {% if not view.available %}
+  <div class="status status--ng" style="margin-top:12px">
+    <span>{{ view.unavailable_message }}</span>
+    <a href="/settings" class="btn btn--nav" style="margin-left:auto">設定画面へ<span class="gl">▸</span></a>
+  </div>
+  {% endif %}
+
+
+    {# 結果を面で分ける。図と中身を縦に積むと、置き場を選ぶたびに
+       図を通り過ぎて下まで見に行くことになる #}
+    <div class="tabs" data-tabs="layout-result" id="layoutTabs">
+      <div class="tabs__bar" role="tablist" aria-label="結果の面">
+        <button class="tab" type="button" role="tab" data-key="plan" data-default="1"
+                id="tab-plan" aria-controls="panel-plan" aria-selected="false">
+          <span class="tab__label">配置図</span>
+          <span class="tab__badge" hidden></span>
+        </button>
+        <button class="tab" type="button" role="tab" data-key="contents"
+                id="tab-contents" aria-controls="panel-contents" aria-selected="false">
+          <span class="tab__label">置き場の中身</span>
+          <span class="tab__badge" id="contentsTabBadge" hidden></span>
+        </button>
+      </div>
+      <div class="tabs__panels">
+        <section class="tabpanel" id="panel-plan" role="tabpanel"
+                 aria-labelledby="tab-plan" hidden>
+  <!-- 2. 配置図 -->
+  <section class="card">
+    <header>
+      <i class="ib ib--sm ib--accent" aria-hidden="true">図</i>
+      <h3>配置図</h3>
+      <span class="eyebrow" id="editState"></span>
+      <div class="filters">
+        {# 通常は動かせない。図はよく押す(中身を見る)ので、常時
+           ドラッグできると見るつもりの操作で置き場がずれる #}
+        <button class="btn" type="button" id="editToggle"
+                aria-pressed="{{ 'true' if view.editing else 'false' }}">配置編集</button>
+      </div>
+    </header>
+    <div class="pad">
+      <div class="mapwrap">
+        <svg id="map" viewBox="{{ view.view_box }}" role="group"
+             aria-label="棚の配置図。押すとその置き場の資材を表示します"></svg>
+      </div>
+      <p class="legend" id="mapLegend"></p>
+
+      {# 編集の道具は編集中だけ出す。ふだん見えていると、押せてしまう #}
+      <div id="editBox" {% if not view.editing %}hidden{% endif %}>
+        <div class="field">
+          <label for="newLabel">置き場を追加</label>
+          <input class="input" id="newLabel" style="width:10em" autocomplete="off"
+                 placeholder="lblItem36">
+          <button class="btn" type="button" id="addLabel">追加</button>
+          <button class="btn btn--danger" type="button" id="removeLabel">
+            <span class="gl">×</span>選んだ置き場を消す</button>
+        </div>
+        <div class="field">
+          <label for="bgFile">背景画像</label>
+          {# `tk.PhotoImage` の PNG/GIF 制約が無くなったので JPEG も使える #}
+          <input class="input" id="bgFile" type="file"
+                 accept="image/png,image/jpeg,image/gif,image/webp">
+          <button class="btn btn--danger" type="button" id="clearBg">
+            <span class="gl">×</span>背景を外す</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn--commit" type="button" id="save">
+            <span class="gl">▪</span>配置を保存</button>
+          <button class="btn btn--danger" type="button" id="reset">
+            <span class="gl">↺</span>出荷時に戻す</button>
+        </div>
+        <p class="why">
+          置き場をドラッグして動かします。<b>「配置を保存」を押すまでファイルには書きません</b> ──
+          間違えて動かしても、画面を開き直せば元に戻ります。
+        </p>
+      </div>
+      <p class="why" id="dirtyWhy" hidden>
+        <b>まだ保存していない変更があります。</b>「配置を保存」を押してください。
+      </p>
+    </div>
+  </section>
+        </section>
+        <section class="tabpanel tabpanel--scroll" id="panel-contents" role="tabpanel"
+                 aria-labelledby="tab-contents" hidden>
+  <!-- 3. 置き場の中身 -->
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">材</i>
+      <h3>置き場の資材</h3>
+      <span class="eyebrow" id="materialsNote">{{ view.materials_note }}</span>
+    </header>
+    <div class="pad">
+      <div class="tablewrap tablewrap--materials">
+        <table class="table">
+          <thead><tr><th>種別</th><th class="n">サイズ</th></tr></thead>
+          <tbody id="materialRows"></tbody>
+        </table>
+      </div>
+      <p class="why">図の置き場を押すと、そこにある資材が出ます。</p>
+    </div>
+  </section>
+        </section>
+      </div>
+    </div>
+
+  {# **図に無いラベルは面の外。** これはデータの不整合の知らせで、
+     見ていない面に隠れていると「検索しても当たらない」形でしか
+     表面化しない。ふだんは hidden なので場所を取らない #}
+  <!-- 4. 図に無いラベル -->
+  {# マスタが参照しているのに図に無いラベル。**足す目安**になる。
+     黙っていると「検索しても当たらない」形で表面化して原因が分からない #}
+  <section class="card" id="unplacedCard" hidden>
+    <header>
+      <i class="ib ib--sm ib--ng" aria-hidden="true">!</i>
+      <h3>図に無い置き場</h3>
+      <span class="eyebrow" id="unplacedNote"></span>
+    </header>
+    <div class="pad">
+      <p class="why">
+        マスタの「データラベル」列が指しているのに、配置図にありません。
+        <b>この置き場は検索に当たりません。</b>
+        「配置編集」で足してから、実際の位置へ動かしてください。
+      </p>
+      <p class="legend" id="unplacedList"></p>
+    </div>
+  </section>
+  </div>
+
+  {# ============================================================
+     右: 操作。探す条件。**スクロールさせない**
+     ============================================================ #}
+  <div class="split__controls" id="controlCol">
+  <!-- 1. 検索 (VBA frmLayout の検索欄) -->
+  <section class="card">
+    <header>
+      <i class="ib ib--sm ib--accent" aria-hidden="true">検</i>
+      <h3>最寄り置き場の検索</h3>
+      <div class="filters">
+        <label class="field" style="margin:0">
+          <span>拠点</span>
+          <select class="input" id="basePoint" style="min-width:7em">
+            {% for name in view.base_points %}
+            <option value="{{ name }}" {% if name == view.base_point %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+    </header>
+    <div class="pad">
+      {# 拠点は資材選択とも共有する設定(VBAのレジストリ1値に相当)。
+         画面ごとに別の拠点を持たせると、同じロットで違う結果が出る #}
+      <p class="why">拠点は<b>資材選択の疲労度優先とも共有</b>します。</p>
+
+      {# 種別。カードにして、探すものの違いを1行で添える(§1.2) #}
+      <div class="choose" role="group" aria-label="探す資材の種別">
+        <button class="choice" type="button" data-kind="board"
+                aria-pressed="{{ 'true' if view.kind == 'board' else 'false' }}">
+          <i class="ib ib--sm ib--lower" aria-hidden="true">板</i>
+          <span class="choice__tx"><b>ボード</b><small>幅と丈で探す</small></span>
+          <i class="choice__ck" aria-hidden="true">✓</i>
+        </button>
+        <button class="choice" type="button" data-kind="angle"
+                aria-pressed="{{ 'true' if view.kind == 'angle' else 'false' }}">
+          <i class="ib ib--sm ib--angle" aria-hidden="true">ｱ</i>
+          <span class="choice__tx"><b>アングル</b><small>丈だけで探す</small></span>
+          <i class="choice__ck" aria-hidden="true">✓</i>
+        </button>
+      </div>
+      <div class="field">
+        <label for="searchWidth">幅</label>
+        <input class="input input--num" id="searchWidth" inputmode="numeric"
+               value="{{ view.width_text }}" autocomplete="off">
+        <label for="searchLength">丈</label>
+        <input class="input input--num" id="searchLength" inputmode="numeric"
+               value="{{ view.length_text }}" autocomplete="off">
+        <button class="btn btn--find" type="button" id="search">
+          <span class="gl">⌕</span>検索</button>
+        {# 資材選択から渡ってきた資材を、まとめて光らせる。
+           1件ずつ打ち直させないための道(旧版 `btnMap` の受け側)。
+           **渡ってきていなければ出さない** ── 押せるのに何も起きない
+           ボタンは、壊れているのか使い方が違うのか区別できない #}
+        <button class="btn btn--select" type="button" id="fromSelection"
+                {% if not view.handoff %}hidden{% endif %}>
+          <span class="gl">▦</span><span id="handoffLabel">選定した資材 {{ view.handoff }}件をまとめて</span></button>
+      </div>
+      <p class="status {{ 'status--ok' if view.found else 'status--ng' }}"
+         id="result" {% if not view.result %}hidden{% endif %}>{{ view.result }}</p>
+    </div>
+  </section>
+    <p class="why">
+      置き場は<b>マスタの「データラベル」列</b>が決めます。
+      図をずらせば置き場が変わり、テーブルを直せば中身が変わります。
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  .mapwrap { width:100%; overflow:auto; max-height:56vh; }
+  #map { width:100%; height:auto; display:block; border-radius:var(--radius-xs);
+         background:var(--sunken); touch-action:none; }
+
+  .shelf { cursor:pointer; }
+  .shelf rect { stroke-width:1; }
+  /* 置き場の状態。色だけに頼らないよう、名前も箱の中に出す(§3.8) */
+  .shelf--idle  rect { fill:var(--map-idle);   stroke:var(--map-line); }
+  .shelf--empty rect { fill:var(--map-empty);  stroke:var(--map-line); }
+  .shelf--hit   rect { fill:var(--map-hit);    stroke:var(--map-hit); }
+  .shelf--base  rect { fill:var(--map-active); stroke:var(--map-active); }
+  .shelf--idle  text { fill:var(--map-idle-fg); }
+  .shelf--empty text { fill:var(--map-empty-fg); }
+  .shelf--hit   text { fill:var(--map-hit-fg); }
+  .shelf--base  text { fill:var(--map-active-fg); }
+  .shelf.is-selected rect { stroke:var(--accent); stroke-width:3; }
+  .shelf text { font-size:7px; text-anchor:middle; dominant-baseline:middle;
+                pointer-events:none; user-select:none; }
+  .area rect { fill:var(--sunken); stroke:var(--hairline); }
+  .area text { font-size:8px; fill:var(--muted); text-anchor:middle;
+               dominant-baseline:middle; pointer-events:none; }
+  /* 編集中は掴めることを見た目でも示す */
+  .map--editing .shelf { cursor:grab; }
+  .map--editing .shelf rect { stroke-dasharray:3 2; }
+
+  .radio { display:inline-flex; align-items:center; gap:4px; font-size: var(--fs-sm);
+           min-height:44px; }
+  .tablewrap--materials { max-height:26vh; overflow:auto; }
+  .legend:empty { display:none; }
+  .card[hidden], .status[hidden], .why[hidden] { display:none; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/layout.js') }}";
+  start({{ state | tojson }});
+</script>
+{% endblock %}

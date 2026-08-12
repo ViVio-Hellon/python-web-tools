@@ -1,0 +1,310 @@
+/*
+  デザイントークン — 色・書体・寸法の唯一の出どころ
+  ここ以外(コンポーネントのCSS・HTML・JS)に色の直値を書かない。
+
+  設計の根拠は docs/UIUX設計指針.md:
+  - 操作は濃いトーン、データと地は淡いトーン。
+    平面をトーンで分け、平面内の分類を色相で分ける
+  - 色相の意味は現行(VBA由来)を引き継ぐ。変えるのは濃さだけ
+  - 上用=赤系 / 下用=緑系 の対応は入れ替えない
+  - 色は必ず形・位置・文言と併用する(色だけに頼らない)
+
+  【色の整え方】
+  操作の色は**色相を保ったまま、明度をそろえ、彩度を 15% 落として**あります
+  (OKLCh で L=0.47 / C×0.85。暗いテーマは L=0.70)。以前は色ごとに
+  明度が 0.44〜0.56 とばらつき、彩度も色相ごとの上限近くにあったため、
+  並べたときに1つの組に見えず、画面が騒がしくなっていました。
+  **色相は1つも動かしていない**ので、「橙っぽいのが印刷」という
+  現場の記憶はそのまま通用します。
+
+  資材・図・保管位置の色は**情報そのもの**なので触っていません。
+  騒がしさの出どころは操作の色と罫線で、そこだけを直せば足ります。
+
+  【構造の色は操作の色から独立させる】
+  画面の骨格(上の帯・現在地・焦点・選択行・タブ)は**ティール**で、
+  操作の7色とは別の系統にしてあります(§3.5)。以前は骨格の色が
+  実行ボタンと同じ青だったので、「押せるもの」と「いま見ている場所」が
+  同じ色で主張し合っていました。系統を分けると、青い塗りは実行だけを
+  意味するようになります。
+
+  この配色と造形は社内の SymfoNavi Data Hub に合わせてあります。
+  同じ現場で並べて使うものが別々の見た目だと、操作を覚え直すことになる
+  ためで、上の帯・角丸・影・淡い塗りのボタンはあちらの体系に寄せました。
+
+  3つの状態に対応する:
+    :root                        … ライト(既定)
+    prefers-color-scheme: dark   … OSがダーク、かつ明示指定なし
+    [data-theme="dark"|"light"]  … 利用者が明示的に選んだ場合
+
+  scripts/check_contrast.py が全ての「地/文字」対を検査する。
+*/
+:root{
+  /* 地・面・線 —— わずかに冷たい中間グレー。
+     **罫線は目立たせない。** 面の明度差と柔らかい影で分ける ──
+     箱を線で囲むほど、画面は「区画の集まり」に見えて中身が沈む */
+  --ground:#f3f6f8; --surface:#ffffff; --sunken:#f1f6f8; --raised:#e9f1f4;
+  --ink:#17232d; --muted:#5b6d79; --faint:#7d8f9a;
+  --rule:#dde5ea; --hairline:#e9eff2;
+  /* 骨格のアクセント。**操作の色とは別系統**(§3.5) */
+  --accent:#0b6d86; --accent-soft:#e7f2f5; --accent-line:#bcdde5;
+  --focus:#0b6d86;
+  /* 入力欄・押せる部品の輪郭。`--rule`(装飾の罫線)より濃い。
+     WCAG 1.4.11 は部品の輪郭に 3:1 を求める */
+  --field-line:#87969f;
+
+  /* ================================================================
+     上の帯 —— 画面のいちばん上に1本だけ置く暗い面
+
+     いま何が決まっているか(Lot・パレット・製品・拠点)と、
+     モード・終了を載せる。**暗い帯を1本通すと、下の作業面が明るく
+     広く見えます。** 明るい面ばかりだと、どこが枠でどこが中身かが
+     面積でしか分からなくなる。
+     帯の上の部品は「うっすら白を重ねる」だけで作り、
+     枠線や別の色は足さない ── 帯の中で更に色を増やすと騒がしくなる。
+     ================================================================ */
+  --bar-a:#153247; --bar-b:#1e6079;      /* 115deg のグラデーション */
+  --bar-ink:#ffffff; --bar-muted:#c3dbe4;
+  /* 帯の上の「未設定」。本文用の --state-error は暗い地では読めない */
+  --bar-alert:#ffc4bf;
+  /* 帯の上の「済み」。本文用の --state-ok は暗い地では読めない
+     (--bar-alert と同じ理由。起動待機画面の段の印にも使う) */
+  --bar-ok:#8ff0c4;
+  --bar-face:#ffffff14; --bar-face-on:#ffffff26; --bar-edge:#ffffff33;
+  --bar-focus:#7fe3ea;
+  --ctl-h:38px; --ctl-r:10px;            /* 帯の上の操作の寸法(1つに統一) */
+
+  /* 資材の意味(入れ替え禁止)。**情報なので彩度も動かさない** */
+  --mat-upper:#b4232a; --mat-upper-bg:#fdf6f6; --mat-upper-fill:#f2c9cc; --mat-upper-line:#a94f57;
+  --mat-lower:#125334; --mat-lower-bg:#f5fbf7; --mat-lower-fill:#e8f6ed; --mat-lower-line:#448a68;
+  --mat-angle:#0f766e; --mat-angle-bg:#f3fafa;
+  --mat-pallet:#1e3a8a; --mat-product:#c2410c;
+  --cut-line:#b4232a; --cut-zone:#f6c99a;
+
+  /* 細くて文字が入らないボードの色分け(30/50/100mm ほか)。
+     図の地(--mat-*-bg)の上に置かれ、幅mmは凡例で読む。
+     **色相はVBAのまま**(30=青 / 50=緑 / 100=紫)。現場の記憶を保つ */
+  --coded-30:#1e3a8a;   --coded-50:#125334;  --coded-100:#5b21b6;
+  --coded-tiny:#9f1239;  --coded-small:#9a3412; --coded-other:#155e75;
+
+  /* アングル配置図。バーは種類ではなく**並び順**を示す色(巡回)なので、
+     地と互いに見分けられることだけが要件 */
+  --angle-pallet:#8a5a2b; --angle-edge:#b4232a;
+  --angle-waste:#525b68; --angle-waste-fg:#ffffff;
+  --angle-bar-1:#1e4f80; --angle-bar-2:#215c3a; --angle-bar-3:#7c4a12;
+  --angle-bar-4:#5b2d82; --angle-bar-5:#0f5f52; --angle-bar-6:#8c2230;
+  --angle-bar-fg:#ffffff;
+
+  /* 保管位置マップ。**色の意味はVBA `clsMapBtn` のまま**:
+     検索で当たった棚=青 / いま見ている棚=赤。現場の記憶をそのまま使う。
+     在庫のある棚と空の棚も分ける(空まで同じ濃さだと物の在り処が読めない) */
+  --map-idle:#dbe3ec;   --map-idle-fg:#101720;
+  --map-empty:#f2f5f8;  --map-empty-fg:#556171;
+  --map-hit:#1e3a8a;    --map-hit-fg:#ffffff;
+  --map-active:#b4232a; --map-active-fg:#ffffff;
+  --map-line:#6b7683;
+
+  /* 操作の種類。**色相の意味は現行のまま、明度をそろえて彩度を落とす** */
+  --act-nav:#476528;     --act-nav-fg:#ffffff;
+  --act-run:#265aa0;     --act-run-fg:#ffffff;
+  --act-print:#923d23;   --act-print-fg:#ffffff;
+  --act-select:#904104;  --act-select-fg:#ffffff;
+  --act-find:#2d6940;
+  --act-danger:#9f2a2c;
+  --act-commit:#9f2a2c;  --act-commit-fg:#ffffff;
+  /* 中立。**押せるが主役ではない**もの。うっすら青みの地 */
+  --act-idle:#edf3f6;    --act-idle-fg:#294f63; --act-idle-line:#87969f;
+  --act-on:#2d6940;      --act-on-fg:#ffffff;
+  --act-fatigue:#7039a6; --act-fatigue-fg:#ffffff;
+
+  /* 状態。文字として地の上に乗るので、操作より一段濃い(L=0.45) */
+  --state-ok:#27633a; --state-warn:#883c02; --state-error:#982326; --state-info:#20549a;
+  --warn-bg:#fdf0f0; --warn-fg:#982326;
+  --ok-bg:#eef6f1;
+
+  /* ================================================================
+     暗い面 —— 機械が吐いたものを読む場所
+
+     触るものは明るく、読むものは暗く。明るい面ばかりの画面に暗い面が
+     1枚あると、それだけで「ここは性質が違う」と伝わる。
+     ログを長く読むときの目の負担も減る。
+     **明暗どちらのテーマでも同じ濃さ**にしてある ── ログはどちらの
+     テーマで見ても暗い面で読むもので、テーマで役割は変わらない。
+     ================================================================ */
+  --night:#0f2733; --night-ink:#dbeef3; --night-line:#23414f;
+  /* 暗いテーマでは、面の濃さでは地と分かれない。輪郭が担う */
+  --night-warn:#ffd38a;  --night-warn-bg:#2b2415;
+  --night-error:#ffaaa2; --night-error-bg:#2a1719;
+  --night-ok:#8ee0c0;
+
+  /* ================================================================
+     形 —— 角丸・影・動き
+
+     **角丸は用途で3段。** 大きい面ほど大きく丸める。全部同じにすると、
+     カードとタグが同じ「粒」に見えて階層が消える。
+     影は輪郭の代わり。線で囲むより、浮かせたほうが中身が前に出る。
+     ================================================================ */
+  --radius:10px;        /* カード・パネル・モーダル */
+  --radius-sm:7px;      /* ボタン・入力欄・タブ */
+  --radius-xs:6px;      /* 表の枠・小さい箱 */
+  --pill:999px;
+
+  /* 影は**広く・淡く・青みを帯びて**。真っ黒の狭い影は縁が見えて
+     「切り抜いて貼った」ように見える。広く散らすと紙が浮いて見える */
+  --shadow-sm:0 5px 18px rgb(21 56 77 / 5%);
+  --shadow:0 2px 6px rgb(21 56 77 / 4%), 0 10px 30px -8px rgb(21 56 77 / 12%);
+  --shadow-pop:0 25px 80px rgb(14 37 53 / 28%), 0 4px 12px rgb(14 37 53 / 10%);
+  /* 焦点の柔らかい輪。輪郭線と二重に出して、細い線でも気づけるようにする */
+  --focus-soft:color-mix(in srgb, var(--focus) 20%, transparent);
+  /* モーダルの背景。後ろを暗くして、前後の関係を作る */
+  --scrim:rgb(13 36 51 / 62%);
+
+  --sans:system-ui,-apple-system,"Segoe UI","Yu Gothic UI","Meiryo UI","Hiragino Sans",sans-serif;
+  --mono:ui-monospace,"SFMono-Regular","Cascadia Mono",Consolas,"Yu Gothic UI",monospace;
+
+  /* ================================================================
+     文字の階段 ── **大きさは6段しか使わない**
+
+     以前は 7 / 8 / 9 / 10 / 10.5 / 11 / 11.5 / 12 / 12.5 / 13 / 13.5 /
+     14 / 14.5 / 15 / 16 / 17 / 19 / 20px と**18種類**あった。
+     0.5px 違いは並べても差として読めず、揃っていないことだけが伝わる。
+     6段に畳むと、大きさの違いが**役割の違い**として読めるようになる。
+
+     段の選び方は「何を読むか」で決める。大きさで迷ったら**1つ下**へ ──
+     工場の画面は情報量が正義で、大きい字は場所を食うだけのことが多い。
+     ================================================================ */
+  --fs-2xs:10px;    /* 見出しの上の小さな札・単位。読まなくてよいもの */
+  --fs-xs:11px;     /* 表の見出し・添え字・状態のピル */
+  --fs-sm:12px;     /* 表の中身・補足の一文。**いちばん多く使う** */
+  --fs-md:13px;     /* 本文・ボタン・入力欄。既定 */
+  --fs-lg:15px;     /* 数値の主役(寸法・件数)・カードの題 */
+  --fs-xl:19px;     /* 画面の題。1画面に1つだけ */
+
+  /* 行の詰め方。**1か所で決める**ので、密度を変えるのはここだけ */
+  --lh-tight:1.3;   /* 表の行・ピル */
+  --lh:1.55;        /* 本文 */
+
+  /* ================================================================
+     寸法の階段 ── 押すものと、読むものを分ける
+
+     **押すものは 44px を割らない**(設計指針 §1.2 フィッツの法則)。
+     表の行は押せるが「狙って押す的」ではなく、目で追って選ぶものなので、
+     読める範囲で詰めてよい ── **一度に見える行数のほうが効く**。
+     ================================================================ */
+  --hit:44px;           /* 押すものの最小。ボタン・入力欄 */
+  --row-h:26px;         /* 表の行。詰めて件数を稼ぐ */
+  --cell-x:8px;         /* 表の左右の余白。列が多いので広げない */
+  --cell-y:3px;         /* 表の上下の余白 */
+  --pad-card:12px;      /* カードの内側 */
+  --gap:10px;           /* 並べるものの間 */
+  --gap-sm:6px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#101820; --surface:#182129; --sunken:#141c23; --raised:#1f2a33;
+    --ink:#e2eaef; --muted:#95a7b2; --faint:#7a8d99;
+    --rule:#28343d; --hairline:#212c34;
+    --accent:#5cc2d4; --accent-soft:#152b33; --accent-line:#2d4d58;
+    --focus:#5cc2d4;
+    --field-line:#7a8d99;
+
+    /* 帯は明暗どちらでも同じ濃さ。**アプリの顔なので変えない** */
+    --bar-a:#0e2130; --bar-b:#154a5e;
+    --bar-ink:#ffffff; --bar-muted:#a9c6d1; --bar-alert:#ffc4bf; --bar-ok:#8ff0c4;
+    --bar-face:#ffffff12; --bar-face-on:#ffffff22; --bar-edge:#ffffff2b;
+    --bar-focus:#7fe3ea;
+
+    --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#6b3036; --mat-upper-line:#d98b90;
+    --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#112818; --mat-lower-line:#4f9c6f;
+    --mat-angle:#4fbdb2; --mat-angle-bg:#152726;
+    --mat-pallet:#8fb4f5; --mat-product:#f59e5b;
+    --cut-line:#f4a0a4; --cut-zone:#7a4a1e;
+    --coded-30:#8fb4f5;   --coded-50:#4bab79;  --coded-100:#c4a2f5;
+    --coded-tiny:#f2909f;  --coded-small:#f0a06a; --coded-other:#5fc0d6;
+    --angle-pallet:#d3a273; --angle-edge:#f4a0a4;
+    --angle-waste:#a8b3c0; --angle-waste-fg:#101720;
+    --angle-bar-1:#8fb4f5; --angle-bar-2:#6fc795; --angle-bar-3:#e0a961;
+    --angle-bar-4:#c4a2f5; --angle-bar-5:#5fc9bb; --angle-bar-6:#f2909f;
+    --angle-bar-fg:#101720;
+    --map-idle:#2f3a49;   --map-idle-fg:#e6ecf3;
+    --map-empty:#1e2632;  --map-empty-fg:#9aa6b4;
+    --map-hit:#9cc4f7;    --map-hit-fg:#0b1220;
+    --map-active:#f0888e; --map-active-fg:#2a0d0f;
+    --map-line:#8894a4;
+
+    --act-nav:#83ae56;     --act-nav-fg:#101720;
+    --act-run:#6a9fee;     --act-run-fg:#101720;
+    --act-print:#da865d;   --act-print-fg:#101720;
+    --act-select:#d38c49;  --act-select-fg:#101720;
+    --act-find:#72be94;
+    --act-danger:#e49093;
+    --act-commit:#e57980;  --act-commit-fg:#101720;
+    --act-idle:#232f37;    --act-idle-fg:#cfe0e7; --act-idle-line:#7a8d99;
+    --act-on:#5ab47b;      --act-on-fg:#101720;
+    --act-fatigue:#b287e1; --act-fatigue-fg:#101720;
+
+    --state-ok:#72be94; --state-warn:#d2a15c; --state-error:#e49093; --state-info:#7faee9;
+    --warn-bg:#331e21; --warn-fg:#eb9a9d;
+    --ok-bg:#16271e;
+
+    --night-line:#517383;
+    --night-line:#517383;
+  --shadow-sm:0 5px 18px rgb(0 0 0 / 32%);
+    --shadow:0 2px 6px rgb(0 0 0 / 28%), 0 10px 30px -8px rgb(0 0 0 / 50%);
+    --shadow-pop:0 25px 80px rgb(0 0 0 / 62%), 0 4px 12px rgb(0 0 0 / 32%);
+    --scrim:rgb(6 16 22 / 68%);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#101820; --surface:#182129; --sunken:#141c23; --raised:#1f2a33;
+  --ink:#e2eaef; --muted:#95a7b2; --faint:#7a8d99;
+  --rule:#28343d; --hairline:#212c34;
+  --accent:#5cc2d4; --accent-soft:#152b33; --accent-line:#2d4d58;
+  --focus:#5cc2d4;
+  --field-line:#7a8d99;
+
+  /* 帯は明暗どちらでも同じ濃さ。**アプリの顔なので変えない** */
+  --bar-a:#0e2130; --bar-b:#154a5e;
+  --bar-ink:#ffffff; --bar-muted:#a9c6d1; --bar-alert:#ffc4bf; --bar-ok:#8ff0c4;
+  --bar-face:#ffffff12; --bar-face-on:#ffffff22; --bar-edge:#ffffff2b;
+  --bar-focus:#7fe3ea;
+
+  --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#6b3036; --mat-upper-line:#d98b90;
+  --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#112818; --mat-lower-line:#4f9c6f;
+  --mat-angle:#4fbdb2; --mat-angle-bg:#152726;
+  --mat-pallet:#8fb4f5; --mat-product:#f59e5b;
+  --cut-line:#f4a0a4; --cut-zone:#7a4a1e;
+  --coded-30:#8fb4f5;   --coded-50:#4bab79;  --coded-100:#c4a2f5;
+  --coded-tiny:#f2909f;  --coded-small:#f0a06a; --coded-other:#5fc0d6;
+  --angle-pallet:#d3a273; --angle-edge:#f4a0a4;
+  --angle-waste:#a8b3c0; --angle-waste-fg:#101720;
+  --angle-bar-1:#8fb4f5; --angle-bar-2:#6fc795; --angle-bar-3:#e0a961;
+  --angle-bar-4:#c4a2f5; --angle-bar-5:#5fc9bb; --angle-bar-6:#f2909f;
+  --angle-bar-fg:#101720;
+
+  --map-idle:#2f3a49;   --map-idle-fg:#e6ecf3;
+  --map-empty:#1e2632;  --map-empty-fg:#9aa6b4;
+  --map-hit:#9cc4f7;    --map-hit-fg:#0b1220;
+  --map-active:#f0888e; --map-active-fg:#2a0d0f;
+  --map-line:#8894a4;
+
+  --act-nav:#83ae56;     --act-nav-fg:#101720;
+  --act-run:#6a9fee;     --act-run-fg:#101720;
+  --act-print:#da865d;   --act-print-fg:#101720;
+  --act-select:#d38c49;  --act-select-fg:#101720;
+  --act-find:#72be94;
+  --act-danger:#e49093;
+  --act-commit:#e57980;  --act-commit-fg:#101720;
+  --act-idle:#232f37;    --act-idle-fg:#cfe0e7; --act-idle-line:#7a8d99;
+  --act-on:#5ab47b;      --act-on-fg:#101720;
+  --act-fatigue:#b287e1; --act-fatigue-fg:#101720;
+
+  --state-ok:#72be94; --state-warn:#d2a15c; --state-error:#e49093; --state-info:#7faee9;
+  --warn-bg:#331e21; --warn-fg:#eb9a9d;
+  --ok-bg:#16271e;
+
+  --night-line:#517383;
+  --shadow-sm:0 5px 18px rgb(0 0 0 / 32%);
+  --shadow:0 2px 6px rgb(0 0 0 / 28%), 0 10px 30px -8px rgb(0 0 0 / 50%);
+  --shadow-pop:0 25px 80px rgb(0 0 0 / 62%), 0 4px 12px rgb(0 0 0 / 32%);
+  --scrim:rgb(6 16 22 / 68%);
+}

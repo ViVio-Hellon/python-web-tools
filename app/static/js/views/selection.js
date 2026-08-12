@@ -1,0 +1,863 @@
+/*
+  資材選択の画面(パレット・製品サイズ・ボード選定・アングル)。
+
+  どの操作もサーバが**画面ぜんぶ**を返すので、ここは受け取ったものを
+  そのまま描き直すだけ。押した欄だけを個別に触ると、触り忘れた欄が
+  古い値のまま残る(tkinter版で実際に何度か起きた)。
+
+  **業務の判断はここに1つも無い。** 押せるかどうか・どの欄を出すか・
+  見出しに何を書くかは、すべてサーバが決めたものを写している
+  (設計書 §3.3)。JSで組み立て直すと、サーバが断る条件と画面が
+  押させる条件が別々に育つ。
+*/
+
+import { api, tokenUrl } from "../api.js";
+import * as nav from "../nav.js";
+import { pageSignal } from "../nav.js";
+import { angleSvg, boardSvg, fitToContent, legendItems } from "../svgplan.js";
+import { toast, toastError } from "../toast.js";
+import * as tabs from "../tabs.js";
+
+const el = {};
+let state = null;
+
+/**
+ * 押しっぱなしのモードのON/OFF。
+ *
+ * `variant` を渡すとONの色を変えられる。疲労度優先だけ別の色にするのは、
+ * それが**操作の種類ではなく、選定の考え方そのもの**だから
+ * (§設計指針の色相の意味)。在庫考慮と同じ緑にすると、2つ並んだときに
+ * どちらが効いているのか色から読めなくなる。
+ */
+function setToggle(button, on, variant = "btn--on") {
+  button.classList.toggle(variant, on);
+  button.setAttribute("aria-pressed", String(on));
+}
+
+function setStatus(node, text, ok) {
+  node.textContent = text;
+  node.className = `status status--${ok ? "ok" : "ng"}`;
+}
+
+function why(node, text) {
+  node.hidden = !text;
+  node.textContent = text || "";
+}
+
+/**
+ * 入力欄を更新する。**サーバ側の値が変わったときだけ**書き換える。
+ *
+ * 打った値かどうかの判断は画面が持つしかない ── 「まだ確定していない
+ * 打鍵」はブラウザにしか存在せず、サーバは確定値しか知らない。
+ * サーバが前回と同じ値を返しているあいだは、利用者が打った内容が勝つ。
+ */
+/**
+ * 「パレットを選ぶ」を押せるかどうかを、**いま欄に入っているもの**で決める。
+ *
+ * 業務の判断(その寸法が載るパレットが在るか)はサーバの仕事で、
+ * 押した結果として返ってくる。ここが見ているのは
+ * **「送るものが揃っているか」という画面側の事実**だけ ── 打った直後に
+ * 押せるようにならないと、1文字打つたびにサーバへ聞きに行くことになる。
+ */
+function refreshDecide() {
+  if (!el.decide) return;
+  el.decide.disabled = !(el.prodWidth.value.trim() && el.prodLength.value.trim());
+}
+
+function setInput(node, value) {
+  const text = value ?? "";
+  if (node.dataset.fromServer === text) return;   // サーバ側は変わっていない
+  node.dataset.fromServer = text;
+  node.value = text;
+}
+
+function row(item) {
+  const tr = document.createElement("tr");
+  if (item.is_ex) tr.classList.add("ex");
+  // 幅・丈は行を選んだときに入力欄へ写す。どの行かはこれで分かる。
+  // 記号まで持つのは、同じ寸法でも記号違いで発注コードが変わるため
+  tr.dataset.width = item.width;
+  tr.dataset.length = item.length;
+  tr.dataset.symbol = item.symbol;
+  tr.dataset.note = item.note;
+  tr.dataset.key = `${item.width}x${item.length}:${item.symbol}`;
+  // **選んだ行を決めるのはサーバ。** 発注コードと単位の出どころは
+  // `session.pallet_row` ただ1つで、寸法が食い違えばサーバが外す。
+  // ここで画面が独自に覚えていたころは、外されたことも自動選定で
+  // 選ばれたことも画面に伝わらず、行が光っているのに倉庫送信が
+  // 「行を選んでください」と断る状態になっていた
+  if (item.picked) tr.classList.add("on");
+
+  item.values.forEach((value, index) => {
+    const td = document.createElement("td");
+    // 列の並び・右寄せはサーバが決めた `PALLET_COLUMNS` に従う
+    if (NUMERIC[index]) td.className = "n";
+    td.textContent = value;
+    tr.appendChild(td);
+  });
+  return tr;
+}
+
+// 右寄せにする列。サーバが返す並びと1対1で対応する
+let NUMERIC = [];
+
+function render(next) {
+  state = next;
+
+  el.lotCaption.textContent = next.lot_caption;
+  el.banner.hidden = !next.banner.visible;
+  el.banner.textContent = next.banner.text;
+  el.banner.dataset.kind = next.banner.kind;
+
+  // どの行を選んでいるかはサーバが `picked` で返す(`row()` が反映する)
+  el.palletRows.replaceChildren(...next.rows.map(row));
+  const pickedRow = picked(el.palletRows);
+  if (pickedRow) pickedRow.scrollIntoView({ block: "nearest" });
+  el.listNote.textContent = next.list_note;
+
+  // 入力欄は**サーバが変えたときだけ**書き換える。
+  // どの操作でも画面ぜんぶが返ってくる設計なので、無条件に代入すると
+  // 「まだセットしていない打鍵」が関係ないボタン1つで消える
+  // (tkinter版は入力欄に触れないので消えなかった)
+  setInput(el.palWidth, next.pallet_width);
+  setInput(el.palLength, next.pallet_length);
+  setInput(el.prodWidth, next.product_width);
+  setInput(el.prodLength, next.product_length);
+
+  // 決まったものは1行。**製品とパレットは1つの決めごと**なので、
+  // 2行に分けると読む場所が2つになる
+  setStatus(el.sizeStatus, next.size_status,
+            next.product_set && next.pallet_set);
+  // パレットが決まって初めて渡せる。決まる前は出さない(旧版 `btnUFMAP`)
+  el.showOnStock.hidden = !next.pallet_set;
+
+  setToggle(el.showAll, next.show_all);
+  setToggle(el.exOnly, next.ex_only);
+  setToggle(el.twoStack, next.two_stack);
+  el.exOnly.disabled = !next.ex_only_enabled;
+  why(el.exOnlyWhy, next.ex_only_why);
+
+  // **主役は「パレットを選ぶ」1つ。** 押せない理由はサーバが持つ
+  why(el.decideWhy, next.decide_why);
+  why(el.productFrom, next.product_from);
+  refreshDecide();
+
+  renderSteps(next);
+  renderResultTabs(next);
+  render1P0113(next.p1);
+  renderBoards(next.boards);
+  renderAngles(next.angles);
+  renderPlans(next.plans);
+  renderOutputs(next.outputs);
+  renderAdmin(next.admin);
+  // 描き直したあとも、光らせていたボードは光らせたままにする
+  applyLink();
+
+  // ステータスリボン。値を持っているのはサーバなので写すだけ
+  if (next.ribbon) applyRibbon(next.ribbon);
+}
+
+/* ================================================================
+   作業の段
+
+   **いま何段目か・何が決まったか・次に押すものは、すべてサーバが決める。**
+   ここは受け取った値を属性と文字にするだけで、条件を組み立て直さない
+   ── 組み立て直すと、判断が2か所に分かれて必ずどちらかが古くなる。
+   ================================================================ */
+function renderSteps(next) {
+  for (const item of next.steps || []) {
+    for (const card of document.querySelectorAll(
+        `[data-step="${item.key}"]`)) {
+      card.dataset.state = item.state;
+      const no = card.querySelector(".stepno");
+      if (no) no.textContent = item.number;
+    }
+  }
+  // 畳んだときに残す確定値。**閉じていても何が決まっているかは失わない**
+  const summary = Object.fromEntries(
+    (next.steps || []).map((s) => [s.key, s.summary]));
+  for (const [id, key] of [["sizeSummary", "size"],
+                           ["boardSummary", "boards"]]) {
+    const node = document.getElementById(id);
+    if (node) node.textContent = summary[key] || "";
+  }
+
+  why(el.nextHint, next.next_hint);
+  // 段が進んだら開き直しは解除する。**いまの段は常に開く**ので、
+  // 前の段が開いたままだと操作カラムがまた入りきらなくなる
+  for (const card of document.querySelectorAll(".step.is-open")) {
+    if (card.dataset.state === "current") card.classList.remove("is-open");
+  }
+
+  // 主動作はいつも1つ。前に付けた強調は必ず外す
+  for (const button of document.querySelectorAll(".btn.is-primary")) {
+    button.classList.remove("is-primary");
+  }
+  const primary = next.primary_action && document.getElementById(next.primary_action);
+  if (primary) primary.classList.add("is-primary");
+}
+
+/**
+ * 結果の面(配置図 / 選定一覧)の見出し。
+ *
+ * **開く前に中身が分かるようにする**(情報の匂い、§2.4)。
+ * 枚数と配置の有無はサーバが決めた値をそのまま写す。
+ */
+function renderResultTabs(next) {
+  if (!el.resultTabs) return;
+  const boards = next.boards || {};
+  const picked = (boards.upper || []).length + (boards.lower || []).length;
+  tabs.setBadges(el.resultTabs, {
+    plan: next.plans && next.plans.placed
+      ? { text: "配置済", level: "ok" } : { text: "" },
+    picked: picked ? { text: String(picked) } : { text: "" },
+  });
+}
+
+/* ================================================================
+   1P0113 裸梱包
+   ================================================================ */
+function render1P0113(p1) {
+  if (!p1) return;
+
+  // パレットを使わないモードなので、パレット欄と入れ替える
+  el.p1Card.hidden = !p1.on;
+  el.sizeCard.hidden = p1.on;
+  setToggle(el.force1p, p1.forced, "btn--on");
+  if (!p1.on) return;
+
+  el.p1Materials.replaceChildren(...p1.materials.map((m) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "p1mat";
+    button.dataset.info = m.info;
+    button.dataset.ok = String(m.ok);
+
+    const name = document.createElement("b");
+    name.textContent = m.name;
+    const size = document.createElement("span");
+    size.className = "p1size";
+    size.textContent = m.label;
+    const count = document.createElement("span");
+    count.className = "p1count";
+    count.textContent = m.count_caption;
+    button.append(name, size, count);
+    return button;
+  }));
+
+  el.p1Tip.textContent = p1.tip;
+  el.p1Tip.className = `status status--${p1.ready ? "ok" : "ng"}`;
+  el.p1Qty.value = p1.qty;
+  el.p1Qty.min = p1.qty_min;
+  el.p1Qty.max = p1.qty_max;
+  why(el.p1Why, p1.why);
+}
+
+/* ================================================================
+   出す — 帳票と倉庫送信
+   ================================================================ */
+function renderOutputs(outputs) {
+  if (!outputs) return;
+
+  const reasons = [];
+  for (const report of outputs.reports) {
+    const button = document.getElementById(`report-${report.key}`);
+    if (!button) continue;
+    button.disabled = !report.can;
+    if (report.why) reasons.push(`${report.label}: ${report.why}`);
+  }
+  el.sendWarehouse.disabled = !outputs.can_send;
+  if (outputs.send_why) reasons.push(`倉庫送信: ${outputs.send_why}`);
+
+  // 押せない理由をボタンの真下にまとめる。同じ文が続いても
+  // どのボタンの話か分かるよう、名前を頭に付ける
+  el.outputWhy.replaceChildren(...[...new Set(reasons)].map((text) => {
+    const p = document.createElement("p");
+    p.className = "why";
+    p.textContent = text;
+    return p;
+  }));
+}
+
+/* ================================================================
+   管理者
+   ================================================================ */
+function renderAdmin(admin) {
+  if (!admin) return;
+
+  el.adminState.textContent = admin.authenticated ? "認証済み" : "未認証";
+  el.savePattern.disabled = !admin.can_save;
+  why(el.saveWhy, admin.save_why);
+  el.patternsNote.textContent = admin.patterns_note;
+  // 認証が通ったらパスワード欄は用済み。残すと肩越しに見える
+  if (admin.authenticated) el.adminPass.value = "";
+
+  el.patternRows.replaceChildren(...admin.patterns.map((p) => {
+    const tr = document.createElement("tr");
+    for (const value of [p.id, p.product, p.boards]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    // ボードの内訳は長い。省略して**「読込」を押せる位置に残す** ──
+    // 押せないところへ追いやると、一覧に出ている意味が無い。
+    // 全文は押さえたままにする(title)
+    const boards = tr.lastElementChild;
+    boards.className = "clip";
+    boards.title = p.boards;
+    const count = document.createElement("td");
+    count.className = "n";
+    count.textContent = p.usage_count;
+    const at = document.createElement("td");
+    at.textContent = p.registered_at;
+
+    const cell = document.createElement("td");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn btn--find rowdel";
+    button.textContent = "読込";
+    button.dataset.pattern = p.id;
+    cell.appendChild(button);
+    tr.append(count, at, cell);
+    return tr;
+  }));
+}
+
+/* ================================================================
+   ボード
+   ================================================================ */
+function boardRow(item) {
+  const tr = document.createElement("tr");
+  tr.dataset.width = item.width;
+  tr.dataset.length = item.length;
+  tr.dataset.key = `${item.width}x${item.length}`;
+  item.values.forEach((value, index) => {
+    const td = document.createElement("td");
+    // 幅・丈は数。在庫の欄は記号(▲薄)
+    if (index < 2) td.className = "n";
+    else if (value) td.className = "thin";
+    td.textContent = value;
+    tr.appendChild(td);
+  });
+  return tr;
+}
+
+/** 選定済みの1行。削除は行の右端に置く(消す対象と押す場所を離さない)。 */
+function selectedRow(item, category) {
+  const tr = document.createElement("tr");
+  tr.dataset.index = item.index;
+  // 図の該当ボードと同じ鍵。押すと互いに光る
+  tr.dataset.key = item.key || "";
+  item.values.forEach((value, index) => {
+    const td = document.createElement("td");
+    if (index === 0) {
+      // 種別は語のまま出す(VBA の '主' / '幅補填' / '丈補填')。
+      // 主だけを強く出す ── 補填は数が多く、同じ強さだと本体が埋もれる
+      if (value) {
+        const tag = document.createElement("span");
+        tag.className = `tag tag--${item.tag_kind || "fill"}`;
+        tag.textContent = value;
+        td.appendChild(tag);
+      }
+    } else {
+      td.className = "n";
+      td.textContent = value;
+    }
+    tr.appendChild(td);
+  });
+
+  const cell = document.createElement("td");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn btn--danger rowdel";
+  button.textContent = "削除";
+  button.dataset.category = category;
+  button.dataset.index = item.index;
+  cell.appendChild(button);
+  tr.appendChild(cell);
+  return tr;
+}
+
+function renderBoards(boards) {
+  if (!boards) return;
+
+  // 種別。開いているあいだにマスタを取り込み直すと候補が変わる
+  el.boardType.replaceChildren(...boards.board_types.map((name) => {
+    const option = document.createElement("option");
+    option.value = option.textContent = name;
+    option.selected = name === boards.board_type;
+    return option;
+  }));
+
+  replaceKeepingPick(el.boardRows, boards.candidates.map(boardRow));
+  el.candidateNote.textContent = boards.candidate_note;
+
+  el.upperRows.replaceChildren(...boards.upper.map((r) => selectedRow(r, "upper")));
+  el.lowerRows.replaceChildren(...boards.lower.map((r) => selectedRow(r, "lower")));
+  el.upperTitle.textContent = boards.upper_title;
+  el.lowerTitle.textContent = boards.lower_title;
+  // 上下共用モードでは上用=下用と同サイズ。欄そのものを出さない
+  el.upperCard.hidden = !boards.show_upper;
+  el.selectedSummary.textContent = boards.summary;
+
+  setToggle(el.fatigue, boards.fatigue, "btn--fatigue");
+  setToggle(el.stockAware, boards.stock_aware);
+  // 選定ボタンの色は**操作の種類**(選定)なので変えない。疲労度が効いて
+  // いることは語で示す(VBA `SELECT_ON_TEXT` = 「疲労考慮ﾎﾞｰﾄﾞ」)。
+  // 色まで疲労度に寄せると、押す先が変わったように読める
+  el.autoSelectLabel.textContent = boards.fatigue ? "疲労考慮ボード" : "ボード選定";
+  el.fatigueWhy.hidden = !boards.fatigue;
+  el.fatigueBase.textContent = boards.base_point;
+
+  el.autoSelect.disabled = !boards.can_select;
+  why(el.selectWhy, boards.select_why);
+  el.place.disabled = !boards.can_place;
+  why(el.placeWhy, boards.place_why);
+}
+
+/* ================================================================
+   配置図
+   ================================================================ */
+function renderPlans(plans) {
+  if (!plans) return;
+
+  el.planStatus.textContent = plans.status;
+  el.planUsage.textContent = plans.usage;
+  el.planUpperTitle.textContent = plans.upper_title;
+  el.planLowerTitle.textContent = plans.lower_title;
+  // 上下共用モードでは上用=下用と同サイズ。図も1つでよい
+  el.planUpperBox.hidden = !plans.show_upper || !plans.upper;
+  el.planAngleBox.hidden = !plans.angle;
+
+  for (const [box, plan] of [[el.planLower, plans.lower], [el.planUpper, plans.upper]]) {
+    const svg = boardSvg(plan, plans.view_box);
+    box.replaceChildren(svg);
+    // 入れてから測る。はみ出しているぶんまで見えるように広げる
+    fitToContent(svg, plans.view_box);
+  }
+  const angle = angleSvg(plans.angle, plans.angle_view_box);
+  el.planAngle.replaceChildren(angle);
+  fitToContent(angle, plans.angle_view_box);
+
+  // 細くて文字が入らないボードは色分けで示す。凡例が無いと読めない
+  el.planLowerLegend.replaceChildren(...legendItems(plans.lower));
+  el.planUpperLegend.replaceChildren(...legendItems(plans.upper));
+
+  el.planLines.replaceChildren(...plans.lines.map((line) => {
+    const p = document.createElement("p");
+    // 「カットあり」と「不足あり」は別。同じ見た目にすると、
+    // 直さなくてよいものと直すべきものが混ざる
+    p.className = `status status--${line.kind === "ok" ? "ok" : "ng"}`;
+    p.dataset.kind = line.kind;
+    const label = document.createElement("b");
+    label.textContent = line.label;
+    p.append(label, document.createTextNode(line.text));
+    return p;
+  }));
+  el.planHint.hidden = !plans.placed;
+}
+
+/* ================================================================
+   図と一覧の相互ハイライト(§設計指針 共通運命の要因)
+
+   どのボードがどこに載るのかは、図と一覧を見比べないと分からない。
+   tkinter版には無かった ── Canvas は図形の集まりで、当たり判定を
+   自前で書く必要があったため。SVG なら要素なのでそのまま押せる。
+   ================================================================ */
+let linked = "";
+
+function applyLink() {
+  for (const node of document.querySelectorAll("[data-key]")) {
+    node.classList.toggle("is-linked", Boolean(linked) && node.dataset.key === linked);
+  }
+}
+
+/**
+ * 同じボードを指すものを全部光らせる。同じものを押したら消す。
+ *
+ * **面が分かれているので、光らせるだけでは伝わらない。** 図で押したら
+ * 選定一覧を、一覧で押したら図を開く ── 押した意図は「これは向こうで
+ * どれか」なので、向こうを見せるところまでが返事になる。空を押したのは
+ * 「消す」なので、そのときは面を動かさない。
+ */
+function setLink(key, reveal) {
+  linked = (key && key !== linked) ? key : "";
+  applyLink();
+  if (!linked || !reveal || !el.resultTabs) return;
+  tabs.select(el.resultTabs, reveal);
+  const shown = document.querySelector(
+    `#panel-${reveal} .is-linked`);
+  if (shown) shown.scrollIntoView({ block: "nearest" });
+}
+
+/* ================================================================
+   アングル
+   ================================================================ */
+/** 候補アングルの1行。選んでから「アングル追加」で選択側へ移す。 */
+function angleRow(length, index) {
+  const tr = document.createElement("tr");
+  tr.dataset.length = length;
+  tr.dataset.index = index;
+  tr.dataset.key = String(length);
+  const td = document.createElement("td");
+  td.className = "n";
+  td.textContent = length;
+  tr.appendChild(td);
+  return tr;
+}
+
+/** 選択済みアングルの1行。削除はボードと同じく行の右端に置く。 */
+function angleSelectedRow(length, index) {
+  const tr = angleRow(length, index);
+  const cell = document.createElement("td");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn btn--danger rowdel";
+  button.textContent = "削除";
+  button.dataset.index = index;
+  cell.appendChild(button);
+  tr.appendChild(cell);
+  return tr;
+}
+
+function renderAngles(angles) {
+  if (!angles) return;
+
+  // 保護材がアングル以外に確定していれば、この欄は使わない
+  el.angleCard.hidden = !angles.show;
+  el.hosozaiLabel.hidden = !angles.hosozai_label;
+  el.hosozaiLabel.textContent = angles.hosozai_label;
+  if (!angles.show) return;
+
+  replaceKeepingPick(el.angleRows, angles.candidates.map(angleRow));
+  // 選択側は選ばせない(削除は行のボタンで押す)ので、そのまま入れ替える
+  el.angleSelected.replaceChildren(...angles.selected.map(angleSelectedRow));
+  el.angleNeedCut.hidden = !angles.need_cut;
+  el.autoAngle.disabled = !angles.can_auto;
+  el.drawAngle.disabled = !angles.can_draw;
+  // 押せない理由はサーバがまとめてある(同じ文を2つ出さない)
+  why(el.angleWhy, (angles.why || []).join("　"));
+}
+
+/** 一覧の中で1行だけを選んだ状態にする。選び直しは押した行に移る。 */
+function pick(tbody, tr) {
+  for (const row of tbody.querySelectorAll("tr")) {
+    row.classList.toggle("on", row === tr);
+  }
+}
+
+/** いま選ばれている行。無ければ `null`。 */
+function picked(tbody) {
+  return tbody.querySelector("tr.on");
+}
+
+/**
+ * 中身を入れ替えても、選んでいた行は選んだままにする。
+ *
+ * どの操作もサーバが画面ぜんぶを返すので一覧は毎回作り直される。
+ * そのたびに選択が外れると、同じボードを2回足すのに毎回選び直す
+ * ことになる(tkinter版の Treeview は選択が残っていた)。
+ * 位置ではなく寸法(`data-key`)で覚える ── 在庫考慮を切り替えると
+ * 並びが変わることがある。
+ */
+function replaceKeepingPick(tbody, nodes) {
+  const key = picked(tbody)?.dataset.key ?? null;
+  tbody.replaceChildren(...nodes);
+  if (key === null) return;
+  const again = [...tbody.children].find((tr) => tr.dataset.key === key);
+  if (again) again.classList.add("on");
+}
+
+function applyRibbon(ribbon) {
+  document.getElementById("rb-lot").textContent = ribbon.lot;
+  document.getElementById("rb-product").textContent = ribbon.product;
+  document.getElementById("rb-pallet").textContent = ribbon.pallet;
+  document.getElementById("rb-modes").replaceChildren(
+    ...ribbon.modes.map((chip) => {
+      const span = document.createElement("span");
+      span.className = `chip chip--${chip.kind}`;
+      span.textContent = chip.text;
+      return span;
+    }));
+}
+
+/** 送って、返ってきた画面を描く。断られたら理由をそのまま出す。 */
+async function send(path, body) {
+  try {
+    const next = await api.post(path, body || {});
+    render(next);
+    if (next.message) toast(next.message, next.found === false ? "ng" : "ok");
+    // 結果そのものではないが伝えるべきこと(疲労度マップが引けなかった等)。
+    // 黙って通常選定へ倒すと、効いていないことに誰も気づけない
+    (next.notes || []).forEach((note) => toast(note, "warn"));
+    return next;
+  } catch (err) {
+    // 422 / 500(業務としての断り・選定の失敗)も本文に画面ぜんぶが入っている。
+    // 押した拍子に一覧が消えると、断られたのか壊れたのか区別できない
+    if (err.body && err.body.rows) {
+      render(err.body);
+      (err.body.notes || []).forEach((note) => toast(note, "warn"));
+    }
+    toastError(err);
+    return null;
+  }
+}
+
+/**
+ * 選んだものを持って別の画面へ移る(旧版 `btnMap` / `btnUFMAP`)。
+ *
+ * **品目や寸法をここから送らない。** 何が決まっているかはサーバ側の
+ * 作業状態(`work_context`)が持っているので、押したことだけを伝える
+ * ── 送ると、同じ事実が画面とサーバの2か所に生まれる。
+ * 断り(まだ何も選んでいない)は 422 で返る。移らずに理由だけを出す。
+ */
+async function handoff(path) {
+  try {
+    const result = await api.post(path, {});
+    nav.go(result.next);
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+export function start(initial) {
+  for (const id of ["lotCaption", "banner", "listNote", "palletRows", "rowNote",
+                    "palWidth", "palLength", "prodWidth", "prodLength",
+                    "sizeStatus", "decideWhy", "productFrom", "exOnlyWhy",
+                    "showOnStock",
+                    "showAll", "exOnly", "twoStack",
+                    "applyPallet", "decide", "clearSizes",
+                    // ボード
+                    "boardCard", "boardType", "boardRows", "candidateNote",
+                    "addCount", "addUpper", "addLower",
+                    "autoSelect", "autoSelectLabel", "fatigue", "fatigueWhy",
+                    "fatigueBase", "place", "clearBoards", "selectWhy",
+                    "stockAware", "upperCard", "upperTitle", "upperRows",
+                    "lowerTitle", "lowerRows", "selectedSummary", "placeWhy",
+                    "showOnMap",
+                    // アングル
+                    "angleCard", "angleRows", "angleSelected", "angleNeedCut",
+                    "addAngle", "autoAngle", "drawAngle", "angleWhy",
+                    "hosozaiLabel",
+                    // 配置図
+                    "planStatus", "planUsage", "planLines", "planHint",
+                    "planUpperBox", "planUpperTitle", "planUpper", "planUpperLegend",
+                    "planLowerTitle", "planLower", "planLowerLegend",
+                    "planAngleBox", "planAngle",
+                    // 1P0113 / 出す / 管理者
+                    "sizeCard", "p1Card", "p1Materials", "p1Tip", "p1Qty",
+                    "p1Why", "force1p",
+                    "sendWarehouse", "outputWhy",
+                    "adminState", "adminPass", "authenticate", "savePattern",
+                    "saveWhy", "patternsNote", "patternRows",
+                    // 作業の段と、結果の面
+                    "nextHint", "outputCard", "resultTabs"]) {
+    el[id] = document.getElementById(id);
+  }
+  tabs.attachAll();
+
+  linked = "";
+
+  // 決まった段は畳んである。見出しを押せば開く ── 直したくなったときに
+  // 辿り着けなくならないようにする(開閉は見た目だけなので画面が持つ)。
+  // `document` に付けるので、この画面のあいだだけ有効にする(`nav.js`)
+  document.addEventListener("click", (event) => {
+    // 見出しの中のボタン(「在庫を見る」)は、押しても畳みを動かさない。
+    // **押した意図はそのボタンのもの**で、段の開け閉めではない
+    if (event.target.closest("button.btn")) return;
+    const header = event.target.closest(
+      ".step:not([data-state='current']) > header, .foldable > header");
+    if (header) header.parentElement.classList.toggle("is-open");
+  }, { signal: pageSignal() });
+
+  // 右寄せにする列は、見出しに付いている印から読む。
+  // 並びを2か所に書かない(サーバの `PALLET_COLUMNS` が唯一の出どころ)
+  NUMERIC = [...document.querySelectorAll("#sizeCard thead th")]
+    .map((th) => th.classList.contains("n"));
+
+  render(initial);
+
+  // 行を押したら入力欄へ写し、**サーバにも行そのものを覚えさせる**
+  // (VBA `_on_pallet_row_select`)。発注コードと単位は行にしか無く、
+  // 同じ寸法でも記号違いで別のコードになる
+  el.palletRows.addEventListener("click", (event) => {
+    const tr = event.target.closest("tr");
+    if (!tr || !tr.dataset.width) return;
+    el.palWidth.value = tr.dataset.width;
+    el.palLength.value = tr.dataset.length;
+    el.rowNote.textContent = tr.dataset.note || "";
+    for (const other of el.palletRows.querySelectorAll("tr")) {
+      other.classList.toggle("on", other === tr);
+    }
+    // 製品サイズも一緒に送る。**打ち直した直後は、サーバがまだ
+    // 知らない値が欄に入っている** ── 送らないと、打ってから行を
+    // 押した人だけ製品が確定しない
+    send("/api/selection/pallet/pick", {
+      width: tr.dataset.width, length: tr.dataset.length,
+      symbol: tr.dataset.symbol || "",
+      product_width: el.prodWidth.value,
+      product_length: el.prodLength.value,
+    });
+  });
+
+  // 一覧に無い寸法を使うときの逃げ道。押した寸法で決める
+  el.applyPallet.addEventListener("click", () =>
+    send("/api/selection/pallet/apply",
+         { width: el.palWidth.value, length: el.palLength.value }));
+
+  // **これ1つでパレットと製品の両方が決まる。**
+  // 載るパレットを探し、載ることを確かめ、確定させるところまで
+  for (const node of [el.prodWidth, el.prodLength]) {
+    node.addEventListener("input", refreshDecide);
+  }
+
+  el.decide.addEventListener("click", () =>
+    send("/api/selection/pallet/search", {
+      product_width: el.prodWidth.value,
+      product_length: el.prodLength.value,
+      pallet_width: el.palWidth.value,
+      pallet_length: el.palLength.value,
+    }));
+
+  el.clearSizes.addEventListener("click", () => send("/api/selection/clear"));
+
+  // 決まったパレットの寸法で簡易在庫を見る(旧版 `btnUFMAP`)。
+  // 寸法を画面から送らないのはボードMAPと同じ理由 ── 何が決まって
+  // いるかはサーバ側の作業状態が持っている
+  el.showOnStock.addEventListener("click", () => handoff("/api/selection/stock"));
+
+  for (const [button, name] of [[el.showAll, "show_all"], [el.exOnly, "ex_only"],
+                                [el.twoStack, "two_stack"],
+                                [el.fatigue, "fatigue"],
+                                [el.stockAware, "stock_aware"]]) {
+    button.addEventListener("click", () => send(`/api/selection/toggle/${name}`));
+  }
+
+  // --- ボード ---------------------------------------------------
+  el.boardType.addEventListener("change", () =>
+    send("/api/selection/board-type", { board_type: el.boardType.value }));
+
+  // 候補は「選んでから上用/下用へ入れる」。どれを入れるのか決めてから
+  // 行き先を選ぶ順で、VBA も候補リストの真下に追加行を置いていた
+  el.boardRows.addEventListener("click", (event) => {
+    const tr = event.target.closest("tr");
+    if (tr && tr.dataset.width) pick(el.boardRows, tr);
+  });
+
+  for (const [button, category] of [[el.addUpper, "upper"], [el.addLower, "lower"]]) {
+    button.addEventListener("click", () => {
+      const tr = picked(el.boardRows);
+      if (!tr) {
+        // サーバへ投げても同じことを言われるが、往復させる意味が無い
+        toast("追加するボードを一覧から選んでください。", "warn");
+        return;
+      }
+      send("/api/selection/boards/add", {
+        category, width: tr.dataset.width, length: tr.dataset.length,
+        count: el.addCount.value,
+      });
+    });
+  }
+
+  for (const tbody of [el.upperRows, el.lowerRows]) {
+    tbody.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-index]");
+      if (button) {
+        send("/api/selection/boards/remove",
+             { category: button.dataset.category, index: button.dataset.index });
+        return;
+      }
+      // 行を押したら、そのボードが図のどこに載るのかを出す
+      const tr = event.target.closest("tr[data-key]");
+      if (tr) setLink(tr.dataset.key, "plan");
+    });
+  }
+
+  el.showOnMap.addEventListener("click", () => handoff("/api/selection/map"));
+
+  el.autoSelect.addEventListener("click", () =>
+    send("/api/selection/boards/auto-select"));
+  el.clearBoards.addEventListener("click", () =>
+    send("/api/selection/boards/clear"));
+  el.place.addEventListener("click", () =>
+    send("/api/selection/boards/place"));
+
+  // --- 配置図 ---------------------------------------------------
+  for (const box of [el.planUpper, el.planLower]) {
+    box.addEventListener("click", (event) => {
+      const board = event.target.closest(".plan__board");
+      setLink(board ? board.dataset.key : "", "picked");
+    });
+  }
+
+  // --- アングル -------------------------------------------------
+  el.angleRows.addEventListener("click", (event) => {
+    const tr = event.target.closest("tr");
+    if (tr) pick(el.angleRows, tr);
+  });
+
+  el.addAngle.addEventListener("click", () => {
+    const tr = picked(el.angleRows);
+    if (!tr) {
+      toast("追加するアングルを候補から選んでください。", "warn");
+      return;
+    }
+    send("/api/selection/angles/add", { length: tr.dataset.length });
+  });
+
+  el.angleSelected.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-index]");
+    if (!button) return;
+    send("/api/selection/angles/remove", { index: button.dataset.index });
+  });
+
+  el.autoAngle.addEventListener("click", () =>
+    send("/api/selection/angles/auto"));
+  el.drawAngle.addEventListener("click", () =>
+    send("/api/selection/angles/draw"));
+
+  // --- 1P0113 -----------------------------------------------------
+  el.force1p.addEventListener("click", () => send("/api/selection/1p0113/force"));
+  el.p1Qty.addEventListener("change", () =>
+    send("/api/selection/1p0113/qty", { qty: el.p1Qty.value }));
+  // 資材を押すとフル情報に差し替わる(VBA `Show1P0113LabelTip`)。
+  // もう一度押すとコード/単位に戻る
+  el.p1Materials.addEventListener("click", (event) => {
+    const row = event.target.closest(".p1mat");
+    if (!row) return;
+    const showing = el.p1Tip.dataset.showing === row.dataset.info;
+    el.p1Tip.textContent = showing ? state.p1.tip : row.dataset.info;
+    el.p1Tip.dataset.showing = showing ? "" : row.dataset.info;
+  });
+
+  // --- 出す -------------------------------------------------------
+  for (const button of document.querySelectorAll("[data-report]")) {
+    // 帳票はサーバがHTMLをそのまま返す。別窓で開いて印刷する
+    button.addEventListener("click", () => {
+      const win = window.open(tokenUrl(button.dataset.url), "_blank");
+      if (!win) toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
+    });
+  }
+  el.sendWarehouse.addEventListener("click", async () => {
+    const next = await send("/api/selection/send");
+    // 送るのは倉庫連携の画面。組み立てただけでは登録されていない。
+    // 差し替えで移るので、出したばかりのトーストが消えない
+    if (next && next.next_url) nav.go(next.next_url);
+  });
+
+  // --- 管理者 -----------------------------------------------------
+  el.authenticate.addEventListener("click", () =>
+    send("/api/selection/auth", { password: el.adminPass.value }));
+  el.adminPass.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      send("/api/selection/auth", { password: el.adminPass.value });
+    }
+  });
+  el.savePattern.addEventListener("click", () =>
+    send("/api/selection/pattern/save"));
+  el.patternRows.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-pattern]");
+    if (button) send("/api/selection/pattern/load", { id: button.dataset.pattern });
+  });
+}

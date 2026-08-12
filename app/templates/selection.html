@@ -1,0 +1,756 @@
+{% extends "base.html" %}
+{% block title %}資材選択 — {{ display_name }}{% endblock %}
+
+{% block content %}
+{# 段はキーで引く。**並び・番号・状態・要約はサーバが決めたもの**で、
+   ここでは当てはめるだけ(`presenters/selection.py` の `_apply_steps`) #}
+{% set step = {} %}{% for s in view.steps %}{% set _ = step.update({s.key: s}) %}{% endfor %}
+{#
+  **結果は左、操作は右。** 以前は1本の列に
+
+     パレット → 製品 → ボード → 配置図 → 上用 → 下用 → アングル → 出す
+
+  と積んでいて、結果(配置図)が入力の**あいだ**に挟まっていた。
+  図を見るには操作を全部スクロールして通り過ぎ、直すには戻る ──
+  1回直すたびに視線と手が往復する。
+
+  設計指針 §4.2 が定めている形(結果はスクロールしてよい / 操作は
+  スクロールさせない / 結果:操作 = 1.3:1)へ寄せた。
+  操作は上から作業順に段を振り、**いま押すべき段だけを強調**する。
+#}
+<div class="split split--selection">
+
+  {# ============================================================
+     左: 結果。見るもの。動いてよい
+     ============================================================ #}
+  <div class="split__results" id="resultCol">
+    <div class="pane__head">
+      <div>
+        <span class="eyebrow">Step 2</span>
+        <h2>資材選択</h2>
+      </div>
+      <p class="why" id="lotCaption" style="margin:0 0 0 16px">{{ view.lot_caption }}</p>
+    </div>
+
+    {% if not view.available %}
+    <div class="status status--ng" style="margin-top:12px">
+      <span>{{ view.unavailable_message }}</span>
+      <a href="/settings" class="btn btn--nav" style="margin-left:auto">設定画面へ<span class="gl">▸</span></a>
+    </div>
+    {% endif %}
+
+  {# 結果も面で分ける。**縦に積むと図と一覧を行き来するのに
+     スクロールが要る**。図を見ながら枚数を確かめたい場面はあるが、
+     図の下に表を積むと図が小さくなり、どちらも中途半端になる。
+     並べ替えて面にすれば、それぞれが枠いっぱいを使える。
+     見出しに枚数を出すので、開く前に中身が分かる(§2.4) #}
+  <div class="tabs" data-tabs="selection-result" id="resultTabs">
+    <div class="tabs__bar" role="tablist" aria-label="結果の面">
+      <button class="tab" type="button" role="tab" data-key="plan" data-default="1"
+              id="tab-plan" aria-controls="panel-plan" aria-selected="false">
+        <span class="tab__label">配置図</span>
+        <span class="tab__badge" id="planTabBadge" hidden></span>
+      </button>
+      <button class="tab" type="button" role="tab" data-key="picked"
+              id="tab-picked" aria-controls="panel-picked" aria-selected="false">
+        <span class="tab__label">選定一覧</span>
+        <span class="tab__badge" id="pickedTabBadge" hidden></span>
+      </button>
+    </div>
+
+    <div class="tabs__panels">
+      <section class="tabpanel tabpanel--scroll" id="panel-plan" role="tabpanel"
+               aria-labelledby="tab-plan" hidden>
+  <!-- 4. 配置図 (VBA RefreshPaletteDisplay)
+       並びは アングル → 上用 → 下用。上から見た順・積み重ねの順で、
+       tkinter版から変えない(自然な対応づけ) -->
+  <section class="card card--plan" id="planCard">
+    <header>
+      <i class="ib ib--sm ib--accent" aria-hidden="true">図</i>
+      <h3>配置図</h3>
+      <span class="eyebrow" id="planStatus">{{ view.plans.status }}</span>
+      <span class="eyebrow" id="planUsage">{{ view.plans.usage }}</span>
+    </header>
+    <div class="pad">
+      <div class="planbox" id="planAngleBox" {% if not view.plans.angle %}hidden{% endif %}>
+        <h4 class="plan__title plan__title--angle">{{ view.plans.angle_title }}</h4>
+        <div id="planAngle"></div>
+      </div>
+
+      <div class="planbox" id="planUpperBox"
+           {% if not view.plans.show_upper %}hidden{% endif %}>
+        <h4 class="plan__title plan__title--upper" id="planUpperTitle">{{ view.plans.upper_title }}</h4>
+        <div id="planUpper"></div>
+        <p class="legend" id="planUpperLegend"></p>
+      </div>
+
+      <div class="planbox">
+        <h4 class="plan__title plan__title--lower" id="planLowerTitle">{{ view.plans.lower_title }}</h4>
+        <div id="planLower"></div>
+        <p class="legend" id="planLowerLegend"></p>
+      </div>
+
+      {# 実測。配置してみて初めて分かるカット量とはみ出しを出す
+         (VBA `DisplayInfo`)。色は種別からテーマが決める #}
+      <div id="planLines"></div>
+      <p class="why" id="planHint">図のボードを押すと「選定一覧」の同じボードへ移ります(逆も同じ)。</p>
+    </div>
+  </section>
+      </section>
+
+      <section class="tabpanel tabpanel--scroll" id="panel-picked" role="tabpanel"
+               aria-labelledby="tab-picked" hidden>
+  <!-- 5. 選定済み (VBA fraUpperBoards / fraLowerBoards) -->
+  <section class="card card--upper" id="upperCard"
+           {% if not view.boards.show_upper %}hidden{% endif %}>
+    <header><i class="ib ib--sm ib--upper" aria-hidden="true">上</i><h3 id="upperTitle">{{ view.boards.upper_title }}</h3></header>
+    <div class="pad">
+      <div class="tablewrap">
+        <table class="table">
+          <thead><tr>
+            {% for label, key, numeric in selected_columns %}
+            <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+            {% endfor %}
+            <th></th>
+          </tr></thead>
+          <tbody id="upperRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card card--lower">
+    <header>
+      <i class="ib ib--sm ib--lower" aria-hidden="true">下</i>
+      <h3 id="lowerTitle">{{ view.boards.lower_title }}</h3>
+      <span class="eyebrow" id="selectedSummary">{{ view.boards.summary }}</span>
+    </header>
+    <div class="pad">
+      <div class="tablewrap">
+        <table class="table">
+          <thead><tr>
+            {% for label, key, numeric in selected_columns %}
+            <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+            {% endfor %}
+            <th></th>
+          </tr></thead>
+          <tbody id="lowerRows"></tbody>
+        </table>
+      </div>
+      <p class="why" id="placeWhy" {% if not view.boards.place_why %}hidden{% endif %}>{{ view.boards.place_why }}</p>
+    </div>
+  </section>
+      </section>
+    </div>
+  </div>
+  </div>
+
+  {# ============================================================
+     右: 操作。探すもの。**スクロールさせない**
+     上から作業順。いま押すべき段だけを強調する(段の判断はサーバ)
+     ============================================================ #}
+  <div class="split__controls" id="controlCol">
+    {# モードバー。1P0113 / プロテック / EX は**見落とすと手戻りになる**ので
+       操作の一番上に常時出す(VBA も同じ位置に置いていた) #}
+    <div class="modeline">
+      <p class="modebar" id="banner" data-kind="{{ view.banner.kind }}"
+         {% if not view.banner.visible %}hidden{% endif %}>{{ view.banner.text }}</p>
+      {# 強制1P0113。包装仕様NOに関わらず裸梱包として扱う逃げ道で、
+         **ロットを切り替えると解除される**(VBA `ClearForNewLot`) #}
+      <button class="btn {% if view.p1.forced %}btn--on{% endif %}" type="button" id="force1p"
+              aria-pressed="{{ 'true' if view.p1.forced else 'false' }}">1P0113 強制</button>
+    </div>
+
+    {# 次の一手。**押すべきものは1つ**であることを言葉でも示す #}
+    <p class="nexthint" id="nextHint" {% if not view.next_hint %}hidden{% endif %}>{{ view.next_hint }}</p>
+
+  {# 1P0113(裸梱包)ではパレットを使わないので、パレット欄と**入れ替える**。
+     VBA も同じ位置に出していた。並びは 松板 → 角材 → コード/単位 →
+     本数 → 枚数 で、寸法の確認を上に、発注する数量を下にまとめる #}
+  <section class="card step" data-step="size" id="p1Card"
+           data-state="{{ step.size.state }}"
+           {% if not view.p1.on %}hidden{% endif %}>
+    <header>
+      <span class="stepno">{{ step.size.number }}</span>
+      <h3>裸梱包(1P0113)</h3>
+      <span class="eyebrow stepsum">パレット・ボードは使わず角材+松板で組みます</span>
+    </header>
+    <div class="pad">
+      <div class="p1grid" id="p1Materials"></div>
+      {# 通常はコード/単位。資材を押すとその資材のフル情報に差し替わる
+         (VBA `Show1P0113LabelTip`)。ホバーでは出さない ── タッチ端末に
+         ホバーは無い(§0) #}
+      <p class="status status--ok" id="p1Tip">{{ view.p1.tip }}</p>
+      <div class="field">
+        <label for="p1Qty">数量</label>
+        <input class="input input--num" id="p1Qty" type="number"
+               min="{{ view.p1.qty_min }}" max="{{ view.p1.qty_max }}"
+               value="{{ view.p1.qty }}">
+        <span class="why">角材の本数・松板の枚数にそのまま掛かります(総梱包数で初期化)</span>
+      </div>
+      <p class="why" id="p1Why" {% if not view.p1.why %}hidden{% endif %}>{{ view.p1.why }}</p>
+    </div>
+  </section>
+
+  <!-- 1. パレットを決める (VBA fraProductSize + fraPaletteSize)
+
+       **製品サイズとパレットは1つの決めごと。** ロットを選ぶと製品サイズが
+       入り(「資材展開」)、それが載るパレットを選ぶ ── パレットは製品の
+       ために選ぶもので、順に決まっていく1本の流れ。
+
+       以前は「製品サイズ」と「パレットサイズ」の2枚に分かれていて、
+       しかも パレット → 製品 の順に並んでいた。まだ分からないものを先に
+       決めさせ、あとから「載るかどうか」を確かめる形で、押す回数も
+       3回(行を選ぶ→適用→セット)必要だった。
+       1枚にまとめると、必要なものが同時に見えて1回で決まる。 -->
+  <section class="card step" data-step="size" id="sizeCard"
+           data-state="{{ step.size.state }}"
+           {% if view.p1.on %}hidden{% endif %}>
+    <header>
+      <span class="stepno">{{ step.size.number }}</span>
+      <h3>パレットを決める</h3>
+      <span class="eyebrow stepsum" id="sizeSummary">{{ step.size.summary }}</span>
+      {# 旧版 `btnUFMAP`。**決まったパレットのすぐ隣**に置く(§距離を縮める)。
+         段の中(`.pad`)に置くと、決まった段は畳まれるので届かなくなる ──
+         確定値が残るのは見出しなので、操作も見出しに置く。
+         決まっていなければ出さない(渡すものが無い) #}
+      <button class="btn btn--nav btn--inhead" type="button" id="showOnStock"
+              title="このパレットの寸法で簡易在庫を引きます"
+              {% if not view.pallet_set %}hidden{% endif %}>
+        在庫を見る<span class="gl">▸</span></button>
+    </header>
+    <div class="pad">
+      {# 製品サイズ。**人が決めるものではなく、決まっているものを確かめる** #}
+      <div class="field">
+        <label for="prodWidth">製品 幅</label>
+        <input class="input num" id="prodWidth" inputmode="numeric" style="width:6em"
+               value="{{ view.product_width }}" autocomplete="off">
+        <label for="prodLength">丈</label>
+        <input class="input num" id="prodLength" inputmode="numeric" style="width:6em"
+               value="{{ view.product_length }}" autocomplete="off">
+        {# **この1つでパレットと製品の両方が決まる。** 載るパレットを
+           探し、載ることを確かめ、確定させるところまで #}
+        <button class="btn btn--select" type="button" id="decide"
+                {% if not view.can_decide %}disabled{% endif %}>
+          <span class="gl">⌕</span>パレットを選ぶ</button>
+        <button class="btn btn--danger" type="button" id="clearSizes">
+          <span class="gl">×</span>やり直す</button>
+      </div>
+      <p class="why" id="productFrom" {% if not view.product_from %}hidden{% endif %}>{{ view.product_from }}</p>
+      <p class="why" id="decideWhy" {% if not view.decide_why %}hidden{% endif %}>{{ view.decide_why }}</p>
+
+      {# 候補の一覧。**製品サイズが決まると、載るものだけが並ぶ。**
+         行を押した時点でそのパレットに決まる(適用もセットも要らない) #}
+      <div class="filters">
+        <button class="btn" type="button" id="showAll"
+                aria-pressed="{{ 'true' if view.show_all else 'false' }}">EXまで表示</button>
+        {# EXオンリーはEX受注のときだけ効く。効かないときは押せなくし、
+           理由をその場に置く(押してから断るより先に言う) #}
+        <button class="btn" type="button" id="exOnly"
+                aria-pressed="{{ 'true' if view.ex_only else 'false' }}"
+                {% if not view.ex_only_enabled %}disabled{% endif %}>EXオンリー</button>
+        <button class="btn" type="button" id="twoStack"
+                aria-pressed="{{ 'true' if view.two_stack else 'false' }}">2山積</button>
+        <span class="eyebrow" id="listNote">{{ view.list_note }}</span>
+      </div>
+      <p class="why" id="exOnlyWhy" {% if not view.ex_only_why %}hidden{% endif %}>{{ view.ex_only_why }}</p>
+      <div class="tablewrap tablewrap--tall">
+        <table class="table">
+          <thead><tr>
+            {% for label, key, numeric in columns %}
+            <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+            {% endfor %}
+          </tr></thead>
+          <tbody id="palletRows"></tbody>
+        </table>
+      </div>
+      {# クリックした行の単位・コード(VBA `DynamicTip`)。列には出していない #}
+      <p class="why" id="rowNote"></p>
+
+      {# 一覧に無い寸法を使うときの逃げ道。**普段は使わない**ので畳んでおく
+         (§1.3 段階的開示)。押せば開く #}
+      <div class="card--sub foldable" id="manualBox">
+        <header><h4>一覧に無い寸法を使う</h4></header>
+        <div class="pad">
+          <div class="field">
+            <label for="palWidth">幅</label>
+            <input class="input num" id="palWidth" inputmode="numeric" style="width:6em"
+                   value="{{ view.pallet_width }}" autocomplete="off">
+            <label for="palLength">丈</label>
+            <input class="input num" id="palLength" inputmode="numeric" style="width:6em"
+                   value="{{ view.pallet_length }}" autocomplete="off">
+            <button class="btn" type="button" id="applyPallet">この寸法にする</button>
+          </div>
+        </div>
+      </div>
+      {# 決まったものは**1行にまとめて**出す。製品とパレットは1つの
+         決めごとなので、2行に分けると読む場所が2つになる #}
+      <p class="status {{ 'status--ok' if view.product_set and view.pallet_set else 'status--ng' }}"
+         id="sizeStatus">{{ view.size_status }}</p>
+
+      <p class="why">
+        通常向きで収まらず回転すれば収まる場合は<b>幅・丈を入れ替えます</b>。
+      </p>
+    </div>
+  </section>
+
+  <!-- 3. ボード候補と実行 (VBA fraBoards / btnColLeft) -->
+  <section class="card step" data-step="boards" id="boardCard"
+           data-state="{{ step.boards.state }}"
+           {% if step.boards.hidden %}hidden{% endif %}>
+    <header>
+      <span class="stepno">{{ step.boards.number }}</span>
+      <h3>ボード</h3>
+      <span class="eyebrow stepsum" id="boardSummary">{{ step.boards.summary }}</span>
+    </header>
+    <div class="pad">
+      <div class="field">
+        <label for="boardType">種別</label>
+        <select class="input" id="boardType" style="min-width:12em">
+          {% for name in view.boards.board_types %}
+          <option value="{{ name }}" {% if name == view.boards.board_type %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+        {# 在庫考慮はモードのトグル。ONの見た目を 2山積 とそろえる #}
+        <button class="btn" type="button" id="stockAware"
+                aria-pressed="{{ 'true' if view.boards.stock_aware else 'false' }}">在庫考慮</button>
+        <span class="eyebrow" id="candidateNote">{{ view.boards.candidate_note }}</span>
+      </div>
+
+      <div class="tablewrap tablewrap--boards">
+        <table class="table">
+          <thead><tr>
+            {% for label, key, numeric in board_columns %}
+            <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+            {% endfor %}
+          </tr></thead>
+          {# 中身はJSが描く。この画面は §3.2 の「Jinja2 で骨格 + JSON API で
+             中身」に当たり、状態遷移のたびに全体を描き直す #}
+          <tbody id="boardRows"></tbody>
+        </table>
+      </div>
+
+      {# 手動追加。枚数と行き先(上/下)は隣り合わせに置く。
+         VBA も候補リストの真下にこの並びで置いていた #}
+      <div class="field">
+        <label for="addCount">枚数</label>
+        <input class="input input--num" id="addCount" inputmode="numeric" value="1" autocomplete="off">
+        <button class="btn btn--upper" type="button" id="addUpper">上用へ追加</button>
+        <button class="btn btn--lower" type="button" id="addLower">下用へ追加</button>
+      </div>
+      <p class="why">追加できるのは<b>一覧にあるボードだけ</b>です。行を選んでから押してください。</p>
+
+      {# 旧版 `btnMap`。選んだボードとアングルの置き場を**まとめて**光らせる。
+         1件ずつ探すと、5種類あれば5回打ち直すことになる。
+         「どれを取りに行くか」ではなく「**全部でどれだけ歩くか**」が要点 #}
+      <div class="btn-row">
+        <button class="btn btn--nav" type="button" id="showOnMap">
+          置き場をまとめて見る<span class="gl">▸</span></button>
+      </div>
+      <p class="why">
+        選んだボードとアングルの置き場を、棚検索でまとめて光らせます
+        (合計疲労度も出ます)。
+      </p>
+
+      {# 実行ボタンは作業順に。色は操作の種類を表す(VBA btnColLeft の並び) #}
+      <div class="btn-row">
+        {# 色は操作の種類(選定)なので疲労度で変えない。効いていることは
+           語で示す(VBA `SELECT_ON_TEXT` = 「疲労考慮ﾎﾞｰﾄﾞ」) #}
+        <button class="btn btn--select" type="button" id="autoSelect"
+                {% if not view.boards.can_select %}disabled{% endif %}>
+          <span class="gl">⚙</span><span id="autoSelectLabel">{{
+            "疲労考慮ボード" if view.boards.fatigue else "ボード選定" }}</span></button>
+        {# ONの色だけ他のトグルと変える。疲労度優先は「操作の種類」ではなく
+           選定の考え方そのもので、在庫考慮と同じ緑だとどちらが効いて
+           いるのか色から読めない #}
+        <button class="btn {% if view.boards.fatigue %}btn--fatigue{% endif %}" type="button" id="fatigue"
+                aria-pressed="{{ 'true' if view.boards.fatigue else 'false' }}">疲労度優先</button>
+        {# 押せない理由はサーバが `place_why` で返す(下の #placeWhy)。
+           画面が条件を組み立て直さない #}
+        <button class="btn btn--run" type="button" id="place"
+                {% if not view.boards.can_place %}disabled{% endif %}>
+          <span class="gl">▶</span>ボード配置</button>
+        <button class="btn btn--danger" type="button" id="clearBoards">
+          <span class="gl">×</span>クリア</button>
+      </div>
+      {# 押せない理由はボタンの真下に置く。離すと、押せないことに
+         気づいたときに理由が視野の外にある #}
+      <p class="why" id="selectWhy" {% if not view.boards.select_why %}hidden{% endif %}>{{ view.boards.select_why }}</p>
+      <p class="why" id="fatigueWhy" {% if not view.boards.fatigue %}hidden{% endif %}>
+        疲労度優先: 拠点 <b id="fatigueBase">{{ view.boards.base_point }}</b> からの取り出し距離とカットの手間を加味します。
+        アングル自動選定にも効きます。
+      </p>
+    </div>
+  </section>
+
+  <!-- 6. アングル (VBA lstAngles / lstSelectedAngles) -->
+  {# 保護材がアングル以外に確定していれば、この欄は**無い**(上下共用モード)。
+     隠すのではなく、そのときは使わないから出さない #}
+  <section class="card card--angle step" data-step="angles" id="angleCard"
+           data-state="{{ step.angles.state }}"
+           {% if not view.angles.show %}hidden{% endif %}>
+    <header>
+      <span class="stepno">{{ step.angles.number }}</span>
+      <h3>アングル</h3>
+      <span class="eyebrow" id="angleNeedCut" {% if not view.angles.need_cut %}hidden{% endif %}>カット前提</span>
+    </header>
+    <div class="pad">
+      <div class="anglecols">
+        <div>
+          <p class="why">候補</p>
+          <div class="tablewrap tablewrap--angles">
+            <table class="table"><tbody id="angleRows"></tbody></table>
+          </div>
+        </div>
+        <div>
+          <p class="why">選択アングル</p>
+          <div class="tablewrap tablewrap--angles">
+            <table class="table"><tbody id="angleSelected"></tbody></table>
+          </div>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn" type="button" id="addAngle">アングル追加</button>
+        <button class="btn btn--find" type="button" id="autoAngle"
+                {% if not view.angles.can_auto %}disabled{% endif %}>
+          <span class="gl">◎</span>アングル自動</button>
+        {# 選んだだけでは図にしない(VBA `btnAngleDraw_Click`)。
+           確かめていない組み合わせが図になると、そのまま通ってしまう #}
+        <button class="btn btn--run" type="button" id="drawAngle"
+                {% if not view.angles.can_draw %}disabled{% endif %}>
+          <span class="gl">▶</span>アングル配置</button>
+      </div>
+      <p class="why" id="angleWhy" {% if not view.angles.why %}hidden{% endif %}>{{ view.angles.why | join("　") }}</p>
+    </div>
+  </section>
+
+  {# 上下共用モードでアングルが消えたとき、その場所に何を使うのかを出す。
+     欄が消えただけだと、消えたのか壊れたのか分からない #}
+  <p class="status status--ok" id="hosozaiLabel"
+     {% if not view.angles.hosozai_label %}hidden{% endif %}>{{ view.angles.hosozai_label }}</p>
+
+  <!-- 7. 出す (VBA btnPrint_Click / btnCutRequest_Click / btnSendToWarehouse_Click) -->
+  <section class="card step" data-step="outputs" id="outputCard"
+           data-state="{{ step.outputs.state }}">
+    <header>
+      <span class="stepno">{{ step.outputs.number }}</span>
+      <h3>出す</h3>
+      <span class="eyebrow stepsum">帳票と倉庫送信</span>
+    </header>
+    <div class="pad">
+      <div class="btn-row">
+        {# 帳票は**別窓で開いて印刷する**。サーバがHTMLをそのまま返すので、
+           一時ファイルとその後始末が要らない(設計書 §6.3) #}
+        {% for report in view.outputs.reports %}
+        <button class="btn btn--print" type="button" id="report-{{ report.key }}"
+                data-report="{{ report.key }}" data-url="{{ report.url }}"
+                {% if not report.can %}disabled{% endif %}>
+          <span class="gl">⎙</span>{{ report.label }}</button>
+        {% endfor %}
+        <button class="btn btn--commit" type="button" id="sendWarehouse"
+                {% if not view.outputs.can_send %}disabled{% endif %}>
+          <span class="gl">▸</span>倉庫送信</button>
+      </div>
+      <div id="outputWhy"></div>
+      <p class="why">
+        帳票は別窓で開きます(<b>Ctrl+P</b> で印刷)。倉庫送信は
+        <b>ここでは登録しません</b> ── 倉庫連携の画面で確かめてから送ります。
+      </p>
+    </div>
+  </section>
+
+  <!-- 8. 管理者 (VBA: 右下に隔離。認証しないと保存できない) -->
+  {# 管理者は**日常操作ではない**(§1.2「日常操作から離す」)。
+     既定で畳み、見出しを押したときだけ開く。操作カラムはスクロール
+     させない決まりなので、毎日使わないものに高さを使わない #}
+  <section class="card card--admin foldable">
+    <header>
+      <h3>管理者</h3>
+      <span class="eyebrow" id="adminState">
+        {{ "認証済み" if view.admin.authenticated else "未認証" }}</span>
+    </header>
+    <div class="pad">
+      <div class="field">
+        <label for="adminPass">パスワード</label>
+        {# 送るだけで、返ってくることはない。画面が受け取るのは
+           「認証したか」の1ビットだけ(設計書 §3.6) #}
+        <input class="input" id="adminPass" type="password" autocomplete="off"
+               style="width:10em">
+        <button class="btn" type="button" id="authenticate">認証</button>
+        <button class="btn btn--commit" type="button" id="savePattern"
+                {% if not view.admin.can_save %}disabled{% endif %}>実績を保存</button>
+      </div>
+      <p class="why" id="saveWhy" {% if not view.admin.save_why %}hidden{% endif %}>{{ view.admin.save_why }}</p>
+
+      <p class="why" id="patternsNote">{{ view.admin.patterns_note }}</p>
+      <div class="tablewrap tablewrap--patterns">
+        <table class="table">
+          <thead><tr>
+            <th>No</th><th>製品</th><th>ボード</th>
+            <th class="n">使用</th><th>登録</th><th></th>
+          </tr></thead>
+          <tbody id="patternRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  {# この画面でまだできないこと。作りかけを黙って出すと、
+     「壊れている」のか「これから作る」のか区別できない。
+     Phase 6d ですべて移し終えたので、いまは空 ── `PENDING_PARTS` に
+     足せばまた出る #}
+  {% if pending %}
+  <section class="card card--pending">
+    <header><h3>この画面でまだできないこと</h3></header>
+    <div class="pad">
+      <ul class="pendinglist">
+        {% for what, phase in pending %}
+        <li><span class="chip chip--todo">{{ phase }}</span>{{ what }}</li>
+        {% endfor %}
+      </ul>
+      <p class="why">それまでは<b>資材選択タブ</b>(tkinter版)をお使いください。</p>
+    </div>
+  </section>
+  {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+
+{% block head %}
+<style>
+  /* ================================================================
+     作業の段 — いま押すべきものを1つに見せる
+
+     16個のボタンが同じ重さで並ぶと、押すべきものを毎回探すことに
+     なる(ヒックの法則)。順序・番号・状態は**サーバが決めた値**を
+     当てるだけで、ここは見た目だけを持つ。
+     ================================================================ */
+  /* 操作の列はスクロールさせない(§4.2)。基準の FHD 100%(本体894px)
+     では、段階的開示によって**開いている段は1つだけ**なので収まる。
+     それより低い画面の逃がし方は `layout.css` の `.split__controls`。 */
+  /* 題は番号のすぐ隣。`.card > header` の space-between のままだと、
+     要約が無い段(いま開いている段)で題が右端まで飛ぶ */
+  .step > header { gap: 8px; justify-content: flex-start; }
+  .stepno {
+    flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
+    display: inline-grid; place-items: center;
+    font-family: var(--mono); font-size: var(--fs-xs); font-weight: 700;
+    background: var(--sunken); color: var(--faint);
+  }
+  .stepsum {
+    margin-left: auto; text-align: right; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 60%;
+  }
+  .step > header h3 { white-space: nowrap; }
+  /* 見出しに置く操作(「在庫を見る」)。**畳んでも残る**位置なので、
+     決まった値のすぐ隣に居続ける。段の高さを増やさないよう小さくする
+     ── 見出しは1行に収まっていないと、段の並びが読めなくなる */
+  .btn--inhead {
+    flex: 0 0 auto; min-height: 24px; padding: 2px 8px;
+    font-size: var(--fs-xs); margin-left: 8px;
+  }
+
+  /* いま押すべき段。**縁と番号だけ**で示し、面は塗らない
+     (§3.5 アクセント青は面に使わない)。輪郭に柔らかい輪を添えて、
+     細い1本の線でも「ここが開いている」と分かるようにする */
+  .step[data-state="current"] {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-soft), var(--shadow-sm);
+  }
+  .step[data-state="current"] .stepno {
+    background: var(--accent); color: var(--surface);
+  }
+  /* 決まった段。番号を済の色にし、要約に確定値を残す */
+  .step[data-state="done"] .stepno {
+    background: var(--ok-bg); color: var(--state-ok);
+  }
+  .step[data-state="done"] .stepno::after { content: "✔"; font-size: var(--fs-2xs); }
+  .step[data-state="done"] .stepno { font-size: 0; }
+  .step[data-state="todo"] { opacity: .82; }
+
+  /* 次の一手。押すべきものを言葉でも1つ示す */
+  .nexthint {
+    margin: 0; padding: 7px 10px; border-radius: var(--radius-sm); font-size: var(--fs-sm);
+    background: var(--ok-bg); color: var(--ink);
+    border-left: 3px solid var(--accent);
+  }
+  .nexthint[hidden] { display: none; }
+
+  /* 主動作。**サーバが選んだ1つだけ**が濃くなる */
+  .btn.is-primary { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  /* 日常操作ではないもの(管理者)。既定で畳む。
+     押せることが見て分かるよう、決まった段と同じ印を使う */
+  .foldable:not(.is-open) > .pad { display: none; }
+  .foldable:not(.is-open) > header { border-bottom: 0; }
+  .foldable > header { cursor: pointer; }
+  .foldable > header::after {
+    content: "▾"; font-size: var(--fs-2xs); color: var(--muted); margin-left: auto;
+  }
+  .foldable.is-open > header::after { content: "▴"; }
+  .foldable > header:hover { background: var(--raised); }
+  /* 段の中に置く小さな畳み(「一覧に無い寸法を使う」)。
+     カードの中のカードにはしない ── 紙は2枚までなので、
+     区切りは線1本と字の大きさだけで作る */
+  .card--sub { border-top: 1px solid var(--hairline); }
+  .card--sub > header { display: flex; align-items: center; padding: 8px 0 6px; }
+  .card--sub > header h4 { font-size: var(--fs-sm); font-weight: 600; color: var(--muted); }
+  .card--sub > .pad { padding: 0 0 8px; }
+
+  /* **開くのはいまの段だけ。** 高さではなく作業段階に連動させる(§1.3)。
+     操作カラムはスクロールさせない決まり(§4.2)で、5段すべてを開くと
+     1,489px になり、FHD 100%(894px)でも入りきらない。
+     畳んでも確定値は要約に残るので「何が決まっているか」は失われない。
+     見出しを押せば開く ── 先を覗きたいときも、戻って直したいときも
+     辿り着けなくならない。 */
+  .step:not([data-state="current"]):not(.is-open) > .pad { display: none; }
+  .step:not([data-state="current"]):not(.is-open) > header { border-bottom: 0; }
+  .step:not([data-state="current"]) > header { cursor: pointer; }
+  .step:not([data-state="current"]) > header::after {
+    content: "▾"; font-size: var(--fs-2xs); color: var(--muted); flex: 0 0 auto;
+  }
+  .step:not([data-state="current"]).is-open > header::after { content: "▴"; }
+  /* 開き直せることが見て分かるように、押せる範囲を広げる */
+  .step:not([data-state="current"]) > header:hover { background: var(--raised); }
+
+  .modebar { margin:10px 0 0; padding:8px 12px; border-radius:var(--radius-xs);
+             font-weight:700; font-size: var(--fs-md);
+             background:var(--sunken); border:1px solid var(--rule); }
+  .modebar[hidden] { display:none; }
+  .modebar[data-kind="1p0113"] { background:var(--warn-bg); color:var(--warn-fg);
+                                 border-color:var(--state-error); }
+  .modebar[data-kind="protec"] { background:var(--ok-bg); color:var(--state-ok);
+                                 border-color:var(--state-ok); }
+  .modebar[data-kind="ex"]     { background:var(--info-bg); color:var(--info-fg);
+                                 border-color:var(--info-fg); }
+
+  .filters { display:flex; gap:6px; margin-left:auto; }
+  /* 一覧は縦に長い。丈をここで決めておかないと、
+     全件(数百行)のときに画面がどこまでも伸びる */
+  /* 候補の一覧。**中で動かす**(§4.2「一覧の中は動いてよい」)。
+     ここを伸ばすと、下の「この寸法にする」と状態表示が操作の列から
+     追い出される ── 押せる場所が消えるほうが困る。
+     低い画面ではさらに詰める(基準は FHD 100% の 894px) */
+  .tablewrap--tall { max-height:38vh; overflow:auto; }
+  @media (max-height: 820px) { .tablewrap--tall { max-height:26vh; } }
+  /* 10列とも短い数字。幅いっぱいに引き伸ばすと、値が見出しから
+     遠く離れて目が往復する。中身の幅のまま左に寄せる */
+  #palletCard .table { width:auto; }
+  #palletCard .table th, #palletCard .table td { min-width:4.5em; }
+  /* EX対象の行。色だけで伝えないよう、記号欄の "EX" も残す(§3.8) */
+  .table tr.ex td { background:var(--warn-bg); }
+  /* 選んでいる行。セルごとに枠を描くと、1行が10個の箱に見える。
+     行の左端に印を置き、背景で一続きだと分かるようにする */
+  .table tr.on td { background:var(--info-bg); font-weight:700; }
+  .table tr.on td:first-child { box-shadow:inset 3px 0 0 var(--focus); }
+  .table tbody tr { cursor:pointer; }
+  .status--ok { background:var(--ok-bg); color:var(--state-ok); }
+  .status--ng { background:var(--warn-bg); color:var(--warn-fg); }
+  /* モードバーと強制トグルは同じ行に。効いているモードと、それを
+     動かす手段が離れていると、押した結果が視野の外に出る */
+  .modeline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .modeline .modebar { flex:1; margin:0; }
+  .modeline .modebar[hidden] { display:none; }
+
+  .card--pending { opacity:.9; }
+  .pendinglist { margin:0; padding:0; list-style:none; display:grid; gap:6px; }
+  .pendinglist li { display:flex; align-items:baseline; gap:8px; font-size: var(--fs-md); }
+  .why[hidden] { display:none; }
+  .card[hidden], .status[hidden], .eyebrow[hidden] { display:none; }
+
+  /* 候補は**細く高く**。中身は幅・丈・在庫の3列しかないので、
+     横に伸ばしても情報は増えず、見える行数が減るだけ
+     (VBA `lstAvailableBoards` も 120x125pt の縦長だった) */
+  #boardCard .table { width:auto; }
+  #boardCard .table th, #boardCard .table td { min-width:4.5em; }
+  .tablewrap--boards { max-height:26vh; overflow:auto; }
+
+  /* 選定済み。削除は行の右端に置く ── 消す対象と押す場所を離さない */
+  .rowdel { min-height:32px; min-width:32px; padding:4px 8px; font-size: var(--fs-xs); }
+  #upperCard .table, .card--lower .table { width:auto; min-width:60%; }
+
+  /* アングルは「候補」と「選択」を横に並べる。移す操作なので、
+     移動元と移動先が同時に見えていないと何が起きたか分からない */
+  /* 配置図。並びは アングル → 上用 → 下用(上から見た順・積み重ねの順)。
+     **枠に合わせて図が縮む。** 以前は中身に合わせて図が伸び、面から
+     162px はみ出していた(1920幅で 910px/枠 748px)。`preserveAspectRatio`
+     が "meet" なので、縮んでも欠けるものは無い ── 見比べるのに
+     スクロールが要らなくなるほうが、原寸に近いことより効く(§4.2)。
+     横に並べる案は取らない。半分の幅に収まるぶん図が小さくなり、
+     縦の余りが無駄になる(実測 462x146 対 縦積み 815x256)。 */
+  .card--plan { display:flex; flex-direction:column; min-height:0; }
+  .card--plan > .pad {
+    display:flex; flex-direction:column; gap:10px; min-height:0; flex:1 1 auto;
+  }
+  .planbox + .planbox { margin-top:0; }
+  /* 図の箱は縮んでよい(`flex-shrink`)が、自分から伸びはしない。
+     縮むぶんは**元の高さに比例して**配られるので、もともと背の高い
+     下用のほうが多く譲る ── どちらも同じくらい読めるまま収まる */
+  .planbox { display:flex; flex-direction:column; min-height:0; flex:0 1 auto; }
+  .planbox[hidden] { display:none; }
+  .planbox > div { flex:0 1 auto; min-height:0; }
+  #planLines, #planHint { flex:0 0 auto; }
+  .plan__title { font-size: var(--fs-sm); font-weight:700; margin:0 0 4px; }
+  .plan__title--upper { color:var(--mat-upper); }
+  .plan__title--lower { color:var(--mat-lower); }
+  .plan__title--angle { color:var(--mat-angle); }
+  /* 図の地は資材ごとに変える。上用と下用が続けて並ぶので、
+     どちらを見ているのか地の色でも分かるようにする */
+  #planUpper .plan { background:var(--mat-upper-bg); }
+  #planLower .plan { background:var(--mat-lower-bg); }
+  #planAngle .plan { background:var(--mat-angle-bg); }
+  /* はみ出しの大きい配置では図が縦に伸びる(切り落とし部まで描くため)。
+     高さに上限を置くと、`preserveAspectRatio` が中身ごと縮めるので
+     **何も欠けないまま**画面に収まる。100%表示で本体は約894px、
+     150%で約534px しかないので、図だけで画面を埋めさせない(§4.1) */
+  .plan {
+    display:block; width:100%; height:100%; max-height:42vh;
+    border:1px solid var(--hairline); border-radius:var(--radius-xs);
+  }
+  /* 図の中のボード。押せることが分かるように指の形にする */
+  .plan__board { cursor:pointer; }
+  .plan__board rect { transition:none; }
+  /* 相互ハイライト。色だけに頼らず**太い輪郭**で示す(§設計指針 3.8) */
+  .plan__board.is-linked rect { stroke:var(--accent); stroke-width:3; }
+  .plan__cutzone { pointer-events:none; }
+
+  .legend { display:flex; flex-wrap:wrap; gap:10px; margin:4px 0 0;
+            font-size: var(--fs-xs); color:var(--muted); }
+  .legend:empty { display:none; }
+  .legend__item { display:inline-flex; align-items:center; gap:4px; }
+  .legend__item i { width:12px; height:12px; border-radius:var(--radius-xs); display:inline-block; }
+
+  /* 1P0113。松板=青系 / 角材=茶系 の色分けはVBAのまま */
+  .p1grid { display:grid; gap:8px; }
+  .p1mat {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    padding:8px 10px; border:1px solid var(--field-line); border-radius:var(--radius-xs);
+    background:var(--surface); cursor:pointer; text-align:left;
+    font:inherit; min-height:44px; width:100%;
+  }
+  .p1mat b { min-width:5em; }
+  .p1mat .p1size { font-family:var(--mono); font-weight:700; }
+  .p1mat .p1count { margin-left:auto; font-weight:700; }
+  .p1mat[data-ok="false"] .p1size { color:var(--state-error); }
+
+  .tablewrap--patterns { max-height:22vh; overflow:auto; }
+  /* ボードの内訳は長い。省略して「読込」を押せる位置に残す */
+  .table td.clip { max-width:28em; overflow:hidden; text-overflow:ellipsis; }
+  .card--admin { border-color:var(--rule); }
+  .card--admin > header h3 { color:var(--muted); }
+
+  .anglecols { display:flex; gap:12px; flex-wrap:wrap; }
+  .anglecols > div { min-width:9em; }
+  .anglecols .why { margin:0 0 4px; }
+  .tablewrap--angles { max-height:22vh; overflow:auto; }
+  .tablewrap--angles .table { width:auto; min-width:7em; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/selection.js') }}";
+  start({{ state | tojson }});
+</script>
+{% endblock %}

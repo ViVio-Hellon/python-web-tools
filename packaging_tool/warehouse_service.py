@@ -1,0 +1,215 @@
+"""倉庫連携(現場↔倉庫)の業務ロジック
+
+VBA `frmSendConfirm`(倉庫に発注データを送る確認ダイアログ)と
+`frmWarehouseOrder`(倉庫側の一覧・確認画面)、および実際のINSERT処理を
+行っていた `SendWarehouseRow` の移植。対象テーブルは `資材パレット注文管理`。
+
+対応関係:
+    VBA                                  -> Python
+    ------------------------------------------------------------
+    SendWarehouseRow                       -> create_order
+    frmWarehouseOrder.LoadOrders/RefreshList -> list_orders
+    frmWarehouseOrder.btnConfirm_Click        -> confirm_order
+    frmSendConfirm.btnDelete_Click             -> cancel_order
+
+【移植で変更した点】
+    - VBA版は「取り消し済/確認済み」を文字列リテラル'1'として書き込み、
+      「対象カラムが存在するか(AddConfirmColumns未実行でないか)」を
+      毎回チェックしていた。SQLite版はスキーマに最初から4カラムとも
+      定義済みなので、その存在チェックは不要になる。
+    - `frmWarehouseOrder.btnConfirm_Click`はUPDATEの影響行数を確認せず
+      「確認済みにしました」と表示してしまう(他端末が同時に取り消した
+      場合に矛盾したメッセージになりうる)という弱点があったが、
+      Python版は`cancel_order`と同様に影響行数を確認し、0件なら
+      「他の端末で状態が変更されています」と正しく伝える(意図的な改善)。
+    - 管理番号の採番はSQLiteのAUTOINCREMENTに任せる(VBA版は
+      オートナンバー未設定の場合にMAX+1を手計算する分岐を持っていたが、
+      SQLite版のテーブルは常にAUTOINCREMENTなので不要)。
+    - 一覧のキーワード/期間フィルタはVBA版はメモリ上の全件配列に対して
+      行っていたが、Python版はSQLiteのWHERE句で行う
+      (登録日時をISO8601で保存しているため `date()` 関数がそのまま使える)。
+"""
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+from typing import Optional
+
+from . import db
+from .logging_utils import get_logger
+
+log = get_logger("warehouse_service")
+
+TABLE = "資材パレット注文管理"
+
+STATUS_CANCELLED = "取消済"
+STATUS_CONFIRMED = "確認済み"
+STATUS_PENDING = "未確認"
+
+
+@dataclass
+class OrderResult:
+    ok: bool
+    message: str
+    mgr_no: Optional[int] = None
+
+
+@dataclass
+class ActionResult:
+    ok: bool
+    message: str
+
+
+def create_order(
+    conn: sqlite3.Connection,
+    *,
+    lot_no: str,
+    hinmei: str,
+    hatchu_code: str,
+    tani: str,
+    zaisitu: str = "",
+    choshitu: str = "",
+    atu,
+    haba,
+    take,
+    nounyusaki: str = "",
+    yoto_code: str = "",
+    hatchu_suu,
+) -> OrderResult:
+    """VBA `SendWarehouseRow`(+ `frmSendConfirm.btnSend_Click`の数量検証)の移植。"""
+    lot_no = db.sanitize_for_db(lot_no)
+    hinmei = db.sanitize_for_db(hinmei)
+    hatchu_code = db.sanitize_for_db(hatchu_code)
+    if not lot_no or not hinmei or not hatchu_code:
+        return OrderResult(ok=False, message="LotNo・品名・発注コードは必須です。")
+
+    try:
+        # 呼び出し側はVBA同様の書式済み文字列("1122.0"等)を渡してくることがある。
+        # Access版は列型に合わせて暗黙変換していたので、floatを経由して受ける
+        atu_v, haba_v, take_v = float(atu), int(float(haba)), int(float(take))
+    except (TypeError, ValueError):
+        return OrderResult(ok=False, message="厚・幅・丈は数値で入力してください。")
+
+    try:
+        qty = int(hatchu_suu)
+    except (TypeError, ValueError):
+        return OrderResult(ok=False, message="発注数を入力してください。")
+    if qty <= 0:
+        return OrderResult(ok=False, message="発注数は1以上を入力してください。")
+
+    now = db.now_db_string()
+    result = db.insert_record(
+        conn, TABLE,
+        {
+            "登録日時": now,
+            "LotNo": lot_no,
+            "品名": hinmei,
+            "発注コード": hatchu_code,
+            "単位": db.sanitize_for_db(tani),
+            "材質": db.sanitize_for_db(zaisitu),
+            "調質": db.sanitize_for_db(choshitu),
+            "厚": atu_v,
+            "幅": haba_v,
+            "丈": take_v,
+            "用途コード": db.sanitize_for_db(yoto_code),
+            "納入先": db.sanitize_for_db(nounyusaki),
+            "発注数": qty,
+        },
+        caller_name="create_order",
+    )
+    if not result.ok:
+        return OrderResult(ok=False, message=f"発注登録に失敗しました。({result.error})")
+
+    return OrderResult(ok=True, message="倉庫へ発注を送信しました。", mgr_no=result.lastrowid)
+
+
+def _status_of(row: sqlite3.Row) -> str:
+    if (row["取り消し済"] or "") == "1":
+        return STATUS_CANCELLED
+    if (row["確認済み"] or "") == "1":
+        return STATUS_CONFIRMED
+    return STATUS_PENDING
+
+
+def list_orders(
+    conn: sqlite3.Connection,
+    *,
+    keyword: str = "",
+    date_filter: Optional[str] = None,  # None / "today" / "week" / "month"
+    include_cancelled: bool = False,
+) -> list[dict]:
+    """VBA `frmWarehouseOrder.LoadOrders`+`RefreshList` の移植。
+
+    `include_cancelled=False` で `frmWarehouseOrder` 相当(取消済は非表示)、
+    `True` で `frmSendConfirm` の履歴パネル相当(取消済も★付きで表示)。
+    """
+    where = ["1=1"]
+    params: list = []
+
+    if not include_cancelled:
+        where.append("(取り消し済 IS NULL OR 取り消し済 <> '1')")
+
+    if keyword:
+        where.append(
+            "(LotNo LIKE ? OR 品名 LIKE ? OR 発注コード LIKE ? OR 用途コード LIKE ? OR 納入先 LIKE ?)"
+        )
+        like = f"%{keyword}%"
+        params.extend([like, like, like, like, like])
+
+    if date_filter == "today":
+        where.append("date(登録日時) = date('now', 'localtime')")
+    elif date_filter == "week":
+        where.append("date(登録日時) >= date('now', 'localtime', '-6 days')")
+    elif date_filter == "month":
+        where.append("date(登録日時) >= date('now', 'localtime', '-29 days')")
+
+    sql = f"SELECT * FROM {TABLE} WHERE {' AND '.join(where)} ORDER BY 登録日時 DESC"
+    rows = db.fetch_all(conn, sql, params, caller_name="list_orders") or []
+
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["状態"] = _status_of(row)
+        result.append(d)
+    return result
+
+
+def confirm_order(conn: sqlite3.Connection, mgr_no: int) -> ActionResult:
+    """VBA `frmWarehouseOrder.btnConfirm_Click` の移植(確認済みにする)。
+
+    元VBAはUPDATEのWHERE句で「取消済でないこと」しかチェックしておらず、
+    「既に確認済みか」はUI側のキャッシュ値でのみ判定していた(他端末が
+    確認した直後に自分も確認ボタンを押すと、SQL上は無条件で
+    再UPDATEが成功してしまい、確認日時が意図せず上書きされる弱点が
+    あった)。Python版はWHERE句にも「未確認であること」を追加し、
+    二重確認を確実に防ぐ(意図的な改善)。
+    """
+    result = db.update_record(
+        conn, TABLE, "管理番号", mgr_no,
+        {"確認済み": "1", "確認日時": db.now_db_string()},
+        where_clause="管理番号 = ? AND (取り消し済 IS NULL OR 取り消し済 <> '1') AND (確認済み IS NULL OR 確認済み <> '1')",
+        where_params=(mgr_no,),
+    )
+    if result.reason == "not_found":
+        return ActionResult(ok=False, message="対象が見つからないか、既に確認済み/取り消し済みです。画面を更新してください。")
+    if not result.ok:
+        return ActionResult(ok=False, message=f"更新に失敗しました。({result.error})")
+    return ActionResult(ok=True, message="確認済みにしました。")
+
+
+def cancel_order(conn: sqlite3.Connection, mgr_no: int) -> ActionResult:
+    """VBA `frmSendConfirm.btnDelete_Click` の移植(取り消し)。
+
+    倉庫が確認済みの注文は現場から取り消せない(元VBA仕様を踏襲)。
+    """
+    result = db.update_record(
+        conn, TABLE, "管理番号", mgr_no,
+        {"取り消し済": "1", "取り消し日時": db.now_db_string()},
+        where_clause="管理番号 = ? AND (確認済み IS NULL OR 確認済み <> '1') AND (取り消し済 IS NULL OR 取り消し済 <> '1')",
+        where_params=(mgr_no,),
+    )
+    if result.reason == "not_found":
+        return ActionResult(ok=False, message="対象が見つからないか、既に倉庫確認済み/取消済みのため取り消せません。")
+    if not result.ok:
+        return ActionResult(ok=False, message=f"更新に失敗しました。({result.error})")
+    return ActionResult(ok=True, message="発注を取り消しました。")
