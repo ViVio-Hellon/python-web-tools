@@ -944,6 +944,12 @@ def _recheck_width_fill_length(
 
     `start_idx` は幅補填が追加され始めたインデックス。
     主ボードより幅が広い行(`wfShort >= 主ボード有効幅`)は対象外。
+
+    【VBAからの修正】"丈補填" タグの行も対象外にする。丈補填ボードは
+    「丈方向の穴埋め専用」で、幅方向ストリップとして丈カバー量を判定する
+    対象ではない。このタグ除外が無いと、丈補填ボード(例: 30×2500)を
+    誤ってこのチェックにかけてしまい、無関係な幅補填ストリップの枚数を
+    芋づる式に水増しする(過剰選定の直接原因になる)。
     """
     if not boards:
         return
@@ -956,6 +962,8 @@ def _recheck_width_fill_length(
 
     for idx in range(start_idx, len(boards)):
         row = boards[idx]
+        if row.tag == TAG_LENGTH_FILL:
+            continue
         short, long_side = min(row.width, row.length), max(row.width, row.length)
         if short >= main_eff_w:
             continue
@@ -1326,10 +1334,24 @@ def _run_upper_length_fill(
             log.debug("上用丈補填: 適合なし → 終了")
             return
 
-        existing = next((s for s in boards if s.width == best.width and s.length == best.length), None)
+        # 【VBAからの修正】既存行へマージするのは "丈補填" タグの行だけに限定する。
+        # タグを問わず(width, length)一致だけでマージすると、"幅補填" タグの
+        # 行(丈カバーには寄与しない専用枠)に丈補填の+1が紛れ込むことがあり、
+        # 実際の丈カバーが伸びないまま丈残だけが減った扱いになって、直後の
+        # 「丈不足強制追加」で別ボードがさらに足される二重補填の原因になる。
+        existing = next(
+            (s for s in boards if s.width == best.width and s.length == best.length
+             and s.tag == TAG_LENGTH_FILL),
+            None,
+        )
         if existing is not None:
             existing.count = min(existing.count + 1, LENGTH_FILL_COUNT_CAP)
-            _, _, added = _orient(best.width, best.length, product.width, category="上用")
+            # 【VBAからの修正】丈補填ボードは短辺だけを丈方向に使う配置なので、
+            # 新規追加時と同じ best_short(短辺)を減算量にする。ここを
+            # _orient() の再計算結果(幅フィット優先で長辺をeffLとする
+            # ことがある)から取ると、実際には少ししか埋まっていない丈残を
+            # 大きく埋まったと誤認し、後続の丈不足チェックが空振りする。
+            added = best_short
             log.debug("上用丈補填(既存+1): %sx%s", best.width, best.length)
         else:
             boards.append(SelectedBoard(width=best.width, length=best.length, count=1, tag=TAG_LENGTH_FILL))

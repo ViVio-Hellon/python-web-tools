@@ -737,6 +737,66 @@ class SelectUpperBoardsTests(unittest.TestCase):
         self.assertTrue(any(b.tag == alg.TAG_LENGTH_FILL for b in r.boards))
 
 
+class UpperLengthFillMergeTests(unittest.TestCase):
+    """`_run_upper_length_fill` の「既存行への丈補填マージ」バグ修正の検証。
+
+    バグの内容(2026年 実機ログから発覚):
+    既存の "丈補填" 行へ+1するとき、丈残の減算量を `_orient()` の
+    再計算結果(幅フィット優先の向き)から取っていた。丈補填ボードは
+    短辺だけを丈方向に使う配置なので、実際には短辺(例:30mm)しか
+    埋めていないのに、`_orient()` が返す長辺(例:1600mm)を使って
+    「1600mm埋めた」と誤認していた。
+    """
+
+    def setUp(self) -> None:
+        self.product = ProductSize(width=900, length=2000)
+        # 主900x190 x10 → 丈カバー1900。丈残は100(400以下なので主は増えない)
+        self.main = SelectedBoard(900, 190, 10, alg.TAG_MAIN)
+
+    def test_existing_merge_uses_short_side_not_orientation_recalc(self):
+        """既存"丈補填"行への+1は短辺(30)ずつ減らす。長辺(1600)ではない。
+
+        30x1600 は在庫1種類のみなので、毎回同じ行への merge を繰り返す。
+        短辺(30)ずつ正しく減らせば丈残100mmを埋めるのに複数回のmergeが
+        起き、上限4枚まで積み増される。誤って長辺(1600)を使うと、
+        1回のmergeで丈残が大きく負の値になり、2回目のループ以降が
+        起きないまま止まる(=枚数が少ないまま終わる)。
+        """
+        boards = [
+            self.main,
+            SelectedBoard(30, 1600, 1, alg.TAG_LENGTH_FILL),
+        ]
+        available = [board(30, 1600)]
+        alg._run_upper_length_fill(boards, self.product, available, None)
+
+        length_fill = next(b for b in boards if b.tag == alg.TAG_LENGTH_FILL)
+        self.assertEqual((length_fill.width, length_fill.length), (30, 1600))
+        # 短辺(30mm)ずつ正しく減算されていれば、100mmの丈残を埋めるのに
+        # 複数回mergeが起き、上限の4枚まで積み増される
+        self.assertEqual(length_fill.count, alg.LENGTH_FILL_COUNT_CAP)
+
+    def test_does_not_merge_into_width_fill_row_of_same_size(self):
+        """"幅補填" タグの行は丈カバーに寄与しない専用枠。マージ対象にしない。
+
+        同じ(30,1600)が既に"幅補填"として1枚あっても、丈補填はそこへ
+        +1するのではなく、別の"丈補填"行を新規に作らなければならない。
+        タグを問わずマージすると、幅補填の専用枠に丈補填の枚数が
+        紛れ込み、実際の丈カバーは伸びないまま丈残だけ消費した扱いに
+        なってしまう。
+        """
+        width_fill = SelectedBoard(30, 1600, 1, alg.TAG_WIDTH_FILL)
+        boards = [self.main, width_fill]
+        available = [board(30, 1600)]
+        alg._run_upper_length_fill(boards, self.product, available, None)
+
+        # 幅補填行はそのまま(丈補填の+1が紛れ込んでいない)
+        self.assertEqual(width_fill.count, 1)
+        # 丈補填は別行として新規に作られている
+        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(length_fill_rows), 1)
+        self.assertEqual((length_fill_rows[0].width, length_fill_rows[0].length), (30, 1600))
+
+
 class NarrowPaletteSelectionTests(unittest.TestCase):
     """VBA `SelectBoardsForNarrowPalette` 系の検証。"""
 
@@ -1009,6 +1069,26 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
         boards: list[SelectedBoard] = []
         alg._recheck_width_fill_length(boards, 0, 900, self.palette, self.product, [])
         self.assertEqual(boards, [])
+
+    def test_length_fill_row_is_excluded(self):
+        """"丈補填" タグの行は幅方向ストリップではないので対象外(バグ修正)。
+
+        丈補填ボード(例: 30x800)は「丈方向の穴埋め専用」で、幅方向の
+        カバー量を判定するこのチェックの対象ではない。タグ除外が無いと
+        誤ってこのチェックにかけられ、無関係な丈補填の枚数を芋づる式に
+        水増ししてしまう(過剰選定の直接原因)。
+
+        主900x1000 x2 → X方向カバー1800。丈補填 30x800 が1枚(=800)だけ
+        なので、タグ除外が無いと「幅補填ストリップとして丈カバーが
+        1000mm足りない」と誤判定され、無関係に枚数が増やされる。
+        """
+        boards = [
+            SelectedBoard(900, 1000, 2, alg.TAG_MAIN),
+            SelectedBoard(30, 800, 1, alg.TAG_LENGTH_FILL),
+        ]
+        alg._recheck_width_fill_length(
+            boards, 1, 900, self.palette, self.product, [board(30, 800)])
+        self.assertEqual(boards[1].count, 1)
 
 
 class AddOrIncrementTests(unittest.TestCase):
