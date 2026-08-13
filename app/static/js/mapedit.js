@@ -59,6 +59,7 @@ export function grip(item) {
     onTap(name)     動かさずに離した = 押した
     onMove(name, x, y)
     onResize(name, w, h)
+    onSelectionChange(count)  複数選択の件数が変わった(省略可)
 
   【複数選択(Shift+クリック)】
   1つずつしか動かせない・大きさを変えられないと、同じ列の棚をまとめて
@@ -66,6 +67,10 @@ export function grip(item) {
   押すたびに複数選択へ足す/外す(掴みには入らない)。複数選択している
   箱のどれかを掴んで動かす/大きさを変えると、**その分の差**を選んで
   いる箱ぜんぶに掛ける。
+
+  見た目は点線の色を変えるだけ(`.is-multi`)なので、「押しても選べた
+  かどうか分からない」という声があった。`onSelectionChange` で件数を
+  受け取り、呼び出し側が文字でも出す。
 */
 export function attach(svg, opts) {
   let holding = null;
@@ -87,6 +92,9 @@ export function attach(svg, opts) {
     for (const group of svg.querySelectorAll(opts.selector)) {
       group.classList.toggle("is-multi", selected.has(group.dataset.name));
     }
+    // 見た目(点線の色)だけだと、選べたのかどうか分からないという声が
+    // あった。文字でも「いま何件選んでいるか」を出す(任意)
+    opts.onSelectionChange?.(selected.size);
   }
 
   /** 掴んでいるあいだ、その場で見せる。サーバには離すまで送らない。 */

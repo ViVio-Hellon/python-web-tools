@@ -121,6 +121,8 @@
           </div>
           <p class="why">
             保管位置を<b>ドラッグして動かし</b>、<b>右下の角を掴んで大きさを変えます</b>。
+            <b>Shift+クリック</b>で複数選び、そのうち1つを動かす/大きさを変えると
+            選んだぶん全部に同じ差が掛かります(<span id="mapMultiNote">選択なし</span>)。
             背景の写真に重ならないときは、上の「背景の合わせこみ」で下敷きの側をずらしてください
             ── 箱を全部動かすより早く、やり直しても位置は壊れません。
           </p>
@@ -356,9 +358,15 @@
   #map.map--editing .pos { cursor:grab; }
   #map.map--editing .pos rect { stroke-dasharray:3 2; }
   #map .pos.is-selected rect { stroke:var(--accent); stroke-width:3; }
-  {# 配置編集モードの複数選択(Shift+クリック)。「消す対象」
-     (is-selected, 実線)と見分けられるよう、破線にする #}
-  #map .pos.is-multi rect { stroke:var(--accent); stroke-width:2; stroke-dasharray:4 2; }
+  {# 配置編集モードの複数選択(Shift+クリック)。
+     編集中は**どの箱も**破線になっているので(直前のルール)、破線の
+     間隔だけを変える差はほぼ見えなかった(現場の声:「シフト+クリック
+     できないよ」── 実際には選べていたが、見た目に変化がなかった)。
+     色を塗って濃い輪郭を足し、誰の目にも「選んだ」と分かるようにする #}
+  #map .pos.is-multi rect {
+    fill: var(--accent-soft); stroke: var(--accent); stroke-width: 3;
+    stroke-dasharray: none;
+  }
 
   .maplegend { display:flex; gap:10px; flex-wrap:wrap; }
   .lg { font-size: var(--fs-xs); padding:2px 9px; border-radius:var(--pill);

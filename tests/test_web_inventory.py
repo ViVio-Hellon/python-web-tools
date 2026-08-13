@@ -251,6 +251,14 @@ class InventoryPageTests(InventoryWebTestCase):
         html = self.client.get("/inventory").get_data(as_text=True)
         self.assertIn("上の一覧から払い出す行を選んでください", html)
 
+    def test_複数選択の件数を出す場所がある(self) -> None:
+        """Shift+クリックの見た目(点線の色)だけでは選べたか分からない、
+        という現場の声への対応。文字でも件数を出す(JS `mapedit.js` の
+        `onSelectionChange` がここへ書き込む)。"""
+        html = self.client.get("/inventory").get_data(as_text=True)
+        self.assertIn('id="mapMultiNote"', html)
+        self.assertIn("Shift", html)
+
     def test_資材だけの権限なら無い(self) -> None:
         """資材課は在庫を動かさない。現場の権限が無ければ、隠すのではなく無い。"""
         from app import create_app

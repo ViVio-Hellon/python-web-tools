@@ -99,6 +99,14 @@ class PageTests(LayoutWebTestCase):
         self.assertEqual(
             client.get("/api/layout/state", headers=self.auth()).status_code, 404)
 
+    def test_複数選択の件数を出す場所がある(self) -> None:
+        """Shift+クリックの見た目(点線の色)だけでは選べたか分からない、
+        という現場の声への対応。文字でも件数を出す(JS `mapedit.js` の
+        `onSelectionChange` がここへ書き込む)。"""
+        html = self.client.get("/layout").get_data(as_text=True)
+        self.assertIn('id="multiNote"', html)
+        self.assertIn("Shift", html)
+
     def test_マスタが無ければ理由を出す(self) -> None:
         state = self.get()
         self.assertFalse(state["available"])

@@ -120,6 +120,8 @@
         </div>
         <p class="why">
           置き場を<b>ドラッグして動かし</b>、<b>右下の角を掴んで大きさを変えます</b>。
+          <b>Shift+クリック</b>で複数選び、そのうち1つを動かす/大きさを変えると
+          選んだぶん全部に同じ差が掛かります(<span id="multiNote">選択なし</span>)。
           背景の写真に重ならないときは、上の「背景の合わせこみ」で下敷きの側をずらしてください
           ── 箱を全部動かすより早く、やり直しても箱の位置は壊れません。
         </p>
@@ -274,9 +276,15 @@
   .shelf--hit   text { fill:var(--map-hit-fg); }
   .shelf--base  text { fill:var(--map-active-fg); }
   .shelf.is-selected rect { stroke:var(--accent); stroke-width:3; }
-  {# 配置編集モードの複数選択(Shift+クリック)。「中身を表示中」
-     (is-selected, 実線)と見分けられるよう、破線にする #}
-  .shelf.is-multi rect { stroke:var(--accent); stroke-width:2; stroke-dasharray:4 2; }
+  {# 配置編集モードの複数選択(Shift+クリック)。
+     編集中は**どの箱も**破線になっているので、破線の間隔だけを変える差
+     はほぼ見えなかった(現場の声:「シフト+クリックできないよ」──
+     実際には選べていたが、見た目に変化がなかった)。色を塗って濃い
+     輪郭を足し、誰の目にも「選んだ」と分かるようにする #}
+  .shelf.is-multi rect {
+    fill: var(--accent-soft); stroke: var(--accent); stroke-width: 3;
+    stroke-dasharray: none;
+  }
   .shelf text { font-size:7px; text-anchor:middle; dominant-baseline:middle;
                 pointer-events:none; user-select:none; }
   .area rect { fill:var(--sunken); stroke:var(--hairline); }

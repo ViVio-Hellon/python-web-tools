@@ -292,6 +292,13 @@ function startDragging() {
     onTap: onTapPosition,
     onMove: (name, x, y) => sendMap("/api/inventory/map/move", { name, x, y }),
     onResize: (name, w, h) => sendMap("/api/inventory/map/resize", { name, w, h }),
+    // 見た目(点線の色)だけでは「選べたか分からない」という声があった。
+    // 文字でも件数を出す
+    onSelectionChange: (count) => {
+      if (el.mapMultiNote) {
+        el.mapMultiNote.textContent = count ? `${count}件選択中` : "選択なし";
+      }
+    },
   });
 }
 
@@ -397,6 +404,7 @@ export function start(state) {
                     "pkStock", "iqty", "issue", "positions",
                     "fromSelectionWhy",
                     "mapEditToggle", "mapEditBox", "mapEditState", "mapDirty",
+                    "mapMultiNote",
                     "mapNewPos", "mapAddPos", "mapRemovePos",
                     "mapBgFile", "mapClearBg", "mapBgPlace",
                     "mapBgX", "mapBgY", "mapBgScale", "mapBgFit",

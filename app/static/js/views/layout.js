@@ -247,6 +247,13 @@ function startDragging() {
     },
     onMove: (name, x, y) => send("/api/layout/move", { name, x, y }),
     onResize: (name, w, h) => send("/api/layout/resize", { name, w, h }),
+    // 見た目(点線の色)だけでは「選べたか分からない」という声があった。
+    // 文字でも件数を出す
+    onSelectionChange: (count) => {
+      if (el.multiNote) {
+        el.multiNote.textContent = count ? `${count}件選択中` : "選択なし";
+      }
+    },
   });
 }
 
@@ -255,7 +262,7 @@ export function start(initial) {
   for (const id of ["map", "mapLegend", "basePoint", "searchWidth",
                     "searchLength", "search", "result",
                     "fromSelection", "handoffLabel",
-                    "editToggle", "editState", "editBox", "dirtyWhy",
+                    "editToggle", "editState", "editBox", "dirtyWhy", "multiNote",
                     "newLabel", "addLabel", "removeLabel", "bgFile", "clearBg",
                     "bgX", "bgY", "bgScale", "bgFit", "bgPlaceBox",
                     "mapWrap", "zoomIn", "zoomOut", "zoomNow",
