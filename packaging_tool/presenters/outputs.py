@@ -204,7 +204,8 @@ def _package_count(session: Any) -> int:
         return 0
     count = lot_service.calc_total_packages(result)
     if count < 0:
-        session.presenter.user_log.log("梱包数:計算不可(調整NO混在)")
+        reason = lot_service.calc_total_packages_reason(result)
+        session.presenter.user_log.log(f"梱包数:計算不可({reason})")
         return 0
     return count
 

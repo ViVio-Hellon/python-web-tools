@@ -443,6 +443,13 @@ def has_lot_data(conn: sqlite3.Connection) -> bool:
 # 計算不可を表す戻り値(VBA も -1 を返す)
 PACKAGES_UNKNOWN = -1
 
+# 計算不可になった理由。**現場が次にどこを確認すればよいかが変わる**ので、
+# 「調整NO混在」の一種類にまとめない(以前は理由を持ち帰らず、原因が
+# 「比重・寸法未設定」でも案内は常に「調整NO混在」と出ていて、
+# 現場が引当調整NOを探しに行っても見つからない、という誤診断を招いていた)
+REASON_ADJUSTED = "引当調整NO混在"
+REASON_WEIGHT_UNKNOWN = "比重または寸法が未設定"
+
 
 def weight_per_sheet(lot: LotInfo, specific_gravity: float) -> float:
     """1枚あたりの重量(kg) = 厚 × 幅 × 丈 × 比重 / 1,000,000。
@@ -465,23 +472,43 @@ def _sheets_per_package(unit_kind: str, unit_value: float, per_sheet: float) -> 
 def calc_total_packages(result: LotSearchResult) -> int:
     """VBA `CalcTotalPackages` の移植。発注数(総梱包数)を見積もる。
 
+    計算不可になった理由まで要るときは `calc_total_packages_reason` を使う。
+    """
+    return _calc_total_packages(result)[0]
+
+
+def calc_total_packages_reason(result: LotSearchResult) -> str:
+    """計算不可(`PACKAGES_UNKNOWN`)になった理由。計算できたときは空文字。
+
+    原因は1種類ではない ── 調整NOが混ざっているときと、比重や寸法が
+    無くて1枚重量が出せないときの両方が同じ -1 を返す。呼び出し側が
+    案内の文言をどちらか一方に決め打ちすると、実際の原因と違う案内を
+    出してしまう(現場が引当調整NOを探しに行っても見つからない、
+    という誤診断が起きていた)。
+    """
+    return _calc_total_packages(result)[1]
+
+
+def _calc_total_packages(result: LotSearchResult) -> tuple[int, str]:
+    """`calc_total_packages` / `calc_total_packages_reason` の共通実装。
+
     引当行を引当番号順に処理し、前工程実績数(BOX実績_枚本数)を
     上から食い潰しながら梱包数を積み上げる。
-    次の場合は計算不可として `PACKAGES_UNKNOWN`(-1)を返す:
+    次の場合は計算不可として `(PACKAGES_UNKNOWN, 理由)` を返す:
         - 引当調整NOを持つ行が1件でも混ざる
         - 1枚重量が出せない(比重や寸法が無い)のに kg 梱包の行がある
           → 過少カウントを避けるため
     """
     if any(row.type_flag == HIKI_ADJUSTED for row in result.hiki):
         log.debug("calc_total_packages: 引当調整NO混在のため計算不可")
-        return PACKAGES_UNKNOWN
+        return PACKAGES_UNKNOWN, REASON_ADJUSTED
 
     per_sheet = weight_per_sheet(result.lot, result.odr.specific_gravity)
     if per_sheet <= 0:
         for row in result.hiki:
             if pack_unit_of(result.odr, row.order_no)[0] == "kg":
                 log.debug("calc_total_packages: 1枚重量0かつkg種別混在のため計算不可")
-                return PACKAGES_UNKNOWN
+                return PACKAGES_UNKNOWN, REASON_WEIGHT_UNKNOWN
 
     remaining = result.lot.prev_process_count
     total = 0
@@ -520,7 +547,7 @@ def calc_total_packages(result: LotSearchResult) -> int:
                   row.order_no, actual, packages, total, remaining)
 
     log.debug("calc_total_packages 完了: 総梱包数=%s", total)
-    return total
+    return total, ""
 
 
 def build_hinmei(industry: str, symbol: str, width: int, length: int) -> str:

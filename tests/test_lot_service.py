@@ -437,6 +437,39 @@ class CalcTotalPackagesTests(unittest.TestCase):
         self.assertEqual(svc.calc_total_packages(self._result(rows=[])), 0)
 
 
+class CalcTotalPackagesReasonTests(unittest.TestCase):
+    """計算不可(-1)になった理由。原因は1種類ではないので、
+    案内の文言をどちらか一方に決め打ちしないための備え。"""
+
+    def _result(self, *, rows, gravity=2.7, count=100, thickness=3.0,
+                width=1000.0, length=2000.0, weights=None, counts=None):
+        lot = svc.LotInfo(thickness=thickness, width=width, length=length,
+                          prev_process_count=count)
+        odr = svc.OdrInfo(specific_gravity=gravity,
+                          pack_unit_weight=weights or {}, pack_unit_count=counts or {})
+        return svc.LotSearchResult(found=True, lot=lot, hiki=rows, odr=odr)
+
+    def test_adjusted_row_reason(self):
+        rows = [svc.HikiRow(order_no="O1", type_flag=svc.HIKI_ADJUSTED, display_value="5")]
+        result = self._result(rows=rows)
+        self.assertEqual(svc.calc_total_packages(result), svc.PACKAGES_UNKNOWN)
+        self.assertEqual(svc.calc_total_packages_reason(result), svc.REASON_ADJUSTED)
+
+    def test_missing_weight_reason(self):
+        """比重が無くて1枚重量が出せないときは、調整NOとは別の理由になる。"""
+        rows = [svc.HikiRow(order_no="O1", type_flag=svc.HIKI_QUANTITY, display_value="50")]
+        result = self._result(rows=rows, gravity=0.0, weights={"O1": 500.0})
+        self.assertEqual(svc.calc_total_packages(result), svc.PACKAGES_UNKNOWN)
+        self.assertEqual(svc.calc_total_packages_reason(result), svc.REASON_WEIGHT_UNKNOWN)
+        self.assertNotEqual(svc.calc_total_packages_reason(result), svc.REASON_ADJUSTED)
+
+    def test_no_reason_when_calculable(self):
+        rows = [svc.HikiRow(order_no="O1", type_flag=svc.HIKI_QUANTITY, display_value="50")]
+        result = self._result(rows=rows, counts={"O1": 20.0})
+        self.assertGreaterEqual(svc.calc_total_packages(result), 0)
+        self.assertEqual(svc.calc_total_packages_reason(result), "")
+
+
 class HikiTypeFlagTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:")
