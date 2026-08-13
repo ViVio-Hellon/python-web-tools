@@ -254,6 +254,19 @@ class PalletListLiveTests(SelectionWebTestCase):
         self.assertFalse(state["product_set"])
         self.assertNotIn("message", state)
 
+    def test_板厚が分かっていれば5x10フィルタも効く(self) -> None:
+        """入力中の一覧でも、自動選定と同じ5×10板厚フィルタが掛かる(バグ修正)。"""
+        insert_pallet(self.conn, width=1300, length=2800,
+                      w_min=1200, w_max=1400, l_min=2700, l_max=2900,
+                      industry="5×10", symbol="通常", unit="台")
+        insert_pallet(self.conn, width=1300, length=2800,
+                      w_min=1200, w_max=1400, l_min=2700, l_max=2900,
+                      industry="5×10", symbol="強度UP", unit="台")
+        self.session().presenter.manufactured_thickness = 5.0
+        state = self.post("/api/selection/pallet/list",
+                          {"product_width": "1250", "product_length": "2750"})
+        self.assertEqual([r["symbol"] for r in state["rows"]], ["強度UP"])
+
 
 # ==================================================================
 # 製品サイズ

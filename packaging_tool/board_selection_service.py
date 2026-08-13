@@ -568,6 +568,7 @@ def list_pallets_for_product(
     show_all: bool = False,
     ex_only: bool = False,
     is_ex_order: bool = False,
+    manufactured_thickness: Optional[float] = None,
 ) -> list[PalletSizeRow]:
     """製品サイズが適合範囲に収まるパレットだけを返す(検索結果リスト表示用)。
 
@@ -581,6 +582,12 @@ def list_pallets_for_product(
     (EXオンリーはEX受注のときだけ効く)。この2つを見ていなかったため、
     EX受注でEXオンリーを付けたままパレット検索すると、絞り込み結果に
     EX以外の行が混ざってしまっていた。
+
+    【バグ修正】5×10業界の板厚フィルタ(`_thickness_5x10_ok`、
+    `auto_select_pallet` は適用済み)がここには無く、自動選定なら
+    除外されるはずの強度UP(または通常5×10)が一覧には出てしまって
+    いた。自動選定の結果と一覧の中身が食い違わないよう、ここにも
+    同じ判定を掛ける。
     """
     # auto_select_pallet の各パスは厳密/±5mmの許容差を使う。ここも同じ
     # 5mmにして、決定されたパレットが検索結果から漏れないようにする
@@ -609,6 +616,12 @@ def list_pallets_for_product(
         elif not show_all and is_ex:
             continue
 
+        industry = row["業界"] or ""
+        if industry == "5×10":
+            ok, _needs_warning = _thickness_5x10_ok(symbol, manufactured_thickness)
+            if not ok:
+                continue
+
         result.append(_row_to_pallet_size_row(row))
     return result
 
@@ -622,6 +635,7 @@ def list_pallets_by_product_dims(
     ex_only: bool = False,
     is_ex_order: bool = False,
     last_hosozai: str = "",
+    manufactured_thickness: Optional[float] = None,
 ) -> list[PalletSizeRow]:
     """製品 幅・丈を**入力している最中**の一覧絞り込み(確定前)。
 
@@ -638,7 +652,8 @@ def list_pallets_by_product_dims(
         return list_pallets_for_product(
             conn, product_width=int(float(product_width_text)),
             product_length=int(float(product_length_text)),
-            show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order)
+            show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order,
+            manufactured_thickness=manufactured_thickness)
     if has_width or has_length:
         return search_pallet_direct(
             conn, pallet_width_text=product_width_text,

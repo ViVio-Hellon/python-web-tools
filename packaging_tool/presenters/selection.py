@@ -1497,13 +1497,17 @@ def list_rows(session: Any) -> list[Any]:
             and context.product_width and context.product_length):
         return svc.list_pallets_for_product(
             conn, product_width=context.product_width,
-            product_length=context.product_length, **flags)
+            product_length=context.product_length,
+            manufactured_thickness=session.presenter.manufactured_thickness,
+            **flags)
 
     if session.list_mode == ss.LIST_PRODUCT_LIVE:
         return svc.list_pallets_by_product_dims(
             conn, product_width_text=session.live_product_width,
             product_length_text=session.live_product_length,
-            last_hosozai=session.presenter.last_hosozai, **flags)
+            last_hosozai=session.presenter.last_hosozai,
+            manufactured_thickness=session.presenter.manufactured_thickness,
+            **flags)
 
     if session.list_mode == ss.LIST_DIRECT:
         # 直接検索はEXオンリーを見ない(VBA 仕様どおり)

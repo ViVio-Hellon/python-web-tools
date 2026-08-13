@@ -344,6 +344,58 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
             self.conn, product_width=1000, product_length=2500, show_all=True)
         self.assertEqual(len(rows), 1)
 
+    def test_5x10_thickness_filter_thin_requires_kyodo_up(self):
+        """5×10業界は板厚フィルタも一覧に適用する(バグ修正)。
+
+        自動選定(`auto_select_pallet`)は板厚≤13.0のとき強度UP以外を
+        除外するが、一覧側にはこの判定が無く、自動選定なら出ないはずの
+        行が一覧には並んでいた。
+        """
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="5×10", symbol="通常", unit="台")
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="5×10", symbol="強度UP", unit="台")
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500,
+            manufactured_thickness=5.0)
+        self.assertEqual([r.symbol for r in rows], ["強度UP"])
+
+    def test_5x10_thickness_filter_thick_excludes_kyodo_up(self):
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="5×10", symbol="通常", unit="台")
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="5×10", symbol="強度UP", unit="台")
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500,
+            manufactured_thickness=40.0)
+        self.assertEqual([r.symbol for r in rows], ["通常"])
+
+    def test_5x10_thickness_unknown_lets_both_through(self):
+        """板厚が分からないときは自動選定と同じく絞り込まない。"""
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="5×10", symbol="通常", unit="台")
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="5×10", symbol="強度UP", unit="台")
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500,
+            manufactured_thickness=None)
+        self.assertEqual({r.symbol for r in rows}, {"通常", "強度UP"})
+
+    def test_non_5x10_is_unaffected_by_thickness(self):
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="一般", symbol="強度UP", unit="台")
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500,
+            manufactured_thickness=40.0)
+        self.assertEqual(len(rows), 1)
+
 
 class ListPalletsByProductDimsTests(BoardSelectionTestCase):
     """製品 幅・丈の入力中(未確定)の一覧絞り込み。"""
@@ -385,6 +437,19 @@ class ListPalletsByProductDimsTests(BoardSelectionTestCase):
         rows = svc.list_pallets_by_product_dims(
             self.conn, product_width_text="", product_length_text="")
         self.assertEqual(len(rows), 1)
+
+    def test_thickness_is_passed_through_when_both_dims_given(self):
+        """入力中の一覧でも、両方そろえば5×10板厚フィルタが効く。"""
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="5×10", symbol="通常", unit="台")
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="5×10", symbol="強度UP", unit="台")
+        rows = svc.list_pallets_by_product_dims(
+            self.conn, product_width_text="1000", product_length_text="2500",
+            manufactured_thickness=5.0)
+        self.assertEqual([r.symbol for r in rows], ["強度UP"])
 
     def test_a_pallet_smaller_than_the_product_is_excluded_even_if_the_fit_range_allows_it(self):
         # 適合範囲が壊れていて製品サイズを許してしまっていても、現物サイズが
