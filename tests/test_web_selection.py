@@ -111,6 +111,17 @@ class PageTests(SelectionWebTestCase):
         for _what, phase in presenter.PENDING_PARTS:
             self.assertIn(phase, html)
 
+    def test_ボード候補の隣に選定済みの一覧がある(self) -> None:
+        """候補は幅・丈・在庫の3列だけで右に余白が残るので、そこへ
+        「いま何を入れたか」を出す(現場の声:「選定したボードのリストは
+        必要です。右に余白があるから出してください」)。候補を選ぶあいだ
+        「選定一覧」タブへ切り替えずに確かめられるようにする。"""
+        html = self.client.get("/selection").get_data(as_text=True)
+        self.assertIn('id="boardPickedUpperRows"', html)
+        self.assertIn('id="boardPickedLowerRows"', html)
+        # 候補の一覧(#boardRows)より後ろに無いと「隣」にならない
+        self.assertLess(html.index('id="boardRows"'), html.index('id="boardPickedUpperRows"'))
+
 
 # ==================================================================
 # 一覧

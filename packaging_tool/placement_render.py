@@ -435,6 +435,12 @@ def build_caption(board: PlacedBoardModel, cut: CutInfo, screen_h: float) -> tup
     【VBAからの変更】フォントサイズはVBAの値のままだと、配置後の図で
     「何を選んだのか読めない」という声があった(現場の声)。行数と
     切り替えの閾値(screen_h)はVBAのまま、サイズだけ底上げする。
+
+    一度 8 まで上げたが、それでも「配置ボードのサイズが見えません」と
+    再度声が出た。`viewBox` はキャンバス(980×460)に対する論理値で、
+    実際の画面では枠の大きさぶん縮んで描かれる ── 8 は縮む前の数字で、
+    縮んだあとは記号にしか見えない大きさだった。実機の見え方(実測
+    143px四方のボードで文字の高さが約7.6px)で確かめたうえで底上げする。
     """
     cap_w = f"幅{board.width}"
     cap_l = f"丈{board.length}"
@@ -444,13 +450,13 @@ def build_caption(board: PlacedBoardModel, cut: CutInfo, screen_h: float) -> tup
         caption = f"{cap_w}\n{cap_l}"
         if note:
             caption += f"\n{note}"
-        return caption, 8
+        return caption, 12
     if screen_h >= 14:
         caption = f"{cap_w} {cap_l}"
         if note:
             caption += f" {note}"
-        return caption, 8
-    return cap_w, 7
+        return caption, 12
+    return cap_w, 11
 
 
 # ------------------------------------------------------------------

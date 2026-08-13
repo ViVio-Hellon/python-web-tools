@@ -322,17 +322,53 @@
         <span class="eyebrow" id="candidateNote">{{ view.boards.candidate_note }}</span>
       </div>
 
-      <div class="tablewrap tablewrap--boards">
-        <table class="table">
-          <thead><tr>
-            {% for label, key, numeric in board_columns %}
-            <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
-            {% endfor %}
-          </tr></thead>
-          {# 中身はJSが描く。この画面は §3.2 の「Jinja2 で骨格 + JSON API で
-             中身」に当たり、状態遷移のたびに全体を描き直す #}
-          <tbody id="boardRows"></tbody>
-        </table>
+      <div class="boardsrow">
+        <div class="tablewrap tablewrap--boards">
+          <table class="table">
+            <thead><tr>
+              {% for label, key, numeric in board_columns %}
+              <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+              {% endfor %}
+            </tr></thead>
+            {# 中身はJSが描く。この画面は §3.2 の「Jinja2 で骨格 + JSON API で
+               中身」に当たり、状態遷移のたびに全体を描き直す #}
+            <tbody id="boardRows"></tbody>
+          </table>
+        </div>
+
+        {# 候補は幅・丈・在庫の3列だけで細く、右に余白が残る。そこに
+           「いま何を入れたか」を出す ── 無いと、候補を選んでいるあいだは
+           「選定一覧」タブへ切り替えるまで確かめられなかった(現場の声:
+           「選定したボードのリストは必要です。右に余白があるから
+           出してください」)。中身は「選定一覧」タブ(`#upperRows` /
+           `#lowerRows`)と同じデータをそのまま写すだけで、削除も行の
+           押下(図とのリンク)もそちらと同じに効かせる #}
+        <div class="tablewrap tablewrap--boardpicked">
+          <div class="boardpicked" id="boardPickedUpper" {% if not view.boards.show_upper %}hidden{% endif %}>
+            <p class="why" id="boardPickedUpperTitle">{{ view.boards.upper_title }}</p>
+            <table class="table">
+              <thead><tr>
+                {% for label, key, numeric in selected_columns %}
+                <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+                {% endfor %}
+                <th></th>
+              </tr></thead>
+              <tbody id="boardPickedUpperRows"></tbody>
+            </table>
+          </div>
+          <div class="boardpicked">
+            <p class="why" id="boardPickedLowerTitle">{{ view.boards.lower_title }}</p>
+            <table class="table">
+              <thead><tr>
+                {% for label, key, numeric in selected_columns %}
+                <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+                {% endfor %}
+                <th></th>
+              </tr></thead>
+              <tbody id="boardPickedLowerRows"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       {# 手動追加。枚数と行き先(上/下)は隣り合わせに置く。
@@ -680,6 +716,23 @@
   #boardCard .table { width:auto; }
   #boardCard .table th, #boardCard .table td { min-width:4.5em; }
   .tablewrap--boards { max-height:26vh; overflow:auto; }
+
+  /* 候補の右の余白に「いま選んでいるもの」を出す(現場の声)。
+     候補は幅・丈・在庫の3列しか無く幅を決め打ちしているので、
+     操作カラムの残りは常に空く ── そこを使う。狭い画面では
+     積んでよい(候補が先、選定済みはその下) */
+  .boardsrow { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+  .tablewrap--boardpicked {
+    flex:1 1 14em; min-width:14em; display:flex; flex-direction:column;
+    gap:10px; max-height:26vh; overflow:auto;
+  }
+  .boardpicked .why { margin:0 0 2px; }
+  .boardpicked[hidden] { display:none; }
+  /* 候補より小さくてよい。ここは確かめるためだけで、押す場所は
+     削除ボタンだけ(追加は左の候補から行う) */
+  .boardpicked .table { width:100%; font-size:var(--fs-xs); }
+  .boardpicked .table th, .boardpicked .table td { min-width:0; padding:3px 6px; }
+  .boardpicked .rowdel { min-height:24px; min-width:0; padding:2px 6px; }
 
   /* 選定済み。削除は行の右端に置く ── 消す対象と押す場所を離さない */
   .rowdel { min-height:32px; min-width:32px; padding:4px 8px; font-size: var(--fs-xs); }

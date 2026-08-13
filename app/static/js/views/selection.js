@@ -467,6 +467,13 @@ function renderBoards(boards) {
   el.upperCard.hidden = !boards.show_upper;
   el.selectedSummary.textContent = boards.summary;
 
+  // 候補の隣に出す、同じ中身の写し(「選定一覧」タブと同じデータ)
+  el.boardPickedUpperRows.replaceChildren(...boards.upper.map((r) => selectedRow(r, "upper")));
+  el.boardPickedLowerRows.replaceChildren(...boards.lower.map((r) => selectedRow(r, "lower")));
+  el.boardPickedUpperTitle.textContent = boards.upper_title;
+  el.boardPickedLowerTitle.textContent = boards.lower_title;
+  el.boardPickedUpper.hidden = !boards.show_upper;
+
   setToggle(el.fatigue, boards.fatigue, "btn--fatigue");
   setToggle(el.stockAware, boards.stock_aware);
   // 選定ボタンの色は**操作の種類**(選定)なので変えない。疲労度が効いて
@@ -702,6 +709,9 @@ export function start(initial) {
                     "stockAware", "upperCard", "upperTitle", "upperRows",
                     "lowerTitle", "lowerRows", "selectedSummary", "placeWhy",
                     "showOnMap",
+                    // ボードの選定済み(候補の隣、右の余白)
+                    "boardPickedUpper", "boardPickedUpperTitle", "boardPickedUpperRows",
+                    "boardPickedLowerTitle", "boardPickedLowerRows",
                     // アングル
                     "angleCard", "angleRows", "angleSelected", "angleNeedCut",
                     "addAngle", "autoAngle", "drawAngle", "angleWhy",
@@ -833,7 +843,11 @@ export function start(initial) {
     });
   }
 
-  for (const tbody of [el.upperRows, el.lowerRows]) {
+  // 候補の隣の写し(`boardPicked*Rows`)も同じ行なので、同じ削除・
+  // 図とのリンクを効かせる ── どちらの一覧を触っても同じ場所
+  // (サーバの状態)を書き換えるだけ
+  for (const tbody of [el.upperRows, el.lowerRows,
+                       el.boardPickedUpperRows, el.boardPickedLowerRows]) {
     tbody.addEventListener("click", (event) => {
       const button = event.target.closest("button[data-index]");
       if (button) {
