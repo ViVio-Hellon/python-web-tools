@@ -613,6 +613,42 @@ def list_pallets_for_product(
     return result
 
 
+def list_pallets_by_product_dims(
+    conn: sqlite3.Connection,
+    *,
+    product_width_text: str = "",
+    product_length_text: str = "",
+    show_all: bool = False,
+    ex_only: bool = False,
+    is_ex_order: bool = False,
+    last_hosozai: str = "",
+) -> list[PalletSizeRow]:
+    """製品 幅・丈を**入力している最中**の一覧絞り込み(確定前)。
+
+    「載るか」の判定(`list_pallets_for_product`)は幅・丈の両方が
+    無いと成り立たない(1辺だけでは向きも当たりも決められない)。
+    片方しか打っていない段階では、代わりに**パレット自身の幅・丈が
+    その値に近いもの**を見せる(`search_pallet_direct` と同じ
+    ±{SEARCH_RANGE_TOLERANCE}mm の単純近似)。両方そろえば厳密な
+    「載るか」判定に切り替わる。どちらも空なら通常の全件一覧。
+    """
+    has_width = _is_numeric(product_width_text)
+    has_length = _is_numeric(product_length_text)
+    if has_width and has_length:
+        return list_pallets_for_product(
+            conn, product_width=int(float(product_width_text)),
+            product_length=int(float(product_length_text)),
+            show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order)
+    if has_width or has_length:
+        return search_pallet_direct(
+            conn, pallet_width_text=product_width_text,
+            pallet_length_text=product_length_text,
+            show_all=show_all, last_hosozai=last_hosozai)
+    return list_pallet_sizes(
+        conn, show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order,
+        last_hosozai=last_hosozai)
+
+
 def auto_select_pallet(
     conn: sqlite3.Connection,
     *,

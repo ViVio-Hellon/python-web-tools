@@ -186,7 +186,8 @@
     {# 右: 図面。読みながら見比べるものなので、横に並べる #}
     <div class="modal__col modal__col--spec" id="specCard" hidden>
       <section class="mblock">
-        <h3>包装仕様書 <span class="eyebrow num" id="specNo"></span></h3>
+        <h3>包装仕様書 <span class="eyebrow num" id="specNo" role="button" tabindex="0"
+              title="クリックでコピー"></span></h3>
         <div class="specbar">
           {# 「枠に収める」と「実寸」は片方だけが有効。押されているほうを
              色で示す。「幅に合わせる」ではなく「収める」なのは、小さい図を
@@ -354,6 +355,8 @@
   .nextstep .why { margin: 0; text-align: right; max-width: 32ch; }
 
   /* ---- 包装仕様書の図面 ---- */
+  /* NOをクリックでコピーできる。押せることが分かるようにする */
+  #specNo { cursor: pointer; border-bottom: 1px dashed var(--muted); }
   .specbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
              margin-bottom: 8px; }
   .specview { background: var(--sunken); border: 1px solid var(--rule);

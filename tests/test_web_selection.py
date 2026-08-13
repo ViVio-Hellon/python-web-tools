@@ -218,6 +218,43 @@ class PalletTests(SelectionWebTestCase):
         self.assertEqual(state["ribbon"]["pallet"], work_context.UNSET)
 
 
+class PalletListLiveTests(SelectionWebTestCase):
+    """製品 幅・丈を打つたびの一覧絞り込み(`/api/selection/pallet/list`)。
+
+    **何も確定しない。** 一覧を出すだけで、パレットも製品サイズも
+    セットされない ── セットは行を選んで「パレット決定」を押した
+    ときだけ。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")
+
+    def test_幅だけでも一覧が絞られる(self) -> None:
+        state = self.post("/api/selection/pallet/list", {"product_width": "1150"})
+        self.assertEqual(len(state["rows"]), 1)
+        self.assertIn("幅", state["list_note"])
+
+    def test_丈だけでも一覧が絞られる(self) -> None:
+        state = self.post("/api/selection/pallet/list", {"product_length": "2650"})
+        self.assertEqual(len(state["rows"]), 1)
+        self.assertIn("丈", state["list_note"])
+
+    def test_両方そろうと厳密な適合判定になる(self) -> None:
+        state = self.post("/api/selection/pallet/list",
+                          {"product_width": "1000", "product_length": "2500"})
+        self.assertEqual(len(state["rows"]), 1)
+
+    def test_何も確定しない(self) -> None:
+        """一覧を出すだけで、パレット・製品サイズは未セットのまま。"""
+        state = self.post("/api/selection/pallet/list",
+                          {"product_width": "1150", "product_length": "2650"})
+        self.assertFalse(state["pallet_set"])
+        self.assertFalse(state["product_set"])
+        self.assertNotIn("message", state)
+
+
 # ==================================================================
 # 製品サイズ
 # ==================================================================
@@ -558,12 +595,29 @@ class StepTests(BoardTestCase):
         self.assertEqual(state["primary_action"], "prodWidth")
         self.assertIn("製品の幅・丈", state["next_hint"])
 
-    def test_製品サイズが入っていれば1回で決まる(self) -> None:
-        """**押すのは1つ。** 載るパレットを探して、そのまま確定する。"""
+    def test_製品サイズだけでは押せない(self) -> None:
+        """**「パレット決定」は一覧で行を選ぶまで押せない。**
+
+        製品 幅・丈が入っただけでは、まだ一覧を見ているだけの段階
+        (行を選んでいなければ、決めるものが無い)。次の一手は
+        一覧から選ぶことを指す。
+        """
         self.expand()
         state = self.get()
-        self.assertTrue(state["can_decide"])
-        self.assertEqual(state["primary_action"], "decide")
+        self.assertFalse(state["can_decide"])
+        self.assertEqual(state["primary_action"], "palletRows")
+
+    def test_一覧で行を選ぶと押せるようになる(self) -> None:
+        """**行を選んで初めて「パレット決定」が押せる。**
+
+        行を選ぶ(`pallet/pick`)と、載ることまで確かめて製品サイズも
+        一緒に確定するので、段はそのまま「ボード選定」へ進む
+        ── ここで確かめたいのは押せる条件(`can_decide`)そのもの。
+        """
+        self.expand()
+        self.post("/api/selection/pallet/pick",
+                  {"width": "1100", "length": "2000", "symbol": ""})
+        self.assertTrue(self.get()["can_decide"])
 
     def test_番号は見える段だけで振る(self) -> None:
         """飛び番があると、抜けた段を探すことになる。"""

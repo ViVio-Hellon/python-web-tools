@@ -309,8 +309,12 @@ html, body { height: 100%; overflow: hidden; }
 .split--inventory { grid-template-columns: 1.3fr 1fr; }
 .split--layout    { grid-template-columns: 1.45fr 1fr; }
 /* 倉庫連携の一覧は16列ある。1.25:1 だと右端の「確認」ボタンが枠から
-   出て、押せるものがあること自体が見えなくなる */
-.split--warehouse { grid-template-columns: 1.9fr 1fr; }
+   出て、押せるものがあること自体が見えなくなる。
+   送信フォームを左・一覧を右に置く(DOM順もそちらに合わせて入替え済み)
+   ので、幅の比はそのままに列の並びだけ反転させる */
+.split--warehouse { grid-template-columns: 1fr 1.9fr; }
+.split--warehouse .split__controls { border-right: 1px solid var(--rule); }
+.split--warehouse .split__results { border-right: 0; }
 /* 操作が無い画面(資材モードの発注一覧)は一覧が全幅を使う */
 .split--onecol    { grid-template-columns: 1fr; }
 .split--onecol .split__results { border-right: 0; }

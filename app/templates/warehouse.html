@@ -3,16 +3,66 @@
 
 {% block content %}
 {#
-  **一覧は左、発注フォームは右**(設計指針 §4.2)。以前は発注フォーム
-  (12項目)が一覧の**上**にあり、送ったあとの結果を見るには毎回
-  フォームを通り過ぎてスクロールしていた。横に並べれば、入れながら
-  一覧を見ていられる。
-
-  資材モードにフォームは無いので、そのときは一覧が全幅を使う。
+  **発注フォームは左、一覧は右**(現場の要望で入替え。以前は逆順
+  だった)。資材モードにフォームは無いので、そのときは一覧が全幅を使う。
 #}
 <div class="split {{ 'split--onecol' if is_material else 'split--warehouse' }}">
 
-  {# 左: 結果。送った / 受け取った発注の一覧 #}
+  {% if not is_material %}
+  {# 左: 操作。出す。**スクロールさせない** #}
+  <div class="split__controls" id="controlCol">
+  {#
+    資材モードは受け取って確認するだけなので、一覧が主役(このブロック
+    自体が出ない)。現場モードは出すのが仕事なので、発注フォームを先に置く。
+  #}
+  <section class="card">
+    <header>
+      <i class="ib ib--sm ib--lower" aria-hidden="true">新</i>
+      <h3>新規発注</h3>
+      <span class="eyebrow">倉庫へ送ります</span>
+    </header>
+    <div class="pad">
+      <div class="form">
+        {% for label, key, required, numeric in fields %}
+        <label for="f-{{ key }}">
+          {{ label }}{% if required %}<span class="req" aria-label="必須">*</span>{% endif %}
+        </label>
+        <input class="input {{ 'num' if numeric else '' }}" id="f-{{ key }}"
+               {% if numeric %}inputmode="numeric"{% endif %} autocomplete="off">
+        {% endfor %}
+      </div>
+      {# 資材選択の「倉庫送信」から来た下書き。**まだ登録していない**。
+         1P0113 は角材と松板の2行になるので、1件ずつ確認して送る #}
+      {% if drafts %}
+      <div class="status status--ng" id="drafts" data-orders="{{ drafts | tojson | forceescape }}">
+        <span>資材選択から <b>{{ drafts | length }} 件</b> 届いています。
+          内容を確かめてから「倉庫へ送信」を押してください。</span>
+        <span class="draftnav" style="margin-left:auto">
+          <button class="btn" type="button" id="draftPrev">前へ</button>
+          <span id="draftPos" class="num"></span>
+          <button class="btn" type="button" id="draftNext">次へ</button>
+        </span>
+      </div>
+      {% endif %}
+      <p class="status" id="sendStatus" hidden></p>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn btn--commit" type="button" id="send">倉庫へ送信</button>
+        <button class="btn btn--danger" type="button" id="clearForm">
+          <span class="gl">×</span>入力を消す
+        </button>
+      </div>
+      <p class="why">
+        <span class="req">*</span> は必須です。送ったあとは右の一覧に出ます。
+        <b>取り消しは倉庫側の操作です</b> ── 間違えて送った場合は倉庫へ
+        連絡してください(現場から状態を動かせると、倉庫が実際に受け取ったかに
+        関わらず消せてしまうため)。
+      </p>
+    </div>
+  </section>
+  </div>
+  {% endif %}
+
+  {# 右: 結果。送った / 受け取った発注の一覧 #}
   <div class="split__results" id="resultCol">
   <div class="pane__head">
     <div>
@@ -75,61 +125,6 @@
     </div>
   </section>
   </div>
-
-  {% if not is_material %}
-  {# 右: 操作。出す。**スクロールさせない** #}
-  <div class="split__controls" id="controlCol">
-  {#
-    資材モードは受け取って確認するだけなので、一覧が主役。
-    現場モードは出すのが仕事なので、発注フォームを先に置く。
-    同じ画面でも、その人の作業の順に並べる。
-  #}
-  <section class="card">
-    <header>
-      <i class="ib ib--sm ib--lower" aria-hidden="true">新</i>
-      <h3>新規発注</h3>
-      <span class="eyebrow">倉庫へ送ります</span>
-    </header>
-    <div class="pad">
-      <div class="form">
-        {% for label, key, required, numeric in fields %}
-        <label for="f-{{ key }}">
-          {{ label }}{% if required %}<span class="req" aria-label="必須">*</span>{% endif %}
-        </label>
-        <input class="input {{ 'num' if numeric else '' }}" id="f-{{ key }}"
-               {% if numeric %}inputmode="numeric"{% endif %} autocomplete="off">
-        {% endfor %}
-      </div>
-      {# 資材選択の「倉庫送信」から来た下書き。**まだ登録していない**。
-         1P0113 は角材と松板の2行になるので、1件ずつ確認して送る #}
-      {% if drafts %}
-      <div class="status status--ng" id="drafts" data-orders="{{ drafts | tojson | forceescape }}">
-        <span>資材選択から <b>{{ drafts | length }} 件</b> 届いています。
-          内容を確かめてから「倉庫へ送信」を押してください。</span>
-        <span class="draftnav" style="margin-left:auto">
-          <button class="btn" type="button" id="draftPrev">前へ</button>
-          <span id="draftPos" class="num"></span>
-          <button class="btn" type="button" id="draftNext">次へ</button>
-        </span>
-      </div>
-      {% endif %}
-      <p class="status" id="sendStatus" hidden></p>
-      <div class="btn-row" style="margin-top:10px">
-        <button class="btn btn--commit" type="button" id="send">倉庫へ送信</button>
-        <button class="btn btn--danger" type="button" id="clearForm">
-          <span class="gl">×</span>入力を消す
-        </button>
-      </div>
-      <p class="why">
-        <span class="req">*</span> は必須です。送ったあとは下の一覧に出ます。
-        <b>取り消しは倉庫側の操作です</b> ── 間違えて送った場合は倉庫へ
-        連絡してください(現場から状態を動かせると、倉庫が実際に受け取ったかに
-        関わらず消せてしまうため)。
-      </p>
-    </div>
-  </section>
-  </div>
-  {% endif %}
 </div>
 {% endblock %}
 

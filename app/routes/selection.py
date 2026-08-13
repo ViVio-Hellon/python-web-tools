@@ -167,6 +167,23 @@ def _settle_product(session, body: dict) -> str:
         "(回転)" if rotated else "")
 
 
+@bp.post("/api/selection/pallet/list")
+def list_pallets_live():
+    """製品 幅・丈を**入力するたびに**呼ばれる、確定しない一覧の絞り込み。
+
+    「パレット決定」を押すまでは何も確定しない ── ここでは
+    `session.list_mode`/`live_product_*` を更新して一覧を引き直すだけで、
+    パレットも製品サイズも一切セットしない(セットは行を選んでからの
+    「パレット決定」の役目)。
+    """
+    body = request.get_json(silent=True) or {}
+    session = _session()
+    session.list_mode = selection_session.LIST_PRODUCT_LIVE
+    session.live_product_width = str(body.get("product_width", "")).strip()
+    session.live_product_length = str(body.get("product_length", "")).strip()
+    return _state(session)
+
+
 @bp.post("/api/selection/pallet/search")
 def search_pallet():
     """「パレット検索」(VBA `btnAutoSelectPallet_Click`)。

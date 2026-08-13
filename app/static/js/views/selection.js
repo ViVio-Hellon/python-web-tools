@@ -22,6 +22,17 @@ const el = {};
 let state = null;
 
 /**
+ * いま一覧で選んでいる行(まだサーバへは伝えていない)。
+ *
+ * **行を押しただけでは何も確定しない。** 以前は行を押した時点で
+ * サーバへ「決める」を送っていたため、一覧を見比べているだけで
+ * 確定の通知が何度もたまってしまっていた(現場の声)。ここでは
+ * 選んだことだけを覚えておき、「パレット決定」を押した瞬間に初めて
+ * サーバへ伝える。
+ */
+let pickedPalletRow = null;   // { width, length, symbol, key }
+
+/**
  * 押しっぱなしのモードのON/OFF。
  *
  * `variant` を渡すとONの色を変えられる。疲労度優先だけ別の色にするのは、
@@ -52,16 +63,37 @@ function why(node, text) {
  * サーバが前回と同じ値を返しているあいだは、利用者が打った内容が勝つ。
  */
 /**
- * 「パレットを選ぶ」を押せるかどうかを、**いま欄に入っているもの**で決める。
+ * 「パレット決定」を押せるかどうかを、**いま一覧で選んでいる行があるか**
+ * で決める。
  *
- * 業務の判断(その寸法が載るパレットが在るか)はサーバの仕事で、
- * 押した結果として返ってくる。ここが見ているのは
- * **「送るものが揃っているか」という画面側の事実**だけ ── 打った直後に
- * 押せるようにならないと、1文字打つたびにサーバへ聞きに行くことになる。
+ * 以前は製品 幅・丈が入っているかどうかで押せた。それだと「検索して
+ * いないのに押せる」「押しても何を決めたのか分からない」という
+ * あいまいさがあった(現場の声)。一覧の行を選んで初めて「これに
+ * 決める」という意思が画面上にも表れるので、それを条件にする。
  */
 function refreshDecide() {
   if (!el.decide) return;
-  el.decide.disabled = !(el.prodWidth.value.trim() && el.prodLength.value.trim());
+  el.decide.disabled = !pickedPalletRow;
+}
+
+/** 一覧の行の見た目を、いま選んでいる行(`pickedPalletRow`)に合わせ直す。
+ *
+ * 描き直し(`render`)のたびに `<tr>` は全部作り直されるので、
+ * ハイライトも毎回付け直す必要がある。
+ */
+function applySelection() {
+  let found = false;
+  for (const tr of el.palletRows.querySelectorAll("tr")) {
+    const on = !!pickedPalletRow && tr.dataset.key === pickedPalletRow.key;
+    tr.classList.toggle("on", on);
+    if (on) found = true;
+  }
+  // 打ち直しで一覧が変わり、選んでいた行が消えたら選択も外す
+  if (pickedPalletRow && !found) {
+    pickedPalletRow = null;
+    el.rowNote.textContent = "";
+  }
+  refreshDecide();
 }
 
 function setInput(node, value) {
@@ -81,11 +113,13 @@ function row(item) {
   tr.dataset.symbol = item.symbol;
   tr.dataset.note = item.note;
   tr.dataset.key = `${item.width}x${item.length}:${item.symbol}`;
-  // **選んだ行を決めるのはサーバ。** 発注コードと単位の出どころは
-  // `session.pallet_row` ただ1つで、寸法が食い違えばサーバが外す。
-  // ここで画面が独自に覚えていたころは、外されたことも自動選定で
-  // 選ばれたことも画面に伝わらず、行が光っているのに倉庫送信が
-  // 「行を選んでください」と断る状態になっていた
+  // マウスを乗せたときだけ、そのパレットの単位・コードを見せる
+  // (VBA `DynamicTip` に相当)。押さなくても分かるようにする
+  tr.title = item.note;
+  // **決めるのは「パレット決定」を押した瞬間。** 押すまではサーバへ
+  // 何も伝えない(押しただけで確定通知がたまる、という声への対応)。
+  // ここでの `on` はまだ最終確定のサーバ側 `picked` の初期反映で、
+  // 選び直した分は `applySelection()` が上書きする
   if (item.picked) tr.classList.add("on");
 
   item.values.forEach((value, index) => {
@@ -109,8 +143,20 @@ function render(next) {
   el.banner.textContent = next.banner.text;
   el.banner.dataset.kind = next.banner.kind;
 
-  // どの行を選んでいるかはサーバが `picked` で返す(`row()` が反映する)
+  // どの行が最終確定しているかはサーバが `picked` で返す。まだ
+  // クリックで選んでいる途中(`pickedPalletRow`)なら、そちらを優先する
   el.palletRows.replaceChildren(...next.rows.map(row));
+  if (!pickedPalletRow) {
+    const pickedItem = next.rows.find((r) => r.picked);
+    if (pickedItem) {
+      pickedPalletRow = {
+        width: String(pickedItem.width), length: String(pickedItem.length),
+        symbol: pickedItem.symbol || "",
+        key: `${pickedItem.width}x${pickedItem.length}:${pickedItem.symbol}`,
+      };
+    }
+  }
+  applySelection();
   const pickedRow = picked(el.palletRows);
   if (pickedRow) pickedRow.scrollIntoView({ block: "nearest" });
   el.listNote.textContent = next.list_note;
@@ -677,27 +723,22 @@ export function start(initial) {
 
   render(initial);
 
-  // 行を押したら入力欄へ写し、**サーバにも行そのものを覚えさせる**
-  // (VBA `_on_pallet_row_select`)。発注コードと単位は行にしか無く、
-  // 同じ寸法でも記号違いで別のコードになる
+  // 行を押しても、まだ何も決めない。**選ぶ(ハイライト)だけ**にして、
+  // 入力欄へ写し、マウスを乗せたときのツールチップ用に note を持つ。
+  // サーバへ伝える(決める)のは「パレット決定」を押した瞬間だけ
+  // (以前は押した時点で決まっていたため、見比べているだけで確定通知が
+  // たまってしまっていた ── 現場の声への対応)。
   el.palletRows.addEventListener("click", (event) => {
     const tr = event.target.closest("tr");
     if (!tr || !tr.dataset.width) return;
+    pickedPalletRow = {
+      width: tr.dataset.width, length: tr.dataset.length,
+      symbol: tr.dataset.symbol || "", key: tr.dataset.key,
+    };
     el.palWidth.value = tr.dataset.width;
     el.palLength.value = tr.dataset.length;
     el.rowNote.textContent = tr.dataset.note || "";
-    for (const other of el.palletRows.querySelectorAll("tr")) {
-      other.classList.toggle("on", other === tr);
-    }
-    // 製品サイズも一緒に送る。**打ち直した直後は、サーバがまだ
-    // 知らない値が欄に入っている** ── 送らないと、打ってから行を
-    // 押した人だけ製品が確定しない
-    send("/api/selection/pallet/pick", {
-      width: tr.dataset.width, length: tr.dataset.length,
-      symbol: tr.dataset.symbol || "",
-      product_width: el.prodWidth.value,
-      product_length: el.prodLength.value,
-    });
+    applySelection();
   });
 
   // 一覧に無い寸法を使うときの逃げ道。押した寸法で決める
@@ -705,21 +746,43 @@ export function start(initial) {
     send("/api/selection/pallet/apply",
          { width: el.palWidth.value, length: el.palLength.value }));
 
-  // **これ1つでパレットと製品の両方が決まる。**
-  // 載るパレットを探し、載ることを確かめ、確定させるところまで
+  // 製品 幅・丈を打つたびに、**確定させずに**候補を一覧へ出す。
+  // 片方だけでもその辺に近いパレットを、両方そろえば「載るか」の
+  // 厳密な判定に切り替わる(`list_pallets_by_product_dims`)。
+  // 連打で毎回サーバへ聞きに行かないよう間を置く(デバウンス)。
+  let liveListTimer = 0;
+  function scheduleLiveList() {
+    window.clearTimeout(liveListTimer);
+    liveListTimer = window.setTimeout(() => {
+      send("/api/selection/pallet/list", {
+        product_width: el.prodWidth.value,
+        product_length: el.prodLength.value,
+      });
+    }, 300);
+  }
   for (const node of [el.prodWidth, el.prodLength]) {
-    node.addEventListener("input", refreshDecide);
+    node.addEventListener("input", scheduleLiveList);
   }
 
-  el.decide.addEventListener("click", () =>
-    send("/api/selection/pallet/search", {
+  // **一覧で行を選んでいるときだけ押せる。** 押した瞬間にその行で
+  // 決める(以前は製品サイズが入っていれば押せて、押すたびに自動選定が
+  // 走っていたため、「一覧で選んだのか、押して決まったのか」が
+  // あいまいだった ── 現場の声への対応)。
+  el.decide.addEventListener("click", () => {
+    if (!pickedPalletRow) return;
+    send("/api/selection/pallet/pick", {
+      width: pickedPalletRow.width, length: pickedPalletRow.length,
+      symbol: pickedPalletRow.symbol,
       product_width: el.prodWidth.value,
       product_length: el.prodLength.value,
-      pallet_width: el.palWidth.value,
-      pallet_length: el.palLength.value,
-    }));
+    });
+  });
 
-  el.clearSizes.addEventListener("click", () => send("/api/selection/clear"));
+  el.clearSizes.addEventListener("click", () => {
+    pickedPalletRow = null;
+    el.rowNote.textContent = "";
+    send("/api/selection/clear");
+  });
 
   // 決まったパレットの寸法で簡易在庫を見る(旧版 `btnUFMAP`)。
   // 寸法を画面から送らないのはボードMAPと同じ理由 ── 何が決まって

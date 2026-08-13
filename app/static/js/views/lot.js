@@ -243,6 +243,18 @@ function specZoom(full) {
   }
 }
 
+/** 包装仕様書NOをクリップボードへコピーする。外部の閲覧システムは
+ * NOを渡さず固定URLで開くだけなので、開いた先で貼れるようにする。 */
+async function copySpecNo() {
+  if (!specNo) return;
+  try {
+    await navigator.clipboard.writeText(specNo);
+    toast(`包装仕様書NO「${specNo}」をコピーしました`, "ok");
+  } catch {
+    toast("コピーできませんでした。NOを選択してコピーしてください", "error");
+  }
+}
+
 /* ================================================================
    詳細(モーダル)
    ================================================================ */
@@ -359,7 +371,7 @@ export function start(options) {
                     "lotFields", "odrFields", "hikiRows", "hikiCount", "gravity",
                     // specMsg は差し替えで消えるので持たない
                     "specCard", "specNo", "specView", "specSource",
-                    "specFit", "specFull", "specReload"]) {
+                    "specFit", "specFull", "specReload", "specOpen"]) {
     el[id] = document.getElementById(id);
   }
 
@@ -373,6 +385,20 @@ export function start(options) {
   specZoom(false);
   el.specFit.addEventListener("click", () => specZoom(false));
   el.specFull.addEventListener("click", () => specZoom(true));
+
+  // 「閲覧システム」はこのツールとは別の外部システムを固定URLで開くだけ
+  // で、NOそのものは渡していない(先方で検索し直す必要がある)。開く前に
+  // NOをクリップボードへコピーしておけば、開いた先にそのまま貼れる。
+  // NOの表示そのものをクリックしても同じことができるようにする
+  // (「NOをクリックしてもコピーされない」という現場の声への対応)。
+  el.specOpen.addEventListener("click", () => copySpecNo());
+  el.specNo.addEventListener("click", () => copySpecNo());
+  el.specNo.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      copySpecNo();
+    }
+  });
   el.specReload.addEventListener("click", async () => {
     if (!specNo) return;
     const no = specNo, run = ++specRun;

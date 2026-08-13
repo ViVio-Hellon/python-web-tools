@@ -344,6 +344,48 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
             self.conn, product_width=1000, product_length=2500, show_all=True)
         self.assertEqual(len(rows), 1)
 
+
+class ListPalletsByProductDimsTests(BoardSelectionTestCase):
+    """製品 幅・丈の入力中(未確定)の一覧絞り込み。"""
+
+    def test_width_only_matches_by_tolerance(self):
+        insert_pallet(self.conn, width=1020, length=2000,
+                      w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="台")
+        insert_pallet(self.conn, width=1500, length=2000,
+                      w_min=1400, w_max=1600, l_min=1900, l_max=2100, unit="台")
+        rows = svc.list_pallets_by_product_dims(
+            self.conn, product_width_text="1000", product_length_text="")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].width, 1020)
+
+    def test_length_only_matches_by_tolerance(self):
+        insert_pallet(self.conn, width=1000, length=2010,
+                      w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="台")
+        insert_pallet(self.conn, width=1000, length=5000,
+                      w_min=900, w_max=1100, l_min=4900, l_max=5100, unit="台")
+        rows = svc.list_pallets_by_product_dims(
+            self.conn, product_width_text="", product_length_text="2000")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].length, 2010)
+
+    def test_both_dims_uses_the_precise_fit_check(self):
+        """両方そろえば、単純な近似ではなく「載るか」の厳密判定を使う。"""
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")
+        # 近似(±50mm)なら当たらない寸法でも、適合範囲に収まっていれば
+        # 「載るパレット」として出る
+        rows = svc.list_pallets_by_product_dims(
+            self.conn, product_width_text="1000", product_length_text="2500")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].width, 1150)
+
+    def test_neither_dim_returns_the_full_list(self):
+        insert_pallet(self.conn, width=1000, length=2000,
+                      w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="台")
+        rows = svc.list_pallets_by_product_dims(
+            self.conn, product_width_text="", product_length_text="")
+        self.assertEqual(len(rows), 1)
+
     def test_a_pallet_smaller_than_the_product_is_excluded_even_if_the_fit_range_allows_it(self):
         # 適合範囲が壊れていて製品サイズを許してしまっていても、現物サイズが
         # 製品より小さければ載らない(board_selection_service の

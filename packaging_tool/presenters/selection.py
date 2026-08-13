@@ -908,13 +908,13 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
         view.product_from = (f"Lot {context.lot_no} の製造板幅×板丈です"
                              "(ロット検索の「資材展開」で入りました)")
 
-    # 「パレットを選ぶ」は製品サイズが入っていれば押せる。
-    # **これ1回でパレットと製品の両方が決まる** ── 載るパレットを探し、
-    # 載ることを確かめ、両方を確定させるところまでやる
-    view.can_decide = bool(view.product_width and view.product_length)
+    # 「パレット決定」は**一覧で行を選んでいるときだけ**押せる
+    # (行を選ぶのは画面側だけの状態なので、ここは前回までに確定した
+    # 行があるかどうかの初期表示。押せるかの最終判断はJS側が
+    # `selectedRow` を見て決め直す)。
+    view.can_decide = session.pallet_row is not None
     view.decide_why = ("" if view.can_decide
-                       else "製品の幅・丈を入れてください"
-                            "(ロット検索の「資材展開」でも入ります)")
+                       else "一覧からパレットを選んでください")
     # 製品サイズだけを手で入れ直す道は残す。パレットが決まっていないと
     # 「載るか」を確かめられないので、そのときは押させない
     view.can_set_product = session.palette.is_set
@@ -1020,11 +1020,12 @@ def _next_action(view: SelectionViewModel,
         if view.mode_1p0113:
             return "p1Qty", "数量を確かめてください。角材の本数と松板の枚数に掛かります。"
         if view.can_decide:
-            # **1回で決まる。** 載るパレットを探して、載ることを
-            # 確かめて、両方を確定させるところまで
-            return "decide", ("この寸法で「パレットを選ぶ」を押します。"
-                              "載るパレットを探して、そのまま確定します。"
-                              "別のものにしたいときは一覧の行を押します。")
+            # 一覧で選んだ行を「パレット決定」で確定させるところまで
+            return "decide", ("一覧で選んだパレットで確定するので、"
+                              "「パレット決定」を押します。"
+                              "別のものにしたいときは一覧の別の行を押します。")
+        if view.product_width and view.product_length:
+            return "palletRows", "一覧からパレットを選んでください。"
         return "prodWidth", "製品の幅・丈を入れてください(ロットを選ぶと入ります)。"
     if current.key == "boards":
         if view.boards.can_place:
@@ -1498,6 +1499,12 @@ def list_rows(session: Any) -> list[Any]:
             conn, product_width=context.product_width,
             product_length=context.product_length, **flags)
 
+    if session.list_mode == ss.LIST_PRODUCT_LIVE:
+        return svc.list_pallets_by_product_dims(
+            conn, product_width_text=session.live_product_width,
+            product_length_text=session.live_product_length,
+            last_hosozai=session.presenter.last_hosozai, **flags)
+
     if session.list_mode == ss.LIST_DIRECT:
         # 直接検索はEXオンリーを見ない(VBA 仕様どおり)
         return svc.search_pallet_direct(
@@ -1529,6 +1536,16 @@ def _list_note(session: Any, count: int) -> str:
     from .. import selection_session as ss
     if session.list_mode == ss.LIST_PRODUCT:
         return f"製品サイズに収まる候補 {count} 件"
+    if session.list_mode == ss.LIST_PRODUCT_LIVE:
+        has_width = bool(session.live_product_width.strip())
+        has_length = bool(session.live_product_length.strip())
+        if has_width and has_length:
+            return f"製品サイズに収まる候補 {count} 件(入力中)"
+        if has_width:
+            return f"製品 幅に近いパレット {count} 件(丈も入れると絞り込みます)"
+        if has_length:
+            return f"製品 丈に近いパレット {count} 件(幅も入れると絞り込みます)"
+        return f"{count} 件"
     if session.list_mode == ss.LIST_DIRECT:
         return (f"パレット寸法 {session.direct_width or '—'}×"
                 f"{session.direct_length or '—'} の前後 {SEARCH_TOLERANCE}mm: "

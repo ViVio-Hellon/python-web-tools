@@ -39,6 +39,11 @@ TWO_COLUMN = {
     "warehouse.html": ["rows"],              # 発注一覧
 }
 
+# 倉庫連携だけは書く順が逆(操作=送信フォームが先、結果=一覧が後ろ)。
+# 現場の要望で、この画面は「一覧を眺める」より先に「送る」が主な作業
+# なため、意図して他画面と順序を変えている(§4.2 の例外として明記)
+REVERSED_ORDER = {"warehouse.html"}
+
 # 1カラムのままでよい画面。**結果しか無い**か、設定のように
 # 順に読むものなので、左右に分ける理由がない
 ONE_COLUMN = ("log.html", "settings.html", "lot.html")
@@ -72,19 +77,37 @@ class TwoColumnTests(unittest.TestCase):
         """
         for name, ids in TWO_COLUMN.items():
             text = read(name)
-            results = block(text, 'split__results', 'split__controls')
+            if name in REVERSED_ORDER:
+                # 操作(controls)が先に書かれているので、結果は
+                # split__results から末尾までが結果カラムの中身
+                results = text[text.index('split__results'):]
+            else:
+                results = block(text, 'split__results', 'split__controls')
             for target in ids:
                 with self.subTest(screen=name, id=target):
                     self.assertIn(f'id="{target}"', results,
                                   f"{name}: {target} が結果カラムの外にあります")
 
     def test_操作カラムは結果より後ろに書く(self) -> None:
-        """読み上げとタブ移動の順序も「結果 → 操作」にそろえる。"""
+        """読み上げとタブ移動の順序も「結果 → 操作」にそろえる。
+
+        `REVERSED_ORDER` に挙げた画面は例外(下のテストで別に確かめる)。
+        """
         for name in TWO_COLUMN:
+            if name in REVERSED_ORDER:
+                continue
             with self.subTest(screen=name):
                 text = read(name)
                 self.assertLess(text.index('split__results'),
                                 text.index('split__controls'))
+
+    def test_倉庫連携は操作カラムが結果より先に書く(self) -> None:
+        """送信フォームが主な作業なので、この画面だけ順序が逆(意図的)。"""
+        for name in REVERSED_ORDER:
+            with self.subTest(screen=name):
+                text = read(name)
+                self.assertLess(text.index('split__controls'),
+                                text.index('split__results'))
 
     def test_1カラムのままでよい画面は分けない(self) -> None:
         """分ける理由が無いのに分けると、片側が空いて落ち着かない。"""

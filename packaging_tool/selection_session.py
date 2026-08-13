@@ -73,8 +73,11 @@ QTY_MAX = 10
 # 検索条件だけを覚える。行を抱えると、EXの絞り込みを触ったときに
 # 古い行が残る(tkinter版で実際に起きていた)
 LIST_ALL = "all"          # マスタ全件(単位・EXのフィルタ適用)
-LIST_PRODUCT = "product"  # 製品サイズに収まる候補
+LIST_PRODUCT = "product"  # 製品サイズに収まる候補(「パレット決定」後の確定値で)
 LIST_DIRECT = "direct"    # パレット寸法の ±50mm 検索(直接検索モード)
+# 製品 幅・丈を入力している最中の一覧(未確定)。片方だけでも絞り込む
+# ── まだ確定していない値なので `work_context` の製品サイズには触らない
+LIST_PRODUCT_LIVE = "product_live"
 
 
 @dataclass
@@ -115,6 +118,12 @@ class SelectionSession:
     list_mode: str = LIST_ALL
     direct_width: str = ""
     direct_length: str = ""
+    # 製品 幅・丈の入力中の値(`LIST_PRODUCT_LIVE` 用)。まだ「パレット決定」
+    # を押していない=確定していないので、`work_context` の製品サイズとは
+    # 別に持つ ── 打っている途中の値でボード選定など他の画面の前提を
+    # 動かしてはいけない
+    live_product_width: str = ""
+    live_product_length: str = ""
 
     # 一覧で選んでいる行(VBA `pal_tree.selection()`)。
     # **発注コードと単位はここにしか無い** ── 幅と丈だけでは決まらず、
@@ -245,6 +254,7 @@ class SelectionSession:
         self.product = svc.ProductSize()
         self.list_mode = LIST_ALL
         self.direct_width = self.direct_length = ""
+        self.live_product_width = self.live_product_length = ""
         self.pallet_row = None
         self.invalidate_placement()
         self._sync_ribbon()

@@ -228,19 +228,22 @@
         <label for="prodLength">丈</label>
         <input class="input num" id="prodLength" inputmode="numeric" style="width:6em"
                value="{{ view.product_length }}" autocomplete="off">
-        {# **この1つでパレットと製品の両方が決まる。** 載るパレットを
-           探し、載ることを確かめ、確定させるところまで #}
+        {# 幅・丈を打つと、載る候補が下の一覧へ自動で出る(片方だけでも
+           近いものを出す)。**決めるのは一覧で行を選んでから、この
+           ボタンを押した瞬間。** 行を押しただけでは確定しない #}
         <button class="btn btn--select" type="button" id="decide"
+                title="一覧でパレットを選ぶと押せます"
                 {% if not view.can_decide %}disabled{% endif %}>
-          <span class="gl">⌕</span>パレットを選ぶ</button>
+          <span class="gl">✓</span>パレット決定</button>
         <button class="btn btn--danger" type="button" id="clearSizes">
           <span class="gl">×</span>やり直す</button>
       </div>
       <p class="why" id="productFrom" {% if not view.product_from %}hidden{% endif %}>{{ view.product_from }}</p>
       <p class="why" id="decideWhy" {% if not view.decide_why %}hidden{% endif %}>{{ view.decide_why }}</p>
 
-      {# 候補の一覧。**製品サイズが決まると、載るものだけが並ぶ。**
-         行を押した時点でそのパレットに決まる(適用もセットも要らない) #}
+      {# 候補の一覧。**製品 幅・丈を打つと自動で絞り込まれる。**
+         行を押しても選ぶだけで確定はしない。マウスを乗せると
+         単位・コードが浮かぶ。確定するのは「パレット決定」を押した瞬間 #}
       <div class="filters">
         <button class="btn" type="button" id="showAll"
                 aria-pressed="{{ 'true' if view.show_all else 'false' }}">EXまで表示</button>
