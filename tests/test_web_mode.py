@@ -211,7 +211,7 @@ class RoleChipLinkTests(ModeTestCase):
         app.config["MODE_NOTE"] = "アクセス権限 に登録がありません"
         html = self.html(app)
         self.assertIn('<a class="role-chip', html)
-        self.assertIn('href="/settings"', html)
+        self.assertIn('href="/settings?tab=status"', html)
 
     def test_理由が無くてもリンクになる(self) -> None:
         """1つしか使えるモードが無いのは、既定へ落ちたときだけではない。

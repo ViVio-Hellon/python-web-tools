@@ -41,6 +41,12 @@ bp = Blueprint("settings", __name__)
 def page():
     view = settings_presenter.build(get_db(), _startup_modes())
     registry = jobs.get_registry()
+    # `?tab=` で面を名指しできる(帯のモード表示から「この端末の権限」
+    # へ直接連れて行くため)。JS を待たずに最初の描画から正しい面が
+    # 開くよう、サーバ側でも同じ既定を選ぶ(`tabs.js` と揃える)
+    requested_tab = request.args.get("tab", "")
+    valid_tabs = {key for key, _ in settings_presenter.TABS}
+    default_tab = requested_tab if requested_tab in valid_tabs else settings_presenter.DEFAULT_TAB
     return render_template(
         "settings.html",
         view=view,
@@ -52,7 +58,7 @@ def page():
         suffixes=" / ".join(source_db.SUFFIXES),
         level_label=settings_presenter.LEVEL_LABEL,
         tabs=settings_presenter.TABS,
-        default_tab=settings_presenter.DEFAULT_TAB,
+        default_tab=default_tab,
         # **面の印も初回から出す。** 開いていない面の問題を、JSが動くのを
         # 待たずに読めるようにする
         tab_badges=settings_presenter.tab_badges(view),

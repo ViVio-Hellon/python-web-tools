@@ -46,6 +46,22 @@ function recall(group) {
   }
 }
 
+/**
+ * 外部リンクが名指ししてきたタブ(`?tab=status` 等)。
+ *
+ * これが要るのは、帯のリンク(`base.html`)のように「この面を直接
+ * 開かせたい」外部リンクがあるため。**前回覚えていたタブより優先する**
+ * ── 覚えていた面を出しても、リンクが指した先が見えなければ、
+ * リンクを踏んだ意味が無い。
+ */
+function requested() {
+  try {
+    return new URLSearchParams(location.search).get("tab");
+  } catch (e) {
+    return null;
+  }
+}
+
 /** タブを1つ選ぶ。`key` が無ければ何もしない(消えたタブを覚えていた等)。 */
 export function select(root, key) {
   const tabs = [...root.querySelectorAll(":scope > .tabs__bar > .tab")];
@@ -113,7 +129,10 @@ export function attach(root) {
     }
   });
 
-  // 前に見ていたタブがあればそこから。無ければ**サーバが既定にした**もの
+  // URLが名指ししたタブ最優先、次に前回見ていたタブ、
+  // 無ければ**サーバが既定にした**もの
+  const wanted = requested();
+  if (wanted && select(root, wanted)) return;
   const saved = recall(root.dataset.tabs);
   if (!saved || !select(root, saved)) {
     const first = root.querySelector(':scope > .tabs__bar > .tab[data-default="1"]')

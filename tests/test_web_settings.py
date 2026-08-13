@@ -518,6 +518,23 @@ class DataPageTests(DataWebTestCase):
         self.assertIsNotNone(tag)
         self.assertIn("disabled", tag.group(0))
 
+    def test_tabパラメータで面を名指しできる(self) -> None:
+        """帯のモード表示(`/settings?tab=status`)が正しい面を開く。
+
+        JSを待たずに最初の描画から `data-default="1"` が「いまの状態」の
+        タブに付くこと ── JSが動く前に見えるHTMLだけでも合っている必要がある。
+        """
+        html = self.client.get("/settings?tab=status").get_data(as_text=True)
+        bar = html[html.index('class="tabs__bar"'):html.index('class="tabs__panels"')]
+        status_tag = bar[bar.index('data-key="status"'):bar.index('data-key="status"') + 120]
+        self.assertIn('data-default="1"', status_tag)
+
+    def test_知らないtabは既定へ落ちる(self) -> None:
+        html = self.client.get("/settings?tab=nonsense").get_data(as_text=True)
+        bar = html[html.index('class="tabs__bar"'):html.index('class="tabs__panels"')]
+        run_tag = bar[bar.index('data-key="run"'):bar.index('data-key="run"') + 120]
+        self.assertIn('data-default="1"', run_tag)
+
     def test_倉庫モードにもある(self) -> None:
         """倉庫スタッフも書き戻しをする。ここは両方に置く。"""
         from app import create_app

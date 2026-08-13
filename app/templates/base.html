@@ -93,13 +93,16 @@
       {% endfor %}
     </div>
     {% else %}
-    {# 切替が出ない=このモードしか無い。**理由の有無によらず**説明へ
-       繋ぐ ── 「既定へ落ちた」ときだけでなく、正しく1つだけ権限が
-       付いている(現場ではよくある、ごく普通の)ときにも「どうすれば
-       増やせるか」を知りたいのは同じ。ホバーだけに頼らない
-       (押さないと理由が読めないのは不親切、という現場の声への対応) #}
-    <a class="role-chip role-chip--{{ mode }}" href="/settings"
-       title="{{ mode_note or 'このモードだけが使えます。' }}(押すと詳しい説明と直し方が見られます)">{{ mode_label }}モード<span class="gl">?</span></a>
+    {# 切替が出ない=このモードしか無い。**条件そのものをホバーだけで
+       読める**ようにする(`mode_note` は誰が・どこで・何を足せば
+       増えるかまで具体的な一文、`access_control.explain_grant`)。
+       「既定へ落ちた」ときだけでなく、正しく1つだけ権限が付いている
+       (現場ではよくある、ごく普通の)ときにも同じ具体性で答える。
+       押せば「この端末の権限」(設定画面のいまの状態タブ)へ直接開く
+       (押さないと理由が読めない・押しても違う面が開く、という現場の
+       声への対応) #}
+    <a class="role-chip role-chip--{{ mode }}" href="/settings?tab=status"
+       title="{{ mode_note }}(押すと「この端末の権限」が開きます)">{{ mode_label }}モード<span class="gl">?</span></a>
     {% endif %}
     <button class="btn btn--danger" type="button" id="quit"><span class="gl">■</span>終了</button>
   </div>

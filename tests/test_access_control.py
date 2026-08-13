@@ -215,6 +215,43 @@ class IdentityTests(unittest.TestCase):
         self.assertIn("NLM-PC-042", YAMADA.label())
 
 
+class ExplainGrantTests(unittest.TestCase):
+    """帯のホバーだけで読める一文(設定画面へ移らなくてよい)。"""
+
+    def setUp(self) -> None:
+        self.conn = make_db()
+        self.addCleanup(self.conn.close)
+
+    def test_誰が使えるかが出る(self) -> None:
+        grant_row(self.conn, pc="NLM-PC-042", permission="mode:material")
+        grant = ac.resolve(self.conn, identity=YAMADA)
+        text = ac.explain_grant(grant)
+        self.assertIn(YAMADA.login_id, text)
+        self.assertIn(YAMADA.pc_name, text)
+
+    def test_正しく1つだけ許可でも増やし方が出る(self) -> None:
+        """既定へ落ちていなくても(`reason` が空でも)具体的に答える。"""
+        grant_row(self.conn, pc="NLM-PC-042", permission="mode:material")
+        grant = ac.resolve(self.conn, identity=YAMADA)
+        self.assertEqual(grant.reason, "")
+        text = ac.explain_grant(grant)
+        self.assertIn("マスタ管理", text)
+        self.assertIn(ac.mode_permission(modes.FIELD), text)
+
+    def test_PC名だけの行でも誰でもそのPCで使える(self) -> None:
+        """空欄は「問わない」。ログインIDが空ならPCの誰にでも効く。"""
+        grant_row(self.conn, pc="NLM-PC-042", permission="mode:material")
+        other = ac.Identity(login_id="suzuki", pc_name="NLM-PC-042")
+        grant = ac.resolve(self.conn, identity=other)
+        self.assertTrue(grant.allows_mode(modes.MATERIAL))
+
+    def test_既定へ落ちたときは理由も含む(self) -> None:
+        grant = ac.resolve(self.conn, identity=YAMADA)
+        text = ac.explain_grant(grant)
+        self.assertIn("取り込まれていません", text)
+        self.assertIn("マスタ管理", text)
+
+
 class GrantOfTests(unittest.TestCase):
     def test_知らないコードは受け付けない(self) -> None:
         """試験が実在しない権限を仮定していると、直したつもりの

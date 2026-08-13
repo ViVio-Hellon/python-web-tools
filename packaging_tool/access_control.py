@@ -364,6 +364,42 @@ def grant_of(*codes: str, identity: Optional[Identity] = None) -> Grant:
                  codes=frozenset(codes), has_master=True)
 
 
+def explain_grant(grant: Grant) -> str:
+    """権限の状態を、設定画面へ移らなくても読める一文にする。
+
+    帯のモード表示は「今このモードしか使えない」ことは見せていたが、
+    **なぜか・増やすには何をすればよいか**は設定画面まで押さないと
+    出なかった。「変更条件をそこで表示させるのがわかりやすい」という
+    現場の声に対応 ── ホバーだけで、設定画面の「この端末の権限」に
+    書いてあるのと同じ具体性(誰が・どこで・何を足すか)まで届かせる。
+
+    既定へ落ちたとき(`grant.reason`)だけでなく、**正しく1つだけ
+    許可されている**(現場ではよくある、ごく普通の)ときも同じ扱い ──
+    「他のモードはどうすれば使えるのか」を知りたいのは、落ちたときも
+    落ちていないときも同じだから。
+    """
+    from . import modes
+
+    allowed = grant.allowed_modes()
+    allowed_labels = "/".join(modes.label(m) for m in allowed) or "なし"
+    text = f"{grant.identity.label()} が使えるのは{allowed_labels}モードだけです。"
+    if grant.reason:
+        text = grant.reason + "。" + text
+
+    missing = [m.key for m in modes.ALL if m.key not in allowed]
+    if not missing:
+        return text
+
+    mode_codes = ", ".join(f"{mode_permission(m)}({modes.label(m)}モード)"
+                           for m in missing)
+    missing_labels = "/".join(modes.label(m) for m in missing)
+    return (text + f"{missing_labels}モードを増やすには、資材モードを持つ人に"
+            f"「設定 > マスタ管理 > {TABLE}」で次の行を足してもらってください: "
+            f"ログインID = {grant.identity.login_id or '(空でPC名だけでもよい)'} / "
+            f"PC名 = {grant.identity.pc_name or '(空でIDだけでもよい)'} / "
+            f"権限 = {mode_codes}。")
+
+
 def summarize(codes: Iterable[str]) -> list[str]:
     """権限コードを画面の言葉にする。文言はサーバが持つ。"""
     out = []

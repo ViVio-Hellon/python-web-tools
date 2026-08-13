@@ -15,8 +15,8 @@ from typing import Any, Optional
 
 from flask import current_app
 
-from packaging_tool import (app_config, idle_exit, modes, user_settings,
-                            work_context)
+from packaging_tool import (access_control, app_config, idle_exit, modes,
+                            user_settings, work_context)
 
 
 @dataclass
@@ -167,8 +167,11 @@ def shell_context(active: str, *,
         "mode_options": [{"key": m.key, "label": m.label, "detail": m.detail,
                           "current": m.key == mode}
                          for m in modes.ALL if m.key in allowed],
-        # 権限で開けないモードがあることを、押す前に伝えるための一言
-        "mode_note": config.get("MODE_NOTE", "") or grant.reason,
+        # 権限で開けないモードがあることを、押す前に伝えるための一言。
+        # **理由の有無によらず**、誰が・どこで・何を足せば増えるかまで
+        # 具体的に出す(帯を見るだけで済ませたい、という現場の声への対応)
+        "mode_note": (f"{config['MODE_NOTE']} " if config.get("MODE_NOTE") else "")
+                     + access_control.explain_grant(grant),
         "display_name": config["DISPLAY_NAME"],
         # 帯に常時出す版。**どれが入っている端末か**を聞かれたときに、
         # 画面を見れば答えられるようにする(出どころは config/app.json)
