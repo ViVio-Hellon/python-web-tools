@@ -98,9 +98,27 @@ function applySelection() {
 
 function setInput(node, value) {
   const text = value ?? "";
-  if (node.dataset.fromServer === text) return;   // サーバ側は変わっていない
+  if (node.dataset.fromServer === text) return false;   // サーバ側は変わっていない
   node.dataset.fromServer = text;
   node.value = text;
+  return true;
+}
+
+// 製品 幅・丈を打つたびに、**確定させずに**候補を一覧へ出す
+// (`list_pallets_by_product_dims`)。連打で毎回サーバへ聞きに行かない
+// よう間を置く(デバウンス)。`render()` からも呼ぶ ── ロット検索の
+// 「資材展開」のように、幅・丈がサーバから**同時に**入るときは
+// `input` イベントが発火せず、打鍵を待つ仕組みだけでは一覧が
+// 古いままになっていた(現場の声)
+let liveListTimer = 0;
+function scheduleLiveList() {
+  window.clearTimeout(liveListTimer);
+  liveListTimer = window.setTimeout(() => {
+    send("/api/selection/pallet/list", {
+      product_width: el.prodWidth.value,
+      product_length: el.prodLength.value,
+    });
+  }, 300);
 }
 
 function row(item) {
@@ -167,8 +185,11 @@ function render(next) {
   // (tkinter版は入力欄に触れないので消えなかった)
   setInput(el.palWidth, next.pallet_width);
   setInput(el.palLength, next.pallet_length);
-  setInput(el.prodWidth, next.product_width);
-  setInput(el.prodLength, next.product_length);
+  const widthChanged = setInput(el.prodWidth, next.product_width);
+  const lengthChanged = setInput(el.prodLength, next.product_length);
+  // サーバ側の製品サイズが変わった(資材展開・自動選定の確定など)。
+  // 打った本人がいなくても一覧を追随させる
+  if (widthChanged || lengthChanged) scheduleLiveList();
 
   // 決まったものは1行。**製品とパレットは1つの決めごと**なので、
   // 2行に分けると読む場所が2つになる
@@ -750,16 +771,6 @@ export function start(initial) {
   // 片方だけでもその辺に近いパレットを、両方そろえば「載るか」の
   // 厳密な判定に切り替わる(`list_pallets_by_product_dims`)。
   // 連打で毎回サーバへ聞きに行かないよう間を置く(デバウンス)。
-  let liveListTimer = 0;
-  function scheduleLiveList() {
-    window.clearTimeout(liveListTimer);
-    liveListTimer = window.setTimeout(() => {
-      send("/api/selection/pallet/list", {
-        product_width: el.prodWidth.value,
-        product_length: el.prodLength.value,
-      });
-    }, 300);
-  }
   for (const node of [el.prodWidth, el.prodLength]) {
     node.addEventListener("input", scheduleLiveList);
   }

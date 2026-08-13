@@ -748,6 +748,17 @@ class AutoSelectTests(BoardTestCase):
         total = sum(row["count"] for row in boards["lower"])
         self.assertIn(f"下用 {len(boards['lower'])}種 {total}枚", boards["summary"])
 
+    def test_見出しに具体的な寸法が出る(self) -> None:
+        """配置図はボードを置くまで何も描かれない。段の見出し(畳んでいても
+        読める)に寸法まで出ていないと、配置するまで何を選んだか
+        分からない(現場の声)。"""
+        self.sizes()
+        boards = self.boards(self.post("/api/selection/boards/auto-select"))
+        for row in boards["lower"]:
+            with self.subTest(row=row):
+                self.assertIn(f"{row['width']}×{row['length']}×{row['count']}",
+                              boards["summary"])
+
     def test_クリアで空に戻る(self) -> None:
         self.sizes()
         self.post("/api/selection/boards/auto-select")
@@ -1621,6 +1632,57 @@ class SendTests(SelectionWebTestCase):
         self.assertEqual([o["hatchu_code"] for o in orders], ["K001", "M001"])
         self.assertTrue(orders[0]["hinmei"].startswith(spk.KAKUZAI_SIZE_LABEL))
         self.assertTrue(orders[1]["hinmei"].startswith(spk.MATSUITA_SIZE_LABEL))
+
+
+class WarehouseDraftOnDecideTests(SelectionWebTestCase):
+    """パレット決定の時点で倉庫連携の下書きを先に用意する(現場の要望)。
+
+    以前は「倉庫送信」を明示的に押すまで倉庫連携の入力欄は空のままで、
+    ボードを選び終えたあとで初めてパレット・Lot情報を打ち直すことに
+    なっていた。パレットはこの時点で決まっているのだから、先に埋めて
+    おいてよい ── ただし**登録(送信)まではしない**。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from app.routes import lot as lot_routes
+        from tests.test_lot_service import insert_hiki, insert_lot, insert_odr
+
+        original = lot_routes.get_db
+        lot_routes.get_db = lambda: self.conn
+        self.addCleanup(lambda: setattr(lot_routes, "get_db", original))
+
+        insert_pallet(self.conn, width=1100, length=2000, code="P9", unit="台")
+        insert_lot(self.conn)
+        insert_hiki(self.conn)
+        insert_odr(self.conn)
+        self.client.get("/api/lot/1234567", headers=self.auth())
+
+    def test_パレット決定だけで下書きが埋まる(self) -> None:
+        """「倉庫送信」を押していなくても、決めた時点で下書きができる。"""
+        self.assertEqual(work_context.get_context().pending_orders, [])
+        self.post("/api/selection/pallet/pick",
+                  {"width": 1100, "length": 2000, "symbol": ""})
+        orders = work_context.get_context().pending_orders
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]["hatchu_code"], "P9")
+
+    def test_まだ登録はしない(self) -> None:
+        """下書きを用意するだけで、発注一覧にはまだ入らない。"""
+        self.post("/api/selection/pallet/pick",
+                  {"width": 1100, "length": 2000, "symbol": ""})
+        self.assertEqual(self.get("/api/warehouse/orders")["found"], 0)
+
+    def test_一覧に無い寸法を適用しただけでは前提が無いので静かに諦める(self) -> None:
+        """一覧の行を選んでいない(発注コードが無い)場合は下書きを作らない。
+
+        `pallet/apply`(旧「セット」に相当)だけでは発注コードが
+        分からないため、`_prepare_warehouse_draft` は
+        `outputs.send_refusal` に断られて何もしない。
+        """
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.assertEqual(work_context.get_context().pending_orders, [])
 
 
 class ReasonTests(unittest.TestCase):

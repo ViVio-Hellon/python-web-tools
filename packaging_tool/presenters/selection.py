@@ -1266,9 +1266,19 @@ def _selected_row(index: int, board: Any, category: str) -> SelectedRow:
 
 
 def _selected_summary(session: Any) -> str:
-    """選定の結果を1行で。種類と枚数は別の数で、取り違えると発注がずれる。"""
+    """選定の結果を1行で。種類と枚数は別の数で、取り違えると発注がずれる。
+
+    【VBAからの追加】配置図はボードを置くまで何も描かれないため、
+    選定した直後は寸法がどこにも見えず「何を選んだのか分からない」
+    という声があった。この見出しは畳んだ段でも読めるので、種類・枚数
+    だけでなく具体的な寸法もここに出す。
+    """
     def describe(boards: list) -> str:
-        return f"{len(boards)}種 {sum(b.count for b in boards)}枚"
+        if not boards:
+            return "なし"
+        count_text = f"{len(boards)}種 {sum(b.count for b in boards)}枚"
+        sizes = ", ".join(f"{b.width}×{b.length}×{b.count}" for b in boards)
+        return f"{count_text}({sizes})"
 
     if not (session.selected.upper or session.selected.lower):
         return "まだ選定していません"

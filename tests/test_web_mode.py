@@ -213,10 +213,16 @@ class RoleChipLinkTests(ModeTestCase):
         self.assertIn('<a class="role-chip', html)
         self.assertIn('href="/settings"', html)
 
-    def test_理由が無ければリンクにしない(self) -> None:
+    def test_理由が無くてもリンクになる(self) -> None:
+        """1つしか使えるモードが無いのは、既定へ落ちたときだけではない。
+
+        正しく1つだけ許可されている(現場ではよくある)ときも、
+        「他のモードはどう増やすか」を知りたいのは同じなので、
+        理由(mode_note)が空でも常にリンクにする。
+        """
         html = self.html(self.make("field", *FIELD_ONLY))
-        self.assertIn('<span class="role-chip', html)
-        self.assertNotIn('<a class="role-chip', html)
+        self.assertIn('<a class="role-chip', html)
+        self.assertNotIn('<span class="role-chip', html)
 
 
 class SettingsSectionTests(ModeTestCase):

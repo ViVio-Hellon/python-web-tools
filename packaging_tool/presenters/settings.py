@@ -551,6 +551,29 @@ def _access_section(conn, startup_modes=None) -> Section:
             OK, " / ".join(f"{r.condition_label()} → {r.permission}"
                            for r in grant.matched)))
 
+    # **1つしか使えるモードが無いのは、既定へ落ちたときだけではない。**
+    # マスタが正しく1行だけ許可している(現場ではごく普通の)ときも、
+    # 「他のモードはどうすれば使えるのか」を知りたいのは同じ。
+    # 上のCheckが「問題なし(OK)」でも、ここは黙らない。
+    all_modes = tuple(m.key for m in modes.ALL)
+    missing_modes = [m for m in all_modes if m not in grant.allowed_modes()]
+    if missing_modes and not grant.reason:
+        missing_labels = " / ".join(modes.label(m) for m in missing_modes)
+        mode_codes = ", ".join(
+            f"{access_control.mode_permission(m)}({modes.label(m)}モード)"
+            for m in missing_modes)
+        section.checks.append(Check(
+            "他のモードを使うには", f"{missing_labels} は未許可",
+            INFO,
+            "資材モードを持つ人に"
+            f"「設定 > マスタ管理 > {access_control.TABLE}」で次の行を"
+            "足してもらってください: "
+            f"ログインID = {grant.identity.login_id or '(空でPC名だけでもよい)'} / "
+            f"PC名 = {grant.identity.pc_name or '(空でIDだけでもよい)'} / "
+            f"権限 = {mode_codes}。"))
+        if not section.action[0]:
+            section.action = FIX_ACCESS
+
     # **足した権限が、開き直すまで全部は効かない。**
     # 使えるモードは要求のたびに引き直すので切り替えは通るが、URL の登録は
     # 起動時の権限で決まっている。マスタ管理から権限を足せるようになって

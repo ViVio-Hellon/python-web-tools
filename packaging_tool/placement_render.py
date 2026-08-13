@@ -431,6 +431,10 @@ def build_caption(board: PlacedBoardModel, cut: CutInfo, screen_h: float) -> tup
     """ボード上に載せる文字列とフォントサイズを決める(VBA踏襲)。
 
     高さに応じて 2行 / 1行 / 幅のみ の3段階に切り替える。
+
+    【VBAからの変更】フォントサイズはVBAの値のままだと、配置後の図で
+    「何を選んだのか読めない」という声があった(現場の声)。行数と
+    切り替えの閾値(screen_h)はVBAのまま、サイズだけ底上げする。
     """
     cap_w = f"幅{board.width}"
     cap_l = f"丈{board.length}"
@@ -440,13 +444,13 @@ def build_caption(board: PlacedBoardModel, cut: CutInfo, screen_h: float) -> tup
         caption = f"{cap_w}\n{cap_l}"
         if note:
             caption += f"\n{note}"
-        return caption, 7
+        return caption, 8
     if screen_h >= 14:
         caption = f"{cap_w} {cap_l}"
         if note:
             caption += f" {note}"
-        return caption, 7
-    return cap_w, 6
+        return caption, 8
+    return cap_w, 7
 
 
 # ------------------------------------------------------------------

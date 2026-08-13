@@ -267,8 +267,10 @@
           <tbody id="palletRows"></tbody>
         </table>
       </div>
-      {# クリックした行の単位・コード(VBA `DynamicTip`)。列には出していない #}
-      <p class="why" id="rowNote"></p>
+      {# クリックした行の単位・コード(VBA `DynamicTip`)。列には出していない。
+         倉庫送信で入力する値そのものなので、小さい説明文字(.why)より
+         はっきり読めるようにする(現場の声) #}
+      <p class="rownote" id="rowNote"></p>
 
       {# 一覧に無い寸法を使うときの逃げ道。**普段は使わない**ので畳んでおく
          (§1.3 段階的開示)。押せば開く #}
@@ -650,6 +652,16 @@
   .table tbody tr { cursor:pointer; }
   .status--ok { background:var(--ok-bg); color:var(--state-ok); }
   .status--ng { background:var(--warn-bg); color:var(--warn-fg); }
+
+  /* 選んだ行の単位・コード。倉庫送信に使う値そのものなので、
+     小さい説明文字(.why)より大きく・太く出す(現場の声) */
+  .rownote {
+    margin: 6px 0 0; padding: 8px 12px; min-height: 1.4em;
+    font-size: var(--fs-md); font-weight: 700;
+    background: var(--sunken); border-radius: var(--radius-xs);
+    border-left: 3px solid var(--accent);
+  }
+  .rownote:empty { display: none; }
   /* モードバーと強制トグルは同じ行に。効いているモードと、それを
      動かす手段が離れていると、押した結果が視野の外に出る */
   .modeline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }

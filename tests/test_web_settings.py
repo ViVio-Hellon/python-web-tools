@@ -327,7 +327,22 @@ class AccessGuidanceTests(PresenterTestCase):
         self.assertIn(self.access_control.TABLE, detail)
         self.assertIn("mode:", detail)
 
-    def test_権限があるときは案内を出さない(self) -> None:
+    def test_全モードを持っていれば案内を出さない(self) -> None:
+        """他に取れていないモードが無ければ、案内することが無い。"""
+        from packaging_tool import modes
+        identity = self.access_control.current_identity()
+        for mode in modes.ALL:
+            self.conn.execute(
+                'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
+                " VALUES (?,'',?,1,'')",
+                (identity.login_id, self.access_control.mode_permission(mode.key)))
+        self.conn.commit()
+        self.assertEqual(self.section().action, ("", ""))
+
+    def test_一部のモードしか無ければ他の増やし方を案内する(self) -> None:
+        """正しく1つだけ許可されている(現場ではよくある)ときも、
+        「他のモードはどう増やすか」を案内する ── 既定へ落ちた
+        (grant.reason がある)ときだけの話ではない。"""
         from packaging_tool import modes
         identity = self.access_control.current_identity()
         self.conn.execute(
@@ -335,7 +350,10 @@ class AccessGuidanceTests(PresenterTestCase):
             " VALUES (?,'',?,1,'')",
             (identity.login_id, self.access_control.mode_permission(modes.MATERIAL)))
         self.conn.commit()
-        self.assertEqual(self.section().action, ("", ""))
+        section = self.section()
+        self.assertEqual(section.action, presenter.FIX_ACCESS)
+        detail = next(c for c in section.checks if c.label == "他のモードを使うには").detail
+        self.assertIn(self.access_control.mode_permission(modes.FIELD), detail)
 
 
 class RestartNeededTests(PresenterTestCase):

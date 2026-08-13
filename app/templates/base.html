@@ -92,14 +92,14 @@
               {% if m.current %}data-current="1"{% endif %}>{{ m.label }}</button>
       {% endfor %}
     </div>
-    {% elif mode_note %}
-    {# 他のモードを選べない理由がある。**ホバーだけに頼らない** ──
-       押せば設定画面の「この端末の権限」節へ飛べるようにする
+    {% else %}
+    {# 切替が出ない=このモードしか無い。**理由の有無によらず**説明へ
+       繋ぐ ── 「既定へ落ちた」ときだけでなく、正しく1つだけ権限が
+       付いている(現場ではよくある、ごく普通の)ときにも「どうすれば
+       増やせるか」を知りたいのは同じ。ホバーだけに頼らない
        (押さないと理由が読めないのは不親切、という現場の声への対応) #}
     <a class="role-chip role-chip--{{ mode }}" href="/settings"
-       title="{{ mode_note }}(押すと詳しい説明と直し方が見られます)">{{ mode_label }}モード<span class="gl">?</span></a>
-    {% else %}
-    <span class="role-chip role-chip--{{ mode }}">{{ mode_label }}モード</span>
+       title="{{ mode_note or 'このモードだけが使えます。' }}(押すと詳しい説明と直し方が見られます)">{{ mode_label }}モード<span class="gl">?</span></a>
     {% endif %}
     <button class="btn btn--danger" type="button" id="quit"><span class="gl">■</span>終了</button>
   </div>

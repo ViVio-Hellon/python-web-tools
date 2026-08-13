@@ -130,7 +130,27 @@ def pick_pallet():
     # **確かめる規則は変えていない**(`apply_product_size`)。押す回数を
     # 減らしただけで、載らないパレットを選べば今までどおり断られる
     note = _settle_product(session, body)
+    _prepare_warehouse_draft(session)
     return _state(session, message=f"{applied.message}{note}")
+
+
+def _prepare_warehouse_draft(session) -> None:
+    """パレットが決まった時点で、倉庫連携の下書きを先に用意する。
+
+    **分岐は作らない。** ボードへ進んでも、パレットは既に決まっている
+    のだから倉庫連携の入力欄は埋めてよい(現場の考え)。ここではまだ
+    「倉庫送信」を押していないので**送信(登録)まではしない**
+    ── `/api/selection/send` と同じ組み立て(`outputs.build_orders`)を
+    先にやっておき、あとで倉庫連携画面を開いたときにパレット・Lot情報・
+    計算できる発注数が入った状態で出せるようにするだけ。
+
+    前提が整っていなければ(ロット未確定・1P0113の資材未確定など)
+    静かに諦める ── ここで断ってパレット決定自体を止める理由にはならない。
+    """
+    if outputs.send_refusal(session) is not None:
+        return
+    orders = outputs.build_orders(session)
+    work_context.get_context().set_pending_orders(orders)
 
 
 def _settle_product(session, body: dict) -> str:
@@ -241,6 +261,7 @@ def search_pallet():
     # 見つかった」のだから、載ることはもう確かめてある。もう一度
     # 「セット」を押させるのは、同じ確認を2回やらせているだけ
     note = _settle_product(session, body)
+    _prepare_warehouse_draft(session)
 
     log.info("パレット自動選定: %s×%s (%s)",
              result.width, result.length, result.pass_label)
