@@ -1611,6 +1611,72 @@ class SendTests(SelectionWebTestCase):
         self.assertEqual(res.mimetype, "text/html")
         self.assertIn("1234567", res.get_data(as_text=True))
 
+    def test_配置していなければ配置図印刷は出せない(self) -> None:
+        """候補を選んだだけでは足りない。配置してあることが前提。"""
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1100, length=2000)
+        self.post("/api/selection/boards/add",
+                  {"category": "lower", "width": 1100, "length": 2000, "count": 1})
+
+        res = self.client.get("/report/plan", headers=self.auth())
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("配置してください", res.get_data(as_text=True))
+
+    def test_配置図印刷は図と選定一覧を含むHTMLを返す(self) -> None:
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1100, length=2000)
+        insert_board(self.conn, width=550, length=1000)
+        self.post("/api/selection/boards/auto-select")
+        self.post("/api/selection/boards/place")
+
+        res = self.client.get("/report/plan", headers=self.auth())
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True)[:300])
+        self.assertEqual(res.mimetype, "text/html")
+        body = res.get_data(as_text=True)
+        self.assertIn("1234567", body)
+        self.assertIn("svgplan.js", body)
+        self.assertIn("下用", body)
+
+    def test_配置しただけでは使用実績は積まれない(self) -> None:
+        """置いてみただけの試しまで数えると、実際の使用実態とずれる。"""
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1100, length=2000)
+        self.post("/api/selection/boards/auto-select")
+        self.post("/api/selection/boards/place")
+
+        self.assertEqual(self.get()["admin"]["usage"], [])
+
+    def test_配置図を印刷すると使用実績が積まれる(self) -> None:
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1100, length=2000)
+        self.post("/api/selection/boards/auto-select")
+        self.post("/api/selection/boards/place")
+
+        self.client.get("/report/plan", headers=self.auth())
+
+        usage = self.get()["admin"]["usage"]
+        self.assertEqual(len(usage), 1)
+        self.assertEqual(usage[0]["width"], 1100)
+        self.assertEqual(usage[0]["length"], 2000)
+        self.assertEqual(usage[0]["usage_count"], 1)
+
+        # 2回目の印刷は積み増す(上書きではない)
+        self.client.get("/report/plan", headers=self.auth())
+        usage = self.get()["admin"]["usage"]
+        self.assertEqual(usage[0]["usage_count"], 2)
+
     def test_1P0113の倉庫送信は角材と松板の2行になる(self) -> None:
         """パレットを使わない裸梱包。行数と品名が通常モードと違う。
 

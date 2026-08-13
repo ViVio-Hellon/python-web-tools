@@ -142,6 +142,29 @@ CREATE TABLE IF NOT EXISTS PalletPatterns (
     J幅 INTEGER, J丈 INTEGER, J枚数 INTEGER, J用途 TEXT NOT NULL DEFAULT ''
 );
 
+-- ------------------------------------------------------------------
+-- ボード使用実績: 選定したボードの使用回数(`packaging_tool/board_usage.py`)。
+--
+-- **配置しただけでは積まない。** 配置は何度でも試せる操作なので、置いて
+-- みただけの下書きまで数えると「よく使われるサイズ」が実態からずれる
+-- (現場の指示: 印刷=実施に使用した)。配置図を印刷したときだけ、その
+-- 時点の配置(何枚使ったか)を積む。
+--
+-- 集計単位は 幅×丈×ボードタイプ。上用/下用は物理的には同じ板なので
+-- 分けない(現場の指示)。
+-- ------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ボード使用実績 (
+    管理番号     INTEGER PRIMARY KEY AUTOINCREMENT,
+    ボード幅     INTEGER NOT NULL,
+    ボード丈     INTEGER NOT NULL,
+    ボードタイプ  TEXT NOT NULL DEFAULT '',
+    使用回数     INTEGER NOT NULL DEFAULT 0,
+    最終使用日時  TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ボード使用実績_key
+    ON ボード使用実績(ボード幅, ボード丈, ボードタイプ);
+
 CREATE INDEX IF NOT EXISTS idx_pallet_patterns_wl ON PalletPatterns(パレット幅, パレット丈);
 
 -- ------------------------------------------------------------------

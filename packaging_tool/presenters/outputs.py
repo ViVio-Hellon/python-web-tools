@@ -29,6 +29,7 @@ log = get_logger("presenters.outputs")
 # 帳票の種類。URL は `app/routes/selection.py` が登録するもの
 REPORT_LABEL = "label"
 REPORT_CUT = "cut-request"
+REPORT_PLAN = "plan"
 
 
 @dataclass
@@ -67,6 +68,20 @@ def cut_request_refusal(session: Any) -> Optional[Refusal]:
         return Refusal("先にロット検索でロットを確定してください。", NEEDS_LOT)
     if not (session.selected.upper or session.selected.lower):
         return Refusal("先にボードを選定してください。", NEEDS_BOARDS)
+    return None
+
+
+def plan_refusal(session: Any) -> Optional[Refusal]:
+    """配置図印刷が出せない理由。
+
+    候補を選んだだけでは出せない ── **配置してあること**が前提。
+    配置は何度でも試せる操作なので、印刷できる=実際に配置した、まで
+    絞っておく(使用実績はこの印刷のタイミングで積む。`board_usage`)。
+    """
+    if session.presenter.lot_result is None:
+        return Refusal("先にロット検索でロットを確定してください。", NEEDS_LOT)
+    if session.placement is None or not session.placement.placed:
+        return Refusal("先にボードを配置してください。", NEEDS_BOARDS)
     return None
 
 

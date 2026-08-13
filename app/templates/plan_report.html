@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ja" data-theme="light">
+<!--
+  配置図の印刷用ページ (VBAには無かった機能。現場の要望で追加)。
+
+  図の中身は既存の配置図タブと**同じ計画データ・同じ描画コード**
+  (`svgplan.js`)を使う。座標計算やカットのハッチ模様を紙面用に
+  もう一つ作ると、片方だけ直したときに画面と紙で図が食い違う。
+
+  `data-theme="light"` を固定するのは、印刷は紙が白い前提だから
+  (OSがダークテーマでも、配置図が黒地で出てインクを無駄にしない)。
+-->
+<head>
+<meta charset="utf-8">
+<title>配置図 — {{ view.lot_no }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<style>
+  @page { size: A4 landscape; margin: 8mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Meiryo UI", "Yu Gothic UI", sans-serif; color: var(--ink); background: var(--surface); }
+  h1 { font-size: var(--fs-xl); margin: 0 0 4px; }
+  h2 { font-size: var(--fs-sm); margin: 0 0 4px; color: var(--muted); }
+  h3 { font-size: var(--fs-md); margin: 14px 0 4px; }
+  .meta { font-size: var(--fs-sm); color: var(--muted); margin: 0 0 10px; }
+
+  .plans { display: flex; gap: 10px; margin-bottom: 10px; }
+  .planbox { flex: 1 1 0; min-width: 0; }
+  .plan { display: block; width: 100%; height: 58mm; border: 1px solid var(--hairline); }
+
+  table.boards { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); margin-bottom: 8px; }
+  table.boards th, table.boards td {
+    border: 1px solid var(--hairline); padding: 3px 6px; text-align: left;
+  }
+  table.boards th.n, table.boards td.n {
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
+
+  @media screen {
+    body { background: #e5e7eb; padding: 12px; }
+    .sheet { background: var(--surface); margin: 0 auto; max-width: 297mm;
+             padding: 8mm; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+    .print-hint { max-width: 297mm; margin: 0 auto 12px; color: var(--muted); font-size: var(--fs-sm); }
+  }
+  @media print { .print-hint { display: none; } }
+</style>
+</head>
+<body>
+<p class="print-hint">この画面で <b>Ctrl+P</b> を押すと印刷できます(A4横)。</p>
+<div class="sheet">
+  <h1>配置図</h1>
+  <p class="meta">{{ view.lot_caption }}　出力: <span id="printedAt"></span></p>
+
+  <div class="plans">
+    {% if plan.angle %}
+    <div class="planbox">
+      <h2>{{ view.plans.angle_title }}</h2>
+      <div id="planAngle"></div>
+    </div>
+    {% endif %}
+    {% if view.plans.show_upper and plan.upper %}
+    <div class="planbox">
+      <h2>{{ view.plans.upper_title }}</h2>
+      <div id="planUpper"></div>
+    </div>
+    {% endif %}
+    <div class="planbox">
+      <h2>{{ view.plans.lower_title }}</h2>
+      <div id="planLower"></div>
+    </div>
+  </div>
+
+  {% if view.boards.show_upper and view.boards.upper %}
+  <h3>{{ view.boards.upper_title }}</h3>
+  <table class="boards">
+    <thead><tr>
+      {% for label, key, numeric in selected_columns %}
+      <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+      {% endfor %}
+    </tr></thead>
+    <tbody>
+      {% for row in view.boards.upper %}
+      <tr>
+        {% for value in row.values %}
+        <td{% if not loop.first %} class="n"{% endif %}>{{ value }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h3>{{ view.boards.lower_title }}</h3>
+  <table class="boards">
+    <thead><tr>
+      {% for label, key, numeric in selected_columns %}
+      <th{% if numeric %} class="n"{% endif %}>{{ label }}</th>
+      {% endfor %}
+    </tr></thead>
+    <tbody>
+      {% for row in view.boards.lower %}
+      <tr>
+        {% for value in row.values %}
+        <td{% if not loop.first %} class="n"{% endif %}>{{ value }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script type="module">
+  import { boardSvg, angleSvg, fitToContent } from "{{ url_for('static', filename='js/svgplan.js') }}";
+  const plan = {{ plan | tojson }};
+  document.getElementById("printedAt").textContent = new Date().toLocaleString("ja-JP");
+
+  function mount(id, data, viewBox, isAngle) {
+    const box = document.getElementById(id);
+    if (!box || !data) return;
+    const svg = isAngle ? angleSvg(data, viewBox) : boardSvg(data, viewBox);
+    box.replaceChildren(svg);
+    fitToContent(svg, viewBox);
+  }
+  mount("planAngle", plan.angle, plan.angle_view_box, true);
+  mount("planUpper", plan.upper, plan.view_box, false);
+  mount("planLower", plan.lower, plan.view_box, false);
+</script>
+</body>
+</html>

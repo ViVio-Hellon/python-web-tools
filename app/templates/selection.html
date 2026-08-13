@@ -533,6 +533,26 @@
           <tbody id="patternRows"></tbody>
         </table>
       </div>
+
+      {# ボードの使用実績。**配置図を印刷したときだけ**積む値なので、
+         置いてみただけの試しはここに出ない(現場の指示: 印刷=実施に
+         使用した)。`.card--sub` は段の中の小さな区切り(既存の
+         「一覧に無い寸法を使う」と同じ見た目)を流用する #}
+      <div class="card--sub">
+        <header><h4>ボード使用実績</h4></header>
+        <div class="pad">
+          <p class="why">配置図を印刷すると積まれます(配置しただけでは積みません)。</p>
+          <div class="tablewrap tablewrap--patterns">
+            <table class="table">
+              <thead><tr>
+                <th>種別</th><th class="n">幅</th><th class="n">丈</th>
+                <th class="n">使用回数</th><th>最終使用</th>
+              </tr></thead>
+              <tbody id="usageRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 

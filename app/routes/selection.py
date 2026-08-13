@@ -32,7 +32,7 @@ from typing import Optional
 from flask import Blueprint, Response, jsonify, render_template, request
 
 from packaging_tool import board_selection_service as svc
-from packaging_tool import printing, selection_session, work_context
+from packaging_tool import board_usage, printing, selection_session, work_context
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import outputs
 from packaging_tool.presenters import selection as presenter
@@ -510,6 +510,8 @@ def report(name: str):
     画面は `window.open()` して `onload` で `window.print()` を呼ぶ。
     """
     session = _session()
+    if name == outputs.REPORT_PLAN:
+        return _report_plan(session)
     if name == outputs.REPORT_LABEL:
         refusal = outputs.label_refusal(session)
         if refusal is not None:
@@ -529,6 +531,33 @@ def report(name: str):
     session.presenter.user_log.log(
         f"{built.title} を出力しました", emphasis=True)
     return Response(printing.render_html(built), mimetype="text/html")
+
+
+def _report_plan(session):
+    """配置図印刷(VBAには無かった機能)。
+
+    `printing.Report`(文字列だけの帳票)ではなく、配置図タブと同じ
+    描画計画・同じ描画コード(`svgplan.js`)を使うHTMLページを返す。
+    **この関数を通ったときだけ**使用実績を積む(`board_usage`) ──
+    配置は何度でも試せる操作なので、置いてみただけの下書きまで数えると
+    「よく使われるサイズ」が実態とずれる(現場の指示: 印刷=実施に使用した)。
+    """
+    refusal = outputs.plan_refusal(session)
+    if refusal is not None:
+        return _report_problem(refusal)
+
+    view = presenter.build_view(session, available=presenter.has_data(get_db()))
+    plan = {
+        "upper": view.plans.upper, "lower": view.plans.lower,
+        "angle": view.plans.angle,
+        "view_box": view.plans.view_box, "angle_view_box": view.plans.angle_view_box,
+    }
+
+    board_usage.record_usage(get_db(), session.placement.placed, session.board_type)
+    session.presenter.user_log.log("配置図を出力しました", emphasis=True)
+    return render_template(
+        "plan_report.html", view=view, plan=plan,
+        selected_columns=presenter.SELECTED_COLUMNS)
 
 
 def _report_problem(refusal, status: int = 422):

@@ -388,6 +388,23 @@ function renderAdmin(admin) {
     tr.append(count, at, cell);
     return tr;
   }));
+
+  el.usageRows.replaceChildren(...admin.usage.map((u) => {
+    const tr = document.createElement("tr");
+    const type = document.createElement("td");
+    type.textContent = u.board_type;
+    tr.appendChild(type);
+    for (const value of [u.width, u.length, u.usage_count]) {
+      const td = document.createElement("td");
+      td.className = "n";
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    const at = document.createElement("td");
+    at.textContent = u.last_used_at;
+    tr.appendChild(at);
+    return tr;
+  }));
 }
 
 /* ================================================================
@@ -726,7 +743,7 @@ export function start(initial) {
                     "p1Why", "force1p",
                     "sendWarehouse", "outputWhy",
                     "adminState", "adminPass", "authenticate", "savePattern",
-                    "saveWhy", "patternsNote", "patternRows",
+                    "saveWhy", "patternsNote", "patternRows", "usageRows",
                     // 作業の段と、結果の面
                     "nextHint", "outputCard", "resultTabs"]) {
     el[id] = document.getElementById(id);

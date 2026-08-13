@@ -651,6 +651,21 @@ class PatternRow:
 
 
 @dataclass
+class BoardUsageRow:
+    """選定ボードの使用実績1件(`board_usage.py`)。
+
+    配置図を印刷したときだけ積む値なので、置いてみただけの試しは
+    ここに出ない(VBAには無い機能。現場の要望で追加)。
+    """
+
+    width: int = 0
+    length: int = 0
+    board_type: str = ""
+    usage_count: int = 0
+    last_used_at: str = ""
+
+
+@dataclass
 class AdminViewModel:
     """管理者エリア(VBA: 右下に隔離。認証しないと保存できない)。
 
@@ -663,6 +678,7 @@ class AdminViewModel:
     save_why: str = ""
     patterns: list[PatternRow] = field(default_factory=list)
     patterns_note: str = ""
+    usage: list[BoardUsageRow] = field(default_factory=list)
 
 
 @dataclass
@@ -1058,6 +1074,12 @@ def build_admin(session: Any) -> AdminViewModel:
         view.save_why = "先に配置を実行してください。"
     view.can_save = not view.save_why
 
+    from .. import board_usage
+    view.usage = [
+        BoardUsageRow(width=u.width, length=u.length, board_type=u.board_type,
+                     usage_count=u.usage_count, last_used_at=u.last_used_at)
+        for u in board_usage.list_usage(session.presenter.conn)]
+
     if not session.palette.is_set:
         view.patterns_note = "パレットサイズを適用すると実績を探せます"
         return view
@@ -1088,6 +1110,7 @@ def build_outputs(session: Any) -> OutputsViewModel:
     for key, label, refusal in (
         (out.REPORT_LABEL, "Lot印刷", out.label_refusal(session)),
         (out.REPORT_CUT, "切断依頼", out.cut_request_refusal(session)),
+        (out.REPORT_PLAN, "配置図印刷", out.plan_refusal(session)),
     ):
         view.reports.append(ReportLink(
             key=key, label=label, url=f"/report/{key}",
@@ -1626,6 +1649,9 @@ def admin_to_dict(view: AdminViewModel) -> dict[str, Any]:
                       "usage_count": p.usage_count, "boards": p.boards}
                      for p in view.patterns],
         "patterns_note": view.patterns_note,
+        "usage": [{"width": u.width, "length": u.length, "board_type": u.board_type,
+                   "usage_count": u.usage_count, "last_used_at": u.last_used_at}
+                  for u in view.usage],
     }
 
 
