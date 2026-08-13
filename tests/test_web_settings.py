@@ -291,6 +291,53 @@ class FixRouteTests(PresenterTestCase):
         self.assertIsNone(end["action"])
 
 
+class AccessGuidanceTests(PresenterTestCase):
+    """権限が既定へ落ちたとき、直し方が具体的に分かること(現場の声)。
+
+    「アクセス権限に行を足してください」とだけ言われても、どこで
+    (マスタ管理タブ)・誰が(資材モードを持つ人)・何を(自分の
+    ログインID/PC名と、使いたいモードの権限コード)足せばよいかが
+    分からないと、結局誰にも直せない。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from packaging_tool import access_control, db
+        self.access_control = access_control
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        db.apply_schema(self.conn)
+        self.addCleanup(self.conn.close)
+
+    def section(self):
+        return next(s for s in presenter.build(self.conn).sections
+                    if s.title == "この端末の権限")
+
+    def test_マスタ管理タブへの案内が付く(self) -> None:
+        section = self.section()
+        self.assertEqual(section.action, presenter.FIX_ACCESS)
+        self.assertEqual(section.action[1], "master")
+
+    def test_身元と権限コードの候補が具体的に入る(self) -> None:
+        identity = self.access_control.current_identity()
+        detail = next(c for c in self.section().checks
+                      if c.label == "権限の出どころ").detail
+        if identity.login_id:
+            self.assertIn(identity.login_id, detail)
+        self.assertIn(self.access_control.TABLE, detail)
+        self.assertIn("mode:", detail)
+
+    def test_権限があるときは案内を出さない(self) -> None:
+        from packaging_tool import modes
+        identity = self.access_control.current_identity()
+        self.conn.execute(
+            'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
+            " VALUES (?,'',?,1,'')",
+            (identity.login_id, self.access_control.mode_permission(modes.MATERIAL)))
+        self.conn.commit()
+        self.assertEqual(self.section().action, ("", ""))
+
+
 class RestartNeededTests(PresenterTestCase):
     """**足した権限は、開き直すまで全部は効かない。**
 

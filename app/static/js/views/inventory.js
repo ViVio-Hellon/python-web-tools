@@ -100,6 +100,9 @@ function drawMap(map) {
     });
     el.map.appendChild(group);
   }
+  // 複数選択(Shift+クリック)の見た目を付け直す。図はまるごと
+  // 作り直されるので、毎回付け直さないと消えたままになる
+  dragger?.reapplySelection();
 
   // 在庫にはあるのに図に無い位置。図から押せないので黙っていない
   el.mapMissing.hidden = !map.missing.length;
@@ -126,7 +129,9 @@ function drawEditBar(map) {
   el.mapEditToggle.setAttribute("aria-pressed", String(editing));
   el.mapEditToggle.classList.toggle("btn--on", editing);
   el.mapEditBox.hidden = !editing;
-  el.mapEditState.textContent = editing ? "編集中(ドラッグで動かせます)" : "";
+  el.mapEditState.textContent = editing
+    ? "編集中(ドラッグで動かせます。Shift+クリックでまとめて選び、"
+      + "まとめて動かす・大きさを変えられます)" : "";
   el.mapDirty.hidden = !map.dirty;
   // 背景が無ければ合わせこむものが無い。押せるのに何も起きない欄を作らない
   el.mapBgPlace.hidden = !map.background;

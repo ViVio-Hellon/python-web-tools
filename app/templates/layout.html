@@ -274,6 +274,9 @@
   .shelf--hit   text { fill:var(--map-hit-fg); }
   .shelf--base  text { fill:var(--map-active-fg); }
   .shelf.is-selected rect { stroke:var(--accent); stroke-width:3; }
+  {# 配置編集モードの複数選択(Shift+クリック)。「中身を表示中」
+     (is-selected, 実線)と見分けられるよう、破線にする #}
+  .shelf.is-multi rect { stroke:var(--accent); stroke-width:2; stroke-dasharray:4 2; }
   .shelf text { font-size:7px; text-anchor:middle; dominant-baseline:middle;
                 pointer-events:none; user-select:none; }
   .area rect { fill:var(--sunken); stroke:var(--hairline); }

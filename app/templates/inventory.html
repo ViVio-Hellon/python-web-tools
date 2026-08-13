@@ -356,6 +356,9 @@
   #map.map--editing .pos { cursor:grab; }
   #map.map--editing .pos rect { stroke-dasharray:3 2; }
   #map .pos.is-selected rect { stroke:var(--accent); stroke-width:3; }
+  {# 配置編集モードの複数選択(Shift+クリック)。「消す対象」
+     (is-selected, 実線)と見分けられるよう、破線にする #}
+  #map .pos.is-multi rect { stroke:var(--accent); stroke-width:2; stroke-dasharray:4 2; }
 
   .maplegend { display:flex; gap:10px; flex-wrap:wrap; }
   .lg { font-size: var(--fs-xs); padding:2px 9px; border-radius:var(--pill);

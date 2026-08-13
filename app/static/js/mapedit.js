@@ -59,13 +59,34 @@ export function grip(item) {
     onTap(name)     動かさずに離した = 押した
     onMove(name, x, y)
     onResize(name, w, h)
+
+  【複数選択(Shift+クリック)】
+  1つずつしか動かせない・大きさを変えられないと、同じ列の棚をまとめて
+  ずらしたいときに1つずつ掴み直すことになる。Shiftを押しながら箱を
+  押すたびに複数選択へ足す/外す(掴みには入らない)。複数選択している
+  箱のどれかを掴んで動かす/大きさを変えると、**その分の差**を選んで
+  いる箱ぜんぶに掛ける。
 */
 export function attach(svg, opts) {
   let holding = null;
+  // 複数選択している箱の名前。Shift+クリックで足す/外す
+  const selected = new Set();
 
   function boxOf(name) {
     return svg.querySelector(
       `${opts.selector}[data-name="${CSS.escape(name)}"]`);
+  }
+
+  /** 複数選択の見た目を、いま図にある箱へ付け直す。
+   *
+   * 呼び出し側は**再描画のたびに**呼ぶこと ── 状態が変わるとSVGは
+   * まるごと作り直されるので(サーバが画面ぜんぶを返す設計)、
+   * クラスも毎回付け直さないと消えたままになる。
+   */
+  function markSelected() {
+    for (const group of svg.querySelectorAll(opts.selector)) {
+      group.classList.toggle("is-multi", selected.has(group.dataset.name));
+    }
   }
 
   /** 掴んでいるあいだ、その場で見せる。サーバには離すまで送らない。 */
@@ -99,15 +120,44 @@ export function attach(svg, opts) {
       return;
     }
     if (opts.canDrag && !opts.canDrag(group)) return;
+
+    // Shift+クリックは複数選択に足す/外すだけ。掴みには入らない
+    // (掴みと同時にやると、選ぼうとしただけで動いてしまう)
+    if (event.shiftKey && !event.target.classList.contains("grip")) {
+      if (selected.has(name)) selected.delete(name);
+      else selected.add(name);
+      markSelected();
+      event.preventDefault();
+      return;
+    }
+
     const item = opts.find(name);
     if (!item) return;
+
+    // 掴んだ箱が複数選択に入っていれば、選択ぜんぶをまとめて動かす。
+    // 入っていなければ、複数選択はこの1つに絞ってから掴む
+    // (まとめて動かすつもりがないのに、前の選択が紛れ込まないように)
+    let names;
+    if (selected.has(name) && selected.size > 1) {
+      names = [...selected];
+    } else {
+      selected.clear();
+      selected.add(name);
+      markSelected();
+      names = [name];
+    }
+    const items = {};
+    for (const n of names) {
+      const it = n === name ? item : opts.find(n);
+      if (it) items[n] = it;
+    }
 
     const point = toPlan(svg, event);
     // 角を掴んだら大きさ、それ以外は位置。**掴んだ場所で決まる**ので、
     // どちらをするのか先に選ばせない
     const resizing = event.target.classList.contains("grip");
     holding = {
-      name, resizing, item, moved: false,
+      name, resizing, item, items, moved: false,
       dx: point.x - item.x, dy: point.y - item.y,
     };
     svg.setPointerCapture(event.pointerId);
@@ -117,23 +167,35 @@ export function attach(svg, opts) {
   function onMove(event) {
     if (!holding) return;
     const point = toPlan(svg, event);
-    const { item } = holding;
+    const { item, items } = holding;
+    const last = {};
     if (holding.resizing) {
-      // 左上は動かさない。掴んだ角だけが動く
+      // 左上は動かさない。掴んだ角だけが動く。複数選択のときは、
+      // 掴んだ箱の増減分(差)を選んでいる箱ぜんぶに掛ける
       const w = Math.max(1, point.x - item.x);
       const h = Math.max(1, point.y - item.y);
-      paint(holding.name, item.x, item.y, w, h);
-      holding.last = { w, h };
+      const dw = w - item.w, dh = h - item.h;
+      for (const [n, it] of Object.entries(items)) {
+        const nw = Math.max(1, it.w + dw);
+        const nh = Math.max(1, it.h + dh);
+        paint(n, it.x, it.y, nw, nh);
+        last[n] = { w: nw, h: nh };
+      }
     } else {
       const x = point.x - holding.dx;
       const y = point.y - holding.dy;
-      paint(holding.name, x, y, item.w, item.h);
-      holding.last = { x, y };
+      const dx = x - item.x, dy = y - item.y;
+      for (const [n, it] of Object.entries(items)) {
+        const nx = it.x + dx, ny = it.y + dy;
+        paint(n, nx, ny, it.w, it.h);
+        last[n] = { x: nx, y: ny };
+      }
     }
+    holding.last = last;
     holding.moved = true;
   }
 
-  function onUp(event) {
+  async function onUp(event) {
     if (!holding) return;
     const { name, resizing, moved, last } = holding;
     holding = null;
@@ -143,9 +205,13 @@ export function attach(svg, opts) {
       opts.onTap?.(name, boxOf(name));
       return;
     }
-    // 枠に収めるのはサーバの仕事。返ってきた座標で描き直す
-    if (resizing) opts.onResize?.(name, last.w, last.h);
-    else opts.onMove?.(name, last.x, last.y);
+    // 枠に収めるのはサーバの仕事。返ってきた座標で描き直す。
+    // 複数のときは**順に**送る ── 同時に送ると応答が前後して、
+    // 最後に描き直った図がどの箱の分か分からなくなる
+    for (const [n, value] of Object.entries(last)) {
+      if (resizing) await opts.onResize?.(n, value.w, value.h);
+      else await opts.onMove?.(n, value.x, value.y);
+    }
   }
 
   svg.addEventListener("pointerdown", onDown);
@@ -154,8 +220,10 @@ export function attach(svg, opts) {
   svg.addEventListener("pointercancel", onUp);
 
   return {
-    /** 画面を出直したときに掴みかけを捨てる(`nav.js` の再入場)。 */
-    reset() { holding = null; },
+    /** 画面を出直したときに掴みかけと複数選択を捨てる(`nav.js` の再入場)。 */
+    reset() { holding = null; selected.clear(); },
+    /** 再描画のたびに呼ぶ。複数選択の見た目(`.is-multi`)を付け直す。 */
+    reapplySelection() { markSelected(); },
   };
 }
 

@@ -92,9 +92,14 @@
               {% if m.current %}data-current="1"{% endif %}>{{ m.label }}</button>
       {% endfor %}
     </div>
+    {% elif mode_note %}
+    {# 他のモードを選べない理由がある。**ホバーだけに頼らない** ──
+       押せば設定画面の「この端末の権限」節へ飛べるようにする
+       (押さないと理由が読めないのは不親切、という現場の声への対応) #}
+    <a class="role-chip role-chip--{{ mode }}" href="/settings"
+       title="{{ mode_note }}(押すと詳しい説明と直し方が見られます)">{{ mode_label }}モード<span class="gl">?</span></a>
     {% else %}
-    <span class="role-chip role-chip--{{ mode }}"
-          {% if mode_note %}title="{{ mode_note }}"{% endif %}>{{ mode_label }}モード</span>
+    <span class="role-chip role-chip--{{ mode }}">{{ mode_label }}モード</span>
     {% endif %}
     <button class="btn btn--danger" type="button" id="quit"><span class="gl">■</span>終了</button>
   </div>

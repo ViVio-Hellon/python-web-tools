@@ -93,6 +93,9 @@ function renderMap(next) {
     parts.push(group);
   }
   el.map.replaceChildren(...parts);
+  // 複数選択(Shift+クリック)の見た目を付け直す。図はまるごと
+  // 作り直されるので、毎回付け直さないと消えたままになる
+  dragger?.reapplySelection();
 
   // 凡例。色の意味を figure の外に書く(色だけで伝えない)
   el.mapLegend.replaceChildren(...[
@@ -142,7 +145,9 @@ function render(next) {
   el.bgX.value = next.background_x;
   el.bgY.value = next.background_y;
   el.bgScale.value = next.background_scale;
-  el.editState.textContent = next.editing ? "編集中(ドラッグで動かせます)" : "";
+  el.editState.textContent = next.editing
+    ? "編集中(ドラッグで動かせます。Shift+クリックでまとめて選び、"
+      + "まとめて動かす・大きさを変えられます)" : "";
   el.dirtyWhy.hidden = !next.dirty;
 
   el.materialsNote.textContent = next.materials_note;

@@ -195,6 +195,30 @@ class RibbonTests(ModeTestCase):
             material[material.index('rel="icon"'):material.index('rel="icon"') + 400])
 
 
+class RoleChipLinkTests(ModeTestCase):
+    """モードを1つしか持たない端末では、理由をホバーだけに頼らない。
+
+    以前は `title` 属性(ホバーでしか読めない)だけだったため、
+    「モード選択できないけど何をしたらできるの?」と聞かれていた
+    (現場の声)。理由があるときは押せば設定画面の説明へ飛べるようにする。
+    """
+
+    def html(self, app) -> str:
+        return app.test_client().get("/settings").get_data(as_text=True)
+
+    def test_理由があるときはリンクになる(self) -> None:
+        app = self.make("field", *FIELD_ONLY)
+        app.config["MODE_NOTE"] = "アクセス権限 に登録がありません"
+        html = self.html(app)
+        self.assertIn('<a class="role-chip', html)
+        self.assertIn('href="/settings"', html)
+
+    def test_理由が無ければリンクにしない(self) -> None:
+        html = self.html(self.make("field", *FIELD_ONLY))
+        self.assertIn('<span class="role-chip', html)
+        self.assertNotIn('<a class="role-chip', html)
+
+
 class SettingsSectionTests(ModeTestCase):
     def test_設定画面に権限の節が出る(self) -> None:
         """**なぜこのモードしか選べないのか**を利用者が自分で確かめられる。"""

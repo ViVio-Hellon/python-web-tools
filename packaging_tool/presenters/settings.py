@@ -286,6 +286,8 @@ def _find_kanban() -> Optional[Path]:
 
 # 置き場所を直しに行く先。**問題を見せた場所から繋ぐ**
 FIX_SOURCE = ("置き場所を直す", "source")
+# アクセス権限を直しに行く先。マスタ管理タブで編集する
+FIX_ACCESS = ("マスタ管理でアクセス権限を編集", "master")
 
 
 def _material_section(material: Optional[Path], conn=None) -> Section:
@@ -526,11 +528,23 @@ def _access_section(conn, startup_modes=None) -> Section:
         "持っている権限: " + (", ".join(labels) if labels else "なし")))
 
     if grant.reason:
-        # 既定へ落ちたときだけ理由を出す。落ちていなければ黙っている
+        # 既定へ落ちたときだけ理由を出す。落ちていなければ黙っている。
+        # **何をどこに足せばよいかをコピーしてそのまま渡せる形にする**。
+        # 「アクセス権限に行を足してください」とだけ言われても、
+        # マスタ管理タブから直せることも、そもそも直せるのが資材モードを
+        # 持つ人だけ(=たいてい自分ではない)ことも伝わらない
+        mode_codes = ", ".join(
+            f"{p.code}({p.label})" for p in access_control.permissions())
         section.checks.append(Check(
             "権限の出どころ", "既定を使っています", WARN,
-            grant.reason + f"。{access_control.TABLE} に "
-            "ログインID または PC名 と権限コードの行を足してください。"))
+            grant.reason + "。直すには、資材モードを持つ人に"
+            f"「設定 > マスタ管理 > {access_control.TABLE}」で次の行を"
+            "足してもらってください: "
+            f"ログインID = {grant.identity.login_id or '(空でPC名だけでもよい)'} / "
+            f"PC名 = {grant.identity.pc_name or '(空でIDだけでもよい)'} / "
+            f"権限 = 使いたいモードのコード({mode_codes})。"
+            "自分がその資材モードを持っていれば、下のボタンから直接開けます。"))
+        section.action = FIX_ACCESS
     else:
         section.checks.append(Check(
             "権限の出どころ", f"{access_control.TABLE} の {len(grant.matched)}行",

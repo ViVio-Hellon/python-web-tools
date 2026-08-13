@@ -142,6 +142,10 @@ html, body { height: 100%; overflow: hidden; }
   border: 1px solid var(--bar-edge);
 }
 .role-chip--material { background: var(--bar-face-on); color: var(--bar-ink); }
+/* 押せるとき(=他のモードを選べない理由がある)は、それと分かるようにする */
+a.role-chip { text-decoration: none; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+a.role-chip:hover, a.role-chip:focus-visible { filter: brightness(1.1); }
+a.role-chip .gl { font-size: var(--fs-sm); opacity: 0.8; }
 
 /* 帯の上のボタン。**枠も色も足さず、白を薄く重ねるだけ**で作る。
    終了だけは塊から離し、触れたときに赤くする(誤操作を避ける) */
