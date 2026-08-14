@@ -65,10 +65,15 @@ def find_files(explicit: str = "") -> list[Path]:
 
 
 def text_columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    """全部の列。**型で絞らない。**
+
+    実際の変換ツールは `CREATE TABLE x ("列1", "列2")` と型を書かずに
+    表を作る。「TEXT型の列だけ」を見ていたころは、そういうファイルでは
+    1列も検査できず「日本語を含む値 0件」と出ていた(現物で踏んだ)。
+    """
     with source_db.identifiers_as_utf8(conn):
         return [r[1] for r in conn.execute(
-            f"PRAGMA table_info({source_db.quote_identifier(table)})")
-            if str(r[2]).upper().startswith("TEXT")]
+            f"PRAGMA table_info({source_db.quote_identifier(table)})")]
 
 
 def tables_of(conn: sqlite3.Connection) -> list[str]:
@@ -154,6 +159,13 @@ def inspect(path: Path, *, only_table: str = "", only_column: str = "",
     print(f"  すでに壊れている値 : {damaged}件")
     print(f"  判定した入れ方で読めない値: {unreadable}件")
 
+    if not checked:
+        # **調べていないことを「無事」と言わない。** 空のファイルや、
+        # 日本語が1つも入っていない表を「問題なし」と読ませると、
+        # 調べたつもりで先へ進んでしまう
+        print("\n  → 判定できません(日本語を含む値が1つも見つかりませんでした)。")
+        print("     表が空か、中身が全部ASCIIです。")
+        return False
     if damaged:
         print("\n  → (B) 取り込み元のファイルが壊れています。")
         print("     読めなかった字の跡(\\ufffd)が**元のファイルに入っています**。")

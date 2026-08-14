@@ -757,8 +757,9 @@ def mojibake_rows(conn: sqlite3.Connection) -> dict[str, int]:
     found: dict[str, int] = {}
     for table in tables:
         try:
-            columns = [r[1] for r in conn.execute(f"PRAGMA table_info([{table}])")
-                       if str(r[2]).upper().startswith("TEXT")]
+            # 型で絞らない(`source_db.sniff_encoding` と同じ理由)。
+            # 数値の列に文字の照合を掛けても当たらないだけで害は無い
+            columns = [r[1] for r in conn.execute(f"PRAGMA table_info([{table}])")]
         except sqlite3.Error:
             continue
         if not columns:

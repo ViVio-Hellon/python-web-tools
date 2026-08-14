@@ -320,6 +320,22 @@ class MojibakeTests(PresenterTestCase):
         self.conn.commit()
         self.assertEqual(data_sync.mojibake_rows(self.conn), {"仕掛ロット": 1})
 
+    def test_型を書いていない表の文字化けも見つける(self) -> None:
+        """手元のDBは型付きだが、走査の条件は取り込み元と同じにしておく。
+        「TEXT型の列だけ」に絞ると、型の無い表を素通りする。"""
+        from packaging_tool import data_sync
+        self.conn.execute('CREATE TABLE "仕掛ロット2" ("ロット番号", "用途名")')
+        self.conn.execute('INSERT INTO "仕掛ロット2" VALUES (?,?)',
+                          ("4102781", "JISN�y"))
+        self.conn.commit()
+        columns = [r[1] for r in
+                   self.conn.execute('PRAGMA table_info("仕掛ロット2")')]
+        self.assertEqual(columns, ["ロット番号", "用途名"])
+        found = self.conn.execute(
+            'SELECT COUNT(*) FROM "仕掛ロット2" WHERE "用途名" LIKE ?',
+            (f"%{data_sync.REPLACEMENT}%",)).fetchone()[0]
+        self.assertEqual(found, 1)
+
     def test_きれいなら黙っている(self) -> None:
         """出続ける警告は読まれなくなる。"""
         from packaging_tool import data_sync

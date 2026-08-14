@@ -262,6 +262,35 @@ class ConnectTests(unittest.TestCase):
         self.assertEqual(set(rows[0]), {"ﾛｯﾄ番号", "用途名"})
         self.assertEqual(rows[0]["用途名"], "シャーシ")
 
+    def test_型を書いていない表でも判定できる(self) -> None:
+        """**型で列を絞ってはいけない。**
+
+        現物の変換ツール(accdb_converter/writers.py)は
+
+            CREATE TABLE "仕掛" ("ﾛｯﾄ番号", "用途名")
+
+        と**型を書かずに**表を作る。「TEXT型の列だけ」を見ていたころは、
+        そういうファイルでは1列も検査せず、判定が素通りして
+        「日本語を含む値 0件」になっていた(現物で踏んだ)。
+        """
+        path = self.dir / "型なし.sqlite3"
+        raw = sqlite3.connect(path)
+        raw.execute('CREATE TABLE "仕掛" ("ﾛｯﾄ番号", "用途名")')   # 型が無い
+        for i in range(10):
+            raw.execute('INSERT INTO "仕掛" VALUES (?, CAST(? AS TEXT))',
+                        (f"410278{i}", "シャーシ".encode("cp932")))
+        raw.commit()
+        raw.close()
+
+        conn = sqlite3.connect(path)
+        self.addCleanup(conn.close)
+        self.assertEqual(source_db.sniff_encoding(conn),
+                         source_db.ENCODING_CP932)
+
+        with source_db._connect(path, read_only=True) as opened:
+            got = {r[0] for r in opened.execute('SELECT "用途名" FROM "仕掛"')}
+        self.assertEqual(got, {"シャーシ"})
+
     def test_列名を見失わない(self) -> None:
         """判定のために `text_factory` を bytes にすると、`PRAGMA table_info`
         の列名と型まで bytes になる。そのままだとTEXT列が1つも見つからず、

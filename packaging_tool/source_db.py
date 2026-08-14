@@ -158,9 +158,13 @@ def sniff_encoding(conn: sqlite3.Connection) -> str:
             return ENCODING_UTF8
         for table in names:
             try:
+                # **型で列を絞らない。** 実際の変換ツールは
+                # `CREATE TABLE x ("列1", "列2")` と**型を書かずに**表を作る。
+                # 「TEXT型の列だけ」を見ていたころは、そういうファイルでは
+                # 1列も検査せず、判定が素通りしていた(現物で踏んだ)。
+                # 値の型は読んでみれば分かる ── bytes で返るものが文字
                 columns = [r[1] for r in conn.execute(
-                    f"PRAGMA table_info({quote_identifier(table)})")
-                    if str(r[2]).upper().startswith("TEXT")]
+                    f"PRAGMA table_info({quote_identifier(table)})")]
             except sqlite3.Error:
                 continue
             if columns:
