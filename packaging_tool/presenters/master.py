@@ -64,6 +64,11 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
         view.page = master_admin.page(None, "", query=view.query)
         return view
 
+    # `frame()` はまだ表を知らない時点の判定(既定は mode:material 有無
+    # だけを見る)。アクセス権限マスタだけの逃げ道(mode:field+パスワード)
+    # は表が決まらないと判断できないので、表が決まった時点で引き直す
+    view.can_edit, view.edit_why = master_admin.can_edit(conn, view.table)
+
     view.page = master_admin.page(found, view.table, query=view.query)
     # 打ち込める欄は、**取り込み元に本当にある列**だけにする。
     # 上流がまだ足していない列を出すと、保存の瞬間に断られる

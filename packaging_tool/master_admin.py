@@ -197,7 +197,7 @@ def create_table(conn: sqlite3.Connection, table: str, *,
     あるのは、最初の1行をここで決め打ちすると、その1行が何を意味するか
     (誰にどの権限を与えたか)が画面に現れないためです。
     """
-    allowed, why = can_edit(conn)
+    allowed, why = can_edit(conn, table)
     if not allowed:
         return Result(False, why, REFUSE_NOT_ALLOWED)
     if not can_create(table):
@@ -235,12 +235,26 @@ def create_table(conn: sqlite3.Connection, table: str, *,
                         f"{_follow(conn, found, table)}")
 
 
-def can_edit(conn: Optional[sqlite3.Connection]) -> tuple[bool, str]:
+def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool, str]:
     """この端末はマスタを直せるか。**直せないなら理由も返す。**
 
     権限で見る。いま開いているモードでは見ない ── 資材課の人が現場の
     画面を見ているあいだだけ直せなくなるのは、権限の分け方として
     説明が付かない。
+
+    【アクセス権限マスタだけの逃げ道】
+    書き間違えて全員から mode:material を消してしまうと、直せる人が
+    どこにもいなくなる(現場の指摘: 「アクセス権の書き換えミスっちゃうと
+    二度と書きかえれなくなっちゃう」)。この表(`access_control.TABLE`)
+    だけ、現場モード(mode:field)を持ち、かつ管理者パスワードが分かる
+    人にも開けておく。
+
+    mode:field は既定で誰でも持っているので、**パスワードも要る**
+    ── 片方だけにすると、mode:field を持つ人なら誰でも自分に
+    mode:material を足せてしまい、権限を分けている意味が薄れる。
+    パスワードの確認は資材選択画面の管理者認証(`selection_session`)を
+    そのまま使う ── アプリの起動プロセスに1つなので、別の認証を
+    もう1つ持たない。
     """
     from . import access_control, modes
 
@@ -253,6 +267,18 @@ def can_edit(conn: Optional[sqlite3.Connection]) -> tuple[bool, str]:
         # まだ誰も登録されていない。ここを塞ぐと、資材モードに入るための
         # 最初の1行をどこからも入れられなくなる
         return True, ""
+
+    if table == access_control.TABLE and grant.allows_mode(modes.FIELD):
+        from . import selection_session
+        if selection_session.get_session(conn).admin:
+            return True, ""
+        return False, (
+            f"{access_control.TABLE} は{modes.label(modes.MATERIAL)}モードを"
+            f"持つ端末のほか、{modes.label(modes.FIELD)}モードを持ち"
+            "管理者パスワードが分かる人にも直せます。"
+            "「資材選択」画面の管理者エリアでパスワードを入れてから、"
+            "もう一度この面を開いてください。")
+
     return False, (
         f"マスタを直せるのは{modes.label(modes.MATERIAL)}モードを持つ端末だけです。"
         f"{access_control.TABLE} に {grant.identity.label()} と "
@@ -578,7 +604,7 @@ def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],
     順番に意味がある ── **権限 → 表 → 届くか**。届かないことを先に
     言うと、権限が無い人に「共有が落ちている」と読ませてしまう。
     """
-    allowed, why = can_edit(conn)
+    allowed, why = can_edit(conn, table)
     if not allowed:
         return None, Result(False, why, REFUSE_NOT_ALLOWED)
     if table not in BY_TABLE:

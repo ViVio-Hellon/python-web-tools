@@ -102,6 +102,30 @@ class MasterApiTests(unittest.TestCase):
         # 押す前に理由が読める
         self.assertIn("資材", state["edit_why"])
 
+    def test_アクセス権限は現場モードだけでは直せない(self) -> None:
+        """逃げ道にはパスワードも要る。書き間違え防止と両立させるため。"""
+        self.only_field()
+        state = self.browse(table=access_control.TABLE)
+        self.assertFalse(state["can_edit"])
+        self.assertIn("管理者パスワード", state["edit_why"])
+
+    def test_アクセス権限は現場モードとパスワードで直せる(self) -> None:
+        """書き間違えて全員から mode:material を消しても、直す手立てが残る。"""
+        from packaging_tool import selection_session
+        self.addCleanup(selection_session.reset_session)
+        self.only_field()
+        selection_session.get_session(self.conn).admin = True
+        state = self.browse(table=access_control.TABLE)
+        self.assertTrue(state["can_edit"], state["edit_why"])
+
+    def test_パスワードだけでは他の表は直せない(self) -> None:
+        from packaging_tool import selection_session
+        self.addCleanup(selection_session.reset_session)
+        self.only_field()
+        selection_session.get_session(self.conn).admin = True
+        state = self.browse(table="PalletMaster")
+        self.assertFalse(state["can_edit"])
+
     # -- 直す -------------------------------------------------------
     def test_直すと画面ぜんぶが返る(self) -> None:
         res = self.post("row/save", {"table": "PalletMaster",

@@ -19,7 +19,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from packaging_tool import (access_control, config, db,  # noqa: E402
-                            master_admin, modes)
+                            master_admin, modes, selection_session)
 
 
 def make_source(directory: Path) -> Path:
@@ -307,6 +307,54 @@ class PermissionTests(MasterTestCase):
         self.conn.execute("DELETE FROM アクセス権限")
         self.conn.commit()
         allowed, _why = master_admin.can_edit(self.conn)
+        self.assertTrue(allowed)
+
+
+class AccessTableEscapeHatchTests(MasterTestCase):
+    """アクセス権限マスタだけの逃げ道(mode:field + 管理者パスワード)。
+
+    書き間違えて全員から mode:material を消すと、直せる人がどこにも
+    いなくなる(現場の指摘)。この表だけは mode:field を持ち、かつ
+    管理者パスワードが分かる人にも開けておく。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        selection_session.reset_session()
+        self.addCleanup(selection_session.reset_session)
+
+    def grant(self, *codes: str) -> None:
+        identity = access_control.current_identity()
+        self.conn.execute("DELETE FROM アクセス権限")
+        for code in codes:
+            self.conn.execute(
+                'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
+                " VALUES (?,'',?,1,'')", (identity.login_id, code))
+        self.conn.commit()
+
+    def test_現場モードだけでは足りない(self) -> None:
+        self.grant(access_control.mode_permission(modes.FIELD))
+        allowed, why = master_admin.can_edit(self.conn, access_control.TABLE)
+        self.assertFalse(allowed)
+        self.assertIn("管理者パスワード", why)
+
+    def test_現場モードとパスワードの両方で直せる(self) -> None:
+        self.grant(access_control.mode_permission(modes.FIELD))
+        selection_session.get_session(self.conn).admin = True
+        allowed, why = master_admin.can_edit(self.conn, access_control.TABLE)
+        self.assertTrue(allowed, why)
+
+    def test_パスワードだけでは他の表は直せない(self) -> None:
+        """逃げ道はアクセス権限マスタだけ。資材課のデータは対象外。"""
+        self.grant(access_control.mode_permission(modes.FIELD))
+        selection_session.get_session(self.conn).admin = True
+        allowed, _why = master_admin.can_edit(self.conn, "PalletMaster")
+        self.assertFalse(allowed)
+
+    def test_資材モードならパスワード無しでどの表も直せる(self) -> None:
+        """既存の経路は変えない。"""
+        self.grant(access_control.mode_permission(modes.MATERIAL))
+        allowed, _why = master_admin.can_edit(self.conn, access_control.TABLE)
         self.assertTrue(allowed)
 
     def test_権限が無ければ書く前に断る(self) -> None:
