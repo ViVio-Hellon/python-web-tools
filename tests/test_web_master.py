@@ -102,15 +102,15 @@ class MasterApiTests(unittest.TestCase):
         # 押す前に理由が読める
         self.assertIn("資材", state["edit_why"])
 
-    def test_アクセス権限は現場モードだけでは直せない(self) -> None:
-        """逃げ道にはパスワードも要る。書き間違え防止と両立させるため。"""
+    def test_アクセス権限はパスワード無しでは直せない(self) -> None:
         self.only_field()
         state = self.browse(table=access_control.TABLE)
         self.assertFalse(state["can_edit"])
         self.assertIn("管理者パスワード", state["edit_why"])
 
-    def test_アクセス権限は現場モードとパスワードで直せる(self) -> None:
-        """書き間違えて全員から mode:material を消しても、直す手立てが残る。"""
+    def test_アクセス権限はパスワードだけで直せる_モードは問わない(self) -> None:
+        """書き間違えて全員から mode:material を消しても、直す手立てが残る。
+        「パスワードが分かれば直せる」を最優先にするので、モードは問わない。"""
         from packaging_tool import selection_session
         self.addCleanup(selection_session.reset_session)
         self.only_field()

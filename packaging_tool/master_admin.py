@@ -246,12 +246,13 @@ def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool,
     書き間違えて全員から mode:material を消してしまうと、直せる人が
     どこにもいなくなる(現場の指摘: 「アクセス権の書き換えミスっちゃうと
     二度と書きかえれなくなっちゃう」)。この表(`access_control.TABLE`)
-    だけ、現場モード(mode:field)を持ち、かつ管理者パスワードが分かる
-    人にも開けておく。
+    だけ、**管理者パスワードが分かれば、いまのモードに関わらず**開ける。
 
-    mode:field は既定で誰でも持っているので、**パスワードも要る**
-    ── 片方だけにすると、mode:field を持つ人なら誰でも自分に
-    mode:material を足せてしまい、権限を分けている意味が薄れる。
+    最初は「現場モード(mode:field)を持ち、かつパスワード」の両方を
+    条件にしていたが、それだと mode:field 側も壊れている(または
+    そう判定される)まれなケースで詰む。「パスワードが分かれば直せる」
+    を最優先にする、という現場の判断でモード条件を外した ──
+    パスワードそのものが唯一の関門になる。
     パスワードの確認は資材選択画面の管理者認証(`selection_session`)を
     そのまま使う ── アプリの起動プロセスに1つなので、別の認証を
     もう1つ持たない。
@@ -268,14 +269,13 @@ def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool,
         # 最初の1行をどこからも入れられなくなる
         return True, ""
 
-    if table == access_control.TABLE and grant.allows_mode(modes.FIELD):
+    if table == access_control.TABLE:
         from . import selection_session
         if selection_session.get_session(conn).admin:
             return True, ""
         return False, (
             f"{access_control.TABLE} は{modes.label(modes.MATERIAL)}モードを"
-            f"持つ端末のほか、{modes.label(modes.FIELD)}モードを持ち"
-            "管理者パスワードが分かる人にも直せます。"
+            "持つ端末のほか、管理者パスワードが分かれば直せます。"
             "「資材選択」画面の管理者エリアでパスワードを入れてから、"
             "もう一度この面を開いてください。")
 

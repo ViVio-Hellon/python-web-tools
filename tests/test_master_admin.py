@@ -311,11 +311,12 @@ class PermissionTests(MasterTestCase):
 
 
 class AccessTableEscapeHatchTests(MasterTestCase):
-    """アクセス権限マスタだけの逃げ道(mode:field + 管理者パスワード)。
+    """アクセス権限マスタだけの逃げ道(管理者パスワード)。
 
     書き間違えて全員から mode:material を消すと、直せる人がどこにも
-    いなくなる(現場の指摘)。この表だけは mode:field を持ち、かつ
-    管理者パスワードが分かる人にも開けておく。
+    いなくなる(現場の指摘)。この表だけは、いまのモードに関わらず
+    管理者パスワードが分かる人にも開けておく ── 「パスワードが分かれば
+    直せる」を最優先にする、という現場の判断でモードの条件は付けない。
     """
 
     def setUp(self) -> None:
@@ -332,13 +333,14 @@ class AccessTableEscapeHatchTests(MasterTestCase):
                 " VALUES (?,'',?,1,'')", (identity.login_id, code))
         self.conn.commit()
 
-    def test_現場モードだけでは足りない(self) -> None:
+    def test_パスワードが無ければ足りない(self) -> None:
         self.grant(access_control.mode_permission(modes.FIELD))
         allowed, why = master_admin.can_edit(self.conn, access_control.TABLE)
         self.assertFalse(allowed)
         self.assertIn("管理者パスワード", why)
 
-    def test_現場モードとパスワードの両方で直せる(self) -> None:
+    def test_パスワードだけで直せる_モードは問わない(self) -> None:
+        """mode:field すら怪しい状態でも、パスワードさえ分かれば直せる。"""
         self.grant(access_control.mode_permission(modes.FIELD))
         selection_session.get_session(self.conn).admin = True
         allowed, why = master_admin.can_edit(self.conn, access_control.TABLE)
