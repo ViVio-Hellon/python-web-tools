@@ -161,6 +161,12 @@ class SettingsViewModel:
     # 管理者パスワードを**この端末で変えてあるか**。値そのものは出さない
     admin_custom: bool = False
     admin_min_length: int = 4
+    # いま管理者認証が通っているか(マスタを直すのに要る。VER2.17.0)。
+    # 認証そのものは資材選択画面にあったが、「いつもどこだっけ」という
+    # 声を受けてここへ移した(`app/routes/selection.py` の
+    # `/api/selection/auth` はそのまま使う ── プロセスに1つの状態なので
+    # どちらの画面から認証しても同じ)
+    admin_authenticated: bool = False
 
     # --- よく使う条件(ロット一覧) ---
     lot_filters: list[dict[str, Any]] = field(default_factory=list)
@@ -211,6 +217,7 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
         spec_sheet_problem=spec_sheet.template_problem(spec_sheet.url_template()),
         admin_custom=admin_password.is_custom(),
         admin_min_length=admin_password.MIN_LENGTH,
+        admin_authenticated=_admin_authenticated(conn),
         lot_filters=_lot_filters(),
     )
     view.sections = [
@@ -282,6 +289,14 @@ def _find_kanban() -> Optional[Path]:
         return data_sync.find_kanban_db()
     except OSError:
         return None
+
+
+def _admin_authenticated(conn) -> bool:
+    """いま管理者パスワードが通っているか。プロセスに1つの状態を覗くだけ。"""
+    if conn is None:
+        return False
+    from .. import selection_session
+    return selection_session.get_session(conn).admin
 
 
 # 置き場所を直しに行く先。**問題を見せた場所から繋ぐ**
@@ -528,16 +543,16 @@ def _access_section(conn, startup_modes=None) -> Section:
         "持っている権限: " + (", ".join(labels) if labels else "なし")))
 
     # マスタを直すには資材モードに加えて管理者パスワードも要る(VER2.17.0)。
-    # 入力する場所は別の画面(資材選択)にあり、**いつもどこだっけと
-    # 探すことになる**という現場の声を受けて、ここに置き場所そのものを
-    # 常に出しておく(値そのものは出さない。設計書 §3.6)
+    # 入力欄は以前は資材選択画面にあり、**いつもどこだっけと探すことになる**
+    # という現場の声を受けて、この設定画面自体へ移した(VER2.19.0)。
+    # 置き場所そのものを常に出しておく(値そのものは出さない。設計書 §3.6)
     section.checks.append(Check(
-        "マスタを直すパスワードの入力欄", "「資材選択」画面の「管理者」欄",
+        "マスタを直すパスワードの入力欄", "この画面の「動作」タブ「マスタ編集の認証」欄",
         INFO,
         f"{access_control.TABLE}を含め、マスタを直すには資材モードに加えて"
-        "管理者パスワードが要ります。入力は資材選択画面(段の下のほう、"
-        "「管理者」の見出しを押すと開きます)で行います。"
-        "パスワードそのものはここには出しません。"))
+        "管理者パスワードが要ります。入力は設定画面の「動作」タブにある"
+        "「マスタ編集の認証」で行います(この端末で一度通せば、"
+        "他の画面からもそのまま使えます)。パスワードそのものはここには出しません。"))
 
     if grant.reason:
         # 既定へ落ちたときだけ理由を出す。落ちていなければ黙っている。
@@ -836,6 +851,7 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         # **値は返さない。** 変えてあるかどうかだけ
         "admin_custom": view.admin_custom,
         "admin_min_length": view.admin_min_length,
+        "admin_authenticated": view.admin_authenticated,
         "lot_filters": view.lot_filters,
         "can_import": view.can_import,
         "import_reason": view.import_reason,

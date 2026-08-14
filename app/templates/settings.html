@@ -399,6 +399,33 @@
     </div>
   </section>
 
+  {# マスタ編集の認証。以前は資材選択画面にしか入力欄が無く、
+     「いつもどこだっけ」と探されていた。認証そのものは
+     プロセスに1つの状態(`selection_session`)なので、どの画面から
+     入れても同じ ── ここに置き場所を移す(コピーではない) #}
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">認</i>
+      <h3>マスタ編集の認証</h3>
+      <span class="st st--{{ 'ok' if state.admin_authenticated else 'warn' }}"
+            id="masterAuthState">{{ "認証済み" if state.admin_authenticated else "未認証" }}</span>
+    </header>
+    <div class="pad">
+      <div class="field">
+        <label for="masterAuthPass">管理者パスワード</label>
+        <input class="input" id="masterAuthPass" type="password"
+               autocomplete="current-password" style="max-width:16em">
+        <button class="btn btn--commit" type="button" id="masterAuthBtn">認証する</button>
+      </div>
+      <p class="status status--ng" id="masterAuthWhy" hidden></p>
+      <p class="why">
+        マスタ管理でどの表を直すときも(<b>アクセス権限</b>を含む)、
+        この認証が要ります。この端末で一度通せば、他の画面からもそのまま使えます
+        (開き直すと消えます)。
+      </p>
+    </div>
+  </section>
+
   {# 管理者パスワード。**実績パターンの保存を誤って押されない**ための
      ガードで、誰が使えるかは アクセス権限 マスタが決める。
      これまでは config.py か環境変数でしか変えられなかった ──

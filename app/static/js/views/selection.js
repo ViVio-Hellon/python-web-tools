@@ -353,11 +353,11 @@ function renderAdmin(admin) {
   if (!admin) return;
 
   el.adminState.textContent = admin.authenticated ? "認証済み" : "未認証";
+  // 認証が通っていれば、置き場所を案内する文はもう要らない
+  if (el.authWhere) el.authWhere.hidden = admin.authenticated;
   el.savePattern.disabled = !admin.can_save;
   why(el.saveWhy, admin.save_why);
   el.patternsNote.textContent = admin.patterns_note;
-  // 認証が通ったらパスワード欄は用済み。残すと肩越しに見える
-  if (admin.authenticated) el.adminPass.value = "";
 
   el.patternRows.replaceChildren(...admin.patterns.map((p) => {
     const tr = document.createElement("tr");
@@ -742,7 +742,7 @@ export function start(initial) {
                     "sizeCard", "p1Card", "p1Materials", "p1Tip", "p1Qty",
                     "p1Why", "force1p",
                     "sendWarehouse", "outputWhy",
-                    "adminState", "adminPass", "authenticate", "savePattern",
+                    "adminState", "authWhere", "savePattern",
                     "saveWhy", "patternsNote", "patternRows", "usageRows",
                     // 作業の段と、結果の面
                     "nextHint", "outputCard", "resultTabs"]) {
@@ -950,15 +950,9 @@ export function start(initial) {
     if (next && next.next_url) nav.go(next.next_url);
   });
 
-  // --- 管理者 -----------------------------------------------------
-  el.authenticate.addEventListener("click", () =>
-    send("/api/selection/auth", { password: el.adminPass.value }));
-  el.adminPass.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      send("/api/selection/auth", { password: el.adminPass.value });
-    }
-  });
+  // --- 管理者 -------------------------------------------------------
+  // 認証の入力欄は「設定」画面に移した。ここは結果を
+  // 映すだけ(プロセスに1つの状態なので、どちらで通しても同じ)
   el.savePattern.addEventListener("click", () =>
     send("/api/selection/pattern/save"));
   el.patternRows.addEventListener("click", (event) => {

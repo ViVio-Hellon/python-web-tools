@@ -321,11 +321,11 @@ class AccessGuidanceTests(PresenterTestCase):
     def test_パスワードの置き場所を常に案内する(self) -> None:
         """「いつもどこだっけって探しちゃう」という現場の声への対応。
         マスタを直すには資材モードに加えて管理者パスワードも要る
-        (VER2.17.0)ので、入力場所をここに常に出す(値そのものは出さない)。"""
+        (VER2.17.0)。入力欄はこの設定画面自体に移した(VER2.19.0)ので、
+        置き場所をここに常に出す(値そのものは出さない)。"""
         check = next(c for c in self.section().checks
                     if c.label == "マスタを直すパスワードの入力欄")
-        self.assertIn("資材選択", check.value)
-        self.assertIn("管理者", check.value)
+        self.assertIn("マスタ編集の認証", check.value)
 
     def test_身元と権限コードの候補が具体的に入る(self) -> None:
         identity = self.access_control.current_identity()
@@ -335,6 +335,19 @@ class AccessGuidanceTests(PresenterTestCase):
             self.assertIn(identity.login_id, detail)
         self.assertIn(self.access_control.TABLE, detail)
         self.assertIn("mode:", detail)
+
+    def test_資材選択の認証がここにも映る(self) -> None:
+        """認証はプロセスに1つの状態(VER2.19.0)。どちらの画面で
+        通しても、もう一方にそのまま出る。"""
+        from packaging_tool import config, selection_session
+
+        self.assertFalse(presenter.build(self.conn).admin_authenticated)
+        session = selection_session.get_session(self.conn)
+        try:
+            session.authenticate(config.ADMIN_PASSWORD)
+            self.assertTrue(presenter.build(self.conn).admin_authenticated)
+        finally:
+            selection_session._session = None
 
     def test_全モードを持っていれば案内を出さない(self) -> None:
         """他に取れていないモードが無ければ、案内することが無い。"""

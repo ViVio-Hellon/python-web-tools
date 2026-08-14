@@ -152,6 +152,12 @@ function renderStatus(state) {
     el.adminState.className = `st st--${state.admin_custom ? "ok" : "warn"}`;
     el.adminState.textContent = state.admin_custom ? "変更済み" : "既定のまま";
   }
+  // マスタ編集の認証。プロセスに1つの状態なので、他画面で通しても
+  // ここに反映される
+  if (el.masterAuthState) {
+    el.masterAuthState.className = `st st--${state.admin_authenticated ? "ok" : "warn"}`;
+    el.masterAuthState.textContent = state.admin_authenticated ? "認証済み" : "未認証";
+  }
   for (const btn of document.querySelectorAll("[data-import]")) {
     btn.disabled = !state.can_import;
     btn.dataset.lockedOff = state.can_import ? "" : "1";
@@ -325,6 +331,7 @@ export function start(state, jobState, masterFrame) {
                     "filterRows", "filterEmpty", "saveBehavior",
                     "admNow", "admNew", "admConfirm", "admSave", "admReset",
                     "admWhy", "adminState",
+                    "masterAuthPass", "masterAuthBtn", "masterAuthWhy", "masterAuthState",
                     "pathAuth", "pathPassword", "pathWhy",
                     "writeBack", "recompute", "savePaths", "refresh",
                     "job", "jobLabel", "jobState", "jobPct", "jobBar",
@@ -391,6 +398,7 @@ export function start(state, jobState, masterFrame) {
   });
 
   startAdminPassword();
+  startMasterAuth();
 
   startBrowser();
 
@@ -441,6 +449,43 @@ function startAdminPassword() {
   el.admReset.addEventListener("click", () => send({
     current: el.admNow.value, reset: true,
   }));
+}
+
+
+/* ================================================================
+   マスタ編集の認証
+
+   以前は資材選択画面にしか入力欄が無かった。
+   `/api/selection/auth` はプロセスに1つの状態(`selection_session`)を
+   触るだけなので、どの画面から認証しても同じ ── 応答は資材選択の
+   状態なので、ここでは `admin.authenticated` だけを見て、設定側の
+   表示は取り直す(2つの画面で同じ事実を別々に持たない)。
+   ================================================================ */
+function startMasterAuth() {
+  if (!el.masterAuthBtn) return;
+
+  const authenticate = async () => {
+    el.masterAuthWhy.hidden = true;
+    try {
+      const res = await api.post("/api/selection/auth",
+        { password: el.masterAuthPass.value });
+      el.masterAuthPass.value = "";
+      if (res.admin && res.admin.authenticated) {
+        toast("認証しました", "ok");
+      } else {
+        el.masterAuthWhy.hidden = false;
+        el.masterAuthWhy.textContent = "パスワードが違います。";
+      }
+      refreshStatus();
+    } catch (err) {
+      toastError(err);
+    }
+  };
+
+  el.masterAuthBtn.addEventListener("click", authenticate);
+  el.masterAuthPass.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); authenticate(); }
+  });
 }
 
 

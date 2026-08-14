@@ -511,13 +511,13 @@
         {{ "認証済み" if view.admin.authenticated else "未認証" }}</span>
     </header>
     <div class="pad">
+      {# 認証の入力欄そのものは「設定」画面に移した。
+         認証はプロセスに1つの状態なので、そちらで通せばここにも
+         そのまま反映される。ここは実績の保存だけに絞る #}
+      <p class="why" id="authWhere" {% if view.admin.authenticated %}hidden{% endif %}>
+        認証は「設定」画面の「マスタ編集の認証」欄で行います。
+      </p>
       <div class="field">
-        <label for="adminPass">パスワード</label>
-        {# 送るだけで、返ってくることはない。画面が受け取るのは
-           「認証したか」の1ビットだけ(設計書 §3.6) #}
-        <input class="input" id="adminPass" type="password" autocomplete="off"
-               style="width:10em">
-        <button class="btn" type="button" id="authenticate">認証</button>
         <button class="btn btn--commit" type="button" id="savePattern"
                 {% if not view.admin.can_save %}disabled{% endif %}>実績を保存</button>
       </div>
