@@ -242,48 +242,59 @@ def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool,
     画面を見ているあいだだけ直せなくなるのは、権限の分け方として
     説明が付かない。
 
-    【アクセス権限マスタだけの逃げ道】
-    書き間違えて全員から mode:material を消してしまうと、直せる人が
-    どこにもいなくなる(現場の指摘: 「アクセス権の書き換えミスっちゃうと
-    二度と書きかえれなくなっちゃう」)。この表(`access_control.TABLE`)
-    だけ、**管理者パスワードが分かれば、いまのモードに関わらず**開ける。
-
-    最初は「現場モード(mode:field)を持ち、かつパスワード」の両方を
-    条件にしていたが、それだと mode:field 側も壊れている(または
-    そう判定される)まれなケースで詰む。「パスワードが分かれば直せる」
-    を最優先にする、という現場の判断でモード条件を外した ──
-    パスワードそのものが唯一の関門になる。
+    【mode:material だけでは、どの表も書けない】
+    以前は mode:material を持つ端末なら無条件にどの表でも書けたが、
+    「mode:material を付与してるからってどのマスタもいじれたら困る」
+    という現場の判断で、**管理者パスワードを必ずもう一手間はさむ**
+    ことにした。資材モードは「マスタを見に来てよい・触ってよい担当か」
+    を分け、パスワードは「いま本当に書くつもりか」を確かめる ──
+    役割が違う2つの関門を両方通す。
     パスワードの確認は資材選択画面の管理者認証(`selection_session`)を
     そのまま使う ── アプリの起動プロセスに1つなので、別の認証を
     もう1つ持たない。
+
+    【アクセス権限マスタだけは、資材モードが無くても開く】
+    書き間違えて全員から mode:material を消してしまうと、直せる人が
+    どこにもいなくなる(現場の指摘: 「アクセス権の書き換えミスっちゃうと
+    二度と書きかえれなくなっちゃう」)。この表(`access_control.TABLE`)
+    だけは資材モードを問わず、パスワードだけで開く復旧経路にしてある。
     """
-    from . import access_control, modes
+    from . import access_control, modes, selection_session
 
     if conn is None:
         return False, "手元のデータベースを開けませんでした。"
     grant = access_control.resolve(conn)
-    if grant.allows_mode(modes.MATERIAL):
-        return True, ""
     if not grant.has_master:
         # まだ誰も登録されていない。ここを塞ぐと、資材モードに入るための
         # 最初の1行をどこからも入れられなくなる
         return True, ""
 
+    authenticated = selection_session.get_session(conn).admin
+
     if table == access_control.TABLE:
-        from . import selection_session
-        if selection_session.get_session(conn).admin:
+        # 資材モードを問わない復旧経路。パスワードだけが関門
+        if authenticated:
             return True, ""
         return False, (
-            f"{access_control.TABLE} は{modes.label(modes.MATERIAL)}モードを"
-            "持つ端末のほか、管理者パスワードが分かれば直せます。"
+            f"{access_control.TABLE} は書き間違えると誰も直せなくなるおそれが"
+            "あるので、管理者パスワードを入れないと直せません"
+            "(モードは問いません)。"
             "「資材選択」画面の管理者エリアでパスワードを入れてから、"
             "もう一度この面を開いてください。")
 
-    return False, (
-        f"マスタを直せるのは{modes.label(modes.MATERIAL)}モードを持つ端末だけです。"
-        f"{access_control.TABLE} に {grant.identity.label()} と "
-        f"{access_control.mode_permission(modes.MATERIAL)} の行を足してください。"
-        "(いまの権限は「いまの状態」の面で確かめられます)")
+    if not grant.allows_mode(modes.MATERIAL):
+        return False, (
+            f"マスタを直せるのは{modes.label(modes.MATERIAL)}モードを持つ端末だけです。"
+            f"{access_control.TABLE} に {grant.identity.label()} と "
+            f"{access_control.mode_permission(modes.MATERIAL)} の行を足してください。"
+            "(いまの権限は「いまの状態」の面で確かめられます)")
+    if not authenticated:
+        return False, (
+            f"{modes.label(modes.MATERIAL)}モードに加えて、管理者パスワードを"
+            "入れないと直せません。"
+            "「資材選択」画面の管理者エリアでパスワードを入れてから、"
+            "もう一度この面を開いてください。")
+    return True, ""
 
 
 # ==================================================================

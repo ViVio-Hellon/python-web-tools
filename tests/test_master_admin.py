@@ -277,7 +277,16 @@ def _no_master() -> bool:
 
 
 class PermissionTests(MasterTestCase):
-    """**権限で分ける。** いま開いているモードでは分けない。"""
+    """**権限で分ける。** いま開いているモードでは分けない。
+
+    mode:material と管理者パスワードは**両方**要る(現場の判断:
+    「mode:materialを付与してるからってどのマスタもいじれたら困る」)。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        selection_session.reset_session()
+        self.addCleanup(selection_session.reset_session)
 
     def grant(self, *codes: str) -> None:
         """アクセス権限マスタを、この端末に効く形で置く。"""
@@ -289,9 +298,17 @@ class PermissionTests(MasterTestCase):
                 " VALUES (?,'',?,1,'')", (identity.login_id, code))
         self.conn.commit()
 
-    def test_資材モードを持つ端末は直せる(self) -> None:
+    def test_資材モードだけでは足りない(self) -> None:
+        """パスワードが無ければ、資材モードがあっても直せない。"""
         self.grant(access_control.mode_permission(modes.MATERIAL))
         allowed, why = master_admin.can_edit(self.conn)
+        self.assertFalse(allowed)
+        self.assertIn("管理者パスワード", why)
+
+    def test_資材モードとパスワードの両方で直せる(self) -> None:
+        self.grant(access_control.mode_permission(modes.MATERIAL))
+        selection_session.get_session(self.conn).admin = True
+        allowed, why = master_admin.can_edit(self.conn, "PalletMaster")
         self.assertTrue(allowed, why)
 
     def test_現場だけの端末は直せない(self) -> None:
@@ -302,6 +319,14 @@ class PermissionTests(MasterTestCase):
         # **直し方まで書く。** 何をどこに足せばよいかが分かる
         self.assertIn(access_control.TABLE, why)
 
+    def test_現場だけの端末はパスワードがあっても直せない(self) -> None:
+        """アクセス権限マスタ以外は資材モードが要る。パスワードでは代われない。"""
+        self.grant(access_control.mode_permission(modes.FIELD))
+        selection_session.get_session(self.conn).admin = True
+        allowed, why = master_admin.can_edit(self.conn, "PalletMaster")
+        self.assertFalse(allowed)
+        self.assertIn("資材", why)
+
     def test_まだ誰も登録されていなければ塞がない(self) -> None:
         """ここを塞ぐと、最初の1行をどこからも入れられなくなる。"""
         self.conn.execute("DELETE FROM アクセス権限")
@@ -311,12 +336,12 @@ class PermissionTests(MasterTestCase):
 
 
 class AccessTableEscapeHatchTests(MasterTestCase):
-    """アクセス権限マスタだけの逃げ道(管理者パスワード)。
+    """アクセス権限マスタだけ、常にパスワードも要る。
 
-    書き間違えて全員から mode:material を消すと、直せる人がどこにも
-    いなくなる(現場の指摘)。この表だけは、いまのモードに関わらず
-    管理者パスワードが分かる人にも開けておく ── 「パスワードが分かれば
-    直せる」を最優先にする、という現場の判断でモードの条件は付けない。
+    書き間違えると誰も直せなくなる表なので(現場の指摘)、
+    mode:material を持つ端末であっても、この表だけは管理者パスワードを
+    別に入れないと直せない。パスワードさえ分かれば、いまのモードに
+    関わらず直せる(mode:material の有無を問わない)。
     """
 
     def setUp(self) -> None:
@@ -339,6 +364,13 @@ class AccessTableEscapeHatchTests(MasterTestCase):
         self.assertFalse(allowed)
         self.assertIn("管理者パスワード", why)
 
+    def test_資材モードでもパスワードが無ければ直せない(self) -> None:
+        """mode:material があっても素通りさせない ── 常に一手間はさむ。"""
+        self.grant(access_control.mode_permission(modes.MATERIAL))
+        allowed, why = master_admin.can_edit(self.conn, access_control.TABLE)
+        self.assertFalse(allowed, why)
+        self.assertIn("管理者パスワード", why)
+
     def test_パスワードだけで直せる_モードは問わない(self) -> None:
         """mode:field すら怪しい状態でも、パスワードさえ分かれば直せる。"""
         self.grant(access_control.mode_permission(modes.FIELD))
@@ -346,18 +378,25 @@ class AccessTableEscapeHatchTests(MasterTestCase):
         allowed, why = master_admin.can_edit(self.conn, access_control.TABLE)
         self.assertTrue(allowed, why)
 
+    def test_資材モードとパスワードの両方でも直せる(self) -> None:
+        self.grant(access_control.mode_permission(modes.MATERIAL))
+        selection_session.get_session(self.conn).admin = True
+        allowed, why = master_admin.can_edit(self.conn, access_control.TABLE)
+        self.assertTrue(allowed, why)
+
     def test_パスワードだけでは他の表は直せない(self) -> None:
-        """逃げ道はアクセス権限マスタだけ。資材課のデータは対象外。"""
+        """パスワードで素通りするのはアクセス権限マスタだけ。
+        資材課のデータは対象外で、資材モードが要る。"""
         self.grant(access_control.mode_permission(modes.FIELD))
         selection_session.get_session(self.conn).admin = True
         allowed, _why = master_admin.can_edit(self.conn, "PalletMaster")
         self.assertFalse(allowed)
 
-    def test_資材モードならパスワード無しでどの表も直せる(self) -> None:
-        """既存の経路は変えない。"""
+    def test_資材モードだけでは他の表は直せない(self) -> None:
+        """他の表は資材モード+パスワードの両方が要る(PermissionTests参照)。"""
         self.grant(access_control.mode_permission(modes.MATERIAL))
-        allowed, _why = master_admin.can_edit(self.conn, access_control.TABLE)
-        self.assertTrue(allowed)
+        allowed, _why = master_admin.can_edit(self.conn, "PalletMaster")
+        self.assertFalse(allowed)
 
     def test_権限が無ければ書く前に断る(self) -> None:
         self.grant(access_control.mode_permission(modes.FIELD))

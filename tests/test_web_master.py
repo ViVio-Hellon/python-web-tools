@@ -73,6 +73,15 @@ class MasterApiTests(unittest.TestCase):
             (identity.login_id, access_control.mode_permission(modes.FIELD)))
         self.conn.commit()
 
+    def only_material(self) -> None:
+        """この端末を資材モードだけにする(管理者パスワードは別)。"""
+        identity = access_control.current_identity()
+        self.conn.execute(
+            'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
+            " VALUES (?,'',?,1,'')",
+            (identity.login_id, access_control.mode_permission(modes.MATERIAL)))
+        self.conn.commit()
+
     # -- 見る -------------------------------------------------------
     def test_表と中身が返る(self) -> None:
         state = self.browse()
@@ -101,6 +110,22 @@ class MasterApiTests(unittest.TestCase):
         self.assertEqual(state["page"]["total"], 1)
         # 押す前に理由が読める
         self.assertIn("資材", state["edit_why"])
+
+    def test_資材モードだけではパスワードが無いと直せない(self) -> None:
+        """「mode:materialを付与してるからってどのマスタもいじれたら困る」
+        という現場の判断で、資材モードに加えて管理者パスワードも要る。"""
+        self.only_material()
+        state = self.browse()
+        self.assertFalse(state["can_edit"])
+        self.assertIn("管理者パスワード", state["edit_why"])
+
+    def test_資材モードとパスワードの両方で直せる(self) -> None:
+        from packaging_tool import selection_session
+        self.addCleanup(selection_session.reset_session)
+        self.only_material()
+        selection_session.get_session(self.conn).admin = True
+        state = self.browse()
+        self.assertTrue(state["can_edit"], state["edit_why"])
 
     def test_アクセス権限はパスワード無しでは直せない(self) -> None:
         self.only_field()
