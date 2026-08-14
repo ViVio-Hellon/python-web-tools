@@ -36,6 +36,7 @@ from . import board_selection_algorithm as alg
 from . import board_selection_service as svc
 from . import location_service, material_service, pattern_service
 from . import placement_algorithm as place
+from . import user_log as user_log_mod
 from . import user_settings, work_context
 from .logging_utils import get_logger
 from .presenters.selection import SelectionPresenter
@@ -330,6 +331,12 @@ class SelectionSession:
 
         setattr(self, name, not getattr(self, name))
         now = bool(getattr(self, name))
+        if name == "two_stack":
+            # 2山積はパレット一覧の当たり方そのものを変える
+            # (`list_pallets_for_product` が片側2倍の寸法も見る)。
+            # 押したのに何も起きていないように見える、を作らない
+            self.presenter.user_log.log(
+                f"[2山積] {'ON' if now else 'OFF'}", emphasis=True)
         if name == "fatigue":
             # VBA `btnFatigueSelect_Click`。以降の**ボード選定とアングル
             # 自動選定の両方**がこの値を見るので、押したことを記録に残す。
@@ -491,14 +498,17 @@ class SelectionSession:
                 ulog.log(f"  疲労度マップ: 拠点 {user_settings.get_position() or '(未設定)'}")
 
         try:
-            result = alg.auto_select_boards(
-                available, self.palette, self.product,
-                fatigue_map_lower=fatigue_lower, fatigue_map_upper=fatigue_upper,
-                fatigue_mode=self.fatigue, stock_aware=self.stock_aware,
-                # 包装仕様NOで決まったモードを選定へ渡す。プロテックと
-                # 上下共用は「上用=下用と同サイズ」を強制する分岐に効く。
-                # どのモードを渡すかはプレゼンタが知っている
-                **self.presenter.selection_flags())
+            # **却下と補正の理由をそのまま流す**(`user_log.bridge_from`)。
+            # 現場が要るのは決まったことではなく、そこへ至った経緯
+            with user_log_mod.bridge_from(ulog):
+                result = alg.auto_select_boards(
+                    available, self.palette, self.product,
+                    fatigue_map_lower=fatigue_lower, fatigue_map_upper=fatigue_upper,
+                    fatigue_mode=self.fatigue, stock_aware=self.stock_aware,
+                    # 包装仕様NOで決まったモードを選定へ渡す。プロテックと
+                    # 上下共用は「上用=下用と同サイズ」を強制する分岐に効く。
+                    # どのモードを渡すかはプレゼンタが知っている
+                    **self.presenter.selection_flags())
         except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
             log.exception("自動選定エラー")
             ulog.log(f"  → 自動選定エラー: {exc}", emphasis=True)
@@ -621,10 +631,12 @@ class SelectionSession:
                  f" / 上用={'はい' if narrow_upper else 'いいえ'}")
 
         try:
-            self.placement = place.auto_place_boards(
-                self.selected.lower, self.selected.upper,
-                self.palette, self.product,
-                narrow_lower=narrow_lower, narrow_upper=narrow_upper)
+            with user_log_mod.bridge_from(
+                    ulog, "packaging_tool.placement_algorithm"):
+                self.placement = place.auto_place_boards(
+                    self.selected.lower, self.selected.upper,
+                    self.palette, self.product,
+                    narrow_lower=narrow_lower, narrow_upper=narrow_upper)
         except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
             log.exception("配置エラー")
             self.placement = None

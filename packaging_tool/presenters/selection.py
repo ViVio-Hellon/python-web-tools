@@ -1526,12 +1526,17 @@ def list_rows(session: Any) -> list[Any]:
     flags = session.flags()
     context = work_context.get_context()
 
+    # **絞り込みの経緯を残す。** サイズを打った時点で自動的に走る検索
+    # なので、押した覚えのないまま候補が減る ── なぜその行が消えたのかは
+    # 記録にしか残らない(現場の声)。2山積もここに効く
     if (session.list_mode == ss.LIST_PRODUCT
             and context.product_width and context.product_length):
         return svc.list_pallets_for_product(
             conn, product_width=context.product_width,
             product_length=context.product_length,
+            two_stack=session.two_stack,
             manufactured_thickness=session.presenter.manufactured_thickness,
+            user_log=session.presenter.user_log,
             **flags)
 
     if session.list_mode == ss.LIST_PRODUCT_LIVE:
@@ -1539,7 +1544,9 @@ def list_rows(session: Any) -> list[Any]:
             conn, product_width_text=session.live_product_width,
             product_length_text=session.live_product_length,
             last_hosozai=session.presenter.last_hosozai,
+            two_stack=session.two_stack,
             manufactured_thickness=session.presenter.manufactured_thickness,
+            user_log=session.presenter.user_log,
             **flags)
 
     if session.list_mode == ss.LIST_DIRECT:
@@ -1570,6 +1577,8 @@ def _match_note(row: Any) -> str:
         parts.append("厳密")
     else:
         parts.append(f"+{getattr(row, 'tolerance', 0)}mm")
+    if getattr(row, "two_stack", False):
+        parts.append("2山積")
     return "   当たり方: " + " / ".join(parts)
 
 

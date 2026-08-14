@@ -369,6 +369,44 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
         self.assertFalse(row.exact)
         self.assertEqual(row.tolerance, 5)
 
+    def test_2山積で当たりが変わる(self):
+        """**押しても何も変わらない、を作らない。**
+
+        2山積は一覧の判定に一切入っておらず、押しても結果が同じだった
+        ため「検索しなおさない」と受け取られていた(現場の声)。
+        `auto_select_pallet` の `_search_dims` と同じく片側2倍で当たる。
+        """
+        # 製品1252x2502。幅2山(1252×2=2504)でだけ適合範囲に入る
+        insert_pallet(self.conn, width=2600, length=2600,
+                      w_min=2400, w_max=2560, l_min=2400, l_max=2560, unit="台")
+        self.assertEqual(
+            svc.list_pallets_for_product(
+                self.conn, product_width=1252, product_length=2502), [])
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1252, product_length=2502, two_stack=True)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0].two_stack)
+
+    def test_外した理由を選定ログに残す(self):
+        """**決定事項は画面を見れば分かる。要るのは経緯**(現場の声)。
+
+        サイズを打った時点で自動で走る検索なので、押した覚えのないまま
+        候補が減る ── なぜその行が消えたのかは記録にしか残らない。
+        """
+        from packaging_tool.user_log import UserLog
+
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")
+        insert_pallet(self.conn, width=9000, length=9000,
+                      w_min=8000, w_max=8500, l_min=8000, l_max=8500, unit="台")
+        log = UserLog()
+        svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500, user_log=log)
+        text = log.text
+        self.assertIn("○候補: 1150x2650", text)
+        self.assertIn("×除外: 9000x9000", text)
+        self.assertIn("適合範囲外", text)
+
     def test_excludes_ex_symbol_by_default(self):
         insert_pallet(self.conn, width=1150, length=2650,
                       w_min=900, w_max=1200, l_min=2400, l_max=2700,

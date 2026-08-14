@@ -166,6 +166,7 @@ class PalletSizeRow:
     rotated: bool = False        # 製品を回して(幅と丈を入れ替えて)当てた
     exact: bool = False          # 許容差なしで適合範囲に収まった
     tolerance: int = 0           # 許容差で当てたときの、その許容量(mm)
+    two_stack: bool = False      # 2山積の寸法(片側2倍)で当てた
 
 
 def _row_to_pallet_size_row(row: sqlite3.Row) -> PalletSizeRow:
@@ -578,7 +579,9 @@ def list_pallets_for_product(
     show_all: bool = False,
     ex_only: bool = False,
     is_ex_order: bool = False,
+    two_stack: bool = False,
     manufactured_thickness: Optional[float] = None,
+    user_log: Optional[UserLog] = None,
 ) -> list[PalletSizeRow]:
     """製品サイズが適合範囲に収まるパレットだけを返す(検索結果リスト表示用)。
 
@@ -598,52 +601,100 @@ def list_pallets_for_product(
     除外されるはずの強度UP(または通常5×10)が一覧には出てしまって
     いた。自動選定の結果と一覧の中身が食い違わないよう、ここにも
     同じ判定を掛ける。
+    【2山積】`two_stack` が立っているときは、製品を2つ積む前提の寸法
+    (`_search_dims` と同じく片側を2倍にしたもの)でも当たりを見る。
+    これを見ていなかったため、**2山積を押しても一覧が何も変わらず**、
+    「押しても検索しなおさない」と受け取られていた(現場の声)。
+
+    【ログ】`user_log` を渡すと、**外した行とその理由**を書く。
+    決まったことは画面を見れば分かるが、「なぜこのパレットが候補から
+    外れたのか」は記録にしか残らない(現場の声:「決定事項は見れば
+    わかる。必要なのは経緯」)。
     """
     # auto_select_pallet の各パスは厳密/±5mmの許容差を使う。ここも同じ
     # 5mmにして、決定されたパレットが検索結果から漏れないようにする
     tol = 5
+    ulog = user_log if user_log is not None else UserLog()   # 未指定なら捨てバッファ
     rows = db.fetch_all(conn, "SELECT * FROM PalletMaster ORDER BY 管理番号",
                         caller_name="list_pallets_for_product") or []
     ex_only_mode = is_ex_order and ex_only
+
+    ulog.log(f"[パレット絞り込み] 製品 {product_width} x {product_length}"
+             + ("【2山積】" if two_stack else ""), emphasis=True)
+    ulog.log(f"  マスタ {len(rows)}件 / 許容差 ±{tol}mm"
+             f" / EX表示={'する' if show_all else 'しない'}"
+             + ("  EXオンリー" if ex_only_mode else ""))
+
+    # 当たりを見る向き。**上から順に見て、最初に当たったものを採る** ──
+    # 順番を変えると「回さなくても載る行」が回転扱いになる。
+    # 2山積の2つは `_search_dims` と同じ組み合わせにそろえてある
+    tries: list[tuple[int, int, bool, bool]] = [
+        (product_width, product_length, False, False),   # 通常
+        (product_length, product_width, True, False),    # 回転
+    ]
+    if two_stack:
+        tries += [
+            (product_width * 2, product_length, False, True),   # 幅2山
+            (product_length * 2, product_width, True, True),    # 丈2山(回転)
+        ]
+
     result: list[PalletSizeRow] = []
     for row in rows:
         w, l = row["幅"], row["丈"]
-        if not w or not l or not _fit_range_ok(row) or _fit_range_inverted(row):
+        label = f"{w}x{l}"
+        if not w or not l:
+            continue                       # 寸法が入っていない行は数えない
+        if not _fit_range_ok(row) or _fit_range_inverted(row):
+            ulog.log(f"  ×除外: {label} 適合範囲がマスタ側で不正です")
             continue
-        # **どう当たったか**まで覚えておく(画面に出す。`PalletSizeRow`)。
-        # 通常向きを先に見て、駄目なら回した向き ── 順番を変えると
-        # 「回さなくても載る行」が回転扱いになる
-        normal = _size_ok(row, product_width, product_length, tol)
-        turned = _size_ok(row, product_length, product_width, tol)
-        if not (normal or turned):
+
+        hit = next(((sw, sl, rot, stack) for sw, sl, rot, stack in tries
+                    if _size_ok(row, sw, sl, tol)), None)
+        if hit is None:
+            ulog.log(f"  ×除外: {label} 適合範囲外"
+                     f"(巾{row['巾適合min']}〜{row['巾適合max']} /"
+                     f" 丈{row['丈適合min']}〜{row['丈適合max']})")
             continue
-        rotated = turned and not normal
-        search_w, search_l = ((product_length, product_width) if rotated
-                              else (product_width, product_length))
-        exact = _size_ok(row, search_w, search_l, 0)
-        if not (_physically_fits(row, product_width, product_length)
-                or _physically_fits(row, product_length, product_width)):
+        search_w, search_l, rotated, stacked = hit
+
+        if not _physically_fits(row, search_w, search_l):
+            # 適合範囲には入るのに現物には載らない。**マスタの適合範囲が
+            # 現物より広い**行で起きる ── 見分けが付かないと直せない
+            ulog.log(f"  ×除外: {label} 現物に載りません"
+                     f"(製品 {search_w}x{search_l})")
             continue
 
         symbol = (row["記号"] or "").strip()
         is_ex = "EX" in symbol.upper()
         if ex_only_mode:
             if not is_ex:
+                ulog.log(f"  ×除外: {label} EXオンリーですがEXではありません")
                 continue
         elif not show_all and is_ex:
+            ulog.log(f"  ×除外: {label} EX({symbol})なので既定では出しません")
             continue
 
         industry = row["業界"] or ""
         if industry == "5×10":
             ok, _needs_warning = _thickness_5x10_ok(symbol, manufactured_thickness)
             if not ok:
+                ulog.log(f"  ×除外: {label} 5×10の板厚条件に合いません"
+                         f"(記号 {symbol} / 板厚 {manufactured_thickness})")
                 continue
 
+        exact = _size_ok(row, search_w, search_l, 0)
         found = _row_to_pallet_size_row(row)
         found.rotated = rotated
         found.exact = exact
         found.tolerance = 0 if exact else tol
+        found.two_stack = stacked
         result.append(found)
+        ulog.log(f"  ○候補: {label}"
+                 + ("(回転)" if rotated else "")
+                 + ("(2山)" if stacked else "")
+                 + ("(厳密)" if exact else f"(+{tol}mm)"))
+
+    ulog.log(f"[パレット絞り込み] {len(result)}件が候補です", emphasis=True)
     return result
 
 
@@ -655,8 +706,10 @@ def list_pallets_by_product_dims(
     show_all: bool = False,
     ex_only: bool = False,
     is_ex_order: bool = False,
+    two_stack: bool = False,
     last_hosozai: str = "",
     manufactured_thickness: Optional[float] = None,
+    user_log: Optional[UserLog] = None,
 ) -> list[PalletSizeRow]:
     """製品 幅・丈を**入力している最中**の一覧絞り込み(確定前)。
 
@@ -674,7 +727,8 @@ def list_pallets_by_product_dims(
             conn, product_width=int(float(product_width_text)),
             product_length=int(float(product_length_text)),
             show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order,
-            manufactured_thickness=manufactured_thickness)
+            two_stack=two_stack,
+            manufactured_thickness=manufactured_thickness, user_log=user_log)
     if has_width or has_length:
         return search_pallet_direct(
             conn, pallet_width_text=product_width_text,

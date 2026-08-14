@@ -465,6 +465,30 @@ class SelectionLogDetailTests(unittest.TestCase):
         self.assertIn("ボード配置を開始します", self.log.text)
         self.assertIn("中止", self.log.text)
 
+    def test_2山積の切り替えが残る(self) -> None:
+        """2山積は一覧の当たり方を変える。押した記録が無いと、
+        なぜ候補が増減したのかを後から辿れない。"""
+        self.session.toggle("two_stack")
+        self.assertIn("[2山積] ON", self.log.text)
+
+    def test_却下の理由がアルゴリズムから流れてくる(self) -> None:
+        """**決定事項ではなく経緯**(現場の声)。
+
+        選定アルゴリズムは却下理由を現場の言葉で出しているのに、
+        ユーザーログへ繋がっていなかった。文言は向こうに置いたまま、
+        走っているあいだだけ流す(`user_log.bridge_from`)。
+        """
+        for w, l in [(1250, 2500), (660, 1310), (750, 1130)]:
+            self.conn.execute(
+                "INSERT INTO BoardMaster (ボード幅,ボード丈,ボードタイプ)"
+                " VALUES (?,?,?)", (w, l, "ハードボード"))
+        self.conn.commit()
+        self.session.apply_pallet("1280", "2550")
+        self.session.apply_product("1252", "2502")
+        self.session.board_type = "ハードボード"
+        self.assertTrue(self.session.auto_select_boards().ok)
+        self.assertIn("却下", self.log.text)
+
     def test_アングルは中止の理由まで残る(self) -> None:
         result = self.session.auto_select_angles()
         self.assertFalse(result.ok)

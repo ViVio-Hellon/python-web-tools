@@ -398,7 +398,8 @@
       </div>
     </div>
   </section>
-
+      </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-password" role="tabpanel" aria-labelledby="tab-password" hidden>
   {# マスタ編集の認証。以前は資材選択画面にしか入力欄が無く、
      「いつもどこだっけ」と探されていた。認証そのものは
      プロセスに1つの状態(`selection_session`)なので、どの画面から
@@ -528,6 +529,7 @@
      1行ずれる。状態の4枚だけは横に並べたいので幅を切らない */
   #panel-run > .card, #panel-source > .card,
   #panel-behavior > .card, #panel-filters > .card,
+  #panel-password > .card,
   #panel-history > .card { max-width: 940px; }
   /* マスタ管理は表を並べる面。**幅を切らない**(切ると列が読めない)。
      `:not([hidden])` が要る ── id の指定は `.tabpanel[hidden]` より強いので、

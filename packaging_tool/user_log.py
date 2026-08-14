@@ -15,7 +15,9 @@ Python版も同じ役割を持たせるが、サービス層が画面に依存�
 """
 from __future__ import annotations
 
+import logging
 import weakref
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional
@@ -204,3 +206,52 @@ def keep_on_disk(target: Optional[UserLog] = None) -> None:
 
     target.subscribe(sink)
     _on_disk.add(target)
+
+
+# ==================================================================
+# 業務ログの橋渡し
+# ==================================================================
+# 選定アルゴリズムへ渡す `UserLog` を引数で持ち回らない理由:
+#
+# `board_selection_algorithm` は40を超える純粋関数に分かれていて、
+# 判断はその奥のほうで起きる(向き補正・却下・補填の打ち切り)。
+# ログのためだけに全部の関数へ引数を1本足すと、業務の読み筋に
+# ログの都合が混ざる ── しかもその行の文言は**すでに `log.debug()` に
+# 現場の言葉で書いてある**(「却下(幅超過)」「[幅補填] ...」)。
+#
+# 同じ文言を2か所に持つと、片方だけ直された日にずれる(設計.md §1)。
+# そこで文言はいまの場所に置いたまま、**選定が走っているあいだだけ**
+# その出力をユーザーログへ流す。
+_BRIDGED = "packaging_tool.board_selection_algorithm"
+
+
+class _Bridge(logging.Handler):
+    """`logging` の1行を `UserLog` の1行にする。"""
+
+    def __init__(self, target: "UserLog") -> None:
+        super().__init__(level=logging.DEBUG)
+        self._target = target
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._target.log("  " + record.getMessage())
+        except Exception:                         # noqa: BLE001 - ログで止めない
+            pass
+
+
+@contextmanager
+def bridge_from(target: "UserLog", *names: str):
+    """`names` のロガーが出す行を、そのあいだ `target` にも流す。
+
+    **付けたら必ず外す。** 外し忘れると、次の選定でも前のログへ
+    流れ続ける(`UserLog` は要求をまたいで生きている)。
+    """
+    handler = _Bridge(target)
+    loggers = [logging.getLogger(n) for n in (names or (_BRIDGED,))]
+    for one in loggers:
+        one.addHandler(handler)
+    try:
+        yield
+    finally:
+        for one in loggers:
+            one.removeHandler(handler)
