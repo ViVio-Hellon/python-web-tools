@@ -219,10 +219,16 @@ class SelectionSession:
         """VBA `btnApplyPalette_Click`。"""
         result, palette = svc.apply_pallet_size(width_text, length_text)
         if not result.ok:
+            self.presenter.user_log.log(
+                f"[パレット確定] 断りました: {result.message}")
             return result
         before_width = self.palette.width if self.palette.is_set else None
         before_length = self.palette.length if self.palette.is_set else None
         self.palette = palette
+        # **決めた瞬間を残す。** ここが残っていないと、あとから
+        # 「いつこの寸法になったのか」が分からない
+        self.presenter.user_log.log(
+            f"[パレット確定] {palette.width} x {palette.length}", emphasis=True)
         # 選んでいた行と寸法が食い違ったら、その行はもう「いま使う
         # パレット」を指していない。持ち越すと**別の寸法の発注コード**を
         # 倉庫へ送ることになる
@@ -245,6 +251,11 @@ class SelectionSession:
                       "製品サイズの確定を解除します",
                       before_width, before_length, palette.width, palette.length)
             self.product = svc.ProductSize()
+            # **黙って解除しない。** 押した人は製品サイズが生きている
+            # つもりでいるので、ボード選定が押せない理由が分からなくなる
+            self.presenter.user_log.log(
+                f"  ※パレットが {before_width} x {before_length} から変わったため、"
+                "製品サイズの確定を解除しました")
         self._sync_ribbon()
         return result
 
@@ -282,8 +293,14 @@ class SelectionSession:
         result, product, rotated = svc.apply_product_size(
             width_text, length_text, self.palette)
         if not result.ok:
+            self.presenter.user_log.log(
+                f"[製品サイズ確定] 断りました: {result.message}")
             return result, False
         self.product = product
+        # 回転したかどうかは**現物の載せ方が変わる**ので必ず残す
+        self.presenter.user_log.log(
+            f"[製品サイズ確定] {product.width} x {product.length}"
+            + ("(製品を回転させました)" if rotated else ""), emphasis=True)
         # 上用の基準枠は製品寸法そのもの。変われば図は作り直し
         self.invalidate_placement()
         self._sync_ribbon()
@@ -438,15 +455,26 @@ class SelectionSession:
 
         疲労度を使うかは押しっぱなしの `fatigue` が決める。
         """
+        ulog = self.presenter.user_log
+        ulog.log("ボード自動選定を開始します", emphasis=True)
+        ulog.log(f"  パレット: {self.palette.width} x {self.palette.length}"
+                 f" / 製品: {self.product.width} x {self.product.length}")
+        ulog.log(f"  ボード種別: {self.board_type or '(未指定)'}"
+                 f" / 疲労度={'ON' if self.fatigue else 'OFF'}"
+                 f" / 在庫考慮={'ON' if self.stock_aware else 'OFF'}")
+
         refusal = self._require_sizes()
         if refusal is not None:
+            ulog.log(f"  → 中止: {refusal.message}", emphasis=True)
             return refusal
 
         available = self.candidates()
         if not available:
+            ulog.log("  → 中止: 候補ボードが0件です", emphasis=True)
             return BoardOpResult(
                 False, "候補ボードがありません。ボード種別を確認してください。",
                 REFUSE_NO_CANDIDATES)
+        ulog.log(f"  候補ボード: {len(available)}件")
 
         notes: list[str] = []
         fatigue_lower = fatigue_upper = None
@@ -458,6 +486,9 @@ class SelectionSession:
                 product_width=self.product.width, product_length=self.product.length)
             if fatigue_lower is None:
                 notes.append("疲労度マップを取得できなかったため通常選定で実行しました。")
+                ulog.log("  ※疲労度マップを取得できず、通常選定に切り替えました")
+            else:
+                ulog.log(f"  疲労度マップ: 拠点 {user_settings.get_position() or '(未設定)'}")
 
         try:
             result = alg.auto_select_boards(
@@ -470,14 +501,26 @@ class SelectionSession:
                 **self.presenter.selection_flags())
         except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
             log.exception("自動選定エラー")
+            ulog.log(f"  → 自動選定エラー: {exc}", emphasis=True)
             return BoardOpResult(False, f"自動選定エラー: {exc}", REFUSE_FAILED)
 
         self.select_result = result
         self.selected.lower = list(result.lower)
         self.selected.upper = list(result.upper)
         self.invalidate_placement()
+        # **何が選ばれたのかを1枚ずつ残す。** 「上用2種類」とだけ言われても、
+        # あとから「なぜこの寸法になったのか」を追えない(現場の声)
+        for label, boards in (("上用", result.upper), ("下用", result.lower)):
+            if not boards:
+                ulog.log(f"  {label}: なし")
+                continue
+            for board in boards:
+                ulog.log(f"  {label}: {board.width} x {board.length}"
+                         f" × {board.count}枚")
         log.info("自動選定: 上用%s種 下用%s種 (疲労度=%s 在庫考慮=%s)",
                  len(result.upper), len(result.lower), self.fatigue, self.stock_aware)
+        ulog.log(f"ボード自動選定 完了: 上用 {len(result.upper)}種 / "
+                 f"下用 {len(result.lower)}種", emphasis=True)
         return BoardOpResult(
             True,
             f"ボードを自動選択しました。上用 {len(result.upper)}種類 / "
@@ -513,6 +556,10 @@ class SelectionSession:
         self.select_result = None
         self.invalidate_placement()
         label = "上用" if category == CATEGORY_UPPER else "下用"
+        # 手で足した1枚も残す。**自動と手動の区別が付かないログは、
+        # あとから「なぜこうなったか」を説明できない**
+        self.presenter.user_log.log(
+            f"[手動] {label}に追加: {width} x {length} × {count}枚")
         return BoardOpResult(True, f"{label}に {width}×{length} を{count}枚 追加しました")
 
     def remove_board(self, category: str, index: int) -> BoardOpResult:
@@ -538,6 +585,8 @@ class SelectionSession:
         removed = target.pop(index)
         self.invalidate_placement()
         label = "上用" if category == CATEGORY_UPPER else "下用"
+        self.presenter.user_log.log(
+            f"[手動] {label}から除外: {removed.width} x {removed.length}")
         return BoardOpResult(
             True, f"{label}から {removed.width}×{removed.length} を外しました")
 
@@ -548,10 +597,15 @@ class SelectionSession:
         手で増減したあとは `select_result` を捨ててあるので通常配置になる ──
         当時の前提のまま並べると、手で足したボードが図の外へ出る。
         """
+        ulog = self.presenter.user_log
+        ulog.log("ボード配置を開始します", emphasis=True)
+
         refusal = self._require_sizes()
         if refusal is not None:
+            ulog.log(f"  → 中止: {refusal.message}", emphasis=True)
             return refusal
         if not (self.selected.lower or self.selected.upper):
+            ulog.log("  → 中止: ボードが選定されていません", emphasis=True)
             return BoardOpResult(False, "先にボードを選定してください。",
                                  REFUSE_NO_CANDIDATES)
 
@@ -559,6 +613,12 @@ class SelectionSession:
         if self.select_result is not None:
             narrow_lower = self.select_result.lower_result.state.narrow_pallet
             narrow_upper = self.select_result.upper_result.narrow_pallet
+        else:
+            # 手で増減したあとは当時の前提を引き継がない。**なぜ配置が
+            # 変わったのか**を追えるよう、その事実を残す
+            ulog.log("  ※手で増減したため、狭幅パレットの前提は引き継ぎません")
+        ulog.log(f"  狭幅パレット: 下用={'はい' if narrow_lower else 'いいえ'}"
+                 f" / 上用={'はい' if narrow_upper else 'いいえ'}")
 
         try:
             self.placement = place.auto_place_boards(
@@ -568,10 +628,15 @@ class SelectionSession:
         except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
             log.exception("配置エラー")
             self.placement = None
+            ulog.log(f"  → 配置エラー: {exc}", emphasis=True)
             return BoardOpResult(False, f"配置エラー: {exc}", REFUSE_FAILED)
 
         placed = self.placement.placed
         log.info("配置完了: %s枚", len(placed))
+        for item in placed:
+            ulog.log(f"  配置: [{item.board_category or '?'}]"
+                     f" {item.width} x {item.length} @ ({item.x}, {item.y})")
+        ulog.log(f"ボード配置 完了: {len(placed)}枚", emphasis=True)
         return BoardOpResult(True, f"ボードを配置しました({len(placed)}枚)")
 
     def map_items(self) -> list[dict]:
@@ -668,21 +733,31 @@ class SelectionSession:
         パレットが未設定でも動く(その場合は脚数を考慮しない)。
         製品丈だけは要る ── 何をカバーするのかが決まらないため。
         """
+        ulog = self.presenter.user_log
+        ulog.log("アングル自動選定を開始します", emphasis=True)
+
         if not self.product.is_set:
+            ulog.log("  → 中止: 製品サイズが未設定です", emphasis=True)
             return BoardOpResult(False, "先に製品サイズを設定してください。",
                                  REFUSE_NEEDS_SIZES)
 
         conn = self.presenter.conn
         angles = self.angle_candidates()
         if not angles:
+            ulog.log("  → 中止: アングルデータが0件です", emphasis=True)
             return BoardOpResult(False, "アングルデータがありません。",
                                  REFUSE_NO_CANDIDATES)
+        ulog.log(f"  製品丈: {self.product.length} / 候補: {len(angles)}件")
 
         pallet_len = leg_count = 0
         if self.palette.is_set:
             pallet_len = self.palette.length
             leg_count = angle_service.get_leg_count(
                 conn, self.palette.width, self.palette.length)
+            ulog.log(f"  パレット丈: {pallet_len} / 脚数: {leg_count}")
+        else:
+            # 脚数を見ずに選んだことを残す。**同じ製品でも本数が変わる**
+            ulog.log("  パレット未設定のため、脚数を考慮せずに選定します")
 
         notes: list[str] = []
         fat_map = None
@@ -707,6 +782,7 @@ class SelectionSession:
 
         if result.count == 0:
             self.selected_angles = []
+            ulog.log("  → 適合するアングルがありませんでした", emphasis=True)
             return BoardOpResult(False, "適合するアングルが見つかりませんでした。",
                                  REFUSE_NOT_FOUND, notes=notes)
 
@@ -717,6 +793,12 @@ class SelectionSession:
         else:
             self.selected_angles = list(result.angles)
 
+        # **選ばれた1本ずつを残す。** 「3本」とだけでは、あとから
+        # 現物と突き合わせられない
+        for length in self.selected_angles:
+            ulog.log(f"  アングル: {length}mm")
+        if result.need_cut:
+            ulog.log("  ※切断が必要です")
         self.presenter.user_log.log(
             f"アングル選定完了: {result.count}本 {result.info}"
             " → アングル配置ボタンで描画してください", emphasis=True)

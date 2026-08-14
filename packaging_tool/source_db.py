@@ -112,6 +112,35 @@ WAY_COPY = "手元への写し"
 _PROOF = "SELECT count(*) FROM sqlite_master"
 
 
+def decode_text(raw: bytes) -> str:
+    """取り込み元のTEXT列を文字にする。**UTF-8で読めない列を捨てない。**
+
+    Access から sqlite3 へ変換したファイルには、文字を Shift-JIS(CP932)
+    のバイトのまま TEXT 列へ書いたものが混ざる(丸数字・ローマ数字など
+    JIS拡張の字を含む行で起きやすい)。
+
+    Python の `sqlite3` は既定でTEXT列をUTF-8として読み、**読めなければ
+    その場で `OperationalError` を投げる**(bytes では返らない)。
+    つまり値を受け取ってから直すことはできず、**列を1つ読めないだけで
+    その表ぜんぶが取り込めない** ── 現場から届いていた
+    「仕掛かり一覧の文字化け」と「マスタが表示されない」は、どちらも
+    ここが出どころだった。
+
+    そこで読む側にこの関数を挿す。まずUTF-8(正しく変換されたファイルは
+    これで通る)、駄目ならCP932、どちらでも読めない字だけを最後に
+    `errors="replace"` で落とす ── 全体を捨てるよりはましだから。
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return raw.decode("cp932")
+    except UnicodeDecodeError:
+        # ここまで来る行は元のファイルが壊れている。読めた字だけでも残す
+        return raw.decode("utf-8", "replace")
+
+
 def _connect(path: Path, *, read_only: bool) -> sqlite3.Connection:
     conn, _way = _open(path, read_only=read_only)
     return conn
@@ -174,6 +203,10 @@ def _open(path: Path, *, read_only: bool,
 def _prepare(conn: sqlite3.Connection) -> sqlite3.Connection:
     """開いた直後の約束ごと。**引けることまで確かめる。**"""
     conn.row_factory = sqlite3.Row
+    # **読めない字で表ごと落とさない**(`decode_text` の説明)。
+    # 既定のままだと UTF-8 として読めない TEXT 列で例外が飛び、
+    # その表の取り込みが丸ごと見送られる
+    conn.text_factory = decode_text
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.execute(_PROOF).fetchone()
     return conn

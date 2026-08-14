@@ -283,6 +283,9 @@ function onJobs(state) {
   if (job.ok) toast(`${job.label}が終わりました`, "ok");
   else toast(`${job.label}: ${job.error || "うまくいきませんでした"}`, "ng");
   refreshStatus();
+  // 取り込みは総入れ替え。開いたままのマスタ一覧は、この時点で古い
+  // (「取り込みなおしてもマスタが表示されない」への対応)
+  if (job.ok) master.reload();
 }
 
 async function refreshStatus() {

@@ -124,6 +124,39 @@ class ConnectTests(unittest.TestCase):
             with self.assertRaises(sqlite3.Error):
                 conn.execute("INSERT INTO 表 VALUES ('い')")
 
+    def test_CP932のまま書かれたTEXT列でも表ごと落とさない(self) -> None:
+        """**UTF-8で読めない列があっても、その表を捨てない。**
+
+        Access から変換したファイルには、文字を Shift-JIS(CP932)の
+        バイトのまま TEXT 列へ書いたものが混ざる。Python の sqlite3 は
+        既定でそこに当たると `OperationalError` を投げる ── bytes では
+        返らないので、値を受け取ってから直すことはできない。
+        現場の「仕掛かり一覧の文字化け」「マスタが表示されない」は
+        どちらもこれが出どころだった。
+        """
+        path = self.dir / "CP932混じり.sqlite3"
+        raw = sqlite3.connect(path)
+        raw.execute("CREATE TABLE 表 (用途名 TEXT)")
+        raw.execute("INSERT INTO 表 VALUES (CAST(? AS TEXT))",
+                    ("JISN製品".encode("cp932"),))
+        raw.execute("INSERT INTO 表 VALUES ('シャーシ①')")   # 正しいUTF-8
+        raw.commit()
+        raw.close()
+
+        # 既定のまま開くと、この列に触れた瞬間に例外が飛ぶ(=表ごと失われる)
+        plain = sqlite3.connect(path)
+        with self.assertRaises(sqlite3.OperationalError):
+            plain.execute("SELECT 用途名 FROM 表").fetchall()
+        plain.close()
+
+        with source_db._connect(path, read_only=True) as conn:
+            got = [r[0] for r in conn.execute("SELECT 用途名 FROM 表")]
+        self.assertEqual(got, ["JISN製品", "シャーシ①"])
+
+    def test_どちらでも読めないバイトは読めた字だけ残す(self) -> None:
+        """壊れた行のために表ぜんぶを捨てるよりはまし。"""
+        self.assertEqual(source_db.decode_text(b"A\xff\xfeB").count("A"), 1)
+
     def test_開けなければ最初の理由を返す(self) -> None:
         """逃げ道も駄目だったときは、原因に近い**最初の**理由を出す。"""
         with self.assertRaises(source_db.SourceError) as caught:

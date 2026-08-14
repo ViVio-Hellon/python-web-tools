@@ -44,6 +44,7 @@ Windows のログインID と PC名 を条件に、その利用者が持つ**権
 """
 from __future__ import annotations
 
+import difflib
 import getpass
 import os
 import platform
@@ -341,12 +342,26 @@ def problems(conn: sqlite3.Connection) -> list[str]:
     unknown = sorted({r.permission for r in rules
                       if r.permission and r.permission not in known})
     if unknown:
+        # **打ち間違いは、指摘だけでは直せない。** `mode:materia` と
+        # 書かれた行を「知らないコードです」と言われても、どこが違うのかは
+        # 目で見比べるしかない(現場の声:1文字足りないことに気づけない)。
+        # 近いコードが1つに決まるなら、そのまま書き写せる形で出す
+        parts = []
+        for code in unknown:
+            near = difflib.get_close_matches(code, sorted(known), n=1, cutoff=0.6)
+            parts.append(f"{code} → {near[0]} のことですか?" if near else code)
         out.append("知らない権限コードがあります(効きません): "
-                   + ", ".join(unknown))
+                   + ", ".join(parts))
     blank = sum(1 for r in rules if not r.has_condition())
     if blank:
+        # **何を書けば効くのか**まで出す。空欄のままにした人は、
+        # たいてい「全員に効かせたい」つもりでいる
+        me = current_identity()
         out.append(f"ログインID も PC名 も空の行が {blank} 件あります"
-                   "(全員への許可になるので効かせていません)")
+                   "(全員への許可になるので効かせていません)。"
+                   "どちらか一方でも埋めれば効きます ── この端末なら "
+                   f"ログインID = {me.login_id or '(空)'} / "
+                   f"PC名 = {me.pc_name or '(空)'} です。")
     return out
 
 

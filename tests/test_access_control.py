@@ -185,10 +185,29 @@ class ProblemTests(unittest.TestCase):
         grant_row(self.conn, login="yamada", permission="mode:materal")
         self.assertTrue(any("mode:materal" in p for p in ac.problems(self.conn)))
 
+    def test_打ち間違いは近いコードを示す(self) -> None:
+        """**指摘だけでは直せない。** 「知らないコードです」と言われても、
+        1文字足りないことは目で見比べないと気づけない(現場の声:
+        `mode:materia` と書いた行が効かず、原因に辿り着けなかった)。"""
+        grant_row(self.conn, login="yamada", permission="mode:materia")
+        said = " ".join(ac.problems(self.conn))
+        self.assertIn("mode:materia", said)
+        self.assertIn("mode:material", said)      # 書き写せる形で出す
+
     def test_条件の無い行を教える(self) -> None:
         """書いた人は効いているつもりでいる。"""
         grant_row(self.conn)
         self.assertTrue(any("空の行" in p for p in ac.problems(self.conn)))
+
+    def test_条件の無い行には何を書けばよいかまで出す(self) -> None:
+        """空欄のままにした人は「全員に効かせたい」つもりでいる。
+        効かせるために何を書けばよいかが無ければ、直しようがない。"""
+        grant_row(self.conn)
+        said = " ".join(ac.problems(self.conn))
+        me = ac.current_identity()
+        self.assertIn("どちらか一方でも埋めれば効きます", said)
+        if me.login_id:
+            self.assertIn(me.login_id, said)
 
     def test_未取り込みなら問題は出さない(self) -> None:
         """まだ作っていないだけ。それは「問題」ではない。"""

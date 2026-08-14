@@ -332,6 +332,43 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
             self.conn, product_width=2500, product_length=1000)
         self.assertEqual(len(rows), 1)
 
+    def test_当たり方を行に持たせる(self):
+        """**同じ「候補」でも当たり方が違えば現物の扱いが違う。**
+
+        判定そのものは前からしていたのに捨てていたため、押した人には
+        回さないと載らない行なのか、許容差でようやく入った行なのかを
+        見分けようが無かった(現場の声、2回目の指摘)。
+        """
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")
+
+        # 通常向きで、適合範囲にそのまま収まる
+        row = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500)[0]
+        self.assertFalse(row.rotated)
+        self.assertTrue(row.exact)
+        self.assertEqual(row.tolerance, 0)
+
+        # 幅・丈を入れ替えないと当たらない = 回転
+        row = svc.list_pallets_for_product(
+            self.conn, product_width=2500, product_length=1000)[0]
+        self.assertTrue(row.rotated)
+        self.assertTrue(row.exact)
+
+    def test_許容差で当たった行はそう分かる(self):
+        """適合範囲を少し外れ、±5mmでようやく入った行。
+
+        現物には載る(`_physically_fits`)が、マスタの適合範囲からは
+        はみ出している ── 「候補に出たのに、なぜか厳密ではない」行。
+        """
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2500, unit="台")
+        # 丈2503 は l_max=2500 を超えるが、許容5mm以内なので当たる
+        row = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2503)[0]
+        self.assertFalse(row.exact)
+        self.assertEqual(row.tolerance, 5)
+
     def test_excludes_ex_symbol_by_default(self):
         insert_pallet(self.conn, width=1150, length=2650,
                       w_min=900, w_max=1200, l_min=2400, l_max=2700,

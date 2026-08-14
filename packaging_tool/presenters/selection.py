@@ -1554,12 +1554,32 @@ def list_rows(session: Any) -> list[Any]:
         conn, last_hosozai=session.presenter.last_hosozai, **flags)
 
 
+def _match_note(row: Any) -> str:
+    """その行が**どう当たったのか**。単位・コードと並べて出す。
+
+    製品サイズで絞ったときだけ意味がある(全件一覧では当たり方が無い)。
+    現場の声:「クリックしたときに、コードと単位とは別に、回転が
+    あったのか・厳密だったのか・+だったのかの表示も要る」── 同じ
+    候補でも、製品を回す前提の行と、許容差でようやく入った行は、
+    現物を前にしたときの扱いが違う。
+    """
+    if not getattr(row, "exact", False) and not getattr(row, "tolerance", 0):
+        return ""                      # 製品サイズで絞っていない(全件一覧)
+    parts = ["回転あり" if getattr(row, "rotated", False) else "回転なし"]
+    if getattr(row, "exact", False):
+        parts.append("厳密")
+    else:
+        parts.append(f"+{getattr(row, 'tolerance', 0)}mm")
+    return "   当たり方: " + " / ".join(parts)
+
+
 def _pallet_row(row: Any, picked: Any = None) -> PalletRow:
     is_ex = "EX" in (row.symbol or "").upper()
     return PalletRow(
         values=[str(getattr(row, key)) for _label, key, _numeric in PALLET_COLUMNS],
         width=row.width, length=row.length, symbol=row.symbol, is_ex=is_ex,
-        note=f"単位: {row.unit or '---'}   コード: {row.code or '---'}",
+        note=(f"単位: {row.unit or '---'}   コード: {row.code or '---'}"
+              + _match_note(row)),
         picked=(picked is not None and picked.id == row.id),
     )
 

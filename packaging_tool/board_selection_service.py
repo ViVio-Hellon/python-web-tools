@@ -156,6 +156,16 @@ class PalletSizeRow:
     keta: int
     code: str
     unit: str
+    # --- どう当たった行なのか(製品サイズで絞ったときだけ入る) ---
+    #
+    # **当たり方が違えば、同じ「候補」でも意味が違う。** 製品を回して
+    # 載せる前提の行と、そのままの向きで載る行は現場での扱いが別物だし、
+    # 適合範囲にぴったり入った行と ±5mm の許容でようやく入った行も同じ
+    # ではない。判定そのものは前からしていたのに画面へ出していなかった
+    # ため、押した人には見分けようが無かった(現場の声)。
+    rotated: bool = False        # 製品を回して(幅と丈を入れ替えて)当てた
+    exact: bool = False          # 許容差なしで適合範囲に収まった
+    tolerance: int = 0           # 許容差で当てたときの、その許容量(mm)
 
 
 def _row_to_pallet_size_row(row: sqlite3.Row) -> PalletSizeRow:
@@ -600,10 +610,17 @@ def list_pallets_for_product(
         w, l = row["幅"], row["丈"]
         if not w or not l or not _fit_range_ok(row) or _fit_range_inverted(row):
             continue
-        fits = (_size_ok(row, product_width, product_length, tol)
-                or _size_ok(row, product_length, product_width, tol))
-        if not fits:
+        # **どう当たったか**まで覚えておく(画面に出す。`PalletSizeRow`)。
+        # 通常向きを先に見て、駄目なら回した向き ── 順番を変えると
+        # 「回さなくても載る行」が回転扱いになる
+        normal = _size_ok(row, product_width, product_length, tol)
+        turned = _size_ok(row, product_length, product_width, tol)
+        if not (normal or turned):
             continue
+        rotated = turned and not normal
+        search_w, search_l = ((product_length, product_width) if rotated
+                              else (product_width, product_length))
+        exact = _size_ok(row, search_w, search_l, 0)
         if not (_physically_fits(row, product_width, product_length)
                 or _physically_fits(row, product_length, product_width)):
             continue
@@ -622,7 +639,11 @@ def list_pallets_for_product(
             if not ok:
                 continue
 
-        result.append(_row_to_pallet_size_row(row))
+        found = _row_to_pallet_size_row(row)
+        found.rotated = rotated
+        found.exact = exact
+        found.tolerance = 0 if exact else tol
+        result.append(found)
     return result
 
 

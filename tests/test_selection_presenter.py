@@ -421,5 +421,56 @@ class SelectionFlagsTests(PresenterTestCase):
             self.assertIn(key, params, f"auto_select_boards に {key} が無い")
 
 
+class SelectionLogDetailTests(unittest.TestCase):
+    """選定ログの粒度。
+
+    **「上用2種類」とだけ残っても、あとから追えない。** VBA版は工程ごとに
+    細かくユーザーログを出しており、現場はそれを見て「なぜこの寸法に
+    なったのか」を確かめていた。Python版はパレット自動選定だけが詳細で、
+    それ以外(ボード選定・配置・アングル・確定操作)がほぼ無記録だった
+    ── 現場の声(2回)「選定ログがほとんどない。この程度のログは意味がない」。
+    """
+
+    def setUp(self) -> None:
+        from packaging_tool.selection_session import SelectionSession
+
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        db.apply_schema(self.conn)
+        self.addCleanup(self.conn.close)
+        self.log = UserLog()
+        self.session = SelectionSession(
+            presenter=SelectionPresenter(self.conn, user_log=self.log))
+
+    def test_パレットと製品の確定が残る(self) -> None:
+        self.session.apply_pallet("1100", "2500")
+        self.assertIn("[パレット確定] 1100 x 2500", self.log.text)
+
+    def test_断った操作も残る(self) -> None:
+        """**通らなかったことこそ残す。** 押した人には、なぜ次へ進めない
+        のかが分からない。"""
+        self.session.apply_pallet("あ", "い")
+        self.assertIn("[パレット確定] 断りました", self.log.text)
+
+    def test_ボード選定は中止の理由まで残る(self) -> None:
+        result = self.session.auto_select_boards()
+        self.assertFalse(result.ok)
+        text = self.log.text
+        self.assertIn("ボード自動選定を開始します", text)
+        self.assertIn("中止", text)
+
+    def test_配置は中止の理由まで残る(self) -> None:
+        result = self.session.place_boards()
+        self.assertFalse(result.ok)
+        self.assertIn("ボード配置を開始します", self.log.text)
+        self.assertIn("中止", self.log.text)
+
+    def test_アングルは中止の理由まで残る(self) -> None:
+        result = self.session.auto_select_angles()
+        self.assertFalse(result.ok)
+        self.assertIn("アングル自動選定を開始します", self.log.text)
+        self.assertIn("中止", self.log.text)
+
+
 if __name__ == "__main__":
     unittest.main()
