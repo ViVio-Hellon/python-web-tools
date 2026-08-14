@@ -153,6 +153,131 @@ class ConnectTests(unittest.TestCase):
             got = [r[0] for r in conn.execute("SELECT 用途名 FROM 表")]
         self.assertEqual(got, ["JISN製品", "シャーシ①"])
 
+    def test_CP932がUTF8としても読めてしまう行で静かに化けない(self) -> None:
+        """**値ごとに読み方を当てにいってはいけない。**
+
+        CP932 の `燿　` は `e0 a0 81 40`。これは**正しいUTF-8としても
+        読める**ので、1値ずつ「まずUTF-8」と試すと例外も `�` も出さずに
+        `ࠁ@` になる ── 気づけないまま手元へ入る。現場から2度届いた
+        「文字化けが治っていない」の残りはこれだった。
+
+        ファイル単位で入れ方を決めれば取りこぼさない
+        (本物のUTF-8ファイルには、UTF-8として読めない値が1つも無い)。
+        """
+        path = self.dir / "静かに化ける.sqlite3"
+        raw = sqlite3.connect(path)
+        raw.execute("CREATE TABLE 表 (用途名 TEXT)")
+        for text in ("燿　", "JISN製品①", "シャーシ"):
+            raw.execute("INSERT INTO 表 VALUES (CAST(? AS TEXT))",
+                        (text.encode("cp932"),))
+        raw.commit()
+        raw.close()
+
+        # 単体で見ると、この4バイトはUTF-8としても妥当(だから危ない)
+        self.assertEqual("燿　".encode("cp932").decode("utf-8"), "ࠁ@")
+
+        with source_db._connect(path, read_only=True) as conn:
+            got = [r[0] for r in conn.execute("SELECT 用途名 FROM 表")]
+        self.assertEqual(got, ["燿　", "JISN製品①", "シャーシ"])
+
+    def test_UTF8で作られたファイルはそのまま読む(self) -> None:
+        """CP932側へ倒しすぎない。正しく変換された取り込み元を壊さない。"""
+        path = self.dir / "正しいUTF8.sqlite3"
+        raw = sqlite3.connect(path)
+        raw.execute("CREATE TABLE 表 (用途名 TEXT)")
+        for text in ("燿　", "JISN製品①", "シャーシ"):
+            raw.execute("INSERT INTO 表 VALUES (?)", (text,))
+        raw.commit()
+        raw.close()
+
+        with source_db._connect(path, read_only=True) as conn:
+            self.assertEqual(source_db.sniff_encoding(conn),
+                             source_db.ENCODING_UTF8)
+            got = [r[0] for r in conn.execute("SELECT 用途名 FROM 表")]
+        self.assertEqual(got, ["燿　", "JISN製品①", "シャーシ"])
+
+    def test_壊れた値が1つあってもUTF8のファイルを巻き添えにしない(self) -> None:
+        """**1つの値で決めない。**
+
+        UTF-8で作られたファイルに読めない値が1件混ざっているとき、
+        そこで「CP932だ」と決めてしまうと、その1件を助けるために
+        **残り全部を化けさせる**ことになる。日本語を含む値の多数決で決める。
+        """
+        path = self.dir / "1件だけ壊れたUTF8.sqlite3"
+        raw = sqlite3.connect(path)
+        raw.execute("CREATE TABLE 表 (用途名 TEXT)")
+        for text in ("シャーシ", "チョウセイドプレート", "イワンイタ",
+                     "JISN製品①", "アングル"):
+            raw.execute("INSERT INTO 表 VALUES (?)", (text,))
+        raw.execute("INSERT INTO 表 VALUES (CAST(? AS TEXT))", (b"\x90\xbb",))
+        raw.commit()
+        raw.close()
+
+        with source_db._connect(path, read_only=True) as conn:
+            self.assertEqual(source_db.sniff_encoding(conn),
+                             source_db.ENCODING_UTF8)
+            got = [r[0] for r in conn.execute("SELECT 用途名 FROM 表")]
+        self.assertEqual(got[:5], ["シャーシ", "チョウセイドプレート",
+                                   "イワンイタ", "JISN製品①", "アングル"])
+
+    def test_CP932のファイルはASCII行に引きずられない(self) -> None:
+        """ロット番号のようなASCIIばかりの列は判断材料にしない。"""
+        path = self.dir / "ASCII多め.sqlite3"
+        raw = sqlite3.connect(path)
+        raw.execute("CREATE TABLE 表 (ﾛｯﾄ番号 TEXT, 用途名 TEXT)")
+        for i in range(20):
+            raw.execute("INSERT INTO 表 VALUES (?, CAST(? AS TEXT))",
+                        (f"410278{i}", "シャーシ".encode("cp932")))
+        raw.commit()
+        raw.close()
+
+        with source_db._connect(path, read_only=True) as conn:
+            self.assertEqual(source_db.sniff_encoding(conn),
+                             source_db.ENCODING_CP932)
+            got = {r[0] for r in conn.execute("SELECT 用途名 FROM 表")}
+        self.assertEqual(got, {"シャーシ"})
+
+    def test_CP932のファイルでも表名と列名はUTF8で読む(self) -> None:
+        """**SQLiteの識別子は必ずUTF-8。**
+
+        中のデータがCP932でも、表名・列名はUTF-8で保持されている。
+        `sqlite_master.name` と `PRAGMA table_info` は識別子を**値として**
+        返すので、CP932で読む `text_factory` を掛けたままだと
+        `ﾛｯﾄ番号` が `ﾛｯﾄ逡ｪ蜿ｷ` になる ── その名前では引けず、
+        表が丸ごと空で取り込まれる。
+        """
+        path = self.dir / "識別子.sqlite3"
+        raw = sqlite3.connect(path)
+        raw.execute("CREATE TABLE 仕掛 (ﾛｯﾄ番号 TEXT, 用途名 TEXT)")
+        for i in range(10):
+            raw.execute("INSERT INTO 仕掛 VALUES (?, CAST(? AS TEXT))",
+                        (f"410278{i}", "シャーシ".encode("cp932")))
+        raw.commit()
+        raw.close()
+
+        self.assertEqual(source_db.list_tables(path), ["仕掛"])
+        self.assertEqual(source_db.columns(path, "仕掛"), ["ﾛｯﾄ番号", "用途名"])
+        # 取り込みが見る辞書の鍵も、元の列名のまま
+        rows = source_db.read_table(path, "仕掛")
+        self.assertEqual(set(rows[0]), {"ﾛｯﾄ番号", "用途名"})
+        self.assertEqual(rows[0]["用途名"], "シャーシ")
+
+    def test_列名を見失わない(self) -> None:
+        """判定のために `text_factory` を bytes にすると、`PRAGMA table_info`
+        の列名と型まで bytes になる。そのままだとTEXT列が1つも見つからず、
+        判定が素通りする(実際に踏んだ)。"""
+        path = self.dir / "列名.sqlite3"
+        raw = sqlite3.connect(path)
+        raw.execute("CREATE TABLE 表 (用途名 TEXT)")
+        raw.execute("INSERT INTO 表 VALUES (CAST(? AS TEXT))",
+                    ("シャーシ".encode("cp932"),))
+        raw.commit()
+        raw.close()
+        conn = sqlite3.connect(path)
+        self.addCleanup(conn.close)
+        self.assertEqual(source_db.sniff_encoding(conn),
+                         source_db.ENCODING_CP932)
+
     def test_どちらでも読めないバイトは読めた字だけ残す(self) -> None:
         """壊れた行のために表ぜんぶを捨てるよりはまし。"""
         self.assertEqual(source_db.decode_text(b"A\xff\xfeB").count("A"), 1)

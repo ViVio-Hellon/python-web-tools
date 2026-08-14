@@ -24,10 +24,11 @@ import os
 import shutil
 import sqlite3
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from .logging_utils import get_logger
 
@@ -112,33 +113,157 @@ WAY_COPY = "手元への写し"
 _PROOF = "SELECT count(*) FROM sqlite_master"
 
 
-def decode_text(raw: bytes) -> str:
-    """取り込み元のTEXT列を文字にする。**UTF-8で読めない列を捨てない。**
+# 取り込み元の文字の入れ方。**ファイル単位で1つに決める**(下記 `sniff`)
+ENCODING_UTF8 = "utf-8"
+ENCODING_CP932 = "cp932"
 
-    Access から sqlite3 へ変換したファイルには、文字を Shift-JIS(CP932)
-    のバイトのまま TEXT 列へ書いたものが混ざる(丸数字・ローマ数字など
-    JIS拡張の字を含む行で起きやすい)。
+# 見極めに読む量。**全部は読まない** ── 共有フォルダの上の数万行を
+# 開くたびに舐めると、開くだけで待たされる
+SNIFF_TABLES = 12
+SNIFF_ROWS = 200
+# 日本語を含む値のうち、UTF-8として読めないものがこれを超えたらCP932。
+# 半分にしてあるのは、**どちらの側の事故も1件では起こさない**ため ──
+# CP932のファイルなら日本語の値はほぼ全部が読めず、UTF-8のファイルなら
+# 読めないのは壊れた値だけなので、実際の値は0付近か1付近に寄る
+SNIFF_CP932_RATIO = 0.5
 
-    Python の `sqlite3` は既定でTEXT列をUTF-8として読み、**読めなければ
-    その場で `OperationalError` を投げる**(bytes では返らない)。
-    つまり値を受け取ってから直すことはできず、**列を1つ読めないだけで
-    その表ぜんぶが取り込めない** ── 現場から届いていた
-    「仕掛かり一覧の文字化け」と「マスタが表示されない」は、どちらも
-    ここが出どころだった。
 
-    そこで読む側にこの関数を挿す。まずUTF-8(正しく変換されたファイルは
-    これで通る)、駄目ならCP932、どちらでも読めない字だけを最後に
-    `errors="replace"` で落とす ── 全体を捨てるよりはましだから。
+def sniff_encoding(conn: sqlite3.Connection) -> str:
+    """このファイルの文字が、UTF-8で入っているのかCP932で入っているのか。
+
+    【値ごとに判定してはいけない】
+    「まずUTF-8、駄目ならCP932」と1値ずつ試すのは**間違い**だった。
+    CP932のバイト列が、たまたま正しいUTF-8としても読めることがある ──
+    例えば `燿　` は CP932 で `e0 a0 81 40`、これはUTF-8としても妥当で
+    `ࠁ@` と読めてしまう。例外も出ず `�` も出ないので、**静かに化ける。**
+    現場の「文字化けが治っていない」の残りはこれだった。
+
+    【ファイル単位なら決められる】
+    変換ツールは1つのファイルを1つの入れ方で書く。そして**本物のUTF-8の
+    ファイルには、UTF-8として読めないバイト列が1つも無い。** だから
+    「読めない値が1つでもあればCP932」と決めてよい。
+    値ごとの当てずっぽうと違って、この判定は取りこぼさない。
     """
+    # **表と列の名前は、切り替える前に集める。** `text_factory` は
+    # `PRAGMA table_info` の戻り(列名・型)にも効くので、bytes にしたまま
+    # 引くと列名が `b'用途名'`、型が `b'TEXT'` になり、TEXT列が1つも
+    # 見つからない ── 判定は素通りして「UTF-8」を返してしまう
+    plan: list[tuple[str, list[str]]] = []
+    with identifiers_as_utf8(conn):
+        try:
+            names = [row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name NOT LIKE 'sqlite_%' LIMIT ?", (SNIFF_TABLES,))]
+        except sqlite3.Error:
+            return ENCODING_UTF8
+        for table in names:
+            try:
+                columns = [r[1] for r in conn.execute(
+                    f"PRAGMA table_info({quote_identifier(table)})")
+                    if str(r[2]).upper().startswith("TEXT")]
+            except sqlite3.Error:
+                continue
+            if columns:
+                plan.append((table, columns))
+    if not plan:
+        return ENCODING_UTF8
+
+    # **1つの値で決めない。** UTF-8で作られたファイルに壊れた値が1つ
+    # 混ざっているだけで全体をCP932と読むと、その1件を助けるために
+    # 残り全部を化けさせることになる。日本語を含む値だけを数えて多数決:
+    #   CP932のファイル … 日本語の値はほぼ全部がUTF-8として読めない
+    #   UTF-8のファイル … 読めないのは壊れた値だけ(あってもごく僅か)
+    japanese = failed = 0
+    saved = conn.text_factory
+    conn.text_factory = bytes          # 決める前に例外で止まらないように
     try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
+        for table, columns in plan:
+            picked = ", ".join(quote_identifier(c) for c in columns)
+            try:
+                rows = conn.execute(
+                    f"SELECT {picked} FROM {quote_identifier(table)} LIMIT ?",
+                    (SNIFF_ROWS,)).fetchall()
+            except sqlite3.Error:
+                continue               # 引けない表は飛ばす。判定は続ける
+            for row in rows:
+                for value in row:
+                    if not isinstance(value, bytes) or value.isascii():
+                        continue       # ASCIIはどちらでも同じ。判断材料にしない
+                    japanese += 1
+                    try:
+                        value.decode(ENCODING_UTF8)
+                    except UnicodeDecodeError:
+                        failed += 1
+    finally:
+        conn.text_factory = saved
+
+    if japanese and failed / japanese > SNIFF_CP932_RATIO:
+        log.info("取り込み元は CP932 と判断しました"
+                 "(日本語を含む %s件のうち %s件がUTF-8として読めません)",
+                 japanese, failed)
+        return ENCODING_CP932
+    return ENCODING_UTF8
+
+
+@contextmanager
+def identifiers_as_utf8(conn: sqlite3.Connection):
+    """表名・列名を読むあいだだけ、UTF-8で読むようにする。
+
+    **SQLiteの識別子は必ずUTF-8。** 中のデータがCP932で入っていても、
+    表名と列名はUTF-8で保持されている。ところが `sqlite_master` の
+    `name` や `PRAGMA table_info` の戻りは**値として**返るので、
+    CP932で読む `text_factory` を掛けたままだと識別子まで CP932 として
+    読まれ、`ﾛｯﾄ番号` が `ﾛｯﾄ逡ｪ蜿ｷ` になる ── その名前で引こうとして
+    「そんな列は無い」になり、表が丸ごと空で取り込まれる。
+
+    (`cursor.description` の列名は `text_factory` を通らないので無事。
+    影響を受けるのは、識別子を**値として**引くこの2つだけ。)
+    """
+    saved = conn.text_factory
+    conn.text_factory = str            # 既定=UTF-8
     try:
-        return raw.decode("cp932")
-    except UnicodeDecodeError:
-        # ここまで来る行は元のファイルが壊れている。読めた字だけでも残す
-        return raw.decode("utf-8", "replace")
+        yield conn
+    finally:
+        conn.text_factory = saved
+
+
+def make_text_factory(encoding: str) -> Callable[[bytes], str]:
+    """決めた入れ方でTEXT列を読む関数。
+
+    決めたほうで読めない値だけ、もう一方を試す(表の中に1行だけ別の
+    入れ方が混ざっている、という壊れ方があるため)。どちらでも読めない
+    バイト列は元のファイルが壊れている ── **黙って `�` に潰さず**、
+    そうしたことを記録に残す(`decode_failures`)。
+    """
+    other = ENCODING_CP932 if encoding == ENCODING_UTF8 else ENCODING_UTF8
+
+    def decode(raw: bytes) -> str:
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+        try:
+            return raw.decode(other)
+        except UnicodeDecodeError:
+            decode_failures.append(raw[:64])
+            log.warning("どちらの入れ方でも読めないバイト列があります: %s",
+                        raw[:32].hex())
+            return raw.decode(encoding, "replace")
+
+    return decode
+
+
+# どちらでも読めなかったバイト列。**黙って潰さない**ための控え。
+# 取り込みのたびに見て、あれば結果に添える(`data_sync`)
+decode_failures: list[bytes] = []
+
+
+def decode_text(raw: bytes) -> str:
+    """入れ方を決めずに読む(判定できなかったときの保険)。
+
+    ふだんは `sniff_encoding` で決めた `make_text_factory` を使う。
+    """
+    return make_text_factory(ENCODING_UTF8)(raw)
 
 
 def _connect(path: Path, *, read_only: bool) -> sqlite3.Connection:
@@ -203,11 +328,13 @@ def _open(path: Path, *, read_only: bool,
 def _prepare(conn: sqlite3.Connection) -> sqlite3.Connection:
     """開いた直後の約束ごと。**引けることまで確かめる。**"""
     conn.row_factory = sqlite3.Row
-    # **読めない字で表ごと落とさない**(`decode_text` の説明)。
-    # 既定のままだと UTF-8 として読めない TEXT 列で例外が飛び、
-    # その表の取り込みが丸ごと見送られる
-    conn.text_factory = decode_text
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    # **読めない字で表ごと落とさない**、そして**静かに化けさせない**。
+    # 既定のままだと UTF-8 として読めない TEXT 列で例外が飛んで表ごと
+    # 見送られ、値ごとに読み方を当てにいくと CP932 が UTF-8 としても
+    # 読めてしまう場合に黙って化ける(`sniff_encoding` の説明)。
+    # ファイル単位で1つに決めてから読む
+    conn.text_factory = make_text_factory(sniff_encoding(conn))
     conn.execute(_PROOF).fetchone()
     return conn
 
@@ -382,9 +509,10 @@ def probe(path: Path) -> Probe:
         with conn:
             out.journal = str(conn.execute(
                 "PRAGMA journal_mode").fetchone()[0])
-            out.tables = [r["name"] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-                " AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            with identifiers_as_utf8(conn):
+                out.tables = [r["name"] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    " AND name NOT LIKE 'sqlite_%' ORDER BY name")]
     except sqlite3.Error as exc:                 # pragma: no cover - 開けた後
         out.error = str(exc)
     return out
@@ -397,9 +525,10 @@ def list_tables(path: Path) -> list[str]:
     """このファイルにあるテーブルの一覧(sqlite の内部表は除く)。"""
     try:
         with _connect(Path(path), read_only=True) as conn:
-            rows = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-                " AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+            with identifiers_as_utf8(conn):
+                rows = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    " AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
         return [r["name"] for r in rows]
     except (SourceError, sqlite3.Error) as exc:
         log.warning("テーブル一覧を引けません (%s): %s", path, exc)
@@ -410,8 +539,9 @@ def columns(path: Path, table: str) -> list[str]:
     """テーブルの列名。取り込み前に「その列があるか」を見るのに使う。"""
     try:
         with _connect(Path(path), read_only=True) as conn:
-            rows = conn.execute(
-                f"PRAGMA table_info({quote_identifier(table)})").fetchall()
+            with identifiers_as_utf8(conn):
+                rows = conn.execute(
+                    f"PRAGMA table_info({quote_identifier(table)})").fetchall()
         return [r["name"] for r in rows]
     except (SourceError, sqlite3.Error):
         return []
@@ -446,9 +576,10 @@ def table_counts(path: Path) -> dict[str, int]:
     counts: dict[str, int] = {}
     try:
         with _connect(path, read_only=True) as conn:
-            names = [r["name"] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-                " AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()]
+            with identifiers_as_utf8(conn):
+                names = [r["name"] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    " AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()]
             for name in names:
                 try:
                     row = conn.execute(
