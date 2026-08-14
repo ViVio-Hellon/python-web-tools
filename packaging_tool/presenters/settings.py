@@ -338,6 +338,7 @@ def _material_section(material: Optional[Path], conn=None) -> Section:
         # 手当てが要る(WAL のまま共有に置かれている等)
         section.checks.append(Check(
             "開き方", found.opened_by, WARN, _why_detoured(found)))
+    _encoding_check(section, found)
 
     names = found.tables
     from .. import import_specs
@@ -409,6 +410,26 @@ def _kanban_section(kanban: Optional[Path]) -> Section:
     else:
         section.checks.append(Check("テーブル", f"{len(names)}個", OK))
     return section
+
+
+def _encoding_check(section: Section, found: "source_db.Probe") -> None:
+    """中の文字をどちらの入れ方と判断したか。**判定を隠さない。**
+
+    文字化けの問い合わせが来たとき、これが出ていれば
+    「判定を誤った(CP932なのにUTF-8と読んだ等)」のか
+    「元のファイルがそもそも壊れている」のかが、その場で切り分けられる。
+    出ていないと、また同じ調べ直しを一からやることになる。
+    """
+    if not found.encoding:
+        return
+    cp932 = found.encoding == source_db.ENCODING_CP932
+    section.checks.append(Check(
+        "文字の入れ方", "Shift-JIS(CP932)" if cp932 else "UTF-8", INFO,
+        ("中の日本語がCP932で入っていると判断しました。読むときに変換します。"
+         if cp932 else
+         "中の日本語がUTF-8で入っていると判断しました。そのまま読みます。")
+        + "  ここが実際と食い違っていると文字化けします"
+          "(化けているのにここが合っていれば、元のファイル側の問題です)。"))
 
 
 def _why_unreadable(found: "source_db.Probe") -> str:
@@ -523,6 +544,11 @@ def _lot_section(lots: dict[str, Path]) -> Section:
         section.checks.append(Check(
             filename, str(found) if found else "見つかりません",
             OK if found else NG))
+    # **文字化けの報告はここの表(仕掛かり一覧)から来る。** どちらの
+    # 入れ方と判断したかを出しておく(`_encoding_check` の説明)
+    for path in lots.values():
+        _encoding_check(section, source_db.probe(path))
+        break                          # 3ファイルとも同じ作られ方。1つで足りる
     section.checks.append(Check(
         "探した場所", f"{config.lot_db_dir()} → {config.master_db_dir()}", INFO,
         "共有フォルダに届かない端末のために、マスタのフォルダも見ます"))

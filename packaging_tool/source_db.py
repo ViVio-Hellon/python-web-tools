@@ -456,6 +456,10 @@ class Probe:
     sidecars: list[str] = field(default_factory=list)
     tables: list[str] = field(default_factory=list)
     attempts: list[tuple[str, str]] = field(default_factory=list)
+    # 中の文字をどちらの入れ方と判断したか(`sniff_encoding`)。
+    # **判定を画面に出しておく。** 文字化けの問い合わせが来たとき、
+    # 判定を誤ったのか元のファイルが壊れているのかが、これだけで分かる
+    encoding: str = ""
     error: str = ""
 
     @property
@@ -513,6 +517,7 @@ def probe(path: Path) -> Probe:
                 out.tables = [r["name"] for r in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                     " AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            out.encoding = sniff_encoding(conn)
     except sqlite3.Error as exc:                 # pragma: no cover - 開けた後
         out.error = str(exc)
     return out

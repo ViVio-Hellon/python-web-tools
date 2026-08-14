@@ -329,6 +329,34 @@ class MojibakeTests(PresenterTestCase):
         self.conn.commit()
         self.assertEqual(data_sync.mojibake_rows(self.conn), {})
 
+    def test_判定した文字の入れ方を出す(self) -> None:
+        """**判定を隠さない。**
+
+        文字化けの問い合わせが来たとき、これが出ていれば
+        「判定を誤った」のか「元のファイルが壊れている」のかを
+        その場で切り分けられる。出ていないと調べ直しを一からやることになる。
+        """
+        from packaging_tool import source_db
+
+        for encoding, shown in ((source_db.ENCODING_CP932, "CP932"),
+                                (source_db.ENCODING_UTF8, "UTF-8")):
+            with self.subTest(encoding=encoding):
+                section = presenter.Section("試し")
+                presenter._encoding_check(
+                    section, source_db.Probe(encoding=encoding))
+                check = next(c for c in section.checks
+                             if c.label == "文字の入れ方")
+                self.assertIn(shown, check.value)
+                self.assertIn("文字化け", check.detail)
+
+    def test_開けなかったファイルには入れ方を出さない(self) -> None:
+        """判定できていないのに何か書くと、それ自体が誤情報になる。"""
+        from packaging_tool import source_db
+
+        section = presenter.Section("試し")
+        presenter._encoding_check(section, source_db.Probe())
+        self.assertEqual(section.checks, [])
+
     def test_取り込み直しへ案内する(self) -> None:
         """見つけただけでは直らない。**入れ直す場所へ繋ぐ。**"""
         self.conn.execute(
