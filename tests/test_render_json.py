@@ -110,6 +110,13 @@ class AnglePlanTests(unittest.TestCase):
         self.assertEqual(len(self.plan["bars"]), 2)
         self.assertEqual(len(self.plan["legs"]), 4)
 
+    def test_バーのフォントサイズがJSONに乗る(self) -> None:
+        """`angle_render.Rect.font_size` を運ばないと、描画側の既定(7)に
+        落ちて実機で読めない大きさになる(現場の声)。"""
+        for bar in self.plan["bars"]:
+            self.assertIn("font_size", bar)
+            self.assertGreater(bar["font_size"], 7)
+
     def test_製品の左右端が入る(self) -> None:
         self.assertEqual(len(self.plan["product_edges"]), 2)
 

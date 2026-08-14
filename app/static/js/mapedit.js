@@ -232,6 +232,13 @@ export function attach(svg, opts) {
     reset() { holding = null; selected.clear(); },
     /** 再描画のたびに呼ぶ。複数選択の見た目(`.is-multi`)を付け直す。 */
     reapplySelection() { markSelected(); },
+    /**
+     * 配置編集をOFFにしたときに呼ぶ。複数選択を捨てないと、次にONに
+     * したときも前の選択の輪郭が残ったままになる(現場の声:
+     * 「配置編集のシフト+クリック後に配置編集をoffにしてもシフト+クリック
+     * の強調表示のままになっている」)。
+     */
+    clearSelection() { selected.clear(); markSelected(); },
   };
 }
 

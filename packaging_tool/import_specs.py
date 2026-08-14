@@ -21,11 +21,23 @@ def _text(value: Any) -> str:
     取り込み元が sqlite3 になって、値は**型が付いたまま**返るように
     なりました(以前の mdb-export は何でも文字列でした)。数値に
     `.strip()` を呼んで落ちないよう、入口でここを通します。
+
+    【bytes で返ってくるとき】
+    sqlite3 は TEXT 列を既定で UTF-8 として str に直すが、**UTF-8として
+    読めない列は bytes のまま返す**(元の Access からの移行時、丸数字や
+    ローマ数字など JIS 拡張の文字を Shift-JIS(CP932)のまま書いた行が
+    混ざっているとこれが起きる)。以前は問答無用で UTF-8 decode
+    (`errors="replace"`)していたため、読めない字がそのまま `�` に
+    置き換わって**永久に失われていた**(現場の声:「仕掛かり一覧に
+    文字化けがある」)。CP932 として読めるならそちらを優先する。
     """
     if value is None:
         return ""
     if isinstance(value, bytes):
-        return value.decode("utf-8", "replace").strip()
+        try:
+            return value.decode("cp932").strip()
+        except UnicodeDecodeError:
+            return value.decode("utf-8", "replace").strip()
     return str(value).strip()
 
 

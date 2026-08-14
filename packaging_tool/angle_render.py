@@ -61,6 +61,11 @@ class Rect:
     caption: str = ""
     text_color: str = "#000000"
     bold: bool = False
+    # 未指定なら描画側(`svgplan.js`)が 7 を当てる。それでは実機で
+    # 読めないほど小さかった(`placement_render.build_caption` と同じ
+    # 不具合。現場の声:「アングルがどのサイズか配置後わからない
+    # （文字サイズ）」)ので、キャプションを持つ矩形には明示的に渡す
+    font_size: int = 0
 
 
 @dataclass
@@ -231,6 +236,7 @@ def build_angle_plan(
             x=lefts[idx], y=tops[idx], width=lens[idx] * scale, height=ANGLE_BAR_H,
             fill=BAR_COLORS[idx % len(BAR_COLORS)], outline=COLOR_BAR_BORDER,
             caption=f"{lens[idx]}mm", text_color=COLOR_BAR_TEXT, bold=True,
+            font_size=9,
         ))
 
     # 1本をカットして使う場合は、切り落とす側を廃材として見せる
@@ -242,7 +248,8 @@ def build_angle_plan(
             plan.cut_marks.append(Rect(
                 x=cut_x, y=tops[0], width=waste_w, height=ANGLE_BAR_H,
                 fill=COLOR_WASTE, outline=COLOR_WASTE_BORDER,
-                caption=f"廃材 {cut_amount}mm", text_color=COLOR_WASTE_TEXT))
+                caption=f"廃材 {cut_amount}mm", text_color=COLOR_WASTE_TEXT,
+                font_size=9))
         plan.cut_marks.append(Rect(
             x=cut_x - 1, y=tops[0] - 4, width=2, height=ANGLE_BAR_H + 8, fill=COLOR_CUT_LINE))
         plan.notes.append(TextItem(

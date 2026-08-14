@@ -318,6 +318,15 @@ class AccessGuidanceTests(PresenterTestCase):
         self.assertEqual(section.action, presenter.FIX_ACCESS)
         self.assertEqual(section.action[1], "master")
 
+    def test_パスワードの置き場所を常に案内する(self) -> None:
+        """「いつもどこだっけって探しちゃう」という現場の声への対応。
+        マスタを直すには資材モードに加えて管理者パスワードも要る
+        (VER2.17.0)ので、入力場所をここに常に出す(値そのものは出さない)。"""
+        check = next(c for c in self.section().checks
+                    if c.label == "マスタを直すパスワードの入力欄")
+        self.assertIn("資材選択", check.value)
+        self.assertIn("管理者", check.value)
+
     def test_身元と権限コードの候補が具体的に入る(self) -> None:
         identity = self.access_control.current_identity()
         detail = next(c for c in self.section().checks

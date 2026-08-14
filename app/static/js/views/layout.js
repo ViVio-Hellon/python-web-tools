@@ -63,6 +63,9 @@ function box(item, className) {
 function renderMap(next) {
   el.map.setAttribute("viewBox", next.view_box);
   el.map.classList.toggle("map--editing", next.editing);
+  // 編集をOFFにしたら複数選択も捨てる。**捨てないと、次にONにしたときも
+  // 前回選んでいた箱の輪郭が残ったままになる**(現場の声)
+  if (!next.editing) dragger?.clearSelection();
 
   const parts = [];
   // 背景 → 区画 → 置き場 → 拠点 の順。後に描いたものが前に来る

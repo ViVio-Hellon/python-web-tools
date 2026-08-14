@@ -48,6 +48,9 @@ function drawMap(map) {
   el.map.replaceChildren();
 
   el.map.classList.toggle("map--editing", Boolean(map.editing));
+  // 編集をOFFにしたら複数選択も捨てる。**捨てないと、次にONにしたときも
+  // 前回選んでいた箱の輪郭が残ったままになる**(現場の声)
+  if (!map.editing) dragger?.clearSelection();
 
   if (map.background) {
     const image = document.createElementNS(SVG_NS, "image");

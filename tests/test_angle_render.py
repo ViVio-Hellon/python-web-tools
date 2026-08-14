@@ -149,6 +149,14 @@ class BuildAnglePlanTests(unittest.TestCase):
         self.assertEqual(captions, {"2000mm", "1500mm"})
         self.assertEqual(plan.bars[0].fill, ar.BAR_COLORS[0])
 
+    def test_bar_captions_have_a_legible_font_size(self):
+        """未指定(0)だと描画側の既定7になり、実機では読めない大きさだった
+        (現場の声:「アングルがどのサイズか配置後わからない」)。"""
+        plan = ar.build_angle_plan([2000], product_len=1800, pallet_len=2600,
+                                   leg_count=3, canvas_w=400)
+        for bar in plan.bars:
+            self.assertGreater(bar.font_size, 7)
+
     def test_zero_length_angles_are_ignored(self):
         plan = ar.build_angle_plan([0, 0], product_len=2000, pallet_len=2600,
                                    leg_count=3, canvas_w=400)

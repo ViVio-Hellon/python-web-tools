@@ -107,6 +107,9 @@ def angle_rect_to_dict(rect: Optional[angle_render.Rect]) -> Optional[dict[str, 
         "fill": rect.fill, "outline": rect.outline,
         "caption": rect.caption,
         "text_color": rect.text_color, "bold": bool(rect.bold),
+        # 未指定(0)なら描画側の既定(7)に任せる。バーの mm 表示のように
+        # 明示した矩形だけ大きくなる(`angle_render.Rect.font_size` 参照)
+        "font_size": rect.font_size,
     }
 
 
