@@ -438,3 +438,59 @@ class ProbeTests(unittest.TestCase):
 
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
+
+
+class CheckEncodingScriptTests(unittest.TestCase):
+    """`scripts/check_encoding.py` ── **壊れているのか読み方か**を判別する。
+
+    文字化けの原因は2つに1つで、直し方がまったく違う。画面の文字を
+    見比べても区別が付かない(どちらも同じように化けて見える)ので、
+    バイトを見て言い切れるようにする。
+
+        (A) 読み方の問題       … 取り込み直せば直る
+        (B) 元のファイルが壊れている … 取り込み直しても直らない
+    """
+
+    def setUp(self) -> None:
+        import importlib.util
+
+        root = Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "check_encoding", root / "scripts" / "check_encoding.py")
+        self.script = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.script)
+        self.dir = Path(tempfile.mkdtemp(prefix="checkenc_"))
+
+    def make(self, name: str, values: list) -> Path:
+        path = self.dir / name
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE 仕掛 (用途名 TEXT)")
+        for value in values:
+            if isinstance(value, bytes):
+                conn.execute("INSERT INTO 仕掛 VALUES (CAST(? AS TEXT))", (value,))
+            else:
+                conn.execute("INSERT INTO 仕掛 VALUES (?)", (value,))
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_健全なCP932は壊れていないと言う(self) -> None:
+        path = self.make("健全.sqlite3",
+                         [s.encode("cp932")
+                          for s in ("JISN製品①", "シャーシ", "燿　")])
+        self.assertFalse(self.script.inspect(path))
+
+    def test_焼き付いた文字化けを壊れていると言う(self) -> None:
+        """`�` が**元のファイルに入っている**なら、取り込み直しても直らない。
+
+        変換の時点で読めなかった字は、そこでバイトが失われている。
+        「取り込み直してください」と案内してはいけない場面。
+        """
+        damaged = [s.encode("cp932").decode("utf-8", "replace")
+                   for s in ("JISN製品①", "シャーシ")]
+        path = self.make("壊れている.sqlite3", damaged)
+        self.assertTrue(self.script.inspect(path))
+
+    def test_正しいUTF8も壊れていないと言う(self) -> None:
+        path = self.make("UTF8.sqlite3", ["JISN製品①", "シャーシ", "燿　"])
+        self.assertFalse(self.script.inspect(path))
