@@ -166,7 +166,8 @@ class PalletSizeRow:
     rotated: bool = False        # 製品を回して(幅と丈を入れ替えて)当てた
     exact: bool = False          # 許容差なしで適合範囲に収まった
     tolerance: int = 0           # 許容差で当てたときの、その許容量(mm)
-    two_stack: bool = False      # 2山積の寸法(片側2倍)で当てた
+    # 2山積で当てたときだけ、その積み方(`幅2山` / `丈2山`)。通常は空
+    two_stack: str = ""
 
 
 def _row_to_pallet_size_row(row: sqlite3.Row) -> PalletSizeRow:
@@ -411,6 +412,26 @@ def _keta_ok(pass_def: _PassDef, two_stack: bool, industry: str, keta: int, leg:
     return True
 
 
+# 2山積の種別。一覧の絞り込み(`list_pallets_for_product`)が
+# `_keta_ok` / `_category_ok` と同じ条件を掛けるために使う
+KIND_WIDTH2 = "幅2山"
+KIND_LEN2 = "丈2山"
+
+
+def _two_stack_ok(kind: str, industry: str, keta: int, leg: int) -> bool:
+    """その業界・桁数・脚数で、その2山の積み方ができるか。
+
+    条件そのものは `_category_ok` / `_keta_ok`(自動選定のパス定義)が
+    持っているものと同じ。**同じ条件を2つの言い方で書かない**ため、
+    ここは種別から引き直すだけにしてある。
+    """
+    if kind == KIND_WIDTH2:
+        return industry == "スカシ" or (keta > 0 and keta % 2 == 1)
+    if kind == KIND_LEN2:
+        return industry in ("スカシ", "タイト") and leg >= 3
+    return True                                   # 2山積ではない(通常/回転)
+
+
 def _pass_tag(pass_def: _PassDef, two_stack: bool) -> str:
     """ログに付ける2山モードの種別タグ(VBA `passTag`)。"""
     if pass_def.number <= 16:
@@ -627,15 +648,23 @@ def list_pallets_for_product(
 
     # 当たりを見る向き。**上から順に見て、最初に当たったものを採る** ──
     # 順番を変えると「回さなくても載る行」が回転扱いになる。
-    # 2山積の2つは `_search_dims` と同じ組み合わせにそろえてある
-    tries: list[tuple[int, int, bool, bool]] = [
-        (product_width, product_length, False, False),   # 通常
-        (product_length, product_width, True, False),    # 回転
-    ]
+    #
+    # **2山積のときは通常寸法を見ない。** `auto_select_pallet` は2山モードで
+    # パス1〜16の寸法そのものを片側2倍に差し替える(`_search_dims`)ので、
+    # 通常寸法は1パスも走らない。ここで通常寸法も混ぜると、**任意で2山を
+    # 選んだのに通常の候補まで並んで邪魔になる**(現場の声)。
+    # 組み合わせも `_search_dims` にそろえる(幅2山=片側2倍、丈2山=丈2倍)。
     if two_stack:
-        tries += [
-            (product_width * 2, product_length, False, True),   # 幅2山
-            (product_length * 2, product_width, True, True),    # 丈2山(回転)
+        tries: list[tuple[int, int, bool, str]] = [
+            (product_width * 2, product_length, False, KIND_WIDTH2),
+            (product_length * 2, product_width, True, KIND_WIDTH2),
+            (product_width, product_length * 2, False, KIND_LEN2),
+            (product_length, product_width * 2, True, KIND_LEN2),
+        ]
+    else:
+        tries = [
+            (product_width, product_length, False, ""),      # 通常
+            (product_length, product_width, True, ""),       # 回転
         ]
 
     result: list[PalletSizeRow] = []
@@ -648,7 +677,20 @@ def list_pallets_for_product(
             ulog.log(f"  ×除外: {label} 適合範囲がマスタ側で不正です")
             continue
 
-        hit = next(((sw, sl, rot, stack) for sw, sl, rot, stack in tries
+        industry = row["業界"] or ""
+        # **2山積は誰にでも積めるわけではない。** 幅2山は桁が奇数か
+        # スカシ、丈2山はスカシ/タイトで脚数3以上 ── `auto_select_pallet`
+        # の `_category_ok` / `_keta_ok` と同じ条件。ここに無かったため、
+        # 積めないパレットまで2山の候補に出ていた(現場の指摘)
+        allowed = [(sw, sl, rot, kind) for sw, sl, rot, kind in tries
+                   if _two_stack_ok(kind, industry, row["桁数"], row["脚数"])]
+        if two_stack and not allowed:
+            ulog.log(f"  ×除外: {label} 2山積の条件に合いません"
+                     f"(業界 {industry or '(なし)'} /"
+                     f" 桁数 {row['桁数']} / 脚数 {row['脚数']})")
+            continue
+
+        hit = next(((sw, sl, rot, kind) for sw, sl, rot, kind in allowed
                     if _size_ok(row, sw, sl, tol)), None)
         if hit is None:
             ulog.log(f"  ×除外: {label} 適合範囲外"
@@ -674,7 +716,6 @@ def list_pallets_for_product(
             ulog.log(f"  ×除外: {label} EX({symbol})なので既定では出しません")
             continue
 
-        industry = row["業界"] or ""
         if industry == "5×10":
             ok, _needs_warning = _thickness_5x10_ok(symbol, manufactured_thickness)
             if not ok:
@@ -691,7 +732,7 @@ def list_pallets_for_product(
         result.append(found)
         ulog.log(f"  ○候補: {label}"
                  + ("(回転)" if rotated else "")
-                 + ("(2山)" if stacked else "")
+                 + (f"({stacked})" if stacked else "")
                  + ("(厳密)" if exact else f"(+{tol}mm)"))
 
     ulog.log(f"[パレット絞り込み] {len(result)}件が候補です", emphasis=True)

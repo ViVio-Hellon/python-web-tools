@@ -307,6 +307,8 @@ def _admin_authenticated(conn) -> bool:
 FIX_SOURCE = ("置き場所を直す", "source")
 # アクセス権限を直しに行く先。マスタ管理タブで編集する
 FIX_ACCESS = ("マスタ管理でアクセス権限を編集", "master")
+# 取り込み直しに行く先。**入れ直さないと直らないもの**があるので繋ぐ
+FIX_IMPORT = ("取り込み直す", "run")
 
 
 def _material_section(material: Optional[Path], conn=None) -> Section:
@@ -486,6 +488,20 @@ def _check_local_master(section: Section, conn) -> None:
             f"{sample}{more}。そろえて拾っているので選定は通りますが、"
             f"マスタ側をそろえておくと確実です。"
             f"「適合範囲を再計算」を押すと、どの行かが全部出ます。"))
+
+    # **文字化けは版を上げただけでは消えない。** 置き換わった時点で元の
+    # バイトが失われているので、取り込み直すまで手元に残る
+    # (現場の声:「文字化け治ってないよ」── 読む側は直っていた)
+    garbled = data_sync.mojibake_rows(conn)
+    if garbled:
+        total = sum(garbled.values())
+        detail = " / ".join(f"{t} {n}件" for t, n in sorted(garbled.items()))
+        section.checks.append(Check(
+            "文字化けした行", f"{total}件", WARN,
+            f"{detail}。取り込み元をUTF-8として決め打ちで読んでいたころに"
+            "入った字です(読み方は直しました)。**置き換わった字は戻らない**"
+            "ので、「まとめて取り込み」を押して入れ直してください。"))
+        section.action = FIX_IMPORT
 
     empty = data_sync.missing_master_tables(conn)
     if empty:

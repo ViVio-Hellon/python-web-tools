@@ -291,6 +291,58 @@ class FixRouteTests(PresenterTestCase):
         self.assertIsNone(end["action"])
 
 
+class MojibakeTests(PresenterTestCase):
+    """**文字化けは版を上げただけでは消えない。**
+
+    取り込み元をUTF-8として決め打ちで読んでいたころ(〜VER2.19.0)に
+    入った `�` は、置き換わった時点で元のバイトが失われている。
+    読み方を直しても手元の行はそのままなので、取り込み直すまで画面には
+    文字化けが出続ける ── 現場の声「文字化け治ってないよ」。
+    こちらから見つけて、入れ直しへ案内する。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from packaging_tool import db
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        db.apply_schema(self.conn)
+        self.addCleanup(self.conn.close)
+
+    def test_手元に残った文字化けを数える(self) -> None:
+        from packaging_tool import data_sync
+        self.conn.execute(
+            "INSERT INTO 仕掛ロット (ロット番号,用途名) VALUES (?,?)",
+            ("4102781", "JISN�y�y"))
+        self.conn.execute(
+            "INSERT INTO 仕掛ロット (ロット番号,用途名) VALUES (?,?)",
+            ("4102782", "シャーシ"))
+        self.conn.commit()
+        self.assertEqual(data_sync.mojibake_rows(self.conn), {"仕掛ロット": 1})
+
+    def test_きれいなら黙っている(self) -> None:
+        """出続ける警告は読まれなくなる。"""
+        from packaging_tool import data_sync
+        self.conn.execute(
+            "INSERT INTO 仕掛ロット (ロット番号,用途名) VALUES (?,?)",
+            ("4102782", "シャーシ①"))
+        self.conn.commit()
+        self.assertEqual(data_sync.mojibake_rows(self.conn), {})
+
+    def test_取り込み直しへ案内する(self) -> None:
+        """見つけただけでは直らない。**入れ直す場所へ繋ぐ。**"""
+        self.conn.execute(
+            "INSERT INTO 仕掛ロット (ロット番号,用途名) VALUES (?,?)",
+            ("4102781", "JISN�y"))
+        self.conn.commit()
+        section = next(s for s in presenter.build(self.conn).sections
+                       if s.title == "梱包資材マスタ")
+        check = next(c for c in section.checks if c.label == "文字化けした行")
+        self.assertEqual(check.level, presenter.WARN)
+        self.assertIn("仕掛ロット", check.detail)
+        self.assertIn("取り込み", check.detail)
+
+
 class AccessGuidanceTests(PresenterTestCase):
     """権限が既定へ落ちたとき、直し方が具体的に分かること(現場の声)。
 

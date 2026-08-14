@@ -376,16 +376,50 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
         ため「検索しなおさない」と受け取られていた(現場の声)。
         `auto_select_pallet` の `_search_dims` と同じく片側2倍で当たる。
         """
-        # 製品1252x2502。幅2山(1252×2=2504)でだけ適合範囲に入る
+        # 製品1252x2502。幅2山(1252×2=2504)でだけ適合範囲に入る。
+        # 桁数を奇数にして幅2山を許す(`_keta_ok`)
         insert_pallet(self.conn, width=2600, length=2600,
-                      w_min=2400, w_max=2560, l_min=2400, l_max=2560, unit="台")
+                      w_min=2400, w_max=2560, l_min=2400, l_max=2560,
+                      unit="台", keta=3)
         self.assertEqual(
             svc.list_pallets_for_product(
                 self.conn, product_width=1252, product_length=2502), [])
         rows = svc.list_pallets_for_product(
             self.conn, product_width=1252, product_length=2502, two_stack=True)
         self.assertEqual(len(rows), 1)
-        self.assertTrue(rows[0].two_stack)
+        self.assertEqual(rows[0].two_stack, svc.KIND_WIDTH2)
+
+    def test_2山積は通常寸法を混ぜない(self):
+        """**任意で2山を選ぶことに意味がある。**
+
+        `auto_select_pallet` は2山モードで全パスの寸法を片側2倍に
+        差し替えるので、通常寸法は1パスも走らない。一覧で通常の候補まで
+        並べると「結果が増えて邪魔」になる(現場の指摘)。
+        """
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      unit="台", keta=3)
+        # 通常なら当たる製品サイズ
+        self.assertEqual(
+            len(svc.list_pallets_for_product(
+                self.conn, product_width=1000, product_length=2500)), 1)
+        # 2山にすると、この行は2倍寸法では適合しないので出ない
+        self.assertEqual(
+            svc.list_pallets_for_product(
+                self.conn, product_width=1000, product_length=2500,
+                two_stack=True), [])
+
+    def test_2山積の条件に合わないパレットは出さない(self):
+        """幅2山は桁数奇数かスカシ、丈2山はスカシ/タイトで脚数3以上
+        (`_keta_ok` / `_category_ok`)。積めないパレットを候補にしない。"""
+        # 桁数が偶数・業界も空なので、幅2山は許されない
+        insert_pallet(self.conn, width=2600, length=2600,
+                      w_min=2400, w_max=2560, l_min=2400, l_max=2560,
+                      unit="台", keta=4)
+        self.assertEqual(
+            svc.list_pallets_for_product(
+                self.conn, product_width=1252, product_length=2502,
+                two_stack=True), [])
 
     def test_外した理由を選定ログに残す(self):
         """**決定事項は画面を見れば分かる。要るのは経緯**(現場の声)。

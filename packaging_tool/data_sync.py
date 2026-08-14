@@ -735,6 +735,46 @@ def missing_master_tables(conn: sqlite3.Connection) -> list[str]:
     return empty
 
 
+# 文字化けの跡。UTF-8として読めなかった字がここに置き換わっている
+REPLACEMENT = "�"
+
+
+def mojibake_rows(conn: sqlite3.Connection) -> dict[str, int]:
+    """**手元のDBに残っている文字化け**を、表ごとに数える。
+
+    取り込み元をUTF-8として決め打ちで読んでいたころ(〜VER2.19.0)は、
+    読めない字が `�` に置き換わったまま手元へ入っていた。読む側は
+    直した(`source_db.decode_text`)が、**入ってしまった字は戻らない** ──
+    置き換わった時点で元のバイトが失われているため。
+
+    つまり版を上げただけでは画面の文字化けは消えず、**取り込み直すまで
+    残る**。放っておくと「直したと言われたのに直っていない」になるので、
+    こちらから見つけて言う(設定画面の「いまの状態」)。
+    """
+    from . import import_specs
+
+    tables = list(import_specs.IMPORT_SPECS) + list(import_specs.LOT_IMPORT_SPECS)
+    found: dict[str, int] = {}
+    for table in tables:
+        try:
+            columns = [r[1] for r in conn.execute(f"PRAGMA table_info([{table}])")
+                       if str(r[2]).upper().startswith("TEXT")]
+        except sqlite3.Error:
+            continue
+        if not columns:
+            continue
+        where = " OR ".join(f"[{c}] LIKE ?" for c in columns)
+        try:
+            count = conn.execute(
+                f"SELECT COUNT(*) FROM [{table}] WHERE {where}",
+                [f"%{REPLACEMENT}%"] * len(columns)).fetchone()[0]
+        except sqlite3.Error:
+            continue
+        if count:
+            found[table] = count
+    return found
+
+
 # ==================================================================
 # 診断
 # ==================================================================

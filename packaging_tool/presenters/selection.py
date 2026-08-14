@@ -1577,8 +1577,9 @@ def _match_note(row: Any) -> str:
         parts.append("厳密")
     else:
         parts.append(f"+{getattr(row, 'tolerance', 0)}mm")
-    if getattr(row, "two_stack", False):
-        parts.append("2山積")
+    # 2山積は積み方まで出す。**幅2山と丈2山では現物の積み方が違う**
+    if getattr(row, "two_stack", ""):
+        parts.append(row.two_stack)
     return "   当たり方: " + " / ".join(parts)
 
 
