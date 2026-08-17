@@ -534,6 +534,41 @@ class CachePolicyTests(unittest.TestCase):
         self.assertIn("max-age=", res.headers["Cache-Control"])
         self.assertIn("immutable", res.headers["Cache-Control"])
 
+    def test_版の付かない静的ファイルは必ず確かめさせる(self):
+        """**入口だけが新しくて中身が古い、を作らない。**
+
+        版を付けるのは `url_for('static', ...)` で、効くのはテンプレートが
+        名指しするファイルだけ。その中の
+
+            import * as mapedit from "../mapedit.js";
+
+        は版の付かない素のURLで取りに行く。ここに `immutable` を付けると
+        ブラウザは再確認すらせず、入れ替えても共有モジュールだけが
+        何日も古いまま残る ── 現場で実際に
+
+            dragger?.clearSelection is not a function
+
+        という形で壊れた(入口の inventory.js は v=2.27.0、中の
+        mapedit.js は古いまま)。
+        """
+        res = self.client.get("/static/js/mapedit.js")
+        self.assertEqual(res.status_code, 200)
+        self.assertNotIn("immutable", res.headers["Cache-Control"])
+        self.assertIn("no-cache", res.headers["Cache-Control"])
+
+    def test_共有モジュールは版なしで読まれている(self):
+        """上の試験が守っているものが、実際にその形で読まれていること。"""
+        root = Path(__file__).resolve().parent.parent
+        views = root / "app" / "static" / "js" / "views"
+        found = []
+        for path in views.glob("*.js"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("import") and '"../' in line:
+                    found.append(line)
+        self.assertTrue(found, "共有モジュールの import が見当たりません")
+        # 版が付いていないことを確かめる(付ける方式へ変えたらこの試験を直す)
+        self.assertFalse([line for line in found if "?v=" in line])
+
     def test_版のバッジは毎回作り直される(self):
         """控えられないので、入れ替えれば次に開いたときに変わる。"""
         html = self.client.get("/lot", headers=self.auth).get_data(as_text=True)

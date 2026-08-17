@@ -261,10 +261,31 @@ def _apply_cache_policy(response) -> None:
       入れ替えればURLが変わるので、古いものが出ることはない
     - **それ以外は控えない。** 画面のHTMLも、APIの応答も、
       いま作ったものを毎回渡す
+
+    【版が入るのは入口だけ、という落とし穴】
+    版を付けるのは `url_for('static', ...)`(`_register_static_version`)で、
+    それが効くのは**テンプレートが名指しするファイルだけ**です。
+    その中の
+
+        import * as mapedit from "../mapedit.js";
+
+    は版の付かない素のURLで取りに行きます。ここに `immutable` を
+    付けると、ブラウザは**再確認すらしません** ── 入れ替えても
+    共有モジュールだけが何日も古いまま残り、
+
+        dragger?.clearSelection is not a function
+
+    のように「入口は新しいのに、その中身が古い」形で壊れます
+    (現場で実際に踏みました)。版が入っていないものは
+    `no-cache`(=使う前に必ず確かめる)にします。ETag が付いているので
+    中身が同じなら 304 が返るだけで、手元のサーバでは事実上ただです。
     """
     if request.path.startswith("/static/"):
-        response.headers["Cache-Control"] = (
-            f"public, max-age={STATIC_MAX_AGE}, immutable")
+        if request.args.get("v"):
+            response.headers["Cache-Control"] = (
+                f"public, max-age={STATIC_MAX_AGE}, immutable")
+        else:
+            response.headers["Cache-Control"] = "no-cache"
         return
     response.headers["Cache-Control"] = "no-store"
     # 発見的キャッシュを使う古いブラウザ向け。`no-store` を読まない
