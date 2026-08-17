@@ -148,22 +148,26 @@ class ScrollRuleTests(unittest.TestCase):
     def test_結果カラムはスクロールしてよい(self) -> None:
         self.assertRegex(self.css, r"\.split__results\s*\{[^}]*overflow:\s*auto")
 
-    def test_操作カラムはスクロールさせない(self) -> None:
-        """見えていない操作に気づけない。手が位置を覚えられない。"""
-        self.assertRegex(self.css, r"\.split__controls\s*\{[^}]*overflow:\s*hidden")
-
-    def test_基準より低い画面では動かせるようにする(self) -> None:
+    def test_操作カラムはスクロールできる(self) -> None:
         """**隠すより動かせるほうがまし。**
 
-        基準は FHD 100%(本体894px)で、そこでは段階的開示と面で収まる。
-        1366x768 のような低い画面では入りきらないことがあり、
-        `overflow: hidden` のままだと下の操作が消える ── 消えた操作には
-        気づけないが、スクロールバーは「まだ下がある」と言ってくれる。
+        もとは `overflow: hidden`(操作は探すものだから動かさない)で、
+        画面が低いときだけスクロールを許していた。ところが一覧
+        (パレット・ボード・アングル)を開いたままにできるようになって、
+        高い画面でも下の設定に届かなくなった ── 現場の声「資材選択に
+        スクロールがないから設定できない。一覧が開くのは良いことなので、
+        スクロールバーを足してほしい」。
+
+        消えた操作には気づけないが、スクロールバーは「まだ下がある」と
+        言ってくれる(§4.2 の但し書き)。
         """
-        self.assertRegex(
+        self.assertRegex(self.css,
+                         r"\.split__controls\s*\{[^}]*overflow-y:\s*auto")
+        # 高さで出し分けない(高い画面でも入りきらないことがある)
+        self.assertNotRegex(
             self.css,
-            r"@media \(max-height: 820px\)\s*\{[^}]*"
-            r"\.split__controls\s*\{[^}]*overflow-y:\s*auto")
+            r"@media \(max-height: \d+px\)\s*\{[^}]*"
+            r"\.split__controls\s*\{[^}]*overflow")
 
     def test_画面ごとにこの規則を上書きしない(self) -> None:
         """**「入りきらない」を `overflow` で隠さない。**
@@ -177,6 +181,20 @@ class ScrollRuleTests(unittest.TestCase):
                 self.assertNotRegex(
                     read(name),
                     r"\.split__controls\s*\{[^}]*overflow[^}]*auto")
+
+
+class CardHeaderTests(unittest.TestCase):
+    """カードの見出しは**入りきらないものを潰さない**。"""
+
+    def test_見出しは折り返す(self) -> None:
+        """折り返さないと、幅の足りない分を全部の子が分け合って縮み、
+        凡例の字が1文字ずつ縦に割れ、後ろのボタンは行から押し出されて
+        見えなくなる ── 現場の声「配置図からコントロールが消えた」。
+        配置編集を入れて見出しの中身が増えたときに出た。
+        """
+        css = (_ROOT / "app" / "static" / "css" / "components.css").read_text(
+            encoding="utf-8")
+        self.assertRegex(css, r"\.card > header \{[^}]*flex-wrap:\s*wrap")
 
 
 class StepDisclosureTests(unittest.TestCase):

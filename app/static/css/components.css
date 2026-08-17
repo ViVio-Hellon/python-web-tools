@@ -153,6 +153,12 @@ a.btn { text-decoration: none; }
 }
 .card > header {
   display: flex; align-items: center; justify-content: space-between;
+  /* **入りきらないものを潰さない。** 折り返さないと、幅の足りない分を
+     全部の子が分け合って縮み、凡例の字が1文字ずつ縦に割れ、後ろの
+     ボタンは行から押し出されて見えなくなる ── 現場の声「配置図から
+     コントロールが消えた」。配置編集を入れて見出しの中身が増えたときに
+     出た(簡易在庫・棚検索の両方)。行が増えるほうがまだまし */
+  flex-wrap: wrap;
   gap: var(--gap); padding: 8px 14px 5px;
   position: sticky; top: 0;
   background: var(--surface);

@@ -298,6 +298,12 @@
            min-height:44px; }
   .tablewrap--materials { max-height:26vh; overflow:auto; }
   .legend:empty { display:none; }
+  /* 凡例。**色見本と言葉をくっつけ、項目どうしは離す** ── 何も当たって
+     いなかったので「☐資材あり☐割り当てなし」と地続きに読めていた
+     (簡易在庫側の `.maplegend` は整っていたので、こちらだけ抜けていた) */
+  .legend { display:flex; flex-wrap:wrap; gap:4px 14px; align-items:center;
+            font-size: var(--fs-xs); color:var(--muted); }
+  .legend__item { display:inline-flex; align-items:center; gap:5px; }
   .card[hidden], .status[hidden], .why[hidden] { display:none; }
 </style>
 {% endblock %}
