@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -234,6 +235,91 @@ class SettingsSectionTests(ModeTestCase):
 
     def html_of(self, app) -> str:
         return app.test_client().get("/settings").get_data(as_text=True)
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class ResyncOnSwitchTests(unittest.TestCase):
+    """切替を断る前に、アクセス権限だけ取り込み元から読み直す(実DB経路)。
+
+    上の `SwitchTests` は `grant=` で権限を固定して試験しており、
+    そこでは実際のDB読み直しは働かない(試験の狙いどおり)。ここは
+    **固定せず**、本物の `startup_grant()` / `current_grant()` の経路を
+    通す ── 現場の声「マスタには正しい行が入っているのに切り替わらない」
+    を再現し、直っていることを確かめる。
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+
+        from packaging_tool import access_control as ac
+        from packaging_tool import config, data_sync, db
+
+        self.dir = Path(tempfile.mkdtemp(prefix="resync_web_"))
+        self.local_db = self.dir / "local.db"
+        self.src = self.dir / "梱包資材マスタ.sqlite3"
+
+        # 手元: スキーマだけ当てて、アクセス権限は空のまま
+        # (「取り込んだつもりが手元へ追いついていない」状態を再現)
+        with db.connect(self.local_db) as conn:
+            db.apply_schema(conn)
+
+        # 取り込み元: 正しい2行が**最初から**入っている
+        src = sqlite3.connect(self.src)
+        src.execute(
+            'CREATE TABLE "アクセス権限" '
+            '("ログインID" TEXT, "PC名" TEXT, "権限" TEXT,'
+            ' "有効" INTEGER, "備考" TEXT)')
+        identity = ac.current_identity()
+        for permission in ("mode:field", "mode:material"):
+            src.execute(
+                'INSERT INTO "アクセス権限" VALUES (?,?,?,1,"")',
+                (identity.login_id, identity.pc_name, permission))
+        src.commit()
+        src.close()
+
+        self._saved_db_path = config.DB_PATH
+        config.DB_PATH = self.local_db
+        self._saved_find = data_sync.find_material_db
+        data_sync.find_material_db = lambda directory=None: self.src
+        self.addCleanup(self._restore)
+
+    def _restore(self) -> None:
+        from packaging_tool import config, data_sync
+        config.DB_PATH = self._saved_db_path
+        data_sync.find_material_db = self._saved_find
+
+    def make(self):
+        from app import create_app
+        app = create_app("field", token=TOKEN, port=8792)   # grant を渡さない
+        app.config["TESTING"] = True
+        app.config["READY"] = True
+        return app
+
+    def test_手元が遅れていても読み直して切り替わる(self) -> None:
+        app = self.make()
+        # 起動時点では、この端末の手元はまだアクセス権限が空
+        self.assertEqual(app.config["MODE"], modes.FIELD)
+
+        res = app.test_client().post(
+            "/api/mode", json={"mode": "material"},
+            headers={"X-Tool-Token": TOKEN})
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        self.assertTrue(res.get_json()["ok"])
+        self.assertEqual(app.config["MODE"], modes.MATERIAL)
+
+    def test_取り込み元にも本当に無ければ403のまま(self) -> None:
+        """読み直しは同期のずれを直すだけで、無い権限は作らない。"""
+        src = sqlite3.connect(self.src)
+        src.execute('DELETE FROM "アクセス権限" WHERE 権限 = "mode:material"')
+        src.commit()
+        src.close()
+
+        app = self.make()
+        res = app.test_client().post(
+            "/api/mode", json={"mode": "material"},
+            headers={"X-Tool-Token": TOKEN})
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(app.config["MODE"], modes.FIELD)
 
 
 if __name__ == "__main__":

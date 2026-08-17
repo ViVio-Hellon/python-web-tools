@@ -271,6 +271,67 @@ class ExplainGrantTests(unittest.TestCase):
         self.assertIn("マスタ管理", text)
 
 
+class ResyncTests(unittest.TestCase):
+    """`resync()` ── 手元が取り込み元より遅れて残っているときの立て直し。
+
+    マスタ管理から書けば `_follow()` がその場で追いつかせるが、
+    それ以外の経路(Access側の変換をやり直す・別端末が同時に書く等)では
+    手元だけが古いまま残ることがある。「マスタには正しい行が入っている
+    のに切り替わらない」という現場の声はたいていこれが原因だった。
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self.dir = Path(tempfile.mkdtemp(prefix="resync_"))
+        self.src = self.dir / "梱包資材マスタ.sqlite3"
+        src = sqlite3.connect(self.src)
+        src.execute(
+            'CREATE TABLE "アクセス権限" '
+            '("ログインID" TEXT, "PC名" TEXT, "権限" TEXT,'
+            ' "有効" INTEGER, "備考" TEXT)')
+        src.commit()
+        src.close()
+        self.conn = make_db()          # 手元は空(未取り込み)
+        self.addCleanup(self.conn.close)
+
+    def add_source_row(self, permission: str) -> None:
+        src = sqlite3.connect(self.src)
+        src.execute(
+            'INSERT INTO "アクセス権限" VALUES (?,?,?,1,"")',
+            (YAMADA.login_id, YAMADA.pc_name, permission))
+        src.commit()
+        src.close()
+
+    def test_取り込み元にはあるが手元が空なら読み直して見つかる(self) -> None:
+        self.add_source_row("mode:field")
+        self.add_source_row("mode:material")
+
+        before = ac.resolve(self.conn, YAMADA)
+        self.assertFalse(before.has_master)
+        self.assertEqual(before.allowed_modes(), (modes.FIELD,))
+
+        self.assertTrue(ac.resync(self.conn, path=self.src))
+
+        after = ac.resolve(self.conn, YAMADA)
+        self.assertTrue(after.has_master)
+        self.assertIn(modes.MATERIAL, after.allowed_modes())
+        self.assertIn(modes.FIELD, after.allowed_modes())
+
+    def test_取り込み元にも本当に無ければ読み直しても増えない(self) -> None:
+        """読み直しは**同期のずれを直す**だけで、無い権限を作らない。"""
+        self.add_source_row("mode:field")   # material の行は入れない
+
+        self.assertTrue(ac.resync(self.conn, path=self.src))
+        after = ac.resolve(self.conn, YAMADA)
+        self.assertNotIn(modes.MATERIAL, after.allowed_modes())
+
+    def test_取り込み元が見つからなければ黙って諦める(self) -> None:
+        """ここでの失敗はモード切替そのものを止める理由にしない。"""
+        missing = self.dir / "無い.sqlite3"
+        self.assertFalse(ac.resync(self.conn, path=missing))
+
+
 class GrantOfTests(unittest.TestCase):
     def test_知らないコードは受け付けない(self) -> None:
         """試験が実在しない権限を仮定していると、直したつもりの

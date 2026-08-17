@@ -50,6 +50,7 @@ import os
 import platform
 import sqlite3
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .logging_utils import get_logger
@@ -422,6 +423,45 @@ def summarize(codes: Iterable[str]) -> list[str]:
         item = find_permission(code)
         out.append(item.label if item else f"{code}(不明)")
     return out
+
+
+def resync(conn: sqlite3.Connection, *, path: Optional[Path] = None) -> bool:
+    """アクセス権限**だけ**を取り込み元から読み直し、手元をそろえる。
+
+    【なぜここで読み直すのか】
+    マスタ管理から書けば `_follow()` がその場で手元を追いつかせる。
+    しかし取り込み元は共有フォルダの1ファイルで、書く場所は
+    ここ(Webアプリ)だけとは限らない ── 別途Access側の変換を
+    やり直す・別の端末が同時に書く、といった経路では、手元がいつの間にか
+    取り込み元より遅れて残ることがある。
+
+    **モードを切り替えられなかったときこそ、疑わしいのはここ。**
+    「アクセス権限マスタには正しい行が入っている(取り込み元を見れば
+    分かる)のに、なぜか切り替わらない」という声は、たいてい手元が
+    追いついていないだけ。切替を断る前に一度だけ読み直し、それでも
+    駄目なら素直に断る ── 読み直しても通らないなら、行が本当に
+    足りていないということ。
+
+    見つからない・開けない・取り込めないときは**黙って諦める**
+    (`False` を返すだけ)。ここでの失敗はモード切替そのものを
+    止める理由にはしない ── 手元にある分で判定を続ける。
+    """
+    from . import data_sync, import_specs
+
+    path = path or data_sync.find_material_db()
+    if path is None:
+        return False
+    try:
+        result = data_sync.import_tables(
+            conn, path, {TABLE: import_specs.IMPORT_SPECS[TABLE]},
+            required=import_specs.REQUIRED_KEY_COLUMNS,
+            blank_is_missing=import_specs.BLANK_IS_MISSING,
+            optional=import_specs.OPTIONAL_TABLES,
+            fallbacks=import_specs.NULL_FALLBACKS)
+    except sqlite3.Error as exc:
+        log.warning("%s の読み直しに失敗しました: %s", TABLE, exc)
+        return False
+    return TABLE in result.imported
 
 
 def startup_grant() -> Grant:

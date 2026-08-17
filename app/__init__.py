@@ -178,11 +178,24 @@ def set_mode(mode: str) -> bool:
 
     プロセスに1つの状態。このアプリは**1台のPCを1人が使う**前提なので、
     作業状態(`work_context`)と同じ持ち方にそろえている。
+
+    **断る前に、アクセス権限だけ取り込み元から読み直す。**
+    マスタ管理から書けばその場で手元へ追いつくが、それ以外の経路
+    (Access側の変換を別途やり直す・別の端末が同時に書く等)では
+    手元が取り込み元より遅れて残ることがある。「マスタには正しい行が
+    入っているのに切り替わらない」という声は、たいていこれが原因
+    (`access_control.resync` の説明を参照)。読み直しても通らないなら、
+    行が本当に足りていないということなので、そこで素直に断る。
     """
     from flask import current_app
     key = modes.normalize(mode)
-    if key not in modes.KEYS or not current_grant().allows_mode(key):
+    if key not in modes.KEYS:
         return False
+    if not current_grant().allows_mode(key):
+        if access_control.resync(get_db()):
+            g.pop("grant", None)              # 読み直した内容で引き直す
+        if not current_grant().allows_mode(key):
+            return False
     current_app.config["MODE"] = key
     log.info("モードを切り替えました: %s", key)
     return True
