@@ -500,22 +500,32 @@
     </div>
   </section>
 
-  <!-- 8. 管理者 (VBA: 右下に隔離。認証しないと保存できない) -->
-  {# 管理者は**日常操作ではない**(§1.2「日常操作から離す」)。
-     既定で畳み、見出しを押したときだけ開く。操作カラムはスクロール
-     させない決まりなので、毎日使わないものに高さを使わない #}
-  <section class="card card--admin foldable">
+  <!-- 8. 実績パターン (VBA: PalletPatterns の呼び出しと保存) -->
+  {# **畳まない。** もとは「管理者」として畳んであり、パスワード欄が
+     ここにあったので開く理由があった。その欄を設定画面へ移したとたん、
+     開く理由が無くなり**過去の実績を呼び出す機能ごと見えなくなった**
+     ── 現場の声「PalletPatternsからみる機能なくなりました?」。
+
+     呼び出しは日常操作で、認証も要らない(認証が要るのは**保存**だけ。
+     `presenters/selection.build_admin`)。日常操作から離すのは
+     保存のほうなので、畳むのをやめて中身を見えるようにする #}
+  <section class="card">
     <header>
-      <h3>管理者</h3>
+      <i class="ib ib--sm" aria-hidden="true">実</i>
+      <h3>実績パターン</h3>
       <span class="eyebrow" id="adminState">
         {{ "認証済み" if view.admin.authenticated else "未認証" }}</span>
     </header>
     <div class="pad">
+      <p class="why">
+        同じパレットで過去に組んだ内容を<b>呼び出せます</b>(認証は要りません)。
+        <b>保存</b>だけは管理者認証が要ります。
+      </p>
       {# 認証の入力欄そのものは「設定」画面に移した。
          認証はプロセスに1つの状態なので、そちらで通せばここにも
-         そのまま反映される。ここは実績の保存だけに絞る #}
+         そのまま反映される #}
       <p class="why" id="authWhere" {% if view.admin.authenticated %}hidden{% endif %}>
-        認証は「設定」画面の「マスタ編集の認証」欄で行います。
+        認証は「設定」画面の「パスワード」タブ →「マスタ編集の認証」で行います。
       </p>
       <div class="field">
         <button class="btn btn--commit" type="button" id="savePattern"

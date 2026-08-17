@@ -388,6 +388,25 @@ class ShellSwapTests(unittest.TestCase):
         wire = app_js[app_js.index("export function wireShell"):]
         self.assertIn("running.paint()", wire[:wire.index("\n}")])
 
+    def test_権限を足したらその場で帯を取り直す(self) -> None:
+        """**開き直さないと切り替えられない、を作らない。**
+
+        帯のモード切替は「いま持っている権限」で作られるが、作られるのは
+        画面を出すときだけ。アクセス権限マスタに行を足しても、その画面に
+        留まっているかぎり帯は古いままになる ── 現場の声「一回閉じたら
+        いけました。閉じなくてもいいようにしたほうがいいですね」。
+        """
+        nav = (_ROOT / "app" / "static" / "js" / "nav.js").read_text(encoding="utf-8")
+        self.assertIn("export async function refreshShell", nav)
+        # 中身(`<main>`)は差し替えない ── 打ちかけの入力を消さない
+        body = nav[nav.index("export async function refreshShell"):]
+        self.assertNotIn("main#main", body)
+
+        master = (_ROOT / "app" / "static" / "js" / "views" / "master.js").read_text(
+            encoding="utf-8")
+        self.assertIn("refreshShell", master)
+        self.assertIn("アクセス権限", master)
+
     def test_版はどの画面でも消えない(self) -> None:
         """**どれが入っている端末か**を、画面を見れば答えられること。
 

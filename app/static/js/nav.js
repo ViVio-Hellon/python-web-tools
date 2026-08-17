@@ -219,3 +219,31 @@ export function start(hooks = {}) {
     go(location.href, false);
   });
 }
+
+/**
+ * 帯とレールだけを取り直す。**画面の中身と入力は触らない。**
+ *
+ * 帯のモード切替は「いま持っている権限」で作られるが、作られるのは
+ * 画面を出すときだけ。アクセス権限マスタに行を足しても、そのページに
+ * 留まっているかぎり帯は古いままで、**アプリを開き直すまでモードを
+ * 切り替えられない**ように見える(現場の声:「一回閉じたらいけました。
+ * 閉じなくてもいいようにしたほうがいい」)。
+ *
+ * `<main>` を差し替えないので、打ちかけの入力も開いている面も残る。
+ * 取りに行けなかったときは黙って諦める ── 帯が少し古いだけで、
+ * 次の移動で直る。
+ */
+export async function refreshShell() {
+  let next;
+  try {
+    const res = await fetch(location.href, { cache: "no-store" });
+    if (!res.ok) return false;
+    next = new DOMParser().parseFromString(await res.text(), "text/html");
+  } catch {
+    return false;
+  }
+  if (!next.querySelector("header.ribbon")) return false;
+  for (const sel of ["header.ribbon", "nav.rail"]) swap(sel, next);
+  afterSwap();
+  return true;
+}

@@ -18,6 +18,7 @@
 
 import { api } from "../api.js";
 import { toast, toastError } from "../toast.js";
+import * as nav from "../nav.js";
 
 const el = {};
 let view = null;          // サーバが返した最後の状態。**画面の唯一の出どころ**
@@ -306,12 +307,22 @@ function askDelete(on) {
 // ------------------------------------------------------------------
 // 書く
 // ------------------------------------------------------------------
+/** 権限の表。ここを直したら帯を取り直す(下記 `send`)。 */
+const ACCESS_TABLE = "アクセス権限";
+
 async function send(path, body) {
+  const table = view.table;
   try {
     render(await api.post(path, {
-      table: view.table, q: el.mQuery.value.trim(), ...body,
+      table, q: el.mQuery.value.trim(), ...body,
     }));
     el.mEdit.close();
+    // **足した権限をその場で効かせる。** 帯のモード切替は「いま持って
+    // いる権限」で作られるが、作られるのは画面を出すときだけ。この
+    // 画面に留まったままだと帯が古いままで、**開き直すまでモードを
+    // 切り替えられない**ように見える(現場の声)。
+    // 中身(`<main>`)は差し替えないので、開いている面も入力も残る
+    if (table === ACCESS_TABLE) nav.refreshShell();
     return true;
   } catch (err) {
     // 断られても本文には**いまの状態**が入っている。理由を出したうえで

@@ -217,9 +217,19 @@ class StepDisclosureTests(unittest.TestCase):
         self.assertIn('.step:not([data-state="current"]) > header { cursor: pointer; }',
                       self.html)
 
-    def test_管理者は既定で畳む(self) -> None:
-        """日常操作ではない(§1.2「日常操作から離す」)。"""
-        self.assertIn('card--admin foldable', self.html)
+    def test_実績パターンは畳まない(self) -> None:
+        """**呼び出しは日常操作。** 認証が要るのは保存だけ。
+
+        もとは「管理者」として畳んであり、パスワード欄がそこにあったので
+        開く理由があった。その欄を設定画面へ移したとたん開く理由が消え、
+        **過去の実績を呼び出す機能ごと見えなくなった**
+        ── 現場の声「PalletPatternsからみる機能なくなりました?」。
+        """
+        self.assertNotIn('card--admin foldable', self.html)
+        self.assertIn("実績パターン", self.html)
+        # 呼び出しの入口(表)と、保存の入口が両方ある
+        self.assertIn('id="patternRows"', self.html)
+        self.assertIn('id="savePattern"', self.html)
 
     def test_段の状態はサーバから来る(self) -> None:
         """画面が条件を組み立て直さない(判断を2か所に置かない)。"""
