@@ -157,6 +157,9 @@ async function act(path, row) {
 async function send() {
   const values = {};
   for (const [key, node] of Object.entries(el.fields)) values[key] = node.value.trim();
+  // EX受注かどうかは**打った内容から推し量らない**。組み立てた側
+  // (資材選択)が立てた旗をそのまま運ぶ(`presenters/outputs.build_orders`)
+  values.is_ex_order = draftIsEx;
 
   try {
     const body = await api.post("/api/warehouse/send", values);
@@ -181,18 +184,46 @@ async function send() {
    ================================================================ */
 let drafts = [];
 let draftAt = 0;
+/** いま欄に入っているのがEX受注の行か(送信時に運ぶ)。 */
+let draftIsEx = false;
+/** EX受注で空のまま送る欄。サーバが持っている(`ex_blank_keys`)。 */
+let exBlankKeys = [];
+
+/**
+ * EX受注の欄を**押せなくする**(VBA `BuildRowUI` の `Enabled=False` 相当)。
+ *
+ * 空で送るのが正しいので、打てるままにしておくと「入れ忘れ」に見える。
+ * 押せない形にして、理由を添える ── 押せないことだけ示して黙ると、
+ * 壊れているのか決まりなのかが分からない(§2.3)。
+ */
+function applyExLock(on) {
+  draftIsEx = Boolean(on);
+  for (const key of exBlankKeys) {
+    const node = el.fields[key];
+    if (!node) continue;
+    // 見た目は `.input:disabled`(沈んだ地・not-allowed)が持っている
+    node.disabled = draftIsEx;
+    if (draftIsEx) node.value = "";
+    // **押せない欄に「必須」の印を残さない。** 空で送るのが正しいので、
+    // * が付いたままだと入れろと言っていることになる
+    const mark = document.querySelector(`label[data-for="${key}"] .req`);
+    if (mark) mark.hidden = draftIsEx;
+  }
+  if (el.exNote) el.exNote.hidden = !draftIsEx;
+}
 
 function showDraft() {
   const box = el.drafts;
   if (!box) return;
   box.hidden = !drafts.length;
-  if (!drafts.length) return;
+  if (!drafts.length) { applyExLock(false); return; }
 
   draftAt = Math.max(0, Math.min(draftAt, drafts.length - 1));
   const order = drafts[draftAt];
   for (const [key, node] of Object.entries(el.fields)) {
     node.value = order[key] === undefined || order[key] === null ? "" : String(order[key]);
   }
+  applyExLock(order.is_ex_order);
   el.draftPos.textContent = `${draftAt + 1} / ${drafts.length}`;
   el.draftPrev.disabled = draftAt === 0;
   el.draftNext.disabled = draftAt === drafts.length - 1;
@@ -210,8 +241,10 @@ export function start(state, material) {
   isMaterial = material;
   drafts = [];          // 再入場のたびに真っさらから(`nav.js`)
   draftAt = 0;
+  exBlankKeys = state.ex_blank_keys || [];
+  draftIsEx = false;
   for (const id of ["rows", "listNote", "found", "pending", "q", "refresh",
-                    "send", "clearForm", "sendStatus", "cancelled",
+                    "send", "clearForm", "sendStatus", "cancelled", "exNote",
                     "drafts", "draftPrev", "draftNext", "draftPos"]) {
     el[id] = document.getElementById(id);
   }
@@ -238,6 +271,9 @@ export function start(state, material) {
   if (el.send) el.send.addEventListener("click", send);
   if (el.clearForm) {
     el.clearForm.addEventListener("click", () => {
+      // 先に錠を外す。外さないと、EXの下書きを消したあとも
+      // 発注コード欄が押せないまま残る
+      applyExLock(false);
       for (const node of Object.values(el.fields)) node.value = "";
       setStatus(el.sendStatus, "", "ok");
     });

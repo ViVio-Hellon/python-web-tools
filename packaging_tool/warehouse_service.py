@@ -75,12 +75,22 @@ def create_order(
     nounyusaki: str = "",
     yoto_code: str = "",
     hatchu_suu,
+    is_ex_order: bool = False,
 ) -> OrderResult:
-    """VBA `SendWarehouseRow`(+ `frmSendConfirm.btnSend_Click`の数量検証)の移植。"""
+    """VBA `SendWarehouseRow`(+ `frmSendConfirm.btnSend_Click`の数量検証)の移植。
+
+    【EX受注】`is_ex_order` の行は、発注コード・単位・発注数を**空のまま**
+    登録する。EXの実データは別の職場から別途届き、そちらが優先されるため、
+    こちらからは「EXである」と分かる合図(品名 `EX`)だけを送る ──
+    中途半端な値を入れると、届いた側の突き合わせで混乱する。
+    どのロットのEXかは LotNo と寸法で分かるので、そこは通常どおり入れる。
+    """
     lot_no = db.sanitize_for_db(lot_no)
     hinmei = db.sanitize_for_db(hinmei)
     hatchu_code = db.sanitize_for_db(hatchu_code)
-    if not lot_no or not hinmei or not hatchu_code:
+    if not lot_no or not hinmei:
+        return OrderResult(ok=False, message="LotNo・品名は必須です。")
+    if not hatchu_code and not is_ex_order:
         return OrderResult(ok=False, message="LotNo・品名・発注コードは必須です。")
 
     try:
@@ -90,12 +100,15 @@ def create_order(
     except (TypeError, ValueError):
         return OrderResult(ok=False, message="厚・幅・丈は数値で入力してください。")
 
-    try:
-        qty = int(hatchu_suu)
-    except (TypeError, ValueError):
-        return OrderResult(ok=False, message="発注数を入力してください。")
-    if qty <= 0:
-        return OrderResult(ok=False, message="発注数は1以上を入力してください。")
+    if is_ex_order:
+        qty = None                       # 列は NULL 可。**0 で埋めない**
+    else:
+        try:
+            qty = int(hatchu_suu)
+        except (TypeError, ValueError):
+            return OrderResult(ok=False, message="発注数を入力してください。")
+        if qty <= 0:
+            return OrderResult(ok=False, message="発注数は1以上を入力してください。")
 
     now = db.now_db_string()
     result = db.insert_record(

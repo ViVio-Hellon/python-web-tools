@@ -209,6 +209,23 @@ def _cell(value: Any) -> Any:
 # ------------------------------------------------------------------
 # 新規発注
 # ------------------------------------------------------------------
+# EX受注の行で**空のまま通す**欄。
+#
+# EXの実データは別の職場から別途届き、そちらが優先される。こちらから
+# 中身のある値を送ると突き合わせで混乱するため、意図的に空で送る
+# (組み立ては `presenters/outputs.build_orders`)。
+EX_BLANK_KEYS = ("hatchu_code", "tani", "hatchu_suu")
+
+
+def is_ex_order(body: dict) -> bool:
+    """EX受注の行か。**品名の文字から推し量らない。**
+
+    `hinmei == "EX"` で判定すると、たまたま品名が EX の通常発注まで
+    検査を素通りする。旗は組み立てた側が立てる。
+    """
+    return bool(body.get("is_ex_order"))
+
+
 def validate(body: dict) -> tuple[dict[str, Any], Optional[tuple[str, str]]]:
     """入力を整える。おかしければ (欄, 理由) を返す。
 
@@ -217,8 +234,11 @@ def validate(body: dict) -> tuple[dict[str, Any], Optional[tuple[str, str]]]:
     """
     values = {key: str(body.get(key, "")).strip()
               for _, key, _, _ in ORDER_FIELDS}
+    ex = is_ex_order(body)
 
     for label, key, required, _ in ORDER_FIELDS:
+        if ex and key in EX_BLANK_KEYS:
+            continue                    # EXは空が正しい。必須にしない
         if required and not values[key]:
             return values, (key, f"{label}を入れてください")
 
@@ -233,8 +253,11 @@ def validate(body: dict) -> tuple[dict[str, Any], Optional[tuple[str, str]]]:
     # 数値の欄は空でも通す(VBA も空欄を許して 0 として扱っていた)。
     # ただし発注数だけは必須なので、上の検査で捕まる
     for key in NUMERIC_KEYS:
+        if ex and key in EX_BLANK_KEYS:
+            continue                    # **0 で埋めない。** 空のまま送る
         if not values[key]:
             values[key] = "0"
+    values["is_ex_order"] = ex
     return values, None
 
 
@@ -255,6 +278,9 @@ def to_dict(view: WarehouseViewModel) -> dict[str, Any]:
         "message": view.message,
         "pending": view.pending,
         "found": view.found,
+        # EX受注の行で空のまま送る欄。**画面側で決めない**(どの欄が
+        # 空でよいかを知っているのはここだけ。2か所で持つとずれる)
+        "ex_blank_keys": list(EX_BLANK_KEYS),
     }
 
 

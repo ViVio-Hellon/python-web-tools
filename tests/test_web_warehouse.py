@@ -210,6 +210,69 @@ class ValidateTests(unittest.TestCase):
         self.assertEqual(values["lot_no"], "4102781")
 
 
+class ExOrderTests(unittest.TestCase):
+    """EX受注は発注コード・単位・発注数を**空のまま**通す。
+
+    EXの実データは別の職場から届き、そちらが優先される。こちらから
+    中身のある値を送ると突き合わせで混乱するので、意図的に空で送る。
+    """
+
+    def ex(self, **over) -> dict:
+        blank = {key: "" for key in presenter.EX_BLANK_KEYS}
+        return {**ORDER, **blank, "hinmei": "EX", "is_ex_order": True, **over}
+
+    def test_空でも通す(self) -> None:
+        values, problem = presenter.validate(self.ex())
+        self.assertIsNone(problem)
+        for key in presenter.EX_BLANK_KEYS:
+            self.assertEqual(values[key], "", key)
+
+    def test_発注数を0で埋めない(self) -> None:
+        """0 を入れると「0個の発注」を送ったことになる。空は空のまま。"""
+        values, _ = presenter.validate(self.ex())
+        self.assertEqual(values["hatchu_suu"], "")
+
+    def test_旗が無ければこれまでどおり弾く(self) -> None:
+        """**品名の文字から推し量らない。** 品名が EX でも旗が無ければ通常扱い。"""
+        _, problem = presenter.validate(
+            {**ORDER, "hatchu_code": "", "hinmei": "EX"})
+        self.assertEqual(problem[0], "hatchu_code")
+
+    def test_ロットと品名は空にできない(self) -> None:
+        """どのロットのEXかが分からないと、届いた側で突き合わせられない。"""
+        for key in ("lot_no", "hinmei"):
+            with self.subTest(key=key):
+                _, problem = presenter.validate(self.ex(**{key: ""}))
+                self.assertEqual(problem[0], key)
+
+    def test_登録まで通る(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        self.addCleanup(conn.close)
+
+        values, problem = presenter.validate(self.ex())
+        self.assertIsNone(problem)
+        result = svc.create_order(conn, **values)
+        self.assertTrue(result.ok, result.message)
+
+        row = conn.execute(
+            "SELECT 品名, 発注コード, 単位, 発注数 FROM 資材パレット注文管理"
+        ).fetchone()
+        self.assertEqual(row["品名"], "EX")
+        self.assertEqual(row["発注コード"], "")
+        self.assertEqual(row["単位"], "")
+        self.assertIsNone(row["発注数"])      # 0 ではなく空
+
+    def test_通常の発注は厳しいまま(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        self.addCleanup(conn.close)
+        result = svc.create_order(conn, **{**ORDER, "hatchu_code": ""})
+        self.assertFalse(result.ok)
+
+
 # ==================================================================
 # 画面とAPI
 # ==================================================================
@@ -243,6 +306,41 @@ class WarehouseWebTestCase(unittest.TestCase):
     def send(self, mode: str = "field", **kw):
         return self.clients[mode].post("/api/warehouse/send",
                                        json={**ORDER, **kw}, headers=self.auth())
+
+
+class ExOrderPageTests(WarehouseWebTestCase):
+    """資材選択から届いたEXの下書きが、画面まで旗を保ったまま渡ること。"""
+
+    def test_下書きに旗と説明が乗る(self) -> None:
+        from packaging_tool import work_context
+
+        work_context.get_context().set_pending_orders([{
+            "lot_no": "4102781", "hinmei": "EX", "hatchu_code": "",
+            "tani": "", "hatchu_suu": "", "zaisitu": "A5052",
+            "choshitu": "H112", "atu": "6.75", "haba": "1122",
+            "take": "2502", "yoto_code": "K434", "nounyusaki": "倉庫A",
+            "is_ex_order": True,
+        }])
+        self.addCleanup(work_context.get_context().take_pending_orders)
+
+        html = self.clients["field"].get(
+            "/warehouse", headers=self.auth()).get_data(as_text=True)
+        # 旗が下書きに乗っている(画面がこれを見て欄に錠を掛ける)
+        self.assertIn("is_ex_order", html)
+        # 押せない理由を書いておく欄
+        self.assertIn('id="exNote"', html)
+        self.assertIn("EXの実データは別の職場から届き", html)
+
+    def test_空にしてよい欄はサーバが決める(self) -> None:
+        """画面側で持つと、どちらかが古くなる。"""
+        body = self.clients["field"].get(
+            "/api/warehouse/orders", headers=self.auth()).get_json()
+        self.assertEqual(body["ex_blank_keys"], list(presenter.EX_BLANK_KEYS))
+
+    def test_EXの発注をAPIから登録できる(self) -> None:
+        res = self.send(hinmei="EX", hatchu_code="", tani="",
+                        hatchu_suu="", is_ex_order=True)
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
 
 
 class RoleSeparationTests(WarehouseWebTestCase):

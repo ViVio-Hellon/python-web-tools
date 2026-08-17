@@ -24,7 +24,10 @@
     <div class="pad">
       <div class="form">
         {% for label, key, required, numeric in fields %}
-        <label for="f-{{ key }}">
+        {# 印には欄の名前を持たせる。EX受注のときは「必須」の印を消す ──
+           空で送るのが正しい欄に * が付いたままだと、押せないのに
+           入れろと言っていることになる(JS `applyExLock`) #}
+        <label for="f-{{ key }}" data-for="{{ key }}">
           {{ label }}{% if required %}<span class="req" aria-label="必須">*</span>{% endif %}
         </label>
         <input class="input {{ 'num' if numeric else '' }}" id="f-{{ key }}"
@@ -44,6 +47,15 @@
         </span>
       </div>
       {% endif %}
+      {# EX受注の下書きを出しているあいだだけ。**押せない理由を書く** ──
+         押せないことだけ示して黙ると、壊れているのか決まりなのかが
+         分からない(§2.3) #}
+      <p class="why" id="exNote" hidden>
+        <b>EX受注です。</b>発注コード・単位・発注数は<b>空のまま送ります</b>
+        ── EXの実データは別の職場から届き、そちらが優先されます。
+        ここからは「EXである」と分かる合図(品名 <b>EX</b>)と、
+        どのロットかが分かる寸法だけを送ります。
+      </p>
       <p class="status" id="sendStatus" hidden></p>
       <div class="btn-row" style="margin-top:10px">
         <button class="btn btn--commit" type="button" id="send">倉庫へ送信</button>
@@ -140,6 +152,7 @@
   }
   .form label { color:var(--muted); font-size: var(--fs-sm); text-align:right; }
   .req { color:var(--state-error); font-weight:700; margin-left:2px; }
+  .req[hidden] { display:none; }
 
   .modes { display:flex; gap:12px; margin-left:8px; }
   .radio { display:inline-flex; align-items:center; gap:5px; cursor:pointer;

@@ -90,9 +90,17 @@ def send_refusal(session: Any) -> Optional[Refusal]:
 
     1P0113 はパレットを使わないのでパレット未設定でも送れる
     (VBA も `If Not Me.Is1P0113Mode Then` でパレット検証を飛ばす)。
+
+    **EX受注も同じくパレット未設定で送れる。** EXの実データは別の職場から
+    別途届き、そちらが優先される。こちらから送るのは「EXである」と
+    分かる最小限の合図だけなので、パレットも発注コードも要らない
+    (`build_orders` が中身を EX 用に差し替える)。
     """
     if session.presenter.lot_result is None:
         return Refusal("先にロット検索でロットを確定してください。", NEEDS_LOT)
+
+    if session.presenter.is_ex_order:
+        return None
 
     if session.presenter.mode_1p0113:
         m = session.presenter.materials_1p0113
@@ -116,15 +124,65 @@ def send_refusal(session: Any) -> Optional[Refusal]:
 # ==================================================================
 # 倉庫送信
 # ==================================================================
+# EX受注のときに送る品名。**これだけが倉庫側への合図**になる
+EX_HINMEI = "EX"
+
+
 def build_orders(session: Any) -> list[dict[str, Any]]:
     """送信する行を組み立てる(VBA `g_SendRows`)。
 
     通常は1行、1P0113 は角材と松板の2行。前提が満たされていることは
     `send_refusal()` で先に確かめてある。
     """
+    if session.presenter.is_ex_order:
+        # **EX受注は中身を送らない。** 実データは別の職場から別途届き、
+        # そちらが優先される。こちらから半端な値を送ると突き合わせで
+        # 混乱するので、EXだと分かる最小限だけにする。
+        #
+        # **組み立てたあとに上から潰す**(VBA の `g_SendRows` 上書きと
+        # 同じ形)。どの組み立てを通っても最後にここへ来るので、
+        # **それぞれの組み立てには一切手を入れない**
+        return [_as_ex_order(row) for row in _ex_source_rows(session)]
+    return _build_rows(session)
+
+
+def _build_rows(session: Any) -> list[dict[str, Any]]:
     if session.presenter.mode_1p0113:
         return _orders_1p0113(session)
     return [_order_normal(session)]
+
+
+def _ex_source_rows(session: Any) -> list[dict[str, Any]]:
+    """EX受注で土台にする行。中身は `_as_ex_order` が潰すので、器だけでよい。
+
+    **パレットを決めずに送れるのがEXの要点**(`send_refusal`)なので、
+    通常の組み立て(`_order_normal`)はそのままでは通らない ── あちらは
+    品名と発注コードをパレット一覧の行から作るため、行が無ければ落ちる。
+    パレットまで決めてあるならその組み立てを通し、決めていなければ
+    ロットと寸法だけの器を作る。**どちらの組み立ても書き換えない。**
+    """
+    if session.presenter.mode_1p0113:
+        return _orders_1p0113(session)
+    if session.palette.is_set and session.pallet_row is not None:
+        return [_order_normal(session)]
+    return [{"lot_no": session.presenter.lot_result.lot.lot_no, **_common(session)}]
+
+
+def _as_ex_order(row: dict[str, Any]) -> dict[str, Any]:
+    """1行をEX受注の送信内容にする。
+
+    発注コード・単位・発注数は空、品名は `EX` 固定。ロット番号と寸法は
+    残す ── **どのロットのEXなのかが分からないと、届いた側で
+    突き合わせられない。**
+    """
+    return {**row,
+            "hinmei": EX_HINMEI,
+            "hatchu_code": "",
+            "tani": "",
+            "hatchu_suu": "",
+            # 受け側(倉庫連携の下書き)が発注数の必須検査を外すための印。
+            # 文言から推し量らせない(`hinmei == "EX"` で判定しない)
+            "is_ex_order": True}
 
 
 def _common(session: Any) -> dict[str, Any]:

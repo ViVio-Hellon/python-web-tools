@@ -489,6 +489,51 @@ class ModeFromLotTests(SelectionWebTestCase):
         self.assertTrue(state["ex_only_enabled"])
         self.assertEqual(state["banner"]["kind"], "ex")
 
+    def test_EX受注はパレット未設定でも倉庫送信できる(self) -> None:
+        """**EXの実データは別の職場から届き、そちらが優先される。**
+
+        こちらから送るのは「EXである」と分かる合図だけなので、
+        パレットの適用も発注コードも要らない(現場の仕様追加)。
+        """
+        from packaging_tool.presenters import outputs
+
+        self.search(EX_輸出区分="EX")
+        session = self.session()
+        self.assertFalse(session.palette.is_set)
+        self.assertIsNone(outputs.send_refusal(session))
+
+    def test_EX受注でない通常はパレットを求める(self) -> None:
+        """**通常の経路は変えない。** EXでだけ関門を外す。"""
+        from packaging_tool.presenters import outputs
+
+        self.search()
+        session = self.session()
+        refusal = outputs.send_refusal(session)
+        self.assertIsNotNone(refusal)
+        self.assertIn("パレット", refusal.message)
+
+    def test_EX受注はコードと単位と発注数を空で送る(self) -> None:
+        """発注コード=空 / 品名=EX / 単位=空 / 発注数=空。
+
+        中途半端な値を送ると、別途届く実データとの突き合わせで混乱する。
+        どのロットのEXかは LotNo と寸法で分かるので、そこは残す。
+        """
+        from packaging_tool.presenters import outputs
+
+        self.search(EX_輸出区分="EX")
+        rows = outputs.build_orders(self.session())
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["hinmei"], outputs.EX_HINMEI)
+        self.assertEqual(row["hatchu_code"], "")
+        self.assertEqual(row["tani"], "")
+        self.assertEqual(row["hatchu_suu"], "")
+        self.assertTrue(row["is_ex_order"])
+        # 突き合わせに要るものは残す
+        self.assertEqual(row["lot_no"], "1234567")
+        self.assertTrue(row["haba"])
+        self.assertTrue(row["take"])
+
     def test_1P0113なら裸梱包の帯が出る(self) -> None:
         state = self.search(包装仕様NO="1P0113")
         self.assertEqual(state["banner"]["kind"], "1p0113")
