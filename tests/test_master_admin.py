@@ -364,6 +364,17 @@ class AccessTableEscapeHatchTests(MasterTestCase):
         self.assertFalse(allowed)
         self.assertIn("管理者パスワード", why)
 
+    def test_案内は今の入力場所を指す(self) -> None:
+        """認証の入力欄は VER2.19.0 で「設定 > パスワード」タブへ移した。
+        断り文が古い場所(資材選択画面)を指したままだと、
+        言われた場所に何も無くて詰む(現場で実際に踏んだ)。"""
+        self.grant(access_control.mode_permission(modes.FIELD))
+        _allowed, why = master_admin.can_edit(self.conn, access_control.TABLE)
+        self.assertIn("パスワード", why)
+        self.assertIn("設定", why)
+        self.assertIn("マスタ編集の認証", why)
+        self.assertNotIn("資材選択", why)
+
     def test_資材モードでもパスワードが無ければ直せない(self) -> None:
         """mode:material があっても素通りさせない ── 常に一手間はさむ。"""
         self.grant(access_control.mode_permission(modes.MATERIAL))

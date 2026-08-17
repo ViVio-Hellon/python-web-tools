@@ -249,9 +249,9 @@ def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool,
     ことにした。資材モードは「マスタを見に来てよい・触ってよい担当か」
     を分け、パスワードは「いま本当に書くつもりか」を確かめる ──
     役割が違う2つの関門を両方通す。
-    パスワードの確認は資材選択画面の管理者認証(`selection_session`)を
-    そのまま使う ── アプリの起動プロセスに1つなので、別の認証を
-    もう1つ持たない。
+    パスワードの確認は設定画面「パスワード」タブの管理者認証
+    (`selection_session`)をそのまま使う ── アプリの起動プロセスに
+    1つなので、別の認証をもう1つ持たない。
 
     【アクセス権限マスタだけは、資材モードが無くても開く】
     書き間違えて全員から mode:material を消してしまうと、直せる人が
@@ -279,7 +279,7 @@ def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool,
             f"{access_control.TABLE} は書き間違えると誰も直せなくなるおそれが"
             "あるので、管理者パスワードを入れないと直せません"
             "(モードは問いません)。"
-            "「資材選択」画面の管理者エリアでパスワードを入れてから、"
+            "設定画面の「パスワード」タブ「マスタ編集の認証」でパスワードを入れてから、"
             "もう一度この面を開いてください。")
 
     if not grant.allows_mode(modes.MATERIAL):
@@ -292,7 +292,7 @@ def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool,
         return False, (
             f"{modes.label(modes.MATERIAL)}モードに加えて、管理者パスワードを"
             "入れないと直せません。"
-            "「資材選択」画面の管理者エリアでパスワードを入れてから、"
+            "設定画面の「パスワード」タブ「マスタ編集の認証」でパスワードを入れてから、"
             "もう一度この面を開いてください。")
     return True, ""
 
