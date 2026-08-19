@@ -1268,8 +1268,12 @@ def select_lower_boards(
 # 丈残がこの値を超える場合は主ボードを1枚増やし、以下なら小型補填を優先する
 UPPER_LENGTH_FILL_THRESHOLD = 400
 
-# プロテックモードのうち 1P1216 の幅許容(本来-20mmだが切断精度を考慮し-5mm)
-PROTEC_1P1216_TOLERANCE = 5
+# プロテックモードのうち 1P1216 の幅許容(本来-20mmだが切断精度を考慮し-10mm)。
+# `reports.protec_cut_size_info` の `PROTEC_CUT_TOL_1P1216` と必ず同じ値にする
+# ―― ここが小さいと、切断依頼書では許容内として同サイズ強制するはずの
+# ボードが、選定側だけ通常選定に外れてしまい(別のボードが選ばれる)、
+# 依頼書の内容と選定結果が食い違う原因になっていた。
+PROTEC_1P1216_TOLERANCE = 10
 
 
 @dataclass
@@ -2043,7 +2047,10 @@ def recalc_length_cut_info(
     length_cut_count: dict[str, int] = {}
 
     for b in lower:
-        if b.tag in (TAG_WIDTH_FILL, TAG_LENGTH_FILL):
+        # 上用側と対称にする。カット前提は選定側で確定済みなのでここでの
+        # 再計算対象から外す(プロテックの共用ボードは常に無タグなので
+        # 現状は無効だが、上下の扱いを揃えておく)
+        if b.tag in (TAG_WIDTH_FILL, TAG_LENGTH_FILL, TAG_CUT_PREMISE):
             continue
         rot, eff_w, eff_l = _orient(b.width, b.length, palette.width)
         rot, eff_w, eff_l = adjust_orientation_for_coverage(

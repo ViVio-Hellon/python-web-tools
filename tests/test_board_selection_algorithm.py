@@ -719,12 +719,25 @@ class SelectUpperBoardsTests(unittest.TestCase):
 
     def test_protec_1p1216_uses_tighter_tolerance(self):
         lower = [SelectedBoard(width=880, length=600, count=2, tag=alg.TAG_MAIN)]
-        # 1P1216 は許容-5mm → 880 >= 900-5=895 は不成立 → 通常選定へ
+        # 1P1216 は許容-10mm → 880 >= 900-10=890 は不成立 → 通常選定へ
         r = alg.select_upper_boards(
             lower, [board(880, 1900)], self.palette, self.product,
             is_protec_mode=True, is_protec_1p1216=True,
         )
         self.assertNotEqual(r.mode, "プロテック")
+
+    def test_protec_1p1216_tolerance_matches_report_tolerance(self):
+        # 890x600 なら 900-10=890 で許容内 → プロテック成立。
+        # report側 PROTEC_CUT_TOL_1P1216(=10mm)と選定側の許容が食い違って
+        # いると、ここでプロテックに落ちず通常選定の別ボードが選ばれて
+        # しまい、切断依頼書の内容と選定結果が食い違う原因になっていた。
+        lower = [SelectedBoard(width=890, length=600, count=2, tag=alg.TAG_MAIN)]
+        r = alg.select_upper_boards(
+            lower, [board(890, 1900)], self.palette, self.product,
+            is_protec_mode=True, is_protec_1p1216=True,
+        )
+        self.assertEqual(r.mode, "プロテック")
+        self.assertEqual((r.boards[0].width, r.boards[0].count), (890, 2))
 
     def test_normal_selection_picks_first_qualifying_board(self):
         r = alg.select_upper_boards(self.lower, [board(900, 600)], self.palette, self.product)
@@ -1107,6 +1120,12 @@ class RecalcLengthCutInfoTests(unittest.TestCase):
     def test_skips_cut_premise_rows_in_upper(self):
         upper = [SelectedBoard(width=900, length=700, count=3, tag=alg.TAG_CUT_PREMISE)]
         info, _ = alg.recalc_length_cut_info([], upper, self.palette, self.product)
+        self.assertEqual(info, {})
+
+    def test_skips_cut_premise_rows_in_lower_too(self):
+        # 上用側は「カット前提」を除外している。下用側も対称にする
+        lower = [SelectedBoard(width=1000, length=700, count=3, tag=alg.TAG_CUT_PREMISE)]
+        info, _ = alg.recalc_length_cut_info(lower, [], self.palette, self.product)
         self.assertEqual(info, {})
 
     def test_no_record_when_within_limit(self):
