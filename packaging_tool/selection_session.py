@@ -620,9 +620,22 @@ class SelectionSession:
                                  REFUSE_NO_CANDIDATES)
 
         narrow_lower = narrow_upper = False
+        protec_result = None
         if self.select_result is not None:
             narrow_lower = self.select_result.lower_result.state.narrow_pallet
             narrow_upper = self.select_result.upper_result.narrow_pallet
+            protec_result = self.select_result.lower_result.protec_result
+        elif self.presenter.protec.is_protec:
+            # 手で増減したあとは `select_result`(ProtecCutResultを含む)を
+            # 捨ててあるので、配置直前にここで後付けする(VBA
+            # `ApplyProtecRulesToLowerList`)。これをしないと、
+            # プロテックのはずなのに「唯一の正解」が無いまま配置に入り、
+            # 配置段階が独自に製品幅厳守を判定し直して静かに配置漏れを
+            # 起こす
+            protec_result = alg.apply_protec_rules_to_lower_list(
+                self.selected.lower, self.product, self.palette.length,
+                is_1p1216=self.presenter.protec.is_1p1216)
+            ulog.log("  ※手で増減したため、狭幅パレットの前提は引き継ぎません")
         else:
             # 手で増減したあとは当時の前提を引き継がない。**なぜ配置が
             # 変わったのか**を追えるよう、その事実を残す
@@ -636,7 +649,8 @@ class SelectionSession:
                 self.placement = place.auto_place_boards(
                     self.selected.lower, self.selected.upper,
                     self.palette, self.product,
-                    narrow_lower=narrow_lower, narrow_upper=narrow_upper)
+                    narrow_lower=narrow_lower, narrow_upper=narrow_upper,
+                    protec_result=protec_result)
         except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
             log.exception("配置エラー")
             self.placement = None

@@ -120,6 +120,10 @@
   --state-ok:#27633a; --state-warn:#883c02; --state-error:#982326; --state-info:#20549a;
   --warn-bg:#fdf0f0; --warn-fg:#982326;
   --ok-bg:#eef6f1;
+  --info-bg:#eef4fb; --info-fg:#20549a;
+  /* 上下共用モードの帯だけの色。warn(1P0113)/ok(プロテック)/info(EX)と
+     衝突しない第4の色が要る(§ モードバー) */
+  --shared-bg:#f2eefa; --shared-fg:#5b3a91;
 
   /* ================================================================
      暗い面 —— 機械が吐いたものを読む場所
@@ -245,6 +249,8 @@
     --state-ok:#72be94; --state-warn:#d2a15c; --state-error:#e49093; --state-info:#7faee9;
     --warn-bg:#331e21; --warn-fg:#eb9a9d;
     --ok-bg:#16271e;
+    --info-bg:#182634; --info-fg:#7faee9;
+    --shared-bg:#241c33; --shared-fg:#c4a2f5;
 
     --night-line:#517383;
     --night-line:#517383;
@@ -301,6 +307,8 @@
   --state-ok:#72be94; --state-warn:#d2a15c; --state-error:#e49093; --state-info:#7faee9;
   --warn-bg:#331e21; --warn-fg:#eb9a9d;
   --ok-bg:#16271e;
+  --info-bg:#182634; --info-fg:#7faee9;
+  --shared-bg:#241c33; --shared-fg:#c4a2f5;
 
   --night-line:#517383;
   --shadow-sm:0 5px 18px rgb(0 0 0 / 32%);

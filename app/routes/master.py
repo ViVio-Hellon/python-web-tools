@@ -58,7 +58,9 @@ def browse():
     view = master_presenter.browse(
         get_db(),
         table=request.args.get("table", ""),
-        query=request.args.get("q", ""))
+        query=request.args.get("q", ""),
+        sort=request.args.get("sort", ""),
+        sort_dir=request.args.get("sort_dir", "asc"))
     return jsonify(master_presenter.to_dict(view))
 
 
@@ -97,6 +99,20 @@ def create_table():
     return _write(master_admin.create_table(get_db(), _table(body)), body)
 
 
+@bp.post("/api/master/table/rebuild")
+def rebuild_table():
+    """列名が想定と違う表を、正しい列名で作り直す。`{"table":…}`
+
+    取り込み元にその表**はある**が、`ログインID` / `PC名` / `権限` などの
+    列名が1つも一致せず、打ち込める欄が無いときに使う(`can_rebuild` が
+    その状態かどうかを見て、画面はボタンの表示・非表示だけ決める)。
+    元の表は消さず `{table}_旧_日時` へ退避してから作り直す
+    (`master_admin.rebuild_table`)。
+    """
+    body = request.get_json(silent=True) or {}
+    return _write(master_admin.rebuild_table(get_db(), _table(body)), body)
+
+
 def _table(body: dict) -> str:
     return str(body.get("table", ""))
 
@@ -112,9 +128,15 @@ def _write(result: master_admin.Result, body: dict):
     断ったときも同じ形で返す ── 画面は「何が起きたか」と「いまどう
     なっているか」を1回で受け取れる。断りの理由は `reason` が運び、
     画面は文言から推し量らない。
+
+    絞り込み(`q`)と同じ理由で、いま押していた並び替え(`sort`/`sort_dir`)
+    も送り返してもらって保つ ── 行を直すたびに並びが既定へ戻ると、
+    並べ替えて探した続きの行を、また並べ替え直すことになる。
     """
     view = master_presenter.browse(
         get_db(), table=_table(body), query=str(body.get("q", "")),
+        sort=str(body.get("sort", "")),
+        sort_dir=str(body.get("sort_dir", "asc")),
         message=result.message if result.ok else "")
     payload = master_presenter.to_dict(view)
     if result.ok:

@@ -15,7 +15,13 @@ import { api, tokenUrl } from "../api.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
-import * as mapedit from "../mapedit.js";
+// `mapedit.js` は動的に読み込む(理由は `settings.js` が `master.js` を
+// 動的に読み込んでいるのと同じ ── このファイル自身と版クエリを合わせ、
+// 入れ替えたときに中身も必ず一緒に入れ替わるようにするため)。
+// トップレベルで一度だけ確定させておけば、以後は今までどおり
+// `mapedit.grip(...)` のように同期的に呼べる。
+const VERSION_QUERY = new URL(import.meta.url).search;
+const mapedit = await import(`../mapedit.js${VERSION_QUERY}`);
 
 const NS = "http://www.w3.org/2000/svg";
 const el = {};
@@ -211,6 +217,24 @@ async function showContents(name) {
       && el.layoutTabs) tabs.select(el.layoutTabs, "contents");
 }
 
+/**
+ * 図の置き場を押した。**編集中は選ぶだけ**(消す対象を決める)。
+ *
+ * 編集中に中身の面まで開くと、動かす/消す対象を選ぼうとしただけの
+ * 操作で面が切り替わる(現場の声:「配置編集中にクリックすると
+ * 配置編集中の挙動を行わないで通常挙動を行う」)。選ぶこと自体は
+ * `/api/layout/select` を叩く ── ハイライト(`state.selected`)と
+ * 「消す置き場」の対象決めは、編集中でも要るため。ここが
+ * `簡易在庫`(`inventory.js` の `onTapPosition`)と対になる。
+ */
+async function onTapShelf(name) {
+  if (state && state.editing) {
+    await send("/api/layout/select", { name });
+    return;
+  }
+  await showContents(name);
+}
+
 /* ================================================================
    ドラッグ
 
@@ -219,20 +243,10 @@ async function showContents(name) {
    置き場が動いてしまう)。
    ================================================================ */
 // 図の縮尺。**背景の写真に合わせこむときに要る** ── 等倍のままだと
-// 置き場1つが小さく、指で狙った場所へ置けない(簡易在庫と同じ刻み)
-const ZOOM_STEPS = [1, 1.5, 2, 3];
-let zoom = 0;
+// 置き場1つが小さく、指で狙った場所へ置けない。拡大縮小そのものは
+// `mapedit.attachZoom` が持つ(簡易在庫と共通の作法・共通の実装)
 let dragger = null;
-
-function applyZoom(step) {
-  zoom = Math.max(0, Math.min(ZOOM_STEPS.length - 1, step));
-  const scale = ZOOM_STEPS[zoom];
-  el.mapWrap.style.setProperty("--zoom", scale);
-  el.zoomNow.textContent = `${Math.round(scale * 100)}%`;
-  el.zoomOut.disabled = zoom === 0;
-  el.zoomIn.disabled = zoom === ZOOM_STEPS.length - 1;
-}
-
+let zoomer = null;
 
 /** 掴む手は `mapedit.js` が持つ。ここは**何を送るか**だけを決める。
 
@@ -246,7 +260,7 @@ function startDragging() {
                      || state.bases.find((s) => s.name === name) || null),
     onTap: (name, group) => {
       // 拠点は「中身」を持たないので、押しても何も出さない
-      if (group && !group.classList.contains("shelf--base")) showContents(name);
+      if (group && !group.classList.contains("shelf--base")) onTapShelf(name);
     },
     onMove: (name, x, y) => send("/api/layout/move", { name, x, y }),
     onResize: (name, w, h) => send("/api/layout/resize", { name, w, h }),
@@ -308,9 +322,10 @@ export function start(initial) {
 
   // --- 図 ---------------------------------------------------------
   startDragging();
-  applyZoom(0);
-  el.zoomIn.addEventListener("click", () => applyZoom(zoom + 1));
-  el.zoomOut.addEventListener("click", () => applyZoom(zoom - 1));
+  zoomer = mapedit.attachZoom({
+    wrap: el.mapWrap, zoomIn: el.zoomIn, zoomOut: el.zoomOut,
+    zoomNow: el.zoomNow,
+  });
 
   // --- 配置編集 ---------------------------------------------------
   el.editToggle.addEventListener("click", () =>

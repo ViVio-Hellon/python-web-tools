@@ -12,6 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packaging_tool import board_selection_algorithm as alg
+from packaging_tool import reports
 from packaging_tool.board_scoring import FatigueEntry
 from packaging_tool.board_selection_service import Palette, ProductSize, SelectedBoard
 from packaging_tool.models import BoardModel
@@ -674,6 +675,395 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
         self.assertEqual(len(length_fill_rows), 1)
 
 
+class DecideLengthCountWithCutTests(unittest.TestCase):
+    """`decide_length_count_with_cut` の検証。
+
+    判定しているのは「超過量」ではなく「最後の1枚に必要な残りの
+    長さ」(lenRemainPL)。100mmを超えて残っていればカットして1枚
+    足し、100mm以下なら切り捨てて無視する。
+    """
+
+    def test_example1_remainder_over_100mm_adds_a_cut_piece(self):
+        # 1枚1000mm、対象丈2910mm: フルサイズ2枚(2000mm)、残り910mm。
+        # 910 > 100 → カットして3枚目を910mmで追加
+        count, need_cut, cut_eff = alg.decide_length_count_with_cut(1000, 2910)
+        self.assertEqual(count, 3)
+        self.assertTrue(need_cut)
+        self.assertEqual(cut_eff, 910)
+
+    def test_example2_remainder_50mm_is_discarded(self):
+        # 1枚1000mm、対象丈2050mm: フルサイズ2枚、残り50mm。
+        # 50 <= 100 → 追加しない(2枚のみ)
+        count, need_cut, cut_eff = alg.decide_length_count_with_cut(1000, 2050)
+        self.assertEqual(count, 2)
+        self.assertFalse(need_cut)
+        self.assertEqual(cut_eff, 1000)
+
+    def test_example3_remainder_5mm_is_discarded(self):
+        count, need_cut, cut_eff = alg.decide_length_count_with_cut(1000, 2005)
+        self.assertEqual(count, 2)
+        self.assertFalse(need_cut)
+
+    def test_remainder_exactly_100mm_is_discarded(self):
+        """境界値: ちょうど100mmは「超える」に含まれないので切り捨てる。"""
+        count, need_cut, _ = alg.decide_length_count_with_cut(1000, 2100)
+        self.assertEqual(count, 2)
+        self.assertFalse(need_cut)
+
+    def test_remainder_101mm_triggers_a_cut(self):
+        """境界値: 101mmは閾値を超えるのでカットする。"""
+        count, need_cut, cut_eff = alg.decide_length_count_with_cut(1000, 2101)
+        self.assertEqual(count, 3)
+        self.assertTrue(need_cut)
+        self.assertEqual(cut_eff, 101)
+
+    def test_exact_multiple_needs_no_extra_piece(self):
+        """対象丈がちょうど割り切れるなら、追加の1枚は要らない。"""
+        count, need_cut, _ = alg.decide_length_count_with_cut(1000, 2000)
+        self.assertEqual(count, 2)
+        self.assertFalse(need_cut)
+
+    def test_board_longer_than_target_still_returns_one(self):
+        """在庫1枚が対象丈より長い場合は、その1枚をカットして使う
+
+        (フルサイズの上にもう1枚足す状況ではない)。
+        """
+        count, need_cut, cut_eff = alg.decide_length_count_with_cut(3000, 2000)
+        self.assertEqual(count, 1)
+        self.assertTrue(need_cut)
+        self.assertEqual(cut_eff, 2000)
+
+    def test_board_exactly_matches_target_needs_no_cut(self):
+        count, need_cut, _ = alg.decide_length_count_with_cut(2000, 2000)
+        self.assertEqual(count, 1)
+        self.assertFalse(need_cut)
+
+
+class DecideProtecOrientationTests(unittest.TestCase):
+    """`decide_protec_orientation` の検証(VBA `DecideProtecOrientation`)。"""
+
+    def test_no_cut_when_within_product_width(self):
+        # 有効幅900は製品幅900と一致 → カット不要
+        r = alg.decide_protec_orientation(900, 1800, 900, is_1p1216=False)
+        self.assertTrue(r.valid)
+        self.assertFalse(r.need_cut)
+        self.assertEqual(r.cut_eff_width, 900)
+
+    def test_width_cut_uses_product_width_minus_tolerance(self):
+        """カットするなら、仕上がり幅は「製品幅」ではなく
+
+        「製品幅-許容」まで削る(通常は-80mm)。
+        """
+        r = alg.decide_protec_orientation(1100, 1800, 900, is_1p1216=False)
+        self.assertTrue(r.need_cut)
+        self.assertEqual(r.cut_eff_width, 820)  # 900 - 80
+
+    def test_1p1216_uses_10mm_tolerance(self):
+        r = alg.decide_protec_orientation(1100, 1800, 900, is_1p1216=True)
+        self.assertTrue(r.need_cut)
+        self.assertEqual(r.cut_eff_width, 890)  # 900 - 10
+
+    def test_prefers_orientation_closest_to_product_width(self):
+        # 1000x600: 回転しない(幅1000, +100mm)方が、回転する(幅600, -300mm)
+        # より製品幅900に近いので、回転しない向きが採用される
+        r = alg.decide_protec_orientation(1000, 600, 900, is_1p1216=False)
+        self.assertFalse(r.is_rotated)
+        self.assertEqual(r.eff_length, 600)
+
+    def test_eff_width_before_cut_is_the_uncut_effective_width(self):
+        """比較・選定に使う「カット前の実効幅」は、仕上がり幅
+
+        (`cut_eff_width`、カットが要る候補同士では常に同じ値に揃う)
+        とは別に残しておく必要がある。混同すると、選定
+        (`select_protec_lower_boards`)が「どちらが無駄が少ないか」を
+        比較できなくなる。
+        """
+        r = alg.decide_protec_orientation(1100, 2000, 900, is_1p1216=False)
+        self.assertEqual(r.eff_width_before_cut, 1100)  # カット前の実効幅
+        self.assertEqual(r.cut_eff_width, 820)           # カット後の仕上がり幅
+
+    def test_rotates_when_that_orientation_is_closer(self):
+        # 600x1000: 回転する(幅1000, +100mm)方が、回転しない(幅600, -300mm)
+        # より近いので、回転する向きが採用される
+        r = alg.decide_protec_orientation(600, 1000, 900, is_1p1216=False)
+        self.assertTrue(r.is_rotated)
+        self.assertEqual(r.eff_length, 600)
+
+    def test_invalid_when_neither_orientation_fits(self):
+        # 両方向とも 900-80=820 に届かない
+        r = alg.decide_protec_orientation(500, 700, 900, is_1p1216=False)
+        self.assertFalse(r.valid)
+
+
+class SelectProtecLowerBoardsTests(unittest.TestCase):
+    """`select_protec_lower_boards` の検証(VBA `SelectProtecLowerBoards`)。
+
+    パレット幅ではなく**製品幅**を基準に在庫全件を評価し、最も条件に
+    近い1件を採用する。丈方向は枚数を増やすだけでカバーする。
+    """
+
+    def setUp(self) -> None:
+        self.product = ProductSize(width=900, length=1800)
+
+    def test_picks_the_board_closest_to_product_width(self):
+        """比較は `eff_width_before_cut`(カット前の実効幅)で行う。
+
+        `cut_eff_width`(カット後の仕上がり幅)で比べると、両方とも
+        カットが必要な候補では同じ値(製品幅-許容)に揃ってしまい、
+        1100幅(製品幅900に対して+200mm、無駄が大きい)と950幅
+        (+50mm、無駄が少ない)の差が見えなくなる。
+        """
+        available = [board(1100, 2000), board(950, 2000)]
+        boards, result = alg.select_protec_lower_boards(
+            available, self.product, palette_length=2000, is_1p1216=False)
+        self.assertEqual(len(boards), 1)
+        self.assertEqual((boards[0].width, boards[0].length), (950, 2000))
+        self.assertTrue(result.valid)
+
+    def test_count_covers_pallet_length_by_stacking(self):
+        """丈方向は基本的に枚数を増やすだけでカバーするが、100mmを
+
+        超える端数が残る場合は最後の1枚をカットして追加する
+        (`decide_length_count_with_cut` と同じ100mm閾値)。
+        パレット丈2100・1枚1000mmなら、2000mmで2枚、残り100mmは
+        閾値ちょうどなので切り捨てて2枚のみ。
+        """
+        available = [board(950, 1000)]
+        boards, result = alg.select_protec_lower_boards(
+            available, self.product, palette_length=2100, is_1p1216=False)
+        self.assertEqual(boards[0].count, 2)
+        self.assertEqual(result.count, 2)
+        self.assertFalse(result.need_length_cut)
+
+    def test_count_adds_a_cut_piece_when_remainder_exceeds_100mm(self):
+        """残りが100mmを超えるなら、最後の1枚をカットして追加する。
+
+        パレット丈2101・1枚1000mmなら、残り101mm > 100mm なので
+        カットして3枚目(101mm)を追加する。MAP画面のカット線
+        (`recalc_length_cut_info`)とカット依頼書
+        (`reports.protec_cut_size_info`)の両方が、この
+        `need_length_cut`/`length_cut_eff` をそのまま使う。
+        """
+        available = [board(950, 1000)]
+        boards, result = alg.select_protec_lower_boards(
+            available, self.product, palette_length=2101, is_1p1216=False)
+        self.assertEqual(boards[0].count, 3)
+        self.assertTrue(result.need_length_cut)
+        self.assertEqual(result.length_cut_eff, 101)
+        self.assertEqual(boards[0].tag, alg.TAG_CUT_PREMISE)
+
+    def test_width_cut_needed_sets_cut_premise_tag(self):
+        """幅カットが必要なときは「カット前提」タグにする(早期にカット
+
+        前提へ倒す設計。現場の声:「プロテックボードは通常ボードより
+        種類が少ないので、通常ボードよりもカット前提のフラグをはやく
+        立てるべき」)。
+        """
+        available = [board(1100, 2000)]  # 有効幅1100 > 製品幅900 → カット要
+        boards, result = alg.select_protec_lower_boards(
+            available, self.product, palette_length=2000, is_1p1216=False)
+        self.assertTrue(result.need_cut)
+        self.assertEqual(boards[0].tag, alg.TAG_CUT_PREMISE)
+
+    def test_no_cut_needed_keeps_main_tag(self):
+        available = [board(900, 2000)]  # 有効幅900 = 製品幅900 → カット不要
+        boards, result = alg.select_protec_lower_boards(
+            available, self.product, palette_length=2000, is_1p1216=False)
+        self.assertFalse(result.need_cut)
+        self.assertEqual(boards[0].tag, alg.TAG_MAIN)
+
+    def test_no_matching_stock_returns_invalid(self):
+        available = [board(300, 400)]
+        boards, result = alg.select_protec_lower_boards(
+            available, self.product, palette_length=2000, is_1p1216=False)
+        self.assertEqual(boards, [])
+        self.assertFalse(result.valid)
+
+
+class ApplyProtecRulesToLowerListTests(unittest.TestCase):
+    """`apply_protec_rules_to_lower_list` の検証(VBA
+
+    `ApplyProtecRulesToLowerList`)。手動で増減した下用行に、配置直前で
+    `ProtecCutResult` を後付けする。以前は丈カット判定
+    (`decide_length_count_with_cut`)を一切行わず、手動で入れた枚数を
+    そのまま `count` に写すだけだった。
+    """
+
+    def setUp(self) -> None:
+        self.product = ProductSize(width=1090, length=1900)
+
+    def test_recomputes_length_cut_for_manual_row(self):
+        """発端の「例1」と同じ構成: 1枚1000mm・パレット丈2910mmなら、
+
+        フルサイズ2枚の残り910mmが100mmを超えるので、3枚目を
+        910mmにカットして追加する ── これが手動追加行にも適用される
+        ようになった。
+        """
+        lower = [SelectedBoard(width=1090, length=1000, count=2, tag="")]
+        result = alg.apply_protec_rules_to_lower_list(
+            lower, self.product, palette_length=2910, is_1p1216=True)
+        self.assertTrue(result.valid)
+        self.assertEqual(result.count, 3)
+        self.assertTrue(result.need_length_cut)
+        self.assertEqual(result.length_cut_eff, 910)
+        # 行自体の枚数も確定値に合わせて更新される(表示上の枚数と
+        # 確定値が食い違わないようにするため)
+        self.assertEqual(lower[0].count, 3)
+
+    def test_no_length_cut_when_remainder_within_threshold(self):
+        lower = [SelectedBoard(width=1090, length=1000, count=2, tag="")]
+        result = alg.apply_protec_rules_to_lower_list(
+            lower, self.product, palette_length=2050, is_1p1216=True)
+        self.assertFalse(result.need_length_cut)
+        self.assertEqual(result.count, 2)
+
+    def test_auto_selected_rows_are_skipped(self):
+        """自動選定済みの行(タグ"主"/"カット前提")は対象外。
+
+        そちらは既に `select_protec_lower_boards` が確定させているので、
+        ここで上書きすると選定結果と食い違う。
+        """
+        lower = [SelectedBoard(width=1090, length=1000, count=5, tag=alg.TAG_MAIN)]
+        result = alg.apply_protec_rules_to_lower_list(
+            lower, self.product, palette_length=2910, is_1p1216=True)
+        self.assertFalse(result.valid)
+        self.assertEqual(lower[0].count, 5)   # 触られていない
+
+    def test_empty_list_returns_invalid(self):
+        result = alg.apply_protec_rules_to_lower_list(
+            [], self.product, palette_length=2000, is_1p1216=False)
+        self.assertFalse(result.valid)
+
+    def test_uses_the_same_threshold_as_select_protec_lower_boards(self):
+        """選定(`select_protec_lower_boards`)と手動追加後の後付け
+
+        (`apply_protec_rules_to_lower_list`)が、同じ在庫・同じパレット丈
+        なら同じ結果になることを確かめる(計算式が2か所で別々に
+        実装されて食い違う、という事故を防ぐ)。
+        """
+        available = [board(1090, 1000)]
+        palette = make_palette(1150, 2910)
+        auto_boards, auto_result = alg.select_protec_lower_boards(
+            available, self.product, palette.length, is_1p1216=True)
+
+        manual = [SelectedBoard(width=1090, length=1000, count=1, tag="")]
+        manual_result = alg.apply_protec_rules_to_lower_list(
+            manual, self.product, palette.length, is_1p1216=True)
+
+        self.assertEqual(auto_result.count, manual_result.count)
+        self.assertEqual(auto_result.need_length_cut, manual_result.need_length_cut)
+        self.assertEqual(auto_result.length_cut_eff, manual_result.length_cut_eff)
+
+
+class IndustryStandardShortcutTests(unittest.TestCase):
+    """業界標準サイズ("1×2"/"4×8")のショートカット選定。
+
+    発端: 製品1002×2002で、業界標準サイズ"1×2"(1000×2000、カット
+    不要)ではなく"1030×1520"(差0mmだが継ぎ足しカットが必要)が
+    選ばれていた。原因はPASS1が「幅の一致度が最も高い候補を、
+    1件見つけた時点で即採用」という設計だったため、"1030×1520"が
+    候補リストの先頭に来るとそこで打ち切られ、後方にある
+    "1000×2000"は評価すらされなかった。
+    """
+
+    def setUp(self) -> None:
+        self.palette = make_palette(1150, 2200)
+
+    def test_1x2_range_picks_standard_board_over_first_candidate(self):
+        product = ProductSize(width=1002, length=2002)
+        available = [
+            board(1030, 1520),   # 候補リストの先頭。継ぎ足しカットが必要
+            board(1000, 2000),   # 業界標準"1×2"。カット不要
+        ]
+        r = alg.select_lower_boards(available, self.palette, product)
+        self.assertEqual((r.boards[0].width, r.boards[0].length), (1000, 2000))
+        self.assertEqual(r.boards[0].tag, alg.TAG_MAIN)
+
+    def test_4x8_range_picks_standard_board(self):
+        product = ProductSize(width=1251, length=2501)
+        palette = make_palette(1300, 2700)
+        available = [board(1280, 1900), board(1250, 2500)]
+        r = alg.select_lower_boards(available, palette, product)
+        self.assertEqual((r.boards[0].width, r.boards[0].length), (1250, 2500))
+
+    def test_board_can_be_stored_rotated(self):
+        """在庫の向き(幅/丈が入れ替わっていても)関わらず見つける。"""
+        product = ProductSize(width=1002, length=2002)
+        available = [board(2000, 1000)]   # 1000x2000の逆向き
+        r = alg.select_lower_boards(available, self.palette, product)
+        self.assertEqual({r.boards[0].width, r.boards[0].length}, {1000, 2000})
+
+    def test_outside_range_does_not_trigger_shortcut(self):
+        """製品サイズが範囲外なら、通常のPASS1がそのまま動く
+
+        (ショートカットは発動しない)。
+        """
+        product = ProductSize(width=1010, length=2010)   # "1×2"の範囲外
+        available = [board(1000, 2000), board(1030, 1520)]
+        r = alg.select_lower_boards(available, self.palette, product)
+        # 通常のPASS1(幅一致優先、先頭優先)が動くので、標準サイズが
+        # 自動的に選ばれるとは限らない。ここでは「ショートカット専用の
+        # 決め打ちロジック(枚数計算式)を通っていない」ことだけを確かめる
+        self.assertNotEqual(r.state.remaining_len, 0)
+
+    def test_stock_not_available_falls_back_to_normal_pass1(self):
+        """範囲内でも、対応するボードサイズの在庫が無ければ
+
+        通常のPASS1にフォールバックする。
+        """
+        product = ProductSize(width=1002, length=2002)
+        available = [board(1030, 1520)]   # 標準サイズの在庫が無い
+        r = alg.select_lower_boards(available, self.palette, product)
+        self.assertEqual((r.boards[0].width, r.boards[0].length), (1030, 1520))
+
+    def test_upper_boards_also_use_the_shortcut(self):
+        """上用(`select_upper_boards`)にも同じ判定を適用する。"""
+        product = ProductSize(width=1002, length=2002)
+        available = [board(1030, 1520), board(1000, 2000)]
+        lower = [SelectedBoard(width=1030, length=1520, count=1, tag=alg.TAG_MAIN)]
+        r = alg.select_upper_boards(lower, available, self.palette, product)
+        self.assertEqual((r.boards[0].width, r.boards[0].length), (1000, 2000))
+
+    def test_shared_mode_takes_priority_over_shortcut(self):
+        """上下共用モードは、ショートカットより優先される
+
+        (通常モードでのみ発動する、という指定どおり)。
+        """
+        product = ProductSize(width=1002, length=2002)
+        available = [board(1000, 2000)]
+        lower = [SelectedBoard(width=1030, length=1520, count=1, tag=alg.TAG_MAIN)]
+        r = alg.select_upper_boards(
+            lower, available, self.palette, product, last_hosozai="ザラ板")
+        self.assertEqual(r.mode, "共用")
+        self.assertEqual((r.boards[0].width, r.boards[0].length), (1030, 1520))
+
+    def test_protec_mode_takes_priority_over_shortcut(self):
+        """プロテックモードも、ショートカットより優先される。"""
+        product = ProductSize(width=1002, length=2002)
+        available = [board(1000, 2000)]
+        lower_boards, protec_result = alg.select_protec_lower_boards(
+            [board(1030, 1520)], product, self.palette.length, is_1p1216=False)
+        r = alg.select_upper_boards(
+            lower_boards, available, self.palette, product,
+            is_protec_mode=True, protec_result=protec_result)
+        self.assertEqual(r.mode, "プロテック")
+
+    def test_length_cut_is_recorded_when_needed(self):
+        """ショートカットで選んだボードでも、100mm閾値による丈カット
+
+        判定は行われる(パレット丈を短くして丈カットを誘発する)。
+        """
+        product = ProductSize(width=1002, length=2002)
+        palette = make_palette(1150, 2050)   # 1000mm×2枚=2000、残り50→切り捨て
+        available = [board(1000, 2000)]
+        r = alg.select_lower_boards(available, palette, product)
+        self.assertEqual(r.length_cut_info, {})
+
+        palette2 = make_palette(1150, 2101)  # 残り101→カット
+        r2 = alg.select_lower_boards(available, palette2, product)
+        self.assertIn("L_1000x2000", r2.length_cut_info)
+
+
 class SelectUpperBoardsTests(unittest.TestCase):
     """VBA `SelectUpperBoards` の移植の検証。"""
 
@@ -699,23 +1089,36 @@ class SelectUpperBoardsTests(unittest.TestCase):
             )
             self.assertNotEqual(r.mode, "共用", f"hosozai={hosozai}")
 
-    def test_protec_mode_copies_lower_when_within_tolerance(self):
-        # 下用1000x600 の上用有効幅は 900(製品幅で頭打ち)ではなく…
-        # GetBestOrientationは上用ではfit_limit=製品幅900。1000も600も比較され600が採用される
-        # 600 >= 900-80=820 は不成立 → 通常選定に落ちる
+    def test_protec_mode_prefers_orientation_closest_to_product_width(self):
+        """VBA `DecideProtecOrientation` の判定: 製品幅に最も近い向きを
+
+        選び、超過分はカットする(超過を避けて大きく不足する向きを
+        選ぶのではない)。下用1000x600 は、回転しない向き(幅1000。
+        製品幅900に対して+100mm、カットで丸める)の方が、回転する
+        向き(幅600。-300mmで大きく不足)より製品幅に近いので、
+        1000の向きが採用され、プロテックとして成立する。
+        カット後の仕上がり幅は「製品幅そのもの」ではなく
+        「製品幅-許容」(通常80mm)まで削る: 900-80=820。
+        """
         r = alg.select_upper_boards(
             self.lower, [board(880, 1900)], self.palette, self.product, is_protec_mode=True,
         )
-        self.assertNotEqual(r.mode, "プロテック")
+        self.assertEqual(r.mode, "プロテック")
+        self.assertTrue(r.protec_result.need_cut)
+        self.assertEqual(r.protec_result.cut_eff_width, 820)
 
     def test_protec_mode_applies_when_lower_width_fits(self):
         lower = [SelectedBoard(width=880, length=600, count=2, tag=alg.TAG_MAIN)]
-        # 880 >= 900-80=820 なのでプロテックモード成立
+        # 880 >= 900-80=820 なのでプロテックモード成立。
+        # 丈カウントは上用専用に製品丈基準で決め直す(下用の`count`を
+        # そのまま引き継がない): 製品丈1900 // 600 = 3枚、残り100mmは
+        # 閾値ちょうどなので切り捨てて3枚のまま
         r = alg.select_upper_boards(
             lower, [board(880, 1900)], self.palette, self.product, is_protec_mode=True,
         )
         self.assertEqual(r.mode, "プロテック")
-        self.assertEqual((r.boards[0].width, r.boards[0].count), (880, 2))
+        self.assertEqual((r.boards[0].width, r.boards[0].count), (880, 3))
+        self.assertFalse(r.protec_result.need_length_cut)
 
     def test_protec_1p1216_uses_tighter_tolerance(self):
         lower = [SelectedBoard(width=880, length=600, count=2, tag=alg.TAG_MAIN)]
@@ -726,18 +1129,15 @@ class SelectUpperBoardsTests(unittest.TestCase):
         )
         self.assertNotEqual(r.mode, "プロテック")
 
-    def test_protec_1p1216_tolerance_matches_report_tolerance(self):
-        # 890x600 なら 900-10=890 で許容内 → プロテック成立。
-        # report側 PROTEC_CUT_TOL_1P1216(=10mm)と選定側の許容が食い違って
-        # いると、ここでプロテックに落ちず通常選定の別ボードが選ばれて
-        # しまい、切断依頼書の内容と選定結果が食い違う原因になっていた。
-        lower = [SelectedBoard(width=890, length=600, count=2, tag=alg.TAG_MAIN)]
+    def test_protec_1p1216_applies_within_10mm(self):
+        """1P1216 の許容は10mm(精度の都合で本来の-20mmより厳しめ)。"""
+        lower = [SelectedBoard(width=892, length=600, count=2, tag=alg.TAG_MAIN)]
+        # 892 >= 900-10=890 は成立 → プロテック成立
         r = alg.select_upper_boards(
-            lower, [board(890, 1900)], self.palette, self.product,
+            lower, [board(892, 1900)], self.palette, self.product,
             is_protec_mode=True, is_protec_1p1216=True,
         )
         self.assertEqual(r.mode, "プロテック")
-        self.assertEqual((r.boards[0].width, r.boards[0].count), (890, 2))
 
     def test_normal_selection_picks_first_qualifying_board(self):
         r = alg.select_upper_boards(self.lower, [board(900, 600)], self.palette, self.product)
@@ -1097,6 +1497,79 @@ class UpperWideCutTests(unittest.TestCase):
         self.assertEqual(r.length_cut_count.get("U_400x1000"), 1)
 
 
+class LowerWideCutTests(unittest.TestCase):
+    """下用のカット前提選定(`select_boards_for_wide_lower`)。上用の
+
+    `UpperWideCutTests` と対称。以前は下用側だけ丈カットの記録漏れ
+    があり、切断依頼書に反映されなかった(現場の声:「3枚出るはずが
+    分割されずに出力される」)。
+    """
+
+    def test_records_length_cut_when_overshooting(self):
+        palette = make_palette(1150, 2650)
+        product = ProductSize(width=1122, length=2502)
+        available = [board(1030, 1520)]
+        r = alg.select_boards_for_wide_lower(available, palette, product)
+        # 1030x1520(最大辺1520 >= パレット幅1150)がヒットしてカット前提に
+        # なる。丈補填で3枚(1030×3=3090)になり、パレット丈2650+3を
+        # 超えるので丈カットが記録される
+        self.assertEqual(r.boards[0].tag, alg.TAG_CUT_PREMISE)
+        self.assertIn("L_1030x1520", r.length_cut_info)
+
+    def test_no_record_when_within_pallet_length(self):
+        palette = make_palette(1150, 4000)
+        product = ProductSize(width=1122, length=2502)
+        available = [board(1030, 1520)]
+        r = alg.select_boards_for_wide_lower(available, palette, product)
+        self.assertEqual(r.length_cut_info, {})
+
+    def test_length_cut_reaches_auto_select_result(self):
+        """カット前提の丈カットが最終結果まで残ること(切断依頼書が読む)。
+
+        以前はここが漏れていた: `LowerSelectionResult` に
+        `length_cut_info` 自体が無く、`auto_select_boards` も
+        マージしていなかった。パレット丈を短くして、確実に丈カットが
+        発生する構成にする。
+        """
+        palette = make_palette(1150, 1750)
+        product = ProductSize(width=1122, length=1800)
+        available = [board(1030, 1520)]
+        r = alg.auto_select_boards(available, palette, product)
+        self.assertEqual(r.length_cut_info.get("L_1030x1520"), 1030)
+        self.assertEqual(r.length_cut_count.get("L_1030x1520"), 1)
+
+    def test_fallback_board_is_not_double_counted(self):
+        """在庫が対象幅に届かずフォールバック(タグ"主")になったときは、
+
+        ここで丈カットを記録しない。`recalc_length_cut_info` の通常
+        ループがこのボードを対象にする(除外されない)ので、ここでも
+        記録すると `_orient` の向き判断の違いで別の値になり、
+        後からマージしても食い違ったまま残ってしまう。
+        """
+        palette = make_palette(1150, 1750)
+        product = ProductSize(width=1122, length=1800)
+        available = [board(400, 1000)]   # 最大辺400 < パレット幅1150 → フォールバック
+        r = alg.select_boards_for_wide_lower(available, palette, product)
+        self.assertEqual(r.boards[0].tag, alg.TAG_MAIN)
+        self.assertEqual(r.length_cut_info, {})
+
+    def test_reported_scenario_1030x1520_splits_into_two_cut_groups(self):
+        """発端の症状: 1030x1520(カット前提)が丈カットで分割されず、
+
+        3枚が「幅カットのみ」の1本にまとめられてしまっていた。
+        """
+        palette = make_palette(1150, 2650)
+        product = ProductSize(width=1122, length=2502)
+        available = [board(1030, 1520)]
+        r = alg.auto_select_boards(available, palette, product)
+        cut_info = reports.get_cut_size_info(
+            r.lower, "下用", palette.width, palette.length,
+            r.cut_info, r.length_cut_info, r.length_cut_count)
+        # 丈カットが検出されていれば size_both が埋まり、
+        # 「幅カットのみ」の1本にまとめられない
+        self.assertNotEqual(cut_info.size_both, "")
+
+
 class RecalcLengthCutInfoTests(unittest.TestCase):
     def setUp(self) -> None:
         self.palette = make_palette(1000, 2000)
@@ -1122,16 +1595,48 @@ class RecalcLengthCutInfoTests(unittest.TestCase):
         info, _ = alg.recalc_length_cut_info([], upper, self.palette, self.product)
         self.assertEqual(info, {})
 
-    def test_skips_cut_premise_rows_in_lower_too(self):
-        # 上用側は「カット前提」を除外している。下用側も対称にする
-        lower = [SelectedBoard(width=1000, length=700, count=3, tag=alg.TAG_CUT_PREMISE)]
-        info, _ = alg.recalc_length_cut_info(lower, [], self.palette, self.product)
-        self.assertEqual(info, {})
-
     def test_no_record_when_within_limit(self):
         lower = [SelectedBoard(width=1000, length=600, count=3, tag=alg.TAG_MAIN)]
         info, _ = alg.recalc_length_cut_info(lower, [], self.palette, self.product)
         self.assertEqual(info, {})  # 600*3=1800 <= 2000
+
+    def test_protec_uses_confirmed_result_without_recalculating(self):
+        """プロテックのときは選定の確定値(`need_length_cut`)をそのまま
+
+        使い、独自に「count * eff_length > limit」を再計算しない
+        (再計算すると、選定[100mm閾値]と食い違う結果になりうる)。
+        """
+        lower = [SelectedBoard(width=1090, length=1000, count=3, tag=alg.TAG_CUT_PREMISE)]
+        pr = alg.ProtecCutResult(
+            valid=True, orig_width=1090, orig_length=1000, cut_eff_width=1090,
+            eff_length=1000, need_cut=False, need_length_cut=True,
+            length_cut_eff=910, count=3)
+        info, count = alg.recalc_length_cut_info(
+            lower, [], self.palette, self.product, lower_protec_result=pr)
+        self.assertIn("L_1090x1000", info)
+        self.assertEqual(count["L_1090x1000"], 1)
+
+    def test_protec_lower_and_upper_can_differ(self):
+        """下用(パレット丈基準)と上用(製品丈基準)は、対象の丈が異なる
+
+        ため、別々に丈カットの要否が決まりうる。ここが同じ
+        `ProtecCutResult` を共有していると、片方だけ正しい判定に
+        なってしまう。
+        """
+        lower = [SelectedBoard(width=1090, length=1000, count=2, tag=alg.TAG_MAIN)]
+        upper = [SelectedBoard(width=1090, length=1000, count=3, tag=alg.TAG_CUT_PREMISE)]
+        lower_pr = alg.ProtecCutResult(
+            valid=True, orig_width=1090, orig_length=1000, cut_eff_width=1090,
+            eff_length=1000, need_cut=False, need_length_cut=False, count=2)
+        upper_pr = alg.ProtecCutResult(
+            valid=True, orig_width=1090, orig_length=1000, cut_eff_width=1090,
+            eff_length=1000, need_cut=False, need_length_cut=True,
+            length_cut_eff=910, count=3)
+        info, _count = alg.recalc_length_cut_info(
+            lower, upper, self.palette, self.product,
+            lower_protec_result=lower_pr, upper_protec_result=upper_pr)
+        self.assertNotIn("L_1090x1000", info)   # 下用は丈カット不要
+        self.assertIn("U_1090x1000", info)      # 上用は丈カットが要る
 
 
 class AutoSelectBoardsHubTests(unittest.TestCase):

@@ -1311,6 +1311,37 @@ class ProtecBoardTypeTests(SelectionWebTestCase):
         state = self.search(包装仕様NO="1P0001")
         self.assertEqual(state["boards"]["board_type"], "ハードボード")
 
+    def test_プロテックは上用キャンバスも隠す(self) -> None:
+        """現場の要望:「保護材上蓋と同じようにプロテックモードも
+
+        『上用キャンバスを隠して上下共用扱いにする』を忘れないように」。
+        以前は上下共用モードの対象外で、上用キャンバスが出たままだった
+        (製品幅を大きく超えるボードを、超過禁止の枠に配置しようとして
+        静かに失敗する不具合の原因)。
+
+        アングルの表示可否(`angles.show`)は上用キャンバスとは独立
+        (VBA `ShowAngleControls` の分離と同じ)。ここではマスタが空で
+        保護材が引けない(未確定)ので、アングルは既定で表示のまま ──
+        上用キャンバスが隠れていることとは別の話であることを、あわせて
+        確かめる。
+        """
+        insert_board(self.conn, width=900, length=900,
+                     board_type="プロテックボード")
+        state = self.search(包装仕様NO="1P1216")
+        self.assertTrue(state["angles"]["show"])   # 保護材未確定、既定は表示
+        self.assertFalse(state["boards"]["show_upper"])
+        self.assertEqual(state["boards"]["lower_title"], presenter.LIST_TITLE_SHARED)
+
+    def test_保護材がアングルでもプロテックが勝つ(self) -> None:
+        """保護材のマスタ設定に関わらず、上用キャンバスはプロテックが優先する。
+
+        アングル自体は実際の保護材判定に従う(独立した判断)。
+        """
+        insert_board(self.conn, width=900, length=900,
+                     board_type="プロテックボード")
+        state = self.search(包装仕様NO="1P1216")
+        self.assertFalse(state["boards"]["show_upper"])
+
 
 # ==================================================================
 # 管理者と実績パターン (Phase 6d)

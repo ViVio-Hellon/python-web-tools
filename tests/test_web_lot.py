@@ -639,6 +639,62 @@ class LotApiTests(LotWebTestCase):
         self.assertEqual(highlighted, set(presenter.BOX_HIGHLIGHT_FIELDS))
 
 
+class OdrSwitchApiTests(LotWebTestCase):
+    """引当行クリックでの受注情報差し替え(VBA `Page1_OnLstHikiClick`)。
+
+    現場の声:「ロット情報画面の引当情報をクリックしても受注内容が
+    切り替わっているように見えない、できていないのではないか」→
+    「引当情報クリックでオーダー情報切り替えですよ」。データの流れ:
+    SIKALOTNOW から LOTNO で1行 → SIKAHIKINOW で同じLOTNOの行の中
+    から**引当NO**で1行 → SIKAODRNOW で同じオーダーNOの行を展開。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        insert_lot(self.conn, lot_no="1234567")
+        insert_hiki(self.conn, lot_no="1234567", order_no="O1", no="60717001")
+        insert_hiki(self.conn, lot_no="1234567", order_no="O2", no="60717002")
+        insert_odr(self.conn, order_no="O1", 納入先名称="納入先A", 包装仕様NO="1P0001")
+        insert_odr(self.conn, order_no="O2", 納入先名称="納入先B", 包装仕様NO="1P0002")
+
+    def test_トークンが要る(self) -> None:
+        res = self.client.get("/api/lot/1234567/hiki/60717002")
+        self.assertEqual(res.status_code, 401)
+
+    def test_初回検索は先頭の受注番号が選択済み(self) -> None:
+        body = self.get("/api/lot/1234567")
+        selected = [h for h in body["hiki"] if h["selected"]]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["order_no"], "O1")
+
+    def test_クリックした引当行の受注情報に切り替わる(self) -> None:
+        self.get("/api/lot/1234567")  # 初回検索(ロットを作業中にする)
+        body = self.get("/api/lot/1234567/hiki/60717002")
+        names = {f["key"]: f["value"] for f in body["odr_fields"]}
+        self.assertEqual(names["delivery_name"], "納入先B")
+        self.assertEqual(body["packaging_spec"], "1P0002")
+        self.assertEqual(body["order_no"], "O2")
+
+    def test_引当一覧の選択状態も塗り直る(self) -> None:
+        self.get("/api/lot/1234567")
+        body = self.get("/api/lot/1234567/hiki/60717002")
+        selected = {h["hiki_no"] for h in body["hiki"] if h["selected"]}
+        self.assertEqual(selected, {"60717002"})
+
+    def test_そのロットに無い引当NOは404(self) -> None:
+        self.get("/api/lot/1234567")
+        res = self.client.get("/api/lot/1234567/hiki/60717999", headers=self.auth())
+        self.assertEqual(res.status_code, 404)
+        self.assertIn("ありません", res.get_json()["error"]["message"])
+
+    def test_ロット情報や図面は差し替え対象に含まれない(self) -> None:
+        """受注情報の断片だけを返す。ロット情報・図面は触らない。"""
+        self.get("/api/lot/1234567")
+        body = self.get("/api/lot/1234567/hiki/60717002")
+        self.assertNotIn("lot_fields", body)
+        self.assertNotIn("specNo", body)
+
+
 class ExpandApiTests(LotWebTestCase):
     """資材展開(VBA `Page1_OnBtnHBClick`)。
 

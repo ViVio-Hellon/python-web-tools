@@ -235,6 +235,63 @@ class MasterApiTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_WEB, _SKIP)
+class ColumnMismatchTests(unittest.TestCase):
+    """アクセス権限の表はあるが、列名が想定と違うときの画面。
+
+    現場の声:「1行足す」を押しても入力欄が1つも出てこない。
+    """
+
+    def setUp(self) -> None:
+        from tests import _web
+        from app.routes import master as master_routes
+
+        self.dir = Path(tempfile.mkdtemp(prefix="webmaster_mismatch_"))
+        self.src = self.dir / config.MATERIAL_DB_NAME
+        conn = sqlite3.connect(self.src)
+        conn.executescript("""
+            CREATE TABLE PalletMaster (
+                管理番号 INTEGER PRIMARY KEY, 幅 INTEGER, 丈 INTEGER);
+            -- 列名がこのツールの想定(ログインID/PC名/権限/有効/備考)と
+            -- 1つも一致しない ── 資材課側で別の付け方をした状況を再現
+            CREATE TABLE アクセス権限 (
+                id INTEGER PRIMARY KEY, LoginID TEXT, PCName TEXT,
+                Permission TEXT);
+        """)
+        conn.execute("INSERT INTO PalletMaster (幅,丈) VALUES (1100,2000)")
+        conn.commit()
+        conn.close()
+
+        self._saved = user_settings.get(config.KEY_MASTER_DB_DIR)
+        user_settings.save(config.KEY_MASTER_DB_DIR, str(self.dir))
+        self.addCleanup(user_settings.save, config.KEY_MASTER_DB_DIR,
+                        self._saved or "")
+
+        self.conn = _web.bind_db(self, master_routes)
+        self.client = _web.make_client("field", port=8714)
+        self.auth = _web.auth()
+
+    def browse(self, **params):
+        res = self.client.get("/api/master/browse", query_string=params,
+                              headers=self.auth)
+        self.assertEqual(res.status_code, 200)
+        return res.get_json()
+
+    def test_打ち込める欄が無いことを画面が言葉にする(self) -> None:
+        state = self.browse(table="アクセス権限")
+        # 表そのものは「まだありません」ではない(取り込み元に実在する)
+        self.assertFalse(state["page"]["missing"])
+        # 直せる表として案内はされるが、入力欄は1つも無い
+        self.assertEqual(state["columns"], [])
+        # なぜ打ち込めないのかが、ここで言葉になっている
+        self.assertIn("列名が想定と違う", state["page"]["why"])
+        self.assertIn("ログインID", state["page"]["why"])
+
+    def test_列名が一致していれば理由は出ない(self) -> None:
+        state = self.browse(table="PalletMaster")
+        self.assertEqual(state["page"]["why"], "")
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
 class SettingsPageTests(unittest.TestCase):
     """設定画面の面として載っていること。"""
 
@@ -335,6 +392,124 @@ class CreateTableApiTests(MasterApiTests):
     def test_断ったときも画面ぜんぶを返す(self) -> None:
         self.only_field()
         body = self.post("table/create", {"table": "アクセス権限"}).get_json()
+        self.assertIn("tables", body)
+        self.assertIn("page", body)
+
+    def test_表が無いまま行を足そうとすると422で表を作れと言う(self) -> None:
+        """現場の声:「1行足す」を押すと『入れる値がありません』と出る。
+
+        画面(`master.js`)は表が無いあいだ `openRow(null)` 自体を止めるが、
+        直接APIを叩かれた場合のために、サーバ側(`_ready`)でも確かめる。
+        断りの文言は「値が無い」ではなく「表がまだ無い」でなければならない
+        ── 本当の原因と違う理由を返すと、直しようがない。
+        """
+        res = self.post("row/add", {"table": "アクセス権限",
+                                    "values": {"ログインID": "x", "PC名": "y",
+                                              "権限": "mode:field",
+                                              "有効": "1", "備考": ""}})
+        self.assertEqual(res.status_code, 422)
+        body = res.get_json()
+        self.assertEqual(body["error"]["code"], master_admin.REFUSE_NOT_CREATABLE)
+        self.assertNotEqual(body["error"]["message"], "入れる値がありません。")
+        self.assertIn("まだ取り込み元にありません", body["error"]["message"])
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class RebuildTableApiTests(MasterApiTests):
+    """表はあるが列名が想定と違い、1つも打ち込めない表を作り直す。
+
+    `CreateTableApiTests` の対になる話。あちらは「表が無い」(よく
+    ある)、こちらは「表はあるが列名が違う」(稀だが、起きると
+    sqlite3 のファイルを直接直す手段が無いので詰む)。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from tests.test_master_admin import source_with_mismatched_columns
+        source_with_mismatched_columns(self.src, "アクセス権限")
+
+    def test_列名が違う表は一覧でも案内される(self) -> None:
+        page = self.browse(table="アクセス権限")["page"]
+        self.assertFalse(page["missing"])       # 「まだ無い」ではない
+        self.assertTrue(page["rebuildable"])
+        self.assertIn("列名が想定と違う", page["why"])
+
+    def test_打ち込める欄が無い(self) -> None:
+        state = self.browse(table="アクセス権限")
+        self.assertEqual(state["columns"], [])
+
+    def test_列名が違うまま行を足そうとすると422で作り直せと言う(self) -> None:
+        res = self.post("row/add", {"table": "アクセス権限",
+                                    "values": {"ログインID": "x", "PC名": "y",
+                                              "権限": "mode:field",
+                                              "有効": "1", "備考": ""}})
+        self.assertEqual(res.status_code, 422)
+        body = res.get_json()
+        self.assertEqual(body["error"]["code"], master_admin.REFUSE_NOT_CREATABLE)
+        self.assertNotEqual(body["error"]["message"], "入れる値がありません。")
+        self.assertIn("列名が想定と違う", body["error"]["message"])
+
+    def test_作り直せる(self) -> None:
+        res = self.post("table/rebuild", {"table": "アクセス権限"})
+        self.assertEqual(res.status_code, 200)
+        page = res.get_json()["page"]
+        # 作り直したあとは**そのまま行を足せる状態**で返る
+        self.assertFalse(page["rebuildable"])
+        self.assertTrue(page["editable"])
+        self.assertEqual(page["total"], 0)
+        self.assertEqual(len(res.get_json()["columns"]), 5)
+
+    def test_元の表は消さず退避する(self) -> None:
+        """**中身を失わない。**"""
+        conn = sqlite3.connect(self.src)
+        conn.execute("INSERT INTO アクセス権限 (LoginID, Permission) "
+                    "VALUES ('old_user', 'old_perm')")
+        conn.commit()
+        conn.close()
+
+        self.post("table/rebuild", {"table": "アクセス権限"})
+
+        conn = sqlite3.connect(self.src)
+        try:
+            names = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            conn.close()
+        backups = [n for n in names if n.startswith("アクセス権限_旧")]
+        self.assertEqual(len(backups), 1)
+
+    def test_列名が一致していれば対象外(self) -> None:
+        """通常のケース(想定どおりの表)ではボタンを出さない。"""
+        from tests.test_master_admin import source_without
+        source_without(self.src, "アクセス権限")
+        self.post("table/create", {"table": "アクセス権限"})
+        page = self.browse(table="アクセス権限")["page"]
+        self.assertFalse(page["rebuildable"])
+
+    def test_表がまだ無ければ422(self) -> None:
+        from tests.test_master_admin import source_without
+        source_without(self.src, "アクセス権限")
+        res = self.post("table/rebuild", {"table": "アクセス権限"})
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_NOT_CREATABLE)
+
+    def test_上流の表は422(self) -> None:
+        res = self.post("table/rebuild", {"table": "PalletMaster"})
+        self.assertEqual(res.status_code, 422)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_NOT_CREATABLE)
+
+    def test_権限が無ければ403(self) -> None:
+        self.only_field()
+        res = self.post("table/rebuild", {"table": "アクセス権限"})
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"],
+                         master_admin.REFUSE_NOT_ALLOWED)
+
+    def test_断ったときも画面ぜんぶを返す(self) -> None:
+        self.only_field()
+        body = self.post("table/rebuild", {"table": "アクセス権限"}).get_json()
         self.assertIn("tables", body)
         self.assertIn("page", body)
 

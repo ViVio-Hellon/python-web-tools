@@ -4,6 +4,7 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
+from packaging_tool import board_selection_algorithm as alg
 from packaging_tool import reports
 from packaging_tool.board_selection_algorithm import SelectedBoard
 
@@ -218,33 +219,81 @@ class GetCutSizeInfoTests(unittest.TestCase):
 
 
 class ProtecCutSizeTests(unittest.TestCase):
+    """`protec_cut_size_info` は `ProtecCutResult`(選定の確定値)を
+
+    そのまま表示するだけで、ここでは幅カット・丈カットの判定を
+    やり直さない(全面書き換え。以前は `placedBoards` から寸法を
+    逆算し、`GetBestOrientation` で独自に再判定していた)。
+    """
+
     def test_width_cut_uses_the_1p1216_tolerance(self):
-        board = SelectedBoard(width=1250, length=1250, count=2, tag="")
-        out = reports.protec_cut_size_info([board], 1100, 2400, is_1p1216=True)
+        pr = alg.decide_protec_orientation(1250, 1250, 1100, is_1p1216=True)
+        pr.count = 2
+        out = reports.protec_cut_size_info(pr)
         # 有効幅1250 > 製品幅1100 → 幅カット。1100 - 10 = 1090
         self.assertTrue(out.size_width_only.startswith("1090x"))
-
-    def test_other_protec_uses_80mm(self):
-        board = SelectedBoard(width=1250, length=1250, count=2, tag="")
-        out = reports.protec_cut_size_info([board], 1100, 2400, is_1p1216=False)
-        self.assertTrue(out.size_width_only.startswith("1020x"))
-
-    def test_small_length_overhang_needs_no_length_cut(self):
-        """はみ出しが100mm以下なら丈カットは不要(VBA `CUT_OVERL_THRESHOLD`)。"""
-        board = SelectedBoard(width=1250, length=1250, count=2, tag="")
-        out = reports.protec_cut_size_info([board], 1100, 2450, is_1p1216=True)
-        self.assertEqual(out.size_both, "")
-        self.assertEqual(out.count_width_only, 2)   # 全枚数が通常カット
-
-    def test_large_overhang_splits_off_one_length_cut(self):
-        board = SelectedBoard(width=1250, length=1250, count=3, tag="")
-        out = reports.protec_cut_size_info([board], 1100, 2400, is_1p1216=True)
-        self.assertEqual(out.count_both, 1)
         self.assertEqual(out.count_width_only, 2)
 
-    def test_no_boards(self):
-        self.assertEqual(reports.protec_cut_size_info([], 1100, 2400,
-                                                      is_1p1216=True).size_both, "")
+    def test_other_protec_uses_80mm(self):
+        pr = alg.decide_protec_orientation(1250, 1250, 1100, is_1p1216=False)
+        pr.count = 2
+        out = reports.protec_cut_size_info(pr)
+        self.assertTrue(out.size_width_only.startswith("1020x"))
+
+    def test_no_cut_needed_when_width_fits(self):
+        """有効幅が製品幅以内なら幅カット自体が発生しない。"""
+        pr = alg.decide_protec_orientation(1090, 1250, 1100, is_1p1216=True)
+        pr.count = 2
+        out = reports.protec_cut_size_info(pr)
+        self.assertFalse(pr.need_cut)
+        self.assertEqual(out.size_width_only, "")
+
+    def test_no_length_cut_when_not_flagged(self):
+        """`need_length_cut=False`(選定が丈カット不要と判定済み)なら
+
+        `size_both` は空のまま。
+        """
+        pr = alg.decide_protec_orientation(1250, 1250, 1100, is_1p1216=True)
+        pr.count = 3
+        out = reports.protec_cut_size_info(pr)
+        self.assertEqual(out.size_both, "")
+        self.assertEqual(out.count_both, 0)
+
+    def test_length_cut_appears_in_size_both(self):
+        """丈カットが要る(`need_length_cut=True`)なら、最後の1枚は
+
+        `size_both` に、残りの枚数は `size_width_only` に振り分ける
+        (`get_cut_size_info` [通常モード]と同じ2枠構成)。MAP画面の
+        カット線(`recalc_length_cut_info`)と同じ確定値を見るので、
+        画面と帳票が食い違わない。
+        """
+        pr = alg.ProtecCutResult(
+            valid=True, orig_width=1090, orig_length=1000, cut_eff_width=1090,
+            eff_length=1000, need_cut=False, need_length_cut=True,
+            length_cut_eff=910, count=3)
+        out = reports.protec_cut_size_info(pr)
+        self.assertEqual(out.size_both, "1090x910")
+        self.assertEqual(out.count_both, 1)
+        # 幅カットは不要なので、残り2枚は「幅カットのみ」欄には出さない
+        self.assertEqual(out.size_width_only, "")
+
+    def test_width_and_length_cut_both_appear(self):
+        """幅カットと丈カットが両方要るとき、両方の欄が埋まる。"""
+        pr = alg.ProtecCutResult(
+            valid=True, orig_width=1250, orig_length=1000, cut_eff_width=1020,
+            eff_length=1000, need_cut=True, need_length_cut=True,
+            length_cut_eff=910, count=3)
+        out = reports.protec_cut_size_info(pr)
+        self.assertEqual(out.size_both, "1020x910")
+        self.assertEqual(out.count_both, 1)
+        self.assertEqual(out.size_width_only, "1020x1000")
+        self.assertEqual(out.count_width_only, 2)
+
+    def test_invalid_result_yields_empty_info(self):
+        """`valid=False`(適合する在庫が無い)なら何も出さない。"""
+        out = reports.protec_cut_size_info(alg.ProtecCutResult(valid=False))
+        self.assertEqual(out.size_both, "")
+        self.assertEqual(out.size_width_only, "")
 
 
 def _cut(**kw) -> reports.CutRequestData:

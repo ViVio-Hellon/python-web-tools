@@ -14,7 +14,22 @@ import { onLeave } from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as jobs from "../jobs.js";
 import * as tabs from "../tabs.js";
-import * as master from "./master.js";
+// `master.js` は静的 import ではなく、**自分と同じ版クエリを付けて**
+// 動的に読み込む。
+//
+// なぜか: 版を付けるのは `url_for('static', ...)` で、それが効くのは
+// **テンプレートが名指しするファイルだけ**(このファイル自身)。この
+// ファイルの中の `import ... from "./master.js"` は素のURLになり、
+// 版が付かない。付かないファイルは `no-cache`(使う前に必ず確かめる)に
+// してあるので通常は直るが、共有フォルダ越しの配布やプロキシを挟む
+// 環境では確認そのものが働かないことがあり、**「設定画面(入口)は新しい
+// のにマスタ管理(中身)だけ古い」**という、過去に共有モジュール
+// (`mapedit.js`)で実際に踏んだ壊れ方(`docs/変更履歴.md` 参照)と同じ
+// 形になりうる。`import.meta.url` からいま自分が読み込まれたときの
+// 版クエリを取り、`master.js` にも同じものを付けて呼べば、設定画面を
+// 入れ替えたときに中身も必ず一緒に入れ替わる。
+const VERSION_QUERY = new URL(import.meta.url).search;
+const master = await import(`./master.js${VERSION_QUERY}`);
 
 const el = {};
 let unwatch = null;
@@ -527,6 +542,10 @@ async function browseTo(path) {
       // **ファイルも押せる。** 目当てのファイルが見えているのに
       // 「フォルダを選べ」と言われるのは、余計な一手になる
       else tr.dataset.file = entry.path;
+      // 共有フォルダをネットワーク越しに辿るので、押してから一覧が
+      // 返るまで待つことがある。`busy.js` がこの目印を見て待機の
+      // 姿にする
+      tr.dataset.rowAction = "1";
       if (entry.name === view.picked) tr.setAttribute("aria-current", "true");
       const td = document.createElement("td");
       const glyph = document.createElement("span");

@@ -39,7 +39,7 @@ VBAソースを1行ずつ確認して移植した。対応関係:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from .board_scoring import (
@@ -103,6 +103,14 @@ class LowerSelectionResult:
     post_fill_max_w: int = 0
     needs_wide_cut: bool = False   # カット前提選定(SelectBoardsForWideLower)が必要
     needs_narrow: bool = False     # 狭幅パレット選定が必要
+    # カット前提選定(`select_boards_for_wide_lower`)が記録した丈カット情報。
+    # `recalc_length_cut_info` は「カット前提」タグのボードを判定対象外に
+    # するので(通常モードの再判定と二重に扱わないため)、その代わりに
+    # ここへ記録された情報をそのまま結果へマージする
+    length_cut_info: dict[str, int] = field(default_factory=dict)
+    # プロテック確定値(唯一の正解)。プロテックでない、またはプロテック
+    # 選定が使える在庫を見つけられなかったときは valid=False のまま
+    protec_result: "ProtecCutResult" = field(default_factory=lambda: ProtecCutResult())
 
 
 # ------------------------------------------------------------------
@@ -1108,19 +1116,266 @@ def _measure_selection(
     return sel_max_w, sel_min_w, sel_total_l
 
 
+# 丈方向のカット判定の閾値(VBA `CUT_OVERL_THRESHOLD` / lenRemainPL)。
+# フルサイズの枚数で製品丈をカバーした後、あと何mm残っているか
+# (lenRemainPL)を見て、これを超える残りがあればカットしてもう1枚足す。
+# 以下なら誤差として切り捨てる(追加しない)。`reports.py` の
+# カット依頼書もこの値をそのまま使う(定義元はここの1か所だけ)
+LENGTH_CUT_REMAIN_THRESHOLD = 100
+
+
+def decide_length_count_with_cut(
+    board_length: int, target_length: int,
+) -> tuple[int, bool, int]:
+    """丈方向に何枚必要か、最後の1枚をカットする必要があるかを判定する。
+
+    VBA の `lenRemainPL` 判定と同じ考え方(判定しているのは「超過量」
+    ではなく「最後の1枚に必要な残りの長さ」):
+
+        lenRemainPL = 対象丈 - (1枚の丈 × フルサイズで収まる枚数)
+        lenRemainPL が 100mm を超える → カットして1枚追加する
+        lenRemainPL が 100mm 以下     → 切り捨てて無視する
+
+    例(1枚1000mm、対象丈2910mm): フルサイズ2枚で2000mm、残り910mm。
+    910mm > 100mm なのでカットして3枚目を910mmで追加する(合計3枚)。
+
+    例(1枚1000mm、対象丈2050mm): フルサイズ2枚で2000mm、残り50mm。
+    50mm ≤ 100mm なので追加しない(2枚のみ、50mm分は切り捨てる)。
+
+    戻り値は `(枚数, 丈カットが必要か, 丈カット後の最後の1枚の丈)`。
+    丈カットが不要なら3番目の値は `board_length` と同じ。
+
+    **MAP画面のカット線描画(`recalc_length_cut_info`)と切断依頼書
+    (`reports.protec_cut_size_info`)の両方が、この関数が返した
+    `count`/`need_length_cut` を経由した `ProtecCutResult` を見る**。
+    枚数の決め方をここ以外で計算し直すと、画面にはカット線が出るのに
+    依頼書には丈カットの行が出ない(またはその逆)という食い違いが
+    起きる(現場の声で報告された不具合の一因)。
+    """
+    if board_length <= 0:
+        return 1, False, 0
+
+    full_count = target_length // board_length
+    remain = target_length - full_count * board_length
+
+    if full_count == 0:
+        # 在庫1枚だけで対象丈を超える(またはちょうど覆う)。1枚をそのまま
+        # 使うか、対象丈に合わせてカットするかだけの話で、フルサイズの
+        # 上に「もう1枚」を足す状況ではない
+        need_cut = board_length > target_length
+        cut_eff = target_length if need_cut else board_length
+        return 1, need_cut, cut_eff
+
+    if remain > LENGTH_CUT_REMAIN_THRESHOLD:
+        # あと1枚、remain の長さにカットして足す
+        return full_count + 1, True, remain
+
+    # 端数は切り捨てる
+    return full_count, False, board_length
+
+
+# ------------------------------------------------------------------
+# プロテック専用の下用選定 (VBA `SelectProtecLowerBoards`)
+# ------------------------------------------------------------------
+def select_protec_lower_boards(
+    available: list[BoardModel], product: ProductSize, palette_length: int,
+    *, is_1p1216: bool,
+) -> tuple[list[SelectedBoard], ProtecCutResult]:
+    """VBA `SelectProtecLowerBoards` の移植。
+
+    プロテックモード専用の下用選定。**パレット幅ではなく製品幅を基準**に、
+    `decide_protec_orientation` で在庫全件を評価し、最も条件に近い1件を
+    採用する。丈方向は基本的に同じボードの枚数を増やすだけでカバーする
+    が、フルサイズで覆いきれない残りが100mmを超えるときは、最後の1枚を
+    カットして追加する(`decide_length_count_with_cut`。判定基準は
+    「超過量」ではなく「あと何mm製品丈が残っているか」)。
+
+    確定した内容は `ProtecCutResult` に記録して返す。これが以降の
+    処理(丈カット判定・配置・カット依頼書)が参照する「唯一の正解」。
+    採用できる在庫が1件も無ければ、空リストと `valid=False` の
+    `ProtecCutResult` を返す(呼び出し側は通常のPASS1-3にフォールバック
+    する)。
+    """
+    best: Optional[ProtecCutResult] = None
+    for board in available:
+        candidate = decide_protec_orientation(
+            board.width, board.length, product.width, is_1p1216=is_1p1216)
+        if not candidate.valid:
+            continue
+        # 製品幅に最も近い(超過・不足とも小さいほど良い)ものを採用。
+        # **カット前の実効幅で比べる** ── `cut_eff_width`(カット後の
+        # 仕上がりサイズ)は、カットが必要な候補同士だと常に同じ値
+        # (製品幅-許容)に揃ってしまい、「どちらが無駄が少ないか」を
+        # 比較する基準として使えない。同点なら丈が長い方
+        # (枚数が減り、継ぎ目が少ない方)を優先する
+        if best is None:
+            best = candidate
+            continue
+        cur_gap = abs(candidate.eff_width_before_cut - product.width)
+        best_gap = abs(best.eff_width_before_cut - product.width)
+        if cur_gap < best_gap or (cur_gap == best_gap and candidate.eff_length > best.eff_length):
+            best = candidate
+
+    if best is None:
+        log.debug("SelectProtecLowerBoards: 条件を満たす在庫がありません")
+        return [], ProtecCutResult(valid=False)
+
+    count, need_length_cut, length_cut_eff = decide_length_count_with_cut(
+        best.eff_length, palette_length)
+    best.count = count
+    best.need_length_cut = need_length_cut
+    best.length_cut_eff = length_cut_eff
+
+    # 幅カットが要るときは「カット前提」タグにする。プロテックは在庫の
+    # 種類が少なく組み合わせの余地がほとんど無いため、通常品のように
+    # 「主ボード選定→補填→カバー不足を確認してからカット前提へ」という
+    # 段階を踏まず、この時点で確定させる(現場の声:「プロテックボードは
+    # 通常ボードより種類が少ないので、通常ボードよりもカット前提の
+    # フラグをはやく立てるべき」)。タグを「カット前提」にすることで、
+    # 配置(`_place_cut_premise`)が `ProtecCutResult` の確定値(カット後
+    # サイズ)をそのまま使って描くため、配置図とカット依頼書の内容が
+    # 一致する。カット不要なら従来どおり通常の主ボードとして配置する。
+    # **丈カットが要るときも同様に「カット前提」にする** ── 幅カット・
+    # 丈カットのどちらであっても、選定が済んだ段階でその情報を確実に
+    # 後段へ伝える必要があるため
+    tag = TAG_CUT_PREMISE if (best.need_cut or need_length_cut) else TAG_MAIN
+    board_out = SelectedBoard(
+        width=best.orig_width, length=best.orig_length, count=count, tag=tag)
+    log.debug("SelectProtecLowerBoards: %sx%s %s枚 (rotated=%s cutEffW=%s needCut=%s "
+             "needLengthCut=%s lengthCutEff=%s tag=%s)",
+             best.orig_width, best.orig_length, count,
+             best.is_rotated, best.cut_eff_width, best.need_cut,
+             need_length_cut, length_cut_eff, tag)
+    return [board_out], best
+
+
+def apply_protec_rules_to_lower_list(
+    lower: list[SelectedBoard], product: ProductSize, palette_length: int,
+    *, is_1p1216: bool,
+) -> ProtecCutResult:
+    """VBA `ApplyProtecRulesToLowerList` の移植。
+
+    手動追加された下用ボード(タグ空欄)に対し、配置直前に
+    `decide_protec_orientation` で向き・カット要否を後付けで適用する。
+    自動選定済みの行(タグ"主"/"カット前提")は対象外(スキップする) ──
+    そちらは既に `select_protec_lower_boards` が正しい `ProtecCutResult`
+    を確定させているので、ここで上書きすると選定結果と食い違う。
+
+    【なぜ必要か】
+    手動でボードを増減すると `select_result`(自動選定の結果、
+    `ProtecCutResult` を含む)は丸ごと捨てられる(`add_board` 参照)。
+    そのまま配置・カット依頼へ進むと、プロテックのはずなのに
+    「唯一の正解」がどこにも無い状態になり、配置段階が独自に
+    製品幅厳守の判定をし直して静かに配置漏れを起こす。ここで
+    手動追加の行から `ProtecCutResult` 相当の値を作り直すことで、
+    後続処理は自動選定のときと同じ経路(確定値をそのまま使う)を通れる。
+
+    【丈カット判定も一緒に更新する】以前はここで手動追加の枚数
+    (`target.count`)をそのまま `ProtecCutResult.count` に代入するだけで、
+    丈カット(100mm閾値超えで最後の1枚をカットして追加する判定)を
+    一切行っていなかった。丈カット判定の計算式が
+    `select_protec_lower_boards` と重複しないよう、共通関数
+    (`decide_length_count_with_cut`)を両方から呼ぶ形にする。
+
+    先頭のタグ空欄の行を対象にする(VBA版が `lstSelectedBoardsLower`
+    の最初の該当行を見ていたのに合わせる)。対象が無ければ
+    `valid=False` を返す。
+    """
+    target = next((b for b in lower if b.tag not in (TAG_MAIN, TAG_CUT_PREMISE)), None)
+    if target is None:
+        return ProtecCutResult(valid=False)
+
+    result = decide_protec_orientation(
+        target.width, target.length, product.width, is_1p1216=is_1p1216)
+    if result.valid:
+        count, need_length_cut, length_cut_eff = decide_length_count_with_cut(
+            result.eff_length, palette_length)
+        result.count = count
+        result.need_length_cut = need_length_cut
+        result.length_cut_eff = length_cut_eff
+        # 後続処理(配置・カット依頼書)は `ProtecCutResult.count` を
+        # 見るので、行自体の枚数もここで合わせておく(手動で入れた
+        # 枚数のままだと、確定値と表示上の枚数が食い違う)
+        target.count = count
+        log.debug("ApplyProtecRulesToLowerList: 手動追加行 %sx%s に後付け適用 "
+                 "cutEffW=%s needCut=%s count=%s needLengthCut=%s",
+                 target.width, target.length,
+                 result.cut_eff_width, result.need_cut, count, need_length_cut)
+    return result
+
+
 # ------------------------------------------------------------------
 # 下用選定 本体
 # ------------------------------------------------------------------
+# 業界標準サイズのショートカット判定(VBA ①モジュール定数)。
+#
+# 【背景】製品1002×2002で、業界標準サイズ"1×2"(1000×2000、カット不要)
+# ではなく"1030×1520"(差0mmだが継ぎ足しカットが必要)が選ばれていた。
+# 原因はPASS1が「幅の一致度が最も高い候補を、1件見つけた時点で即採用」
+# という設計で、"1030×1520"が候補リストの先頭に来るとそこで打ち切られ、
+# 後方にある"1000×2000"は評価すらされなかったこと。
+#
+# 【対応方針】PASS1の一般ロジック自体(全ケースに影響)を変えるのは
+# リスクが大きいため、"1×2""4×8"という業界標準の2ケースだけ、製品
+# サイズ範囲判定によるピンポイントショートカットで対応する。範囲に
+# 入っていれば、在庫にそのボードサイズがあるかだけ確認し、あれば
+# 即採用してPASS1-3をまるごとスキップする。通常モードのPASS1本体
+# (スコア順1件即採用ロジック)には一切手を入れない。
+SC_1X2_W_MIN, SC_1X2_W_MAX = 997, 1005
+SC_1X2_L_MIN, SC_1X2_L_MAX = 1997, 2005
+SC_1X2_BOARD_W, SC_1X2_BOARD_L = 1000, 2000
+
+SC_4X8_W_MIN, SC_4X8_W_MAX = 1248, 1255
+SC_4X8_L_MIN, SC_4X8_L_MAX = 2499, 2505
+SC_4X8_BOARD_W, SC_4X8_BOARD_L = 1250, 2500
+
+
+def _industry_standard_board_size(product: ProductSize) -> Optional[tuple[int, int]]:
+    """製品サイズが業界標準("1×2"/"4×8")の範囲に入っていれば
+
+    対応するボードサイズ(幅, 丈)を返す。入っていなければ None。
+    """
+    if (SC_1X2_W_MIN <= product.width <= SC_1X2_W_MAX
+            and SC_1X2_L_MIN <= product.length <= SC_1X2_L_MAX):
+        return SC_1X2_BOARD_W, SC_1X2_BOARD_L
+    if (SC_4X8_W_MIN <= product.width <= SC_4X8_W_MAX
+            and SC_4X8_L_MIN <= product.length <= SC_4X8_L_MAX):
+        return SC_4X8_BOARD_W, SC_4X8_BOARD_L
+    return None
+
+
+def _find_industry_standard_stock(
+    available: list[BoardModel], board_w: int, board_l: int,
+) -> Optional[BoardModel]:
+    """在庫の中に、対応ボードサイズ(向きは問わない)がそのままあるか探す。"""
+    for b in available:
+        if (b.width, b.length) in ((board_w, board_l), (board_l, board_w)):
+            return b
+    return None
+
+
 def select_lower_boards(
     available: list[BoardModel], palette: Palette, product: ProductSize,
     *,
     fatigue_map: Optional[dict[str, FatigueEntry]] = None,
     fatigue_mode: bool = False,
     stock_aware: bool = False,
+    is_protec_mode: bool = False,
+    is_protec_1p1216: bool = False,
 ) -> LowerSelectionResult:
     """VBA `SelectLowerBoards` の移植。
 
     処理順:
+        0. プロテック判定: `is_protec_mode` のときは `SelectProtecLowerBoards`
+           を最優先で試し、成功すれば以下の通常PASS1-3をスキップする
+           (プロテックは在庫が少なく、通常フローを一通り試すと遠回りに
+           なるため)。在庫が見つからなければ通常フローへフォールバックする
+        0.5. 業界標準サイズショートカット(通常モードのみ): 製品サイズが
+           "1×2"/"4×8"の範囲に入っていれば、在庫にそのボードサイズが
+           あるかだけ確認し、あれば即採用してPASS1-3をまるごとスキップ
+           する。PASS1が「最初に見つけた候補で即採用」する設計のため、
+           継ぎ足しカットが要らない標準サイズより先に、差はあるが
+           カットが要る別サイズが選ばれてしまう不具合への対応
         1. 1枚物優先選定(製品サイズ基準・パレット不問)
         2. PASS1 / PASS1.5(疲労度モードは競合選定、通常モードは即決定)
         3. PASS2(ベストフィット、パレット幅超過不可)
@@ -1131,6 +1386,39 @@ def select_lower_boards(
         8. 代替ボードリトライループ(疲労度モードのみ、最大5回)
         9. それでも幅が足りなければカット前提選定が必要と報告
     """
+    if is_protec_mode:
+        protec_boards, protec_result = select_protec_lower_boards(
+            available, product, palette.length, is_1p1216=is_protec_1p1216)
+        if protec_result.valid:
+            state = PassState(remaining_len=0, pass1_done=True)
+            return LowerSelectionResult(
+                boards=protec_boards, state=state, protec_result=protec_result)
+        log.debug("SelectLowerBoards [プロテック]: 適合する在庫なし → 通常選定へ")
+
+    # 0.5. 業界標準サイズショートカット(通常モードのみ)。
+    # PASS1本体(スコア順1件即採用ロジック)には一切手を入れず、その
+    # 手前で完全一致の在庫があるかだけを確認する
+    std_size = _industry_standard_board_size(product)
+    if std_size is not None:
+        std_stock = _find_industry_standard_stock(available, *std_size)
+        if std_stock is not None:
+            eff_l = min(std_stock.width, std_stock.length)
+            count, need_length_cut, length_cut_eff = decide_length_count_with_cut(
+                eff_l, palette.length)
+            board = SelectedBoard(
+                width=std_stock.width, length=std_stock.length,
+                count=count, tag=TAG_MAIN)
+            state = PassState(remaining_len=0, pass1_done=True)
+            length_cut_info: dict[str, int] = {}
+            if need_length_cut:
+                length_cut_info[f"L_{board.width}x{board.length}"] = length_cut_eff
+            log.debug("SelectLowerBoards [業界標準ショートカット]: %sx%s %s枚 "
+                     "(製品%sx%s、needLengthCut=%s)",
+                     board.width, board.length, count,
+                     product.width, product.length, need_length_cut)
+            return LowerSelectionResult(
+                boards=[board], state=state, length_cut_info=length_cut_info)
+
     boards: list[SelectedBoard] = []
     state = PassState(remaining_len=palette.length)
 
@@ -1242,6 +1530,7 @@ def select_lower_boards(
 
     # 9. 幅補填後もカバー不足ならカット前提選定へ
     needs_wide_cut = post_fill_max_w < product.width - PASS1_TOLERANCE
+    length_cut_info: dict[str, int] = {}
     if needs_wide_cut:
         log.debug("[下用] 幅補填後もカバー不足 -> カット前提選定へ")
         boards.clear()
@@ -1250,9 +1539,11 @@ def select_lower_boards(
         )
         boards.extend(wide.boards)
         state.cut_info.update(wide.cut_info)
+        length_cut_info.update(wide.length_cut_info)
 
     return LowerSelectionResult(
         boards=boards, state=state, post_fill_max_w=post_fill_max_w, needs_wide_cut=needs_wide_cut,
+        length_cut_info=length_cut_info,
     )
 
 
@@ -1268,12 +1559,98 @@ def select_lower_boards(
 # 丈残がこの値を超える場合は主ボードを1枚増やし、以下なら小型補填を優先する
 UPPER_LENGTH_FILL_THRESHOLD = 400
 
-# プロテックモードのうち 1P1216 の幅許容(本来-20mmだが切断精度を考慮し-10mm)。
-# `reports.protec_cut_size_info` の `PROTEC_CUT_TOL_1P1216` と必ず同じ値にする
-# ―― ここが小さいと、切断依頼書では許容内として同サイズ強制するはずの
-# ボードが、選定側だけ通常選定に外れてしまい(別のボードが選ばれる)、
-# 依頼書の内容と選定結果が食い違う原因になっていた。
+# プロテックの上用/下用が製品幅より小さくてよい許容量(mm)。
+# 1P1216 のみ精度の都合で厳しめの10mm(本来は-20mmだが切断精度を
+# 考慮して厳しめにする)、それ以外は80mm(VBA `DecideProtecOrientation`
+# の判定基準)。カットが必要なときの仕上がり幅(「製品幅-この許容」)
+# にも同じ値を使う ── 在庫を候補にするかどうかの判定と、カット後の
+# 仕上がりサイズは、同じ「製品幅からどれだけマイナスまで許すか」
+# という1つの数直線上の話なので、別の値を持たせない
 PROTEC_1P1216_TOLERANCE = 10
+PROTEC_OTHER_TOLERANCE = 80
+
+
+@dataclass
+class ProtecCutResult:
+    """プロテック専用の選定確定値(VBA `ProtecCutResult` / `mProtecCutResult`)。
+
+    選定(`select_protec_lower_boards`)が決めた**唯一の正解**を保持する。
+    後続の処理(丈カット判定・配置・カット依頼書)はここに書かれた値を
+    そのまま使い、再計算しない ── 以前は配置やカット依頼書がそれぞれ
+    独自に「製品幅を超えてよいか」を判定し直しており、選定結果と
+    食い違うことがあった(プロテックの上用ボードが製品幅を超過すると
+    配置段階が静かに弾いてしまい、`placedBoards` に一切登録されない
+    という不具合の原因)。この型が「唯一の正解」の置き場になることで、
+    再計算そのものを起こさせない。
+
+    `valid` が False のときは他フィールドを見ない(まだプロテック確定
+    値が無い、または通常選定にフォールバックした状態)。
+    """
+
+    valid: bool = False
+    orig_width: int = 0     # 元の在庫サイズ(幅)
+    orig_length: int = 0    # 元の在庫サイズ(丈)
+    is_rotated: bool = False
+    eff_width_before_cut: int = 0  # 向きを決めた後、カットする前の実効幅
+    cut_eff_width: int = 0  # 幅カット後の実効幅(カット不要ならeff_width_before_cutと同じ)
+    eff_length: int = 0     # 丈方向の実効サイズ(フルサイズ側の1枚あたりの丈)
+    need_cut: bool = False  # 幅カットが必要か
+    need_length_cut: bool = False   # 丈カットが必要か(最後の1枚だけ)
+    length_cut_eff: int = 0         # 丈カット後の、最後の1枚の丈
+    count: int = 1          # 枚数(丈カットする最後の1枚も含む)
+
+
+def decide_protec_orientation(
+    board_width: int, board_length: int, product_width: int, *, is_1p1216: bool,
+) -> ProtecCutResult:
+    """VBA `DecideProtecOrientation` の移植。
+
+    プロテックルール(**製品幅基準・マイナス方向の許容のみ・超過禁止**)で、
+    1つの在庫サイズについてどちらの向きを使うか、カットが必要か、
+    カット後の幅はいくつかを判定する。`select_protec_lower_boards`
+    (自動選定)と `select_upper_boards` の下用コピー判定の両方から
+    呼ばれる共通ロジック ── 呼び出し元によって判定基準がずれると、
+    上用が下用と無関係な結果になりうるため、ここに1つだけ置く。
+
+    向きは「有効幅が製品幅-許容 以上、かつ製品幅に最も近い(超過は
+    カットで丸める)」ものを選ぶ。長辺・短辺どちらを幅方向に使っても
+    条件を満たせない場合は `valid=False` を返す(この在庫サイズは
+    プロテックとして採用できない)。
+    """
+    tol = PROTEC_1P1216_TOLERANCE if is_1p1216 else PROTEC_OTHER_TOLERANCE
+    min_w = product_width - tol
+
+    candidates = []
+    for rotated, eff_w, eff_l in (
+        (False, board_width, board_length), (True, board_length, board_width),
+    ):
+        if eff_w >= min_w:
+            candidates.append((rotated, eff_w, eff_l))
+
+    if not candidates:
+        return ProtecCutResult(valid=False)
+
+    # 製品幅に最も近い(＝超過分が最小、無ければ不足が最小)ものを選ぶ。
+    # 同点なら回転しない向きを優先する(VBAの走査順を踏襲)
+    rotated, eff_w, eff_l = min(candidates, key=lambda c: (abs(c[1] - product_width), c[0]))
+
+    need_cut = eff_w > product_width
+    # カットするなら、仕上がり幅は「製品幅そのもの」ではなく
+    # 「製品幅-許容」まで削る(超過禁止ルールと同じ許容を仕上がり側にも
+    # 適用する。1P1216なら製品幅-10mm、それ以外は製品幅-80mm)
+    cut_eff_w = min_w if need_cut else eff_w
+
+    result = ProtecCutResult(
+        valid=True, orig_width=board_width, orig_length=board_length,
+        is_rotated=rotated, eff_width_before_cut=eff_w,
+        cut_eff_width=cut_eff_w, eff_length=eff_l,
+        need_cut=need_cut, count=1,
+    )
+    log.debug("DecideProtecOrientation: %sx%s productW=%s tol=%s -> "
+             "rotated=%s cutEffW=%s effL=%s needCut=%s",
+             board_width, board_length, product_width, tol,
+             rotated, cut_eff_w, eff_l, need_cut)
+    return result
 
 
 @dataclass
@@ -1284,6 +1661,9 @@ class UpperSelectionResult:
     needs_wide_cut: bool = False   # SelectUpperBoardsWideCut が必要
     cut_info: dict[str, int] = field(default_factory=dict)
     length_cut_info: dict[str, int] = field(default_factory=dict)
+    # プロテック確定値(下用選定と共有する「唯一の正解」)。mode="プロテック"
+    # のときだけ valid=True になる
+    protec_result: ProtecCutResult = field(default_factory=lambda: ProtecCutResult())
 
 
 def _copy_lower_main_to_upper(lower: list[SelectedBoard]) -> list[SelectedBoard]:
@@ -1420,14 +1800,24 @@ def select_upper_boards(
     is_protec_mode: bool = False,
     is_protec_1p1216: bool = False,
     last_hosozai: str = "",
+    protec_result: Optional[ProtecCutResult] = None,
 ) -> UpperSelectionResult:
     """VBA `SelectUpperBoards` の移植。
 
     処理順:
         1. 上下共用モード(ザラ板等): 保護材が確定していてアングルでも
            「一致なし」でもなければ、上用は下用の主ボードと同サイズを強制
-        2. プロテックモード: 下用主ボードの有効幅が許容内なら同サイズを強制
-           (1P1216は許容-5mm、それ以外は-80mm)。許容外なら通常選定へ
+        2. プロテックモード: 下用選定(`select_protec_lower_boards`)が
+           確定させた `protec_result` をそのまま踏襲する。**上用が
+           独自に判定し直さない** ── 以前は上用がここで
+           `GetBestOrientation` を素で呼び直しており、下用と同じ条件で
+           判定したはずなのに、丸め誤差やロジックの違いで「条件に
+           合わない」と判断し、下用と無関係な別サイズを選んでしまう
+           ことがあった。`protec_result` が無い(下用がプロテック選定を
+           使わなかった)場合のみ、フォールバックとして
+           `decide_protec_orientation` で下用主ボードを判定し直す
+        2.5. 業界標準サイズショートカット(通常モードでのみ発動)。
+           下用の同名ショートカットと同じ判定範囲・対応サイズを使う
         3. 主ボード選択(製品幅基準・strict・最初に条件を満たしたもの)
         4. 1件も選べなければ狭幅パレット扱い
         5. 幅補填(不足がUPPER_WIDTH_TOLERANCEを超えるときのみ)
@@ -1450,15 +1840,73 @@ def select_upper_boards(
 
     # 2. プロテックモード
     if is_protec_mode and lower_boards:
-        protec_tol = PROTEC_1P1216_TOLERANCE if is_protec_1p1216 else UPPER_WIDTH_TOLERANCE
-        main = lower_boards[0]
-        _, p_eff_w, _ = _orient(main.width, main.length, product.width, category="上用")
-        if p_eff_w >= product.width - protec_tol:
-            result.boards = _copy_lower_main_to_upper(lower_boards)
+        pr = protec_result
+        if pr is None or not pr.valid:
+            # フォールバック: 下用選定がプロテック確定値を持っていない
+            # 場合だけ、ここで判定し直す(通常は起こらない経路)
+            main = lower_boards[0]
+            pr = decide_protec_orientation(
+                main.width, main.length, product.width, is_1p1216=is_protec_1p1216)
+        if pr.valid:
+            # 【上用も下用と同じ「製品幅よりマイナス」ルールに従う】
+            # プロテックは上下とも製品幅を超えてはいけない
+            # (以前は上用だけ製品幅を超えてよいと誤って実装していた)。
+            # `_copy_lower_main_to_upper` は元の在庫サイズをそのまま
+            # コピーするだけなので、幅カットが要るときはそれでは
+            # ならず、下用と同じ確定値(`ProtecCutResult`)から作り直す。
+            # 幅カットが不要なら、元の在庫サイズがそのまま製品幅以内に
+            # 収まっているのでコピーで問題ない。
+            #
+            # 【丈方向は下用と別に決め直す】幅の確定値(cut_eff_width等)は
+            # 下用と共通(同じボードを使うため)だが、丈方向の枚数・
+            # カット要否は下用(パレット丈基準)と上用(製品丈基準)で
+            # 別の答えになりうる。ここで上用専用の丈判定を行い、
+            # `ProtecCutResult` のコピーに上書きする(下用の `protec_result`
+            # は変えない ── `recalc_length_cut_info`/カット依頼書が
+            # それぞれ正しい方を参照できるようにするため)
+            u_count, u_need_len_cut, u_len_cut_eff = decide_length_count_with_cut(
+                pr.eff_length, product.length)
+            upper_pr = replace(
+                pr, count=u_count, need_length_cut=u_need_len_cut,
+                length_cut_eff=u_len_cut_eff)
+
+            tag = TAG_CUT_PREMISE if (pr.need_cut or u_need_len_cut) else TAG_MAIN
+            main = lower_boards[0]
+            result.boards = [SelectedBoard(
+                width=main.width, length=main.length, count=u_count, tag=tag)]
             result.mode = "プロテック"
-            log.debug("SelectUpperBoards [プロテック]: 下用と同サイズ強制 effW=%s tol=%s", p_eff_w, protec_tol)
+            result.protec_result = upper_pr
+            log.debug("SelectUpperBoards [プロテック]: 下用の確定値を踏襲 "
+                     "cutEffW=%s needCut=%s upperCount=%s needLengthCut=%s tag=%s",
+                     pr.cut_eff_width, pr.need_cut, u_count, u_need_len_cut, tag)
             return result
         log.debug("SelectUpperBoards [プロテック]: 下用サイズが許容外 → 通常選定へ")
+
+    # 2.5. 業界標準サイズショートカット(通常モードでのみ発動)。
+    # 下用の同名ショートカット(`select_lower_boards`)と同じ判定範囲・
+    # 対応サイズを使う(`_industry_standard_board_size`)。上下共用・
+    # プロテックの強制コピー判定より後に置くのは、それらが優先される
+    # べきモードだから ── 通常モードでのみ、PASS1が最初に見つけた
+    # 候補で打ち切ってしまう問題への対応として発動する
+    if not is_protec_mode and not (last_hosozai and last_hosozai not in ("アングル", "一致なし")):
+        std_size = _industry_standard_board_size(product)
+        if std_size is not None:
+            std_stock = _find_industry_standard_stock(available, *std_size)
+            if std_stock is not None:
+                eff_l = min(std_stock.width, std_stock.length)
+                count, need_length_cut, length_cut_eff = decide_length_count_with_cut(
+                    eff_l, product.length)
+                board = SelectedBoard(
+                    width=std_stock.width, length=std_stock.length,
+                    count=count, tag=TAG_MAIN)
+                result.boards = [board]
+                if need_length_cut:
+                    result.length_cut_info[f"U_{board.width}x{board.length}"] = length_cut_eff
+                log.debug("SelectUpperBoards [業界標準ショートカット]: %sx%s %s枚 "
+                         "(製品%sx%s、needLengthCut=%s)",
+                         board.width, board.length, count,
+                         product.width, product.length, need_length_cut)
+                return result
 
     # 3. 主ボード選択(最初に条件を満たしたものを採用)
     sorted_upper = sort_boards_by_target_width(
@@ -1970,8 +2418,42 @@ def select_boards_for_wide_lower(
     """VBA `SelectBoardsForWideLower` の移植(下用カット前提選定)。
 
     対象幅はパレット幅。フォールバック時のタグは "主"。
+
+    【丈カット情報の記録漏れを修正】以前はここで丈カットが発生しても
+    `length_cut_info` に何も記録していなかった(上用の
+    `select_upper_boards_wide_cut` には対応する記録処理があったが、
+    下用側は無かった)。`recalc_length_cut_info` は「カット前提」
+    タグのボードを判定対象外にするので、その代わりにここで記録
+    しないと、丈カットの情報がどこにも残らない(現場の声で報告された
+    「3枚出るはずが分割されずに出力される」不具合の一因)。丈補填
+    (`_wide_cut_length_fill`、100mm/400mm閾値で枚数を調整する)が
+    終わった後、それでもわずかに超過が残っていれば記録する
+    (`select_upper_boards_wide_cut` と同じ `+3` の誤差吸収)。
     """
-    return _select_wide_cut(available, palette.width, product, TAG_MAIN, fatigue_map, fatigue_mode)
+    result = _select_wide_cut(
+        available, palette.width, product, TAG_MAIN, fatigue_map, fatigue_mode)
+    if not result.boards:
+        return result
+
+    main = result.boards[0]
+    if main.tag != TAG_CUT_PREMISE:
+        # フォールバック(在庫が対象幅に届かず、最大辺が最大のものを
+        # そのまま採用した)ときはタグが"主"のままで、`recalc_length_cut_info`
+        # の通常ループがこのボードを対象にする(除外されない)。ここで
+        # 二重に記録すると、`_orient` による向きの判断が異なるせいで
+        # 別の値になり、後からマージしても食い違ったまま残ってしまう
+        return result
+
+    short_side = min(main.width, main.length)
+    if short_side <= 0:
+        return result
+
+    final_total_l = short_side * main.count
+    if final_total_l > palette.length + 3:
+        result.length_cut_info.setdefault(f"L_{main.width}x{main.length}", short_side)
+        log.debug("select_boards_for_wide_lower: 丈カット記録 L_%sx%s shortSide=%s",
+                 main.width, main.length, short_side)
+    return result
 
 
 def select_boards_for_wide_product(
@@ -2013,6 +2495,15 @@ def select_upper_boards_wide_cut(
     else:
         log.debug("SelectUpperBoardsWideCut: lGap=%smm (カット前提で許容)", l_gap)
 
+    if main.tag != TAG_CUT_PREMISE:
+        # フォールバック(在庫が対象幅に届かず、最大辺が最大のものを
+        # そのまま採用した)ときはタグが空("")のままで、
+        # `recalc_length_cut_info` の通常ループがこのボードを対象に
+        # する(除外されない)。ここで二重に記録すると、`_orient` に
+        # よる向きの判断が異なるせいで別の値になり、後からマージしても
+        # 食い違ったまま残ってしまう
+        return result
+
     final_total_l = short_side * main.count
     if final_total_l > product.length + 3:
         # 【修正】これは丈カットの記録なので `length_cut_info` に入れる。
@@ -2033,6 +2524,8 @@ def select_upper_boards_wide_cut(
 def recalc_length_cut_info(
     lower: list[SelectedBoard], upper: list[SelectedBoard],
     palette: Palette, product: ProductSize,
+    *, lower_protec_result: Optional[ProtecCutResult] = None,
+    upper_protec_result: Optional[ProtecCutResult] = None,
 ) -> tuple[dict[str, int], dict[str, int]]:
     """VBA `RecalcLengthCutInfo` の移植。
 
@@ -2040,16 +2533,49 @@ def recalc_length_cut_info(
     明記している処理。丈カットは丈オーバー時に最後の1枚だけ発生する
     (常に枚数1)という業務ルールをここで確定させる。
 
+    `lower_protec_result`/`upper_protec_result` が有効なとき
+    (プロテック確定値がある)は、`GetBestOrientation` による再判定を
+    行わず、選定(`select_protec_lower_boards`/`select_upper_boards`)が
+    `decide_length_count_with_cut` で既に決めた `need_length_cut`を
+    そのまま使う。下用(パレット丈基準)と上用(製品丈基準)は判定対象の
+    丈が異なるため、それぞれ別々の `ProtecCutResult` を渡す。
+
+    **ここで独自に「lenRemainPL > 100mm」を再計算しない。** 計算し直すと
+    選定と食い違う結果になりうる(MAP画面にはカット線が出るのに切断
+    依頼書には丈カットの行が出ない、という不一致の原因になっていた)。
+
     戻り値は (length_cut_info, length_cut_count)。
     キーは下用が "L_幅x丈"、上用が "U_幅x丈"、値は切断線の長さ(有効幅)。
     """
     length_cut_info: dict[str, int] = {}
     length_cut_count: dict[str, int] = {}
 
+    has_protec = ((lower_protec_result is not None and lower_protec_result.valid)
+                  or (upper_protec_result is not None and upper_protec_result.valid))
+    if has_protec:
+        for b, prefix, pr in (
+            (lower[0] if lower else None, "L_", lower_protec_result),
+            (upper[0] if upper else None, "U_", upper_protec_result),
+        ):
+            if b is None or pr is None or not pr.valid:
+                continue
+            if pr.need_length_cut:
+                key = f"{prefix}{b.width}x{b.length}"
+                length_cut_info[key] = pr.cut_eff_width
+                length_cut_count[key] = 1
+                log.debug("丈カット記録[プロテック確定値 %s]: %s lengthCutEff=%s needLengthCut=True",
+                         prefix, key, pr.length_cut_eff)
+        return length_cut_info, length_cut_count
+
     for b in lower:
-        # 上用側と対称にする。カット前提は選定側で確定済みなのでここでの
-        # 再計算対象から外す(プロテックの共用ボードは常に無タグなので
-        # 現状は無効だが、上下の扱いを揃えておく)
+        # 幅補填・丈補填・カット前提は対象外。カット前提の丈カットは
+        # 選定側(`select_boards_for_wide_lower`)が別途記録し、
+        # `LowerSelectionResult.length_cut_info` として呼び出し元
+        # (`auto_select_boards`)に渡る ── ここで再判定すると二重に
+        # 扱ってしまう。以前は選定側がその記録を一切していなかったため、
+        # ここで除外された「カット前提」の丈カット情報が結果として
+        # どこにも残らず、切断依頼書に反映されない不具合になっていた
+        # (現場の声:「3枚出るはずが分割されずに出力される」)
         if b.tag in (TAG_WIDTH_FILL, TAG_LENGTH_FILL, TAG_CUT_PREMISE):
             continue
         rot, eff_w, eff_l = _orient(b.width, b.length, palette.width)
@@ -2067,7 +2593,10 @@ def recalc_length_cut_info(
                           key, b.count, eff_l * b.count, palette.length)
 
     for b in upper:
-        # 幅補填は丈カット対象外。カット前提は SelectUpperBoardsWideCut が記録済み
+        # 幅補填は丈カット対象外。カット前提の丈カットは選定側
+        # (`select_upper_boards_wide_cut`)が別途記録し、
+        # `UpperSelectionResult.length_cut_info` として渡る
+        # (下用と対称。両方とも呼び出し元でマージされる)
         if b.tag in (TAG_WIDTH_FILL, TAG_CUT_PREMISE):
             continue
         rot, eff_w, eff_l = _orient(b.width, b.length, product.width, category="上用")
@@ -2116,17 +2645,27 @@ def auto_select_boards(
     lower_result = select_lower_boards(
         available, palette, product,
         fatigue_map=fatigue_map_lower, fatigue_mode=fatigue_mode, stock_aware=stock_aware,
+        is_protec_mode=is_protec_mode, is_protec_1p1216=is_protec_1p1216,
     )
     upper_result = select_upper_boards(
         lower_result.boards, available, palette, product,
         fatigue_map=fatigue_map_upper, fatigue_mode=fatigue_mode, stock_aware=stock_aware,
         is_protec_mode=is_protec_mode, is_protec_1p1216=is_protec_1p1216, last_hosozai=last_hosozai,
+        protec_result=lower_result.protec_result,
     )
     length_cut_info, length_cut_count = recalc_length_cut_info(
         lower_result.boards, upper_result.boards, palette, product,
+        lower_protec_result=lower_result.protec_result,
+        upper_protec_result=upper_result.protec_result,
     )
-    # カット前提(幅広)の上用は `recalc_length_cut_info` の対象外なので、
-    # 選定時に記録した丈カットをここで合流させる
+    # カット前提(幅広)の下用・上用は `recalc_length_cut_info` の対象外
+    # なので、選定時に記録した丈カットをここで合流させる
+    # (以前は下用側のこのマージが漏れており、丈カット情報がどこにも
+    # 残らなかった)
+    for key, value in lower_result.length_cut_info.items():
+        if key not in length_cut_info:
+            length_cut_info[key] = value
+            length_cut_count[key] = 1
     for key, value in upper_result.length_cut_info.items():
         if key not in length_cut_info:
             length_cut_info[key] = value

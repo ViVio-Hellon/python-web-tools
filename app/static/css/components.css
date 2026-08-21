@@ -252,7 +252,7 @@ a.btn { text-decoration: none; }
    「掴める」と読めてしまう */
 .grip {
   fill: var(--accent);
-  stroke: var(--paper);
+  stroke: var(--surface);
   stroke-width: 1;
   cursor: nwse-resize;
 }
@@ -838,7 +838,26 @@ select.input { cursor: pointer; }
   font-family: var(--mono); font-variant-numeric: tabular-nums;
   font-size: var(--fs-xs); opacity: .8;
 }
+/* 押せる行(引当行・パレット行など `data-row-action` を付けたもの)。
+   `<tr>` は `disabled` を持てないので、見た目は薄くしつつ
+   `pointer-events` で二重送信を防ぐ(`busy.js` の `mark` 参照) */
+tr[data-row-action][data-busy] { cursor: progress; opacity: .6; }
+tr[data-row-action][data-busy] td:last-child {
+  display: flex; align-items: center; gap: 6px; justify-content: flex-end;
+}
+tr[data-row-action][data-busy] td:last-child::after {
+  content: ""; width: 12px; height: 12px; flex: none; border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  opacity: .85; animation: busy-spin .7s linear infinite;
+}
+tr[data-row-action] td:last-child > .elapsed {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xs); opacity: .8;
+}
 @media (prefers-reduced-motion: reduce) {
   .btn[data-busy]::before { animation: none; border-top-color: currentColor; opacity: .5; }
+  tr[data-row-action][data-busy] td:last-child::after {
+    animation: none; border-top-color: currentColor; opacity: .5;
+  }
   .st--run::after { animation: none; }
 }

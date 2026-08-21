@@ -203,6 +203,7 @@ class HikiRow:
 class OdrInfo:
     """受注情報ブロック(VBA `lblOdr(0..7)` + 比重・梱包単位)。"""
 
+    order_no: str = ""          # いま表示している受注番号(引当行との対応付けに使う)
     delivery_name: str = ""     # lblOdr(0) 納入先名称
     packaging_spec: str = ""    # lblOdr(1) 包装仕様NO
     customer_name: str = ""     # lblOdr(2) 取引先名称
@@ -363,6 +364,7 @@ def _load_odr(conn: sqlite3.Connection, order_nos: list[str]) -> OdrInfo:
         return OdrInfo()
 
     odr = OdrInfo(
+        order_no=row["受注番号"] or "",
         delivery_name=row["納入先名称"] or "",
         packaging_spec=row["包装仕様NO"] or "",
         customer_name=row["取引先名称"] or "",
@@ -422,12 +424,72 @@ def search_lot(conn: sqlite3.Connection, lot_no: str) -> LotSearchResult:
         if row.order_no and row.order_no not in order_nos:
             order_nos.append(row.order_no)
     odr = _load_odr(conn, order_nos)
-
-    if _needs_spec_override(lot):
-        log.debug("search_lot: 包装仕様NO → %s に書き換え", PACKAGING_SPEC_OVERRIDE)
-        odr.packaging_spec = PACKAGING_SPEC_OVERRIDE
+    _apply_spec_override(odr, lot)
 
     return LotSearchResult(found=True, message=f"ロット {lot_no}", lot=lot, hiki=hiki, odr=odr)
+
+
+def load_odr_for_hiki_row(
+    conn: sqlite3.Connection, lot_no: str, hiki_no: str,
+) -> Optional[tuple[OdrInfo, list[HikiRow], LotInfo]]:
+    """引当行を1件クリックしたときの、その行の受注情報(VBA `Page1_OnLstHikiClick`)。
+
+    データの流れ: SIKALOTNOW から LOTNO で1行 → SIKAHIKINOW で同じ
+    LOTNO の行の中から**引当NO**で1行(=引当NOとオーダーNOが決まる)
+    → SIKAODRNOW で同じオーダーNOの行を展開。
+
+    **主語は「引当行」であって「受注番号」ではない。** 受注番号
+    だけで照合すると、1ロット内で受注番号が重複する状況が万一あった
+    場合に、押した行とは別の行(たまたま同じ受注番号を持つ行)の
+    データを表示してしまいうる。引当NOで行そのものを特定してから
+    受注番号を取り出すことで、押した行と表示される内容が必ず一致する。
+
+    VBA版は受注情報を**先頭1件だけ**表示に使い(`_load_odr` のdocstring
+    参照)、複数の受注番号にまたがるロットでは `lstHiki`(引当一覧)の
+    行をクリックすると、その行が指す受注番号の情報に表示を差し替えて
+    いた。Python版はこのクリック時の差し替え経路が無く、常に先頭1件
+    しか出せなかった(現場の声:「引当情報をクリックしても受注内容が
+    切り替わっているように見えない」)。
+
+    ロットが見つからない、または指定の引当NOがそのロットに無ければ
+    断る。別ロットの受注情報が紛れ込むと、資材選定や1P0113判定の
+    元になる情報が誤って差し替わる。
+
+    戻り値は `(受注情報, 引当一覧, ロット情報)`。呼び出し側(画面のAPI)が
+    引当一覧の選択状態を塗り直し、見出しの断り書きにロット情報を使うため、
+    ここでまとめて返す(同じ行を何度も読み直させない)。
+    """
+    hiki_no = (hiki_no or "").strip()
+    if not hiki_no:
+        return None
+    lot = _load_lot_info(conn, lot_no)
+    if lot is None:
+        return None
+    hiki = _load_hiki(conn, lot_no)
+    # **引当行そのもの**(引当NO)で特定する。受注番号ではなく、
+    # 押された行がどれかをまず決めてから、その行の受注番号を引く
+    picked_row = next((row for row in hiki if row.hiki_no == hiki_no), None)
+    if picked_row is None or not picked_row.order_no:
+        log.warning("load_odr_for_hiki_row: 引当NO %s はロット %s にありません",
+                   hiki_no, lot_no)
+        return None
+
+    odr = _load_odr(conn, [picked_row.order_no])
+    _apply_spec_override(odr, lot)
+    return odr, hiki, lot
+
+
+def _apply_spec_override(odr: OdrInfo, lot: LotInfo) -> None:
+    """1P0113判定用に包装仕様NOを上書きする(該当ロットのみ)。
+
+    `search_lot` と `load_odr_for_order` の両方で同じ判断をするので、
+    ここに1つだけ置く(**同じ事実を2か所で判断すると、片方だけ
+    直し忘れる**)。
+    """
+    if _needs_spec_override(lot):
+        log.debug("_apply_spec_override: 包装仕様NO → %s に書き換え",
+                 PACKAGING_SPEC_OVERRIDE)
+        odr.packaging_spec = PACKAGING_SPEC_OVERRIDE
 
 
 def has_lot_data(conn: sqlite3.Connection) -> bool:

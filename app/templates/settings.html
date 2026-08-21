@@ -189,6 +189,11 @@
           {# 取り込み元にまだ無い表を作る。**あるときは出さない** #}
           <button class="btn btn--run" type="button" id="mCreate" hidden>
             + 取り込み元に作る</button>
+          {# 表はあるが列名が想定と違い、1つも打ち込めない。**両方は
+             同時に出ない**(mCreateは無いとき、mRebuildはあって
+             列が合わないとき) #}
+          <button class="btn btn--danger" type="button" id="mRebuild" hidden>
+            列名を直して作り直す</button>
           <button class="btn btn--find" type="button" id="mReload">
             <span class="gl">⟳</span>読み直す</button>
         </div>
@@ -657,7 +662,7 @@
   .mrow:hover { background:var(--act-idle); }
   .mrow[aria-current="true"] { background:var(--accent-soft);
                                border-color:var(--accent-line); }
-  .mrow[aria-current="true"] .mrow__name { font-weight:700; color:var(--accent-ink); }
+  .mrow[aria-current="true"] .mrow__name { font-weight:700; color:var(--accent); }
   .mrow__name { min-width:0; overflow-wrap:anywhere; font-size: var(--fs-sm); }
   /* 件数は情報の匂い(§2.4)。押す前に「その先に何があるか」が分かる */
   .mrow__n { font-family:var(--mono); font-size: var(--fs-xs); color:var(--muted); }

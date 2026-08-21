@@ -15,20 +15,21 @@ import { api, tokenUrl } from "../api.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
-import * as mapedit from "../mapedit.js";
+// `mapedit.js` は動的に読み込む(理由は `settings.js` が `master.js` を
+// 動的に読み込んでいるのと同じ ── このファイル自身と版クエリを合わせ、
+// 入れ替えたときに中身も必ず一緒に入れ替わるようにするため)。
+// トップレベルで一度だけ確定させておけば、以後は今までどおり
+// `mapedit.grip(...)` のように同期的に呼べる。
+const VERSION_QUERY = new URL(import.meta.url).search;
+const mapedit = await import(`../mapedit.js${VERSION_QUERY}`);
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-
-// 図の縮尺。等倍だと棚1つが約22px しかなく、指では押しにくい
-// (WCAG 2.5.8 が求める 24px にも届かない)。
-// tkinter版も 0.4〜2.0 倍を持っていた(`MIN_SCALE` / `MAX_SCALE`)
-const ZOOM_STEPS = [1, 1.5, 2, 3];
 
 const el = {};
 let selected = null;      // 払い出す対象の行
 let lastQuery = null;     // 「最新にする」で同じ表示を取り直すため
-let zoom = 0;             // ZOOM_STEPS の添字
 let dragger = null;       // 掴む手(`mapedit.js`)
+let zoomer = null;        // 拡大縮小(`mapedit.js`)
 let lastMap = null;       // いまの図。掴んだ箱の元の大きさを引くのに要る
 let picked = "";          // 配置編集で選んでいる位置(消すときの対象)
 
@@ -49,8 +50,16 @@ function drawMap(map) {
 
   el.map.classList.toggle("map--editing", Boolean(map.editing));
   // 編集をOFFにしたら複数選択も捨てる。**捨てないと、次にONにしたときも
-  // 前回選んでいた箱の輪郭が残ったままになる**(現場の声)
-  if (!map.editing) dragger?.clearSelection();
+  // 前回選んでいた箱の輪郭が残ったままになる**(現場の声)。
+  // `picked`(単発クリックで選んだ「消す対象」)も同様に捨てる ──
+  // `dragger.clearSelection()` は `mapedit.js` 内部の複数選択
+  // (Shift+クリック)だけを見ており、こちらの単一選択とは別の状態
+  // なので、片方だけ消すと「編集をOFFにしても強調表示が残り続ける」
+  // (現場の声)。
+  if (!map.editing) {
+    dragger?.clearSelection();
+    picked = "";
+  }
 
   if (map.background) {
     const image = document.createElementNS(SVG_NS, "image");
@@ -141,17 +150,6 @@ function drawEditBar(map) {
   el.mapBgX.value = map.background_x;
   el.mapBgY.value = map.background_y;
   el.mapBgScale.value = map.background_scale;
-}
-
-function applyZoom(step) {
-  zoom = Math.max(0, Math.min(ZOOM_STEPS.length - 1, step));
-  const scale = ZOOM_STEPS[zoom];
-  el.mapWrap.style.setProperty("--zoom", scale);
-  el.zoomNow.textContent = `${Math.round(scale * 100)}%`;
-  el.zoomOut.disabled = zoom === 0;
-  el.zoomIn.disabled = zoom === ZOOM_STEPS.length - 1;
-  // 等倍のままだと押しにくいことに気づけないので、そのときだけ案内を出す
-  el.zoomWhy.hidden = zoom !== 0;
 }
 
 // ------------------------------------------------------------------
@@ -429,9 +427,12 @@ export function start(state) {
   picked = "";
   dragger?.reset();
 
-  applyZoom(0);
-  el.zoomIn.addEventListener("click", () => applyZoom(zoom + 1));
-  el.zoomOut.addEventListener("click", () => applyZoom(zoom - 1));
+  zoomer = mapedit.attachZoom({
+    wrap: el.mapWrap, zoomIn: el.zoomIn, zoomOut: el.zoomOut,
+    zoomNow: el.zoomNow,
+    // 等倍のままだと押しにくいことに気づけないので、そのときだけ案内を出す
+    onChange: (percent) => { el.zoomWhy.hidden = percent !== 100; },
+  });
 
   render(state);
   // 資材選択から寸法を持って来たときは、**引いたところから始まっている**

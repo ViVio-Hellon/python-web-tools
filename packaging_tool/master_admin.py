@@ -235,6 +235,107 @@ def create_table(conn: sqlite3.Connection, table: str, *,
                         f"{_follow(conn, found, table)}")
 
 
+def can_rebuild(conn: sqlite3.Connection, table: str,
+                path: Optional[Path] = None) -> bool:
+    """列名が想定と違うだけで、作り直せば直る状態か。
+
+    `create_table()` が使える(=表が無い)条件とは逆で、**表はあるのに
+    列が1つも一致しない**ときだけ真になる。両方は同時に真にならない
+    (無ければ作る、あれば作り直す、で always exactly one)。
+    """
+    if not can_create(table):
+        return False
+    found = path or data_sync.find_material_db()
+    if found is None:
+        return False
+    present = source_db.columns(found, table)
+    if not present:
+        return False                              # 表が無い(create_tableの領分)
+    return bool(column_mismatch_why(table, present))
+
+
+def rebuild_table(conn: sqlite3.Connection, table: str, *,
+                  path: Optional[Path] = None) -> Result:
+    """列名が想定と違う表を、**中身を捨てずに**正しい列名へ作り直す。
+
+    【なぜ RENAME であって DROP でないか】
+    列名が違うだけで、中に意味のあるデータが入っている可能性を
+    否定できない(誰かが手作業で作った表かもしれない)。黙って消すと
+    取り返しがつかないので、`{table}_旧_YYYYMMDDHHMMSS` のような名前へ
+    退避してから、正しい列名で新しく作る。退避したことは結果の文言で
+    必ず言う ── 「直ったように見えて、実は前のデータがどこにあるか
+    誰も分からない」を作らない。
+
+    【なぜここにしかできないのか】
+    sqlite3 ファイルはテキストエディタでは編集できない(バイナリ形式)。
+    列名を直す手段が他に無い環境を前提に、この画面から完結できるように
+    してある。
+    """
+    allowed, why = can_edit(conn, table)
+    if not allowed:
+        return Result(False, why, REFUSE_NOT_ALLOWED)
+    if not can_create(table):
+        return Result(False,
+                      f"{_label(table)}は、このツールが作り直す表ではありません。",
+                      REFUSE_NOT_CREATABLE)
+    found = path or data_sync.find_material_db()
+    if found is None:
+        return Result(False,
+                      f"梱包資材マスタが見つかりません。"
+                      f"{config.master_db_dir()} を確かめてください。",
+                      REFUSE_NO_SOURCE)
+
+    present = source_db.columns(found, table)
+    if not present:
+        # 表そのものが無い ── これは create_table の仕事
+        return Result(False, f"{_label(table)}は取り込み元にまだありません。"
+                             "「取り込み元へ作る」を使ってください。",
+                      REFUSE_NOT_CREATABLE)
+    if not column_mismatch_why(table, present):
+        # 1列でも一致していれば、作り直しの対象ではない(誤って
+        # 一致している列まで巻き込んで消さない)
+        return Result(False, f"{_label(table)}は列名が一部一致しているため、"
+                             "作り直しの対象ではありません。"
+                             "一致していない列だけ、取り込み元で直してください。",
+                      REFUSE_NOT_CREATABLE)
+
+    try:
+        ddl = _ddl_for(conn, table)
+    except ValueError as exc:                    # pragma: no cover - 通常は無い
+        return Result(False, str(exc), REFUSE_NOT_CREATABLE)
+
+    from datetime import datetime
+    backup_name = f"{table}_旧_{datetime.now():%Y%m%d%H%M%S}"
+
+    try:
+        with source_db.connect(found) as src:
+            if table not in src.table_names():
+                # 一覧を出したあとに誰かが消した/作り直した
+                return Result(False, f"{_label(table)}はもうありません。"
+                                     "一覧を出し直してください。",
+                              REFUSE_NO_ROW)
+            if backup_name in src.table_names():  # pragma: no cover - 秒単位で衝突は稀
+                return Result(False, "退避先の表名が衝突しました。"
+                                     "もう一度押してください。",
+                              REFUSE_ALREADY)
+            src.execute(
+                f"ALTER TABLE {source_db.quote_identifier(table)} "
+                f"RENAME TO {source_db.quote_identifier(backup_name)}")
+            src.execute(ddl)
+    except source_db.SourceError as exc:
+        return _write_failed(table, exc)
+
+    log.info("取り込み元で作り直しました: %s -> 退避 %s、新規作成 (%s)",
+             table, backup_name, found)
+    return Result(True,
+                  f"{_label(table)}を正しい列名で作り直しました。"
+                  f"元の表は {backup_name} という名前で残しています"
+                  "(中身が要らないと分かれば、あとで消してください)"
+                  f"{_follow(conn, found, table)}")
+
+
+
+
 def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool, str]:
     """この端末はマスタを直せるか。**直せないなら理由も返す。**
 
@@ -365,6 +466,42 @@ def columns(conn: sqlite3.Connection, table: str,
     return out
 
 
+def expected_column_names(table: str) -> list[str]:
+    """この表で取り込みが読もうとする、取り込み元の列名。
+
+    `IMPORT_SPECS` の `source` 側(取り込み元での呼び名)を並べただけ。
+    `columns()` が0件を返したとき、「取り込み元にこの表はあるのに、
+    なぜ1つも打ち込めないのか」を具体的に言うために使う。
+    """
+    return [source for _local, source, _conv in import_specs.IMPORT_SPECS.get(table, [])]
+
+
+def column_mismatch_why(table: str, present: Iterable[str]) -> str:
+    """**表はある。列名が期待と違うので、1つも打ち込めない。**
+
+    取り込み元に表そのものは存在する(`missing=False`)のに、`columns()`が
+    0件を返すのは、たいていこれが原因。「まだ取り込まれていません」
+    (`_create_why`)とは別の話で、専用の理由を出さないと、編集の窓が
+    ただ空になって何も打てない画面にしか見えない
+    (現場の声:「1行足す」を押しても入力欄が1つも出てこない)。
+    """
+    expected = expected_column_names(table)
+    if not expected:
+        return ""
+    have = set(present)
+    if have & set(expected):
+        # 一部でも一致していれば、これは別の状況(型違い等)。ここでは
+        # 「1つも無い」ときだけに絞る
+        return ""
+    return (f"{table} は取り込み元にありますが、列名が想定と違うため"
+           f"1つも打ち込めません。このツールが読む列名は "
+           + " / ".join(expected) +
+           f" です。取り込み元の実際の列名({', '.join(present) or '(列が無い)'})"
+           "と見比べて、列名を合わせてください。")
+
+
+
+
 def _kind_of(declared: str) -> str:
     upper = declared.upper()
     if "INT" in upper:
@@ -419,13 +556,13 @@ def tables(path: Optional[Path]) -> list[TableInfo]:
         if managed.table not in counts:
             if can_create(managed.table):
                 out.append(TableInfo(
-                    table=managed.table, label=managed.label,
+                    table=managed.table, label=managed.table,
                     mark=managed.mark, note=managed.note, rows=0,
                     editable=True, missing=True,
                     why=_create_why(managed.table)))
             continue
         out.append(TableInfo(
-            table=managed.table, label=managed.label, mark=managed.mark,
+            table=managed.table, label=managed.table, mark=managed.mark,
             note=managed.note, rows=counts[managed.table], editable=True))
     for name in sorted(n for n in counts if n not in BY_TABLE):
         out.append(TableInfo(
@@ -449,6 +586,11 @@ class Page:
     error: str = ""
     # 取り込み元に無い(が、作れる)表
     missing: bool = False
+    # 取り込み元にはあるが、列名が想定と1つも合わず、作り直せば直る表
+    rebuildable: bool = False
+    # いま並び替えている列。空なら既定(rowid、取り込み順)
+    sort: str = ""
+    sort_dir: str = "asc"
 
     def to_dict(self) -> dict[str, Any]:
         return {"table": self.table, "label": self.label,
@@ -456,20 +598,28 @@ class Page:
                 "total": self.total, "shown": len(self.rows),
                 "editable": self.editable, "why": self.why,
                 "note": self.note, "error": self.error,
-                "missing": self.missing, "row_key": ROW_KEY}
+                "missing": self.missing, "rebuildable": self.rebuildable,
+                "row_key": ROW_KEY,
+                "sort": self.sort, "sort_dir": self.sort_dir}
 
 
 def page(path: Optional[Path], table: str, *, query: str = "",
+         sort: str = "", sort_dir: str = "asc",
          limit: int = ROW_LIMIT) -> Page:
     """表の中身を読む。**取り込み元から直に読む。**
 
     手元の写しではなく元を読むのは、直したあと「本当に入ったか」を
     ここで確かめられるようにするためです。写しを見せると、書き込みが
     失敗していても画面上は直ったように見えます。
+
+    `sort` は列名(見出しクリック)。**取り込み元に実在する列だけ**を
+    許す ── 列名をそのまま `ORDER BY` に組み込むので、絞り込み
+    (`_filter`)と同じく許可リストで確かめてから使う。無効な指定は
+    黙って既定(`rowid`)に戻す(拒否すると押しただけで断られる画面になる)。
     """
     managed = BY_TABLE.get(table)
     view = Page(table=table,
-                label=managed.label if managed else table,
+                label=table,
                 editable=managed is not None,
                 why=view_only_why(table))
     if path is None:
@@ -490,6 +640,9 @@ def page(path: Optional[Path], table: str, *, query: str = "",
     view.columns = names
 
     where, params = _filter(names, query)
+    order, sort_col = _order(names, sort, sort_dir)
+    view.sort = sort_col
+    view.sort_dir = "desc" if sort_dir == "desc" else "asc"
     quoted = source_db.quote_identifier(table)
     try:
         count = source_db.read_query(
@@ -498,7 +651,7 @@ def page(path: Optional[Path], table: str, *, query: str = "",
         view.rows = source_db.read_query(
             path,
             f'SELECT rowid AS "{ROW_KEY}", * FROM {quoted}{where}'
-            f" ORDER BY rowid LIMIT ?", [*params, max(1, limit)])
+            f" {order} LIMIT ?", [*params, max(1, limit)])
     except source_db.SourceError as exc:
         view.rows = []
         view.error = str(exc)
@@ -510,6 +663,21 @@ def page(path: Optional[Path], table: str, *, query: str = "",
         view.note = (f"{view.total}件のうち {len(view.rows)}件を出しています"
                      f"(ほか {hidden}件)。絞り込むと目当ての行が出ます。")
     return view
+
+
+def _order(names: list[str], sort: str, sort_dir: str) -> tuple[str, str]:
+    """見出しクリックの並び替え。
+
+    `sort` が実在の列でなければ、押していないのと同じ(`rowid` の
+    既定順)へ静かに戻す ── マスタの列は取り込み元の都合で増減するので、
+    もう無い列を指した並び替えを断ると「さっきまで押せたのに」が起きる。
+    """
+    if sort and sort in names:
+        direction = "DESC" if sort_dir == "desc" else "ASC"
+        quoted = source_db.quote_identifier(sort)
+        # 同値が並ぶと表示順がページごとに揺れるので、rowidで確定させる
+        return f"ORDER BY {quoted} {direction}, rowid ASC", sort
+    return "ORDER BY rowid ASC", ""
 
 
 def _filter(names: list[str], query: str) -> tuple[str, list[Any]]:
@@ -612,8 +780,20 @@ def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],
            ) -> tuple[Optional[Path], Optional[Result]]:
     """書く前に通す関門。通れば `(ファイル, None)`、通らなければ理由。
 
-    順番に意味がある ── **権限 → 表 → 届くか**。届かないことを先に
-    言うと、権限が無い人に「共有が落ちている」と読ませてしまう。
+    順番に意味がある ── **権限 → 表 → 届くか → 表が本当にあるか**。
+    届かないことを先に言うと、権限が無い人に「共有が落ちている」と
+    読ませてしまう。
+
+    【表が本当にあるかを、ここでも確かめる理由】
+    `MANAGED`(=`BY_TABLE`)に載っているだけでは、**取り込み元に実在する
+    とは限らない**(`アクセス権限` はあとから足した表で、無い端末が
+    普通にある)。ここを確かめずに書こうとすると、`source_db.columns`
+    が空を返し、`_clean` がどの値も「取り込み元に無い列」として
+    黙って弾く。結果、押した人には「入れる値がありません」としか
+    見えず、**表が無いこと**という本当の理由に辿り着けない
+    (現場の声)。画面側(`master.js`)にも同じ防御を置いているが、
+    直接APIを叩かれた場合や、二重にタブを開いていた場合のために、
+    ここでも確かめる。
     """
     allowed, why = can_edit(conn, table)
     if not allowed:
@@ -627,6 +807,23 @@ def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],
                             f"梱包資材マスタが見つかりません。"
                             f"{config.master_db_dir()} を確かめてください。",
                             REFUSE_NO_SOURCE)
+    present = source_db.columns(found, table)
+    if not present:
+        if can_create(table):
+            return None, Result(
+                False,
+                f"{_label(table)}はまだ取り込み元にありません。"
+                "先に「取り込み元に作る」で表を作ってください。",
+                REFUSE_NOT_CREATABLE)
+        return None, Result(False, f"{_label(table)}は取り込み元にありません。",
+                            REFUSE_NOT_CREATABLE)
+    mismatch = column_mismatch_why(table, present)
+    if mismatch:
+        return None, Result(
+            False,
+            f"{_label(table)}は列名が想定と違うため、1つも打ち込めません。"
+            "「列名を直して作り直す」で表を作り直してください。",
+            REFUSE_NOT_CREATABLE)
     return found, None
 
 
@@ -636,8 +833,7 @@ def _write_failed(table: str, exc: Exception) -> Result:
 
 
 def _label(table: str) -> str:
-    managed = BY_TABLE.get(table)
-    return managed.label if managed else table
+    return table
 
 
 def _clean(conn: sqlite3.Connection, table: str, values: dict[str, Any],

@@ -23,6 +23,8 @@ from packaging_tool.presenters.selection import (  # noqa: E402
     BANNER_EX,
     BANNER_NONE,
     BANNER_PROTEC,
+    BANNER_SHARED,
+    BANNER_SHARED_EX,
     TITLE_LOWER,
     TITLE_LOWER_SHARED,
     SelectionPresenter,
@@ -283,12 +285,58 @@ class HosozaiTests(PresenterTestCase):
         self.assertEqual(result.lower_title, TITLE_LOWER)
         self.assertFalse(self.p.is_shared_board_mode)
 
-    def test_プロテック中は上下共用が抑止される(self) -> None:
-        """VBAの `Not mIsProtecMode And ...` 条件。"""
-        self.p.apply_hosozai("ザラ板")
-        self.assertTrue(self.p.is_shared_board_mode)
+    def test_プロテックでも上用キャンバスは常に隠す(self) -> None:
+        """以前は「プロテック中は上下共用が抑止される」だったが、これは
+
+        選定アルゴリズム(`SelectUpperBoards`)の分岐の話であって、
+        `is_shared_board_mode` は画面表示だけの判定(`selection_flags`
+        には使われない)。プロテックは上用・下用とも同じボードを使う点で
+        上下共用と同じなので、画面上はプロテックも上下共用として扱い、
+        上用キャンバスを隠す(製品幅を大きく超えるボードを、超過禁止の
+        枠に配置しようとして静かに失敗する不具合があったため)。
+
+        **アングル表示(`show_angle`)は上用キャンバスの表示可否とは
+        独立**(VBA `ShowAngleControls` の `angleVisibleOverride` 分離と
+        同じ経緯)。ここではまだ `apply_hosozai` を呼んでいない
+        (`last_hosozai` が空)ので、`show_angle` は「保護材未確定」の
+        既定値(True)のまま ── プロテックだから強制的にFalseになる、
+        ということはない(現場の声:「プロテックモードでは、使用保護材が
+        実際にアングルと判定されていてもアングルリスト・配置が常に
+        非表示になってしまっていた」への対応)。
+        """
         self.p.check_and_set_protec_mode("1P1216")
-        self.assertFalse(self.p.is_shared_board_mode)
+        self.assertTrue(self.p.is_shared_board_mode)
+        self.assertTrue(self.p.show_angle)
+
+    def test_プロテック中も保護材が実際にアングルなら表示する(self) -> None:
+        """使用保護材が実際にアングルと判定されているなら、プロテック中
+
+        でもアングルの一覧・配置は表示する。上用キャンバス(共用化)は
+        独立して常に隠したままになる。
+        """
+        self.p.check_and_set_protec_mode("1P1216")
+        result = self.p.apply_hosozai(material_service.HOSOZAI_ANGLE)
+        self.assertTrue(result.show_angle)
+        self.assertEqual(result.lower_title, TITLE_LOWER_SHARED)
+        self.assertTrue(self.p.is_shared_board_mode)
+
+    def test_プロテック中に保護材が他のものなら上用もアングルも隠す(self) -> None:
+        self.p.check_and_set_protec_mode("1P1216")
+        result = self.p.apply_hosozai("ザラ板")
+        self.assertFalse(result.show_angle)
+        self.assertEqual(result.lower_title, TITLE_LOWER_SHARED)
+        self.assertTrue(self.p.is_shared_board_mode)
+
+    def test_プロテックを抜けると保護材どおりに戻る(self) -> None:
+        p = SelectionPresenter(self.conn, user_log=UserLog())
+        p.check_and_set_protec_mode("1P1216")
+        result = p.apply_hosozai(material_service.HOSOZAI_ANGLE)
+        self.assertTrue(result.show_angle)   # プロテック中でも実際の判定に従う
+        # プロテック対象外の包装仕様NOに変わる
+        p.check_and_set_protec_mode("")
+        result = p.apply_hosozai(material_service.HOSOZAI_ANGLE)
+        self.assertTrue(result.show_angle)
+        self.assertFalse(p.is_shared_board_mode)
 
     def test_show_angleプロパティは判断と一致する(self) -> None:
         for hosozai in ("", "一致なし", material_service.HOSOZAI_ANGLE, "ザラ板", "ダンボール"):
@@ -343,6 +391,50 @@ class ModeBannerTests(PresenterTestCase):
         self.assertEqual(banner.kind, BANNER_EX)
         self.assertIn("EXオーダー", banner.text)
 
+    def test_上下共用は独立して出る(self) -> None:
+        """`上下共用` はモードバーの選択肢に無く、下用の見出し変更
+
+        (`TITLE_LOWER_SHARED`)でしか示されていなかった。現場の声:
+        「他のモードはテキストが出ていないものもあるのでは」への対応。
+        """
+        self.p.apply_hosozai("ザラ板")
+        self.assertTrue(self.p.is_shared_board_mode)
+        banner = self.p.mode_banner()
+        self.assertEqual(banner.kind, BANNER_SHARED)
+        self.assertIn("上下共用", banner.text)
+
+    def test_上下共用はプロテックより下位(self) -> None:
+        """プロテックは画面表示上「上下共用の一種」になったが、
+
+        バナーの優先順位としてはプロテックを先に見る ── 「プロテック
+        ボードオーダー選択中」は既に上用・下用が同じという意味を含む
+        具体的な案内なので、「上下共用」と重ねて言わない
+        (`mode_banner` のdocstring参照)。
+        """
+        self.p.check_and_set_protec_mode("1P1216")
+        self.p.apply_hosozai("ザラ板")
+        self.assertTrue(self.p.is_shared_board_mode)  # 表示上はプロテックも上下共用
+        self.assertEqual(self.p.mode_banner().kind, BANNER_PROTEC)
+
+    def test_上下共用とEXは同時に成立し1本の帯にまとまる(self) -> None:
+        """EXは上下共用と独立(相互排他ではない)。現場の要望:
+
+        「1つのバーに全て並べて出す」への対応。
+        """
+        self.p.set_ex_order(True)
+        self.p.apply_hosozai("ザラ板")
+        self.assertTrue(self.p.is_shared_board_mode)
+        banner = self.p.mode_banner()
+        self.assertEqual(banner.kind, BANNER_SHARED_EX)
+        self.assertIn("上下共用", banner.text)
+        self.assertIn("EX", banner.text)
+
+    def test_1P0113は上下共用やEXより優先(self) -> None:
+        self.p.set_ex_order(True)
+        self.p.apply_hosozai("ザラ板")
+        self.p.apply_1p0113_mode(spk.HOSOSIYO_1P0113)
+        self.assertEqual(self.p.mode_banner().kind, BANNER_1P0113)
+
 
 # ==================================================================
 # ロット確定 — 状態機械の順序
@@ -367,16 +459,26 @@ class ApplyLotTests(PresenterTestCase):
         self.p.apply_lot(_make_result(spec="1P1216"))
         self.assertTrue(self.p.protec.is_protec)
 
-    def test_保護材の判定順がプロテックより前(self) -> None:
-        """VBA `SearchAndDisplay` 末尾の順序。
+    def test_保護材の判定順がプロテックより後(self) -> None:
+        """VBA `ReapplyAngleVisibility` の修正と同じ順序。
 
-        `apply_hosozai` → `check_and_set_protec_mode` の順で呼ぶので、
-        プロテックのロットでは(保護材が何であれ)上下共用が抑止される。
-        逆順にするとここが崩れる。
+        `check_and_set_protec_mode` → `apply_hosozai` の順で呼ぶ
+        (以前は逆順だった)。逆順だと `apply_hosozai` の中で
+        `self.protec.is_protec` がまだ確定しておらず、プロテックの
+        ロットでも上用キャンバスを隠す判断に一度も到達できない
+        (VBAで実際に踏んだ不具合と同じ構造)。いまはプロテックの
+        ロットでは(保護材が何であれ)上下共用として画面に出る。
+
+        `show_angle` は上用キャンバスの表示可否とは独立(VBA
+        `ShowAngleControls` の分離と同じ)。マスタが空でこのテストでは
+        保護材が引けない(`last_hosozai=""`)ので、`show_angle` は
+        「保護材未確定」の既定値(True)のまま ── プロテックだから
+        強制的にFalseになることはない。
         """
         self.p.apply_lot(_make_result(spec="1P1216"))
         self.assertTrue(self.p.protec.is_protec)
-        self.assertFalse(self.p.is_shared_board_mode)
+        self.assertTrue(self.p.is_shared_board_mode)
+        self.assertTrue(self.p.show_angle)
 
     def test_ロット表示の文言(self) -> None:
         outcome = self.p.apply_lot(_make_result(lot_no="4102781", thickness=6.75))
@@ -477,14 +579,19 @@ class SelectionLogDetailTests(unittest.TestCase):
         選定アルゴリズムは却下理由を現場の言葉で出しているのに、
         ユーザーログへ繋がっていなかった。文言は向こうに置いたまま、
         走っているあいだだけ流す(`user_log.bridge_from`)。
+
+        製品サイズ・在庫サイズは業界標準("1×2"/"4×8")のショートカット
+        判定に触れないものを選ぶ ── 触れるとショートカットが即決定して
+        しまい、このテストが確かめたい「却下されて先へ進む過程」が
+        ログに出ない。
         """
-        for w, l in [(1250, 2500), (660, 1310), (750, 1130)]:
+        for w, l in [(1300, 2600), (660, 1310), (750, 1130)]:
             self.conn.execute(
                 "INSERT INTO BoardMaster (ボード幅,ボード丈,ボードタイプ)"
                 " VALUES (?,?,?)", (w, l, "ハードボード"))
         self.conn.commit()
-        self.session.apply_pallet("1280", "2550")
-        self.session.apply_product("1252", "2502")
+        self.session.apply_pallet("1330", "2650")
+        self.session.apply_product("1302", "2602")
         self.session.board_type = "ハードボード"
         self.assertTrue(self.session.auto_select_boards().ok)
         self.assertIn("却下", self.log.text)

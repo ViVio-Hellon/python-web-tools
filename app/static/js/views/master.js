@@ -26,7 +26,8 @@ let loaded = false;
 let editing = null;       // いま開いている行(足すときは null)
 
 const IDS = ["mTables", "mMark", "mTitle", "mCan", "mCount", "mQuery", "mFind",
-             "mAdd", "mCreate", "mReload", "mWhy", "mError", "mHead", "mRows", "mNote",
+             "mAdd", "mCreate", "mRebuild", "mReload", "mWhy", "mError", "mHead",
+             "mRows", "mNote",
              "mEdit", "mEditTitle", "mEditKind", "mEditWhy", "mEditError",
              "mFields", "mFoot", "mSave", "mDelete", "mConfirm",
              "mDeleteYes", "mDeleteNo"];
@@ -41,13 +42,14 @@ export function start(frame) {
   view = frame;
   showWhy();
 
-  el.mFind.addEventListener("click", () => load(view && view.table));
+  el.mFind.addEventListener("click", () => loadKeepSort(view && view.table));
   el.mQuery.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") { event.preventDefault(); load(view && view.table); }
+    if (event.key === "Enter") { event.preventDefault(); loadKeepSort(view && view.table); }
   });
-  el.mReload.addEventListener("click", () => load(view && view.table));
+  el.mReload.addEventListener("click", () => loadKeepSort(view && view.table));
   el.mAdd.addEventListener("click", () => openRow(null));
   el.mCreate.addEventListener("click", createTable);
+  el.mRebuild.addEventListener("click", rebuildTable);
 
   el.mRows.addEventListener("click", (event) => {
     const tr = event.target.closest("tr[data-key]");
@@ -55,9 +57,17 @@ export function start(frame) {
   });
   el.mTables.addEventListener("click", (event) => {
     const row = event.target.closest("[data-table]");
-    // 表を変えたら絞り込みは外す。前の表の言葉で絞ったままにすると
-    // 「0件」だけが出て、なぜ空なのか分からない
+    // 表を変えたら絞り込みも並び替えも外す。前の表の言葉/列で
+    // 絞ったままにすると、「0件」や意味の無い並びだけが出て、
+    // なぜそうなっているのか分からない
     if (row) { el.mQuery.value = ""; load(row.dataset.table); }
+  });
+
+  // 見出しクリックで並び替え。**サーバが並べ替えた結果を描き直すだけ**
+  // (設計.md §1) ── ここでJS側にソートを持たない
+  el.mHead.addEventListener("click", (event) => {
+    const button = event.target.closest("button.sortbtn");
+    if (button) sortBy(button.dataset.column);
   });
 
   el.mSave.addEventListener("click", saveRow);
@@ -87,20 +97,56 @@ export function opened() {
  */
 export function reload() {
   if (!loaded || editing) return;
-  load(view && view.table);
+  loadKeepSort(view && view.table);
 }
 
 // ------------------------------------------------------------------
 // 読む
 // ------------------------------------------------------------------
-async function load(table) {
+async function load(table, sort, sortDir) {
   const query = el.mQuery.value.trim();
-  const params = new URLSearchParams({ table: table || "", q: query });
+  const params = new URLSearchParams({
+    table: table || "", q: query,
+    sort: sort || "", sort_dir: sortDir || "asc",
+  });
   try {
     render(await api.get(`/api/master/browse?${params}`));
   } catch (err) {
     toastError(err);
   }
+}
+
+/** いま出している表の並び替えを保ったまま読み直す。 */
+function loadKeepSort(table) {
+  const page = (view && view.page) || {};
+  load(table, page.sort, page.sort_dir);
+}
+
+/** 見出しを押した。同じ列なら向きを反転、違う列なら昇順から。 */
+function sortBy(column) {
+  const page = (view && view.page) || {};
+  const dir = (page.sort === column && page.sort_dir === "asc") ? "desc" : "asc";
+  load(view && view.table, column, dir);
+}
+
+/** 見出し1列ぶん。押すと並び替え(`lotlist.js` と同じ作法の `sortbtn`)。 */
+function headerCell(name, page) {
+  const th = document.createElement("th");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "sortbtn";
+  button.dataset.column = name;
+  button.append(name);
+  if (page.sort === name) {
+    const mark = document.createElement("span");
+    mark.className = "sortmark";
+    // ▲▼は文字なので、色を拾えない環境でも並び順が読める
+    mark.textContent = page.sort_dir === "asc" ? "▲" : "▼";
+    button.append(mark);
+    th.setAttribute("aria-sort", page.sort_dir === "asc" ? "ascending" : "descending");
+  }
+  th.append(button);
+  return th;
 }
 
 function render(next) {
@@ -153,14 +199,20 @@ function render(next) {
   const editable = Boolean(view.can_edit && page.editable);
   // 取り込み元にまだ無い表。**行を足す前に、表そのものを作る**
   const missing = Boolean(page.missing);
+  // 表はあるが列名が想定と違い、1つも打ち込めない
+  const rebuildable = Boolean(page.rebuildable);
   el.mCan.hidden = !view.table;
-  el.mCan.className = `st st--${missing ? "warn" : (editable ? "ok" : "warn")}`;
-  el.mCan.textContent = missing ? "まだありません" : (editable ? "直せます" : "見るだけ");
-  // 表が無いあいだは行を足せない。押せる形にしておくと、押した先で
-  // 「入れる値がありません」としか言えず、何が足りないのか分からない
-  el.mAdd.disabled = !editable || missing;
+  el.mCan.className = `st st--${(missing || rebuildable) ? "warn" : (editable ? "ok" : "warn")}`;
+  el.mCan.textContent = missing ? "まだありません"
+    : rebuildable ? "列名が違います" : (editable ? "直せます" : "見るだけ");
+  // 表が無い/列名が違うあいだは行を足せない。押せる形にしておくと、
+  // 押した先で「入れる値がありません」としか言えず、何が足りないのか
+  // 分からない
+  el.mAdd.disabled = !editable || missing || rebuildable;
   el.mCreate.hidden = !missing;
   el.mCreate.disabled = !view.can_edit;
+  el.mRebuild.hidden = !rebuildable;
+  el.mRebuild.disabled = !view.can_edit;
 
   showWhy();
   el.mError.hidden = !page.error;
@@ -169,11 +221,7 @@ function render(next) {
   // --- 右: 表 ---
   const columns = page.columns || [];
   const head = document.createElement("tr");
-  for (const name of columns) {
-    const th = document.createElement("th");
-    th.textContent = name;
-    head.appendChild(th);
-  }
+  for (const name of columns) head.appendChild(headerCell(name, page));
   el.mHead.replaceChildren(head);
 
   el.mRows.replaceChildren(...(page.rows || []).map((row) => {
@@ -216,6 +264,19 @@ function openRow(key) {
     : (page.rows || []).find((r) => String(r[view.row_key]) === String(key));
   if (key !== null && !row) return;
 
+  // 表がまだ無い/列名が想定と違うあいだは、**新規に行を足すダイアログを
+  // 開かせない**。開けてしまうと、`page.columns` が空のまま
+  // (`master_admin.page()` は表が無ければ列を読まずに返す)なので、
+  // 入力欄が1つも無いのに保存だけは押せてしまい、「入れる値がありません」
+  // という的外れな断りになる(現場の声)。行を足す前に、まず表を
+  // 作る/作り直すよう、その場で伝える
+  if (key === null && (page.missing || page.rebuildable)) {
+    toast(page.missing
+      ? "先に表を「取り込み元に作る」で作ってください。"
+      : "先に「列名を直して作り直す」で表を作り直してください。", "warn");
+    return;
+  }
+
   editing = key === null ? null : key;
   const editable = Boolean(view.can_edit && page.editable);
   const columns = view.columns || [];
@@ -231,8 +292,12 @@ function openRow(key) {
   el.mFoot.hidden = !editable;
   askDelete(false);
 
+  // 打ち込める欄が無いなら、直せる表(`editable`)でも理由を隠さない。
+  // 「表はある。列名が想定と違うので1つも打ち込めない」という状況は
+  // 従来の「直せない表」とは別物で、ここで隠すと空の窓だけが残る
+  const noFields = editable && columns.length === 0;
   const why = view.can_edit ? page.why : view.edit_why;
-  el.mEditWhy.hidden = !why || editable;
+  el.mEditWhy.hidden = !why || (editable && !noFields);
   el.mEditWhy.textContent = why || "";
 
   // 直せないなら**打ち込める形にしない**。読めない欄を出すと、打てると
@@ -312,9 +377,12 @@ const ACCESS_TABLE = "アクセス権限";
 
 async function send(path, body) {
   const table = view.table;
+  const page = (view && view.page) || {};
   try {
     render(await api.post(path, {
-      table, q: el.mQuery.value.trim(), ...body,
+      table, q: el.mQuery.value.trim(),
+      sort: page.sort || "", sort_dir: page.sort_dir || "asc",
+      ...body,
     }));
     el.mEdit.close();
     // **足した権限をその場で効かせる。** 帯のモード切替は「いま持って
@@ -356,6 +424,31 @@ async function createTable() {
   if (!table) return;
   try {
     render(await api.post("/api/master/table/create",
+                          { table, q: el.mQuery.value.trim() }));
+  } catch (err) {
+    if (err.body && err.body.page) render({ ...err.body, message: "" });
+    el.mError.hidden = false;
+    el.mError.textContent = err.message;
+    toastError(err);
+  }
+}
+
+/** 列名が想定と違う表を、正しい列名で作り直す。
+
+    sqlite3 のファイルは他に直す手段が無い(テキストエディタでは
+    開けない)ことが多いので、ここから完結させる。元の表は消さず
+    退避するが、**表名が変わる**という後戻りしにくい操作なので、
+    押す前に一度だけ確かめる。 */
+async function rebuildTable() {
+  const table = view && view.table;
+  if (!table) return;
+  const ok = window.confirm(
+    `${table} を正しい列名で作り直します。\n` +
+    "今の表は消さず、別の名前(◯◯_旧_日時)で残ります。\n" +
+    "よろしいですか?");
+  if (!ok) return;
+  try {
+    render(await api.post("/api/master/table/rebuild",
                           { table, q: el.mQuery.value.trim() }));
   } catch (err) {
     if (err.body && err.body.page) render({ ...err.body, message: "" });

@@ -334,7 +334,14 @@ def build_cut_request(session: Any) -> tuple[Optional[printing.Report],
 
     カットが1つも無ければ帳票にならない。**それは失敗ではない**ので、
     理由を添えて返す(押した人には「不要だった」と分かる必要がある)。
+
+    切断依頼は配置を実行していなくても押せる(`cut_request_refusal` は
+    配置済みを条件にしない)ため、`session.placement`(配置後にしか
+    存在しない)には頼れない。`place_boards` と同じ手順
+    (`select_result` があればそこから、手動で増減した後なら後付け
+    適用)を、ここでも独立して行い、`ProtecCutResult` を用意する。
     """
+    from .. import board_selection_algorithm as alg
     from .. import user_settings
 
     presenter = session.presenter
@@ -345,10 +352,16 @@ def build_cut_request(session: Any) -> tuple[Optional[printing.Report],
     length_cut_count = result.length_cut_count if result else {}
 
     if presenter.protec.is_protec:
-        # プロテックは上下を分けず、上用の主ボードだけを見る
-        upper = reports.protec_cut_size_info(
-            session.selected.upper, session.product.width, session.product.length,
-            is_1p1216=presenter.protec.is_1p1216)
+        # プロテックは上下を分けず、選定(または手動追加後の後付け)が
+        # 確定させた `ProtecCutResult` をそのまま表示するだけ
+        # (`reports.protec_cut_size_info` のdocstring参照)。
+        if result is not None:
+            protec_result = result.lower_result.protec_result
+        else:
+            protec_result = alg.apply_protec_rules_to_lower_list(
+                session.selected.lower, session.product, session.palette.length,
+                is_1p1216=presenter.protec.is_1p1216)
+        upper = reports.protec_cut_size_info(protec_result)
         lower = reports.CutSizeInfo()
     else:
         upper = reports.get_cut_size_info(

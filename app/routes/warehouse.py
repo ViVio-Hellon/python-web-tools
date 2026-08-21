@@ -12,38 +12,73 @@ VBA版は現場用と資材用が別のフォームで、確認ボタンは資�
 
 Web版は同じ保証を2段で作ります。
 
-1. `mode:material` の権限が無い端末には、確認・取消のエンドポイントを
-   **そもそも登録しません**(404)。守るのは「誰か」です
-2. 登録されていても、いま現場モードで見ていれば断ります(403)。
+1. `mode:material` の権限が無い端末には、確認・取消の操作を断ります(404)。
+   守るのは「誰か」です
+2. 権限があっても、いま現場モードで見ていれば断ります(403)。
    こちらは誤操作の防止で、1 とは目的が違うので両方置いています
+
+**両方とも、要求のたびに確かめます。** 以前は 1 を「起動時の権限で
+エンドポイントを登録するかどうか」で分けていましたが、これだと
+マスタ管理でアクセス権限に行を足しても、**サーバプロセスを終了して
+起動し直すまで反映されません**でした(ページの読み込み直しでは
+Pythonのプロセスは再起動しないため)。権限を足した理由が
+「いま資材モードで使いたいから」であることを踏まえ、`master.py` の
+マスタ管理と同じ形(常に登録し、要求のたびに `master_admin.can_edit`
+で見る)にそろえています。
 """
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, render_template, request
 
-from packaging_tool import (data_sync, modes, warehouse_service as svc,
-                            work_context)
+from packaging_tool import (access_control, data_sync, modes,
+                            warehouse_service as svc, work_context)
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import warehouse as presenter
 
-from .. import current_mode, get_db
+from .. import current_grant, current_mode, get_db
 from ..shell import shell_context
 
 log = get_logger("app.routes.warehouse")
 
 # どのモードにもある部分(一覧・検索・発注)
 bp = Blueprint("warehouse", __name__)
-# **資材モードの権限がある端末にしか登録しない**部分(確認・取消)
+# 資材モードの権限がある端末でだけ使える部分(確認・取消)。
+# **常に登録する**(起動時の権限では決めない)。誰が使えるかは
+# `_require_material_mode` が要求のたびに確かめる
 material_only = Blueprint("material_only", __name__)
 
 
 @material_only.before_request
 def _require_material_mode():
-    """権限があっても、いま資材モードで見ていなければ断る。
+    """資材モードの権限があり、かついま資材モードで見ているかを断る。
 
-    登録の可否(権限)とは別の話。資材課の人が現場モードで作業して
-    いる最中に、手が滑って確認済みにできてしまうのを防ぐ。
+    2段のうち、こちらが両方を受け持つ(以前は1段目を起動時の登録で
+    分けていた)。
+
+    1. 権限そのものが無い ── **そもそもこの端末では使えない操作**。
+       起動時の権限では決めず、要求のたびに `access_control.resolve`
+       で引き直す。取り込み元は共有フォルダの1ファイルで、書く場所は
+       ここだけとは限らないため、断る前に一度だけ読み直す
+       (`access_control.resync` と同じ考え方)
+    2. 権限はあるが、いま現場モードで見ている ── 資材課の人が現場
+       モードで作業している最中に、手が滑って確認済みにできて
+       しまうのを防ぐ
     """
+    grant = current_grant()
+    if not grant.allows_mode(modes.MATERIAL):
+        # 手元がまだ古い可能性がある。断る前に取り込み元から
+        # アクセス権限だけ読み直し、それでも無ければ本当に無い
+        if access_control.resync(get_db()):
+            from flask import g
+            g.pop("grant", None)
+            grant = current_grant()
+        if not grant.allows_mode(modes.MATERIAL):
+            log.info("資材モードの権限が無いため断りました: %s", request.path)
+            return jsonify({"error": {
+                "code": "not_found",
+                "message": "その操作はこの端末では使えません。"
+                          "設定画面でアクセス権限の登録状況を確認してください。"
+                }}), 404
     if current_mode() != modes.MATERIAL:
         log.info("資材モードではないため断りました: %s", request.path)
         return jsonify({"error": {

@@ -49,11 +49,15 @@ HOSOZAI_NO_MATCH = "一致なし"
 TITLE_LOWER = "【下用ボード配置】"
 TITLE_LOWER_SHARED = "【上下共用ボード配置】"
 
-# モードバーの種類。色は表示側(CSS / tkinter)が決める
+# モードバーの種類。色は表示側(CSS / tkinter)が決める。
+# 複合(上下共用+EX)は専用の種別を持つ ── 「上下共用」の青と「EX」の赤を
+# 単純に混ぜると誰の色でもなくなるので、複合用の見た目をCSS側に用意する
 BANNER_NONE = ""
 BANNER_1P0113 = "1p0113"
 BANNER_PROTEC = "protec"
+BANNER_SHARED = "shared"
 BANNER_EX = "ex"
+BANNER_SHARED_EX = "shared_ex"
 
 
 @dataclass
@@ -61,6 +65,14 @@ class ModeBanner:
     """操作パネル最上部の帯(VBA `DynamicTip_ProtecMark` / `DynamicTip_ExMark`)。
 
     `kind` は表示側が色を選ぶための種別。`text` が空なら通常モード。
+
+    【複数モードの同時表示について】
+    1P0113・プロテック・上下共用は互いに排他(状態機械の設計より)。
+    EXだけは独立(EX受注のまま上下共用になることがある)ので、
+    「上下共用のときにEXでもある」場合だけ1本のバーに両方を書く
+    (現場の要望:「1つのバーに全て並べて出す」)。1P0113・プロテックは
+    そもそもボード欄自体を隠すか、EXと同時に成立しないため、単独表示のまま
+    でよい。
     """
 
     kind: str = BANNER_NONE
@@ -289,24 +301,41 @@ class SelectionPresenter:
         """VBA `ShowAngleControls` の移植(状態保存と表示の判断)。
 
         保護材がアングル以外に確定したときは**上下共用モード**
-        (上用=下用と同サイズ)になるので、アングル関連に加えて上用の欄も
-        丸ごと隠し、下用の見出しを「【上下共用ボード配置】」に変える。
+        (上用=下用と同サイズ)になるので、上用の欄を丸ごと隠し、
+        下用の見出しを「【上下共用ボード配置】」に変える。
+
+        【アングル表示と上用キャンバス非表示は独立した判断】
+        以前はプロテックのとき、アングルの実際の判定を見ずに
+        無条件でアングルも上用キャンバスも非表示にしていた
+        (VBA `ShowAngleControls` が1つの引数で両方を同時制御していた
+        のと同じ構造的欠陥)。プロテックは「上用キャンバスは常に隠す
+        (上下共用として扱う)」が、「アングルを表示するか」は
+        `last_hosozai` の実際の判定(`show_angle` プロパティ)に従う
+        ── 使用保護材が実際にアングルと判定されているなら、プロテック
+        中でもアングルの一覧・配置は出す(現場の声への対応)。
         """
         self.last_hosozai = hosozai or ""
-        show_angle = (not self.last_hosozai
-                      or self.last_hosozai == HOSOZAI_NO_MATCH
-                      or self.last_hosozai == material_service.HOSOZAI_ANGLE)
-        log.debug("apply_hosozai: hosozai=%s show_angle=%s", hosozai, show_angle)
-        if not show_angle:
+        show_angle = self.show_angle
+        hide_upper = self.is_shared_board_mode
+        log.debug("apply_hosozai: hosozai=%s protec=%s show_angle=%s hide_upper=%s",
+                 hosozai, self.protec.is_protec, show_angle, hide_upper)
+        if hide_upper:
+            reason = ("プロテック" if self.protec.is_protec
+                      else self.last_hosozai)
             self.user_log.log(
-                f"[上下共用({self.last_hosozai})] 上用は下用と同サイズになります")
+                f"[上下共用({reason})] 上用は下用と同サイズになります")
         return HosozaiResult(
             hosozai=self.last_hosozai,
             show_angle=show_angle,
-            lower_title=TITLE_LOWER if show_angle else TITLE_LOWER_SHARED,
+            lower_title=TITLE_LOWER_SHARED if hide_upper else TITLE_LOWER,
             # アングルを出しているあいだはアングルの欄があるので出さない。
-            # 消えたときだけ、その場所に何を使うのかを出す
-            hosozai_label="" if show_angle else f"使用保護材: {self.last_hosozai}",
+            # 消えたときだけ、その場所に何を使うのかを出す。プロテックは
+            # アングルの有無に関わらず上用キャンバス自体を隠すので、
+            # 「使用保護材」ではなく専用の文言にする
+            hosozai_label=("" if not hide_upper
+                           else (f"使用保護材: {self.last_hosozai}"
+                                 if not self.protec.is_protec
+                                 else "プロテックボード(上下共用)")),
         )
 
     def lookup_hosozai(self, result: Any) -> str:
@@ -331,15 +360,41 @@ class SelectionPresenter:
 
     @property
     def is_shared_board_mode(self) -> bool:
-        """上下共用モードか(VBA `SelectUpperBoards` の1番目の分岐と同条件)。"""
+        """上用キャンバスを隠し、上下共用として画面に出すか。
+
+        【選定アルゴリズムの分岐とは別物】
+        `board_selection_algorithm.SelectUpperBoards` は「上下共用
+        (ザラ板等)」と「プロテック」を**別の分岐**として持つ
+        (プロテックは許容幅での判定が要るため)。ここはその選定ロジック
+        には使わない(`selection_flags` が `is_protec_mode` を個別に渡す)、
+        **画面表示だけの判定**。
+
+        プロテックは上用・下用とも同じボードを使う点では上下共用と
+        同じなので、画面上は上下共用の一種として扱い、上用キャンバスを
+        隠す(製品幅を大きく超えるボードを、超過禁止の枠に配置しようと
+        して静かに失敗する不具合があったため)。
+        """
+        if self.protec.is_protec:
+            return True
         return bool(self.last_hosozai
                     and self.last_hosozai not in (HOSOZAI_NO_MATCH,
-                                                  material_service.HOSOZAI_ANGLE)
-                    and not self.protec.is_protec)
+                                                  material_service.HOSOZAI_ANGLE))
 
     @property
     def show_angle(self) -> bool:
-        """アングル関連の欄を出すか。`apply_hosozai` の判断と同じ式。"""
+        """アングル関連の欄を出すか。
+
+        【上用キャンバスの表示可否とは独立】以前はプロテックのとき
+        無条件で `False`(非表示)にしていたが、これは誤りだった
+        (VBA `ShowAngleControls` の修正と同じ経緯)。上用キャンバスを
+        隠すこと(`is_shared_board_mode`)と、アングルを表示するかは
+        **別の判断**。プロテックであっても、使用保護材が実際に
+        アングルと判定されているなら、アングルの一覧・配置は
+        出すべき(現場の声:「プロテックモードでは、使用保護材が実際に
+        アングルと判定されていてもアングルリスト・配置が常に非表示に
+        なってしまっていた」)。上用キャンバスの非表示は
+        `is_shared_board_mode` が別途担う。
+        """
         return (not self.last_hosozai
                 or self.last_hosozai == HOSOZAI_NO_MATCH
                 or self.last_hosozai == material_service.HOSOZAI_ANGLE)
@@ -372,11 +427,24 @@ class SelectionPresenter:
              5×10業界の強度UP判定に使う
           2. `SetExOrder` がEX受注フラグを立て、EXオンリー絞り込みを有効化
           3. `Apply1P0113Mode` が包装仕様NOで裸梱包モードを切り替え
-          4. `GetUpperPartMaterial` → `ShowAngleControls` でアングルの要否
-          5. `CheckAndSetProtecMode` がプロテック判定とボード種別切替
+          4. `CheckAndSetProtecMode` がプロテック判定とボード種別切替
+          5. `GetUpperPartMaterial` → `ShowAngleControls` でアングルの要否
 
         **3〜5は互いに独立ではなく、この順で呼ばれる前提の状態機械**
-        (例: プロテックだと上下共用モードが抑止される)なので順序を守る。
+        (プロテックだと上下共用も含めて上用キャンバスを隠す)なので
+        順序を守る。
+
+        【4と5の順序について】
+        以前は 4(プロテック) と 5(アングル/上下共用) が逆順だった。
+        VBA側で「`ReapplyAngleVisibility` が `m_lastHosozai` の早期
+        リターンをプロテック判定より先に評価してしまい、プロテックの
+        ときに上用キャンバスを隠す処理へ一度も到達しない」という
+        不具合が実際に起きたため、VBA側はプロテック判定を早期リターン
+        より前に動かす形で直した。Python版はここが同じ順序依存を
+        引き継いでいたので、揃えて直す ── `apply_hosozai` が
+        `self.protec.is_protec` を見られるよう、プロテック判定を先に
+        済ませておく必要がある(`check_and_set_protec_mode` は
+        `last_hosozai` に依存しないので、順序を入れ替えても安全)。
         """
         self.lot_no = result.lot.lot_no
         self.lot_result = result
@@ -398,10 +466,10 @@ class SelectionPresenter:
         spec = result.odr.packaging_spec
         mode_change = self.apply_1p0113_mode(
             spec, product_width=product_width, product_length=product_length)
-        hosozai = self.apply_hosozai(self.lookup_hosozai(result))
         protec = self.check_and_set_protec_mode(
             spec, available_board_types=available_board_types,
             current_board_type=current_board_type)
+        hosozai = self.apply_hosozai(self.lookup_hosozai(result))
 
         return {
             "force_released": force_released,
@@ -424,9 +492,25 @@ class SelectionPresenter:
     # ビューモデル
     # ------------------------------------------------------------------
     def mode_banner(self) -> ModeBanner:
-        """モードバーに出す内容。優先順位は 1P0113 → プロテック → EX。
+        """モードバーに出す内容。優先順位は 1P0113 → プロテック → 上下共用。
 
         VBA も同じ優先順で、下位のモードは上位に隠れる。
+
+        【プロテックと上下共用の関係】
+        プロテックは画面表示上「上下共用の一種」(`is_shared_board_mode`
+        が真になる)だが、プロテック特有の許容幅判定を伴う分、案内する
+        情報が上下共用より具体的なので、**プロテックの表示を優先し、
+        「上下共用」と重ねて言わない**(「プロテックボードオーダー選択中」
+        は既に上用・下用が同じという意味を含む)。1P0113 は
+        パレット・ボードを使わないモードなので、これも別枠で最優先。
+
+        EXだけはこれらと独立に成立しうる(EX受注のまま上下共用/プロテックに
+        なることがある。ただしEXとプロテックは実業務上同時に成立しない)。
+        1P0113とプロテックは、EXと同時に成立しても業務上は問題にならない/
+        ボード欄自体が隠れるため単独表示のままとし、**上下共用とEXが
+        両方立っているときだけ**、見落とすと直接手戻りにつながるため
+        1本のバーにまとめて出す(現場の声:「他のモードはテキストが
+        出ていないものもあるのでは」への対応)。
         """
         if self.mode_1p0113:
             return ModeBanner(
@@ -434,6 +518,11 @@ class SelectionPresenter:
                 f"【{spk.HOSOSIYO_1P0113} 裸梱包モード】角材+松板で組みます")
         if self.protec.is_protec:
             return ModeBanner(BANNER_PROTEC, "【プロテックボードオーダー選択中】")
+        if self.is_shared_board_mode:
+            if self.is_ex_order:
+                return ModeBanner(
+                    BANNER_SHARED_EX, "【上下共用・EXオーダー選択中】")
+            return ModeBanner(BANNER_SHARED, "【上下共用ボードオーダー選択中】")
         if self.is_ex_order:
             return ModeBanner(BANNER_EX, "【EXオーダー選択中】")
         return ModeBanner()
@@ -1473,16 +1562,31 @@ def _angle_plan(session: Any) -> Optional[dict[str, Any]]:
 # アングル
 # ------------------------------------------------------------------
 def build_angles(session: Any) -> AnglesViewModel:
-    """アングルの部分。保護材がアングル以外に確定していれば丸ごと出さない。"""
+    """アングルの部分。保護材が実際にアングルと判定されていなければ
+
+    丸ごと出さない(`presenter.show_angle`)。
+
+    【プロテックでも実際の判定に従う】以前はプロテックのとき、実際の
+    保護材判定を見ずに常に非表示にし、"プロテックボード(上下共用)"
+    という文言で隠していた。しかし「上用キャンバスを隠す」
+    (`is_shared_board_mode`)ことと「アングルを表示するか」
+    (`show_angle`)は独立した判断で、プロテックでも使用保護材が実際に
+    アングルなら表示すべきだった(現場の声への対応。VBA
+    `ShowAngleControls` の `angleVisibleOverride` 分離と同じ経緯)。
+    ここでアングルが隠れているとすれば、それは上用キャンバスの都合
+    ではなく、**保護材が実際にアングル以外と判定された**からなので、
+    その理由をそのまま示す。
+    """
     presenter = session.presenter
     show = presenter.show_angle
+    hosozai_label = ("" if show or not presenter.last_hosozai
+                     else f"使用保護材: {presenter.last_hosozai}")
 
     view = AnglesViewModel(
         show=show,
         # アングルを出しているあいだはアングルの欄があるので出さない。
         # 消えたときだけ、その場所に何を使うのかを出す
-        hosozai_label=("" if show or not presenter.last_hosozai
-                       else f"使用保護材: {presenter.last_hosozai}"),
+        hosozai_label=hosozai_label,
         selected=list(session.selected_angles),
         need_cut=session.angle_need_cut,
     )

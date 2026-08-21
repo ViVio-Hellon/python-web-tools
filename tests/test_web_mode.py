@@ -91,9 +91,19 @@ class RegistrationTests(ModeTestCase):
             with self.subTest(path=path):
                 self.assertNotIn(path, rules)
 
-    def test_資材の権限が無ければ確認のAPIは無い(self) -> None:
-        rules = self.rules(self.make("field", *FIELD_ONLY))
-        self.assertNotIn("/api/warehouse/confirm", rules)
+    def test_資材の権限が無ければ確認の操作は404(self) -> None:
+        """以前はURLごと登録しなかった(起動時の権限で決めていた)。
+
+        いまは常に登録し、`material_only.before_request` が要求のたびに
+        権限を確かめる ── 権限を持たない端末には見える結果は変わらない
+        (404)。ただし**マスタ管理で権限を足せば、開き直さずにその場の
+        プロセスでも使えるようになる**(`ResyncOnSwitchTests` 参照)。
+        """
+        app = self.make("field", *FIELD_ONLY)
+        res = app.test_client().post(
+            "/api/warehouse/confirm", json={}, headers=self.auth())
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.get_json()["error"]["code"], "not_found")
 
     def test_両方持っていれば両方ある(self) -> None:
         """モードを切り替えられるので、いま資材モードで見ていても
@@ -320,6 +330,100 @@ class ResyncOnSwitchTests(unittest.TestCase):
             headers={"X-Tool-Token": TOKEN})
         self.assertEqual(res.status_code, 403)
         self.assertEqual(app.config["MODE"], modes.FIELD)
+
+
+class MaterialOnlyWithoutRestartTests(unittest.TestCase):
+    """起動後に資材モードの権限を足したら、**開き直さずに**確認・取消が
+
+    使えるようになるか。
+
+    現場の声:「マスタ管理でアクセス権限に mode:material を足して
+    モードを切り替えたのに、確認ボタンを押すと失敗する」。原因は、
+    確認・取消のエンドポイント(`warehouse.material_only`)が**起動時の
+    権限だけ**で登録するかどうかを決めていたこと。モード切替のボタンは
+    ページを読み込み直すだけで、Pythonのサーバプロセス自体は再起動しない
+    ため、起動時に権限が無ければ登録されず、あとから権限を足しても
+    404のままだった。
+
+    ここでは「起動時は権限が無い」→「取り込み元にだけ mode:material の
+    行を足す」→「サーバプロセスは同じまま、モードを切り替えて確認操作を
+    呼ぶ」という、まさにその手順を再現する。
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+
+        from packaging_tool import access_control as ac
+        from packaging_tool import config, data_sync, db
+
+        self.dir = Path(tempfile.mkdtemp(prefix="norestart_web_"))
+        self.local_db = self.dir / "local.db"
+        self.src = self.dir / "梱包資材マスタ.sqlite3"
+
+        with db.connect(self.local_db) as conn:
+            db.apply_schema(conn)
+
+        # 取り込み元: 起動時点では現場モードの権限しか無い
+        src = sqlite3.connect(self.src)
+        src.execute(
+            'CREATE TABLE "アクセス権限" '
+            '("ログインID" TEXT, "PC名" TEXT, "権限" TEXT,'
+            ' "有効" INTEGER, "備考" TEXT)')
+        self.identity = ac.current_identity()
+        src.execute(
+            'INSERT INTO "アクセス権限" VALUES (?,?,?,1,"")',
+            (self.identity.login_id, self.identity.pc_name, "mode:field"))
+        src.commit()
+        src.close()
+
+        self._saved_db_path = config.DB_PATH
+        config.DB_PATH = self.local_db
+        self._saved_find = data_sync.find_material_db
+        data_sync.find_material_db = lambda directory=None: self.src
+        self.addCleanup(self._restore)
+
+    def _restore(self) -> None:
+        from packaging_tool import config, data_sync
+        config.DB_PATH = self._saved_db_path
+        data_sync.find_material_db = self._saved_find
+
+    def test_起動後に権限を足しても開き直さず確認できる(self) -> None:
+        from app import create_app
+
+        # 起動: この時点ではまだ mode:material は無い
+        app = create_app("field", token=TOKEN, port=8793)  # grantを渡さない
+        app.config["TESTING"] = True
+        app.config["READY"] = True
+        client = app.test_client()
+        headers = {"X-Tool-Token": TOKEN}
+
+        # 起動直後は確認できない(まだ権限が無いので404)
+        res0 = client.post("/api/warehouse/confirm", json={}, headers=headers)
+        self.assertEqual(res0.status_code, 404)
+
+        # 取り込み元にだけ mode:material を足す(マスタ管理からの追加を
+        # 模す ── `master_admin.add_row` は取り込み元へ直接書く)
+        src = sqlite3.connect(self.src)
+        src.execute(
+            'INSERT INTO "アクセス権限" VALUES (?,?,?,1,"")',
+            (self.identity.login_id, self.identity.pc_name, "mode:material"))
+        src.commit()
+        src.close()
+
+        # モードを切り替える(プロセスは同じまま。ページの読み込み直し
+        # に相当する操作はここでは行わない)
+        res1 = client.post("/api/mode", json={"mode": "material"},
+                           headers=headers)
+        self.assertEqual(res1.status_code, 200, res1.get_data(as_text=True))
+        self.assertEqual(app.config["MODE"], modes.MATERIAL)
+
+        # 確認操作が、**サーバプロセスを再起動せずに**使えるようになって
+        # いること。存在しない発注番号なので業務としては断られる
+        # (422/400等)が、**「そのURLが無い」(404)にはならない**
+        res2 = client.post("/api/warehouse/confirm",
+                           json={"order_no": "存在しない"}, headers=headers)
+        self.assertNotEqual(res2.status_code, 404,
+                            res2.get_data(as_text=True))
 
 
 if __name__ == "__main__":

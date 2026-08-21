@@ -254,6 +254,50 @@ def search(lot_no: str):
     return jsonify(body)
 
 
+@bp.get("/api/lot/<lot_no>/hiki/<hiki_no>")
+def odr_for_hiki_row(lot_no: str, hiki_no: str):
+    """引当情報の行をクリックしたら、受注情報をその行のものに差し替える
+
+    (VBA `Page1_OnLstHikiClick`)。
+
+    現場の声:「ロット情報画面の引当情報をクリックしても受注内容が
+    切り替わっているように見えない、できていないのではないか」→
+    「引当情報クリックでオーダー情報切り替えですよ」。
+
+    データの流れ: SIKALOTNOW から LOTNO で1行 → SIKAHIKINOW で同じ
+    LOTNO の行の中から**引当NO**で1行(=引当NOとオーダーNOが決まる)
+    → SIKAODRNOW で同じオーダーNOの行を展開。URLも引当NOで引く
+    (受注番号ではない) ── 主語は押された「引当行」そのもの。
+
+    1ロットに複数の受注番号がまたがることがあり、受注情報欄は
+    そのうち1件しか出せない(`lot_service._load_odr` のdocstring
+    参照)。以前はこの切り替え経路自体が無く、常に先頭1件のままだった。
+
+    **ロット情報・引当一覧そのもの・図面には触らない。** そこまで
+    作り直すと重いだけでなく、入力中の値が再描画で消える。差し替える
+    のは受注情報の断片だけ。
+    """
+    conn = get_db()
+    lot_no = lot_presenter.normalize(lot_no)
+    found = lot_service.load_odr_for_hiki_row(conn, lot_no, hiki_no)
+    if found is None:
+        return jsonify({
+            "error": {"code": "not_found",
+                     "message": f"引当NO {hiki_no} はロット {lot_no} に"
+                                "ありません。"}}), 404
+
+    odr, hiki, lot = found
+    body = lot_presenter.build_odr_switch(odr, lot)
+    # 引当一覧のどの行が選ばれているかも塗り直す(サーバが決める。
+    # 画面が別に覚えると、別のロットを引いたときに前の選択が残る)
+    body["hiki"] = [
+        {"order_no": row.order_no, "hiki_no": row.hiki_no,
+         "selected": row.hiki_no == hiki_no}
+        for row in hiki
+    ]
+    return jsonify(body)
+
+
 @bp.post("/api/lot/expand")
 def expand():
     """資材展開(VBA `Page1_OnBtnHBClick`)。

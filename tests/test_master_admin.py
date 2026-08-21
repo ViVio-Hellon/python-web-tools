@@ -159,6 +159,33 @@ class ColumnTests(MasterTestCase):
         self.assertNotIn("管理番号", names)
 
 
+class ColumnMismatchWhyTests(unittest.TestCase):
+    """表はあるのに、列名が想定と違って1つも打ち込めないときの案内。
+
+    現場の声:「1行足す」を押しても入力欄が1つも出てこない。原因は
+    取り込み元にその表はあるが、列名がこのツールの想定
+    (`import_specs.IMPORT_SPECS`)と一致していないこと。無言で空の
+    編集窓が出るだけでは気づけないので、理由を言葉にする。
+    """
+
+    def test_1つも一致しなければ理由を返す(self) -> None:
+        why = master_admin.column_mismatch_why(
+            "アクセス権限", ["id", "LoginID", "PCName", "Permission"])
+        self.assertIn("列名が想定と違う", why)
+        self.assertIn("ログインID", why)          # 想定の列名を出す
+        self.assertIn("LoginID", why)             # 実際の列名も出す
+
+    def test_1つでも一致すれば理由を返さない(self) -> None:
+        """一部一致は「列名が違う」ではなく別の状況(その列だけ打ち込める)。"""
+        why = master_admin.column_mismatch_why(
+            "アクセス権限", ["ログインID", "PC名", "Permission", "有効", "備考"])
+        self.assertEqual(why, "")
+
+    def test_想定の列を持たない表では理由を返さない(self) -> None:
+        """`IMPORT_SPECS` に無い表(直せない表)は、この理由の対象外。"""
+        self.assertEqual(master_admin.column_mismatch_why("知らない表", []), "")
+
+
 # ==================================================================
 # 直す
 # ==================================================================
@@ -266,6 +293,35 @@ class RefuseTests(MasterTestCase):
         master_admin.save_row(self.conn, "PalletMaster", self.key(),
                               {"幅": "ひろい"}, path=self.src)
         self.assertEqual(self.source_rows("PalletMaster")[0]["幅"], 1100)
+
+    def test_表がまだ無ければ入れる値がありませんとは言わない(self) -> None:
+        """現場の声:「1行足す」を押すと『入れる値がありません』と出る。
+
+        原因は、取り込み元に表そのものが無いのに `_ready` が通してしまい、
+        `_clean` がどの値も「取り込み元に無い列」として黙って弾いていた
+        こと。表が無いことが本当の理由なので、その言葉で断る。
+        """
+        source_without(self.src, "アクセス権限")
+        result = master_admin.add_row(
+            self.conn, "アクセス権限",
+            {"ログインID": "x", "PC名": "y", "権限": "mode:field",
+             "有効": "1", "備考": ""}, path=self.src)
+        self.assertFalse(result.ok)
+        self.assertNotEqual(result.message, "入れる値がありません。")
+        self.assertIn("まだ取り込み元にありません", result.message)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_CREATABLE)
+
+    def test_列名が違う表も入れる値がありませんとは言わない(self) -> None:
+        from tests.test_master_admin import source_with_mismatched_columns
+        source_with_mismatched_columns(self.src, "アクセス権限")
+        result = master_admin.add_row(
+            self.conn, "アクセス権限",
+            {"ログインID": "x", "PC名": "y", "権限": "mode:field",
+             "有効": "1", "備考": ""}, path=self.src)
+        self.assertFalse(result.ok)
+        self.assertNotEqual(result.message, "入れる値がありません。")
+        self.assertIn("列名が想定と違う", result.message)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_CREATABLE)
 
 
 def _no_master() -> bool:
@@ -477,6 +533,15 @@ def source_without(path: Path, table: str) -> None:
     conn.close()
 
 
+def source_table_names(path: Path) -> set:
+    conn = sqlite3.connect(path)
+    try:
+        return {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+    finally:
+        conn.close()
+
+
 class CreateTableTests(MasterTestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -504,7 +569,7 @@ class CreateTableTests(MasterTestCase):
         result = master_admin.create_table(self.conn, "アクセス権限",
                                            path=self.src)
         self.assertTrue(result.ok, result.message)
-        self.assertIn("アクセス権限", self.source_table_names())
+        self.assertIn("アクセス権限", source_table_names(self.src))
 
     def test_作った表は空(self) -> None:
         """最初の1行は普段どおり足す。誰に何を許したかを画面に出すため。"""
@@ -581,7 +646,7 @@ class CreateTableTests(MasterTestCase):
         result = master_admin.create_table(self.conn, "PalletMaster",
                                            path=self.src)
         self.assertEqual(result.reason, master_admin.REFUSE_NOT_CREATABLE)
-        self.assertNotIn("PalletMaster", self.source_table_names())
+        self.assertNotIn("PalletMaster", source_table_names(self.src))
 
     def test_上流の表は一覧にも出さない(self) -> None:
         source_without(self.src, "PalletMaster")
@@ -600,13 +665,131 @@ class CreateTableTests(MasterTestCase):
                                            path=self.src)
         self.assertEqual(result.reason, master_admin.REFUSE_NOT_ALLOWED)
 
-    def source_table_names(self) -> set:
+
+def source_with_mismatched_columns(path: Path, table: str) -> None:
+    """その表を、想定と1つも一致しない列名で作り直す(列名違いを再現)。
+
+    sqlite3 ファイルはテキストエディタで直せないため、この状況を
+    直す手段はアプリの中にしか無い、という前提を試験でも保つ。
+    """
+    conn = sqlite3.connect(path)
+    conn.execute(f'DROP TABLE "{table}"')
+    conn.execute(
+        f'CREATE TABLE "{table}" '
+        '(id INTEGER PRIMARY KEY, LoginID TEXT, PCName TEXT, Permission TEXT)')
+    conn.commit()
+    conn.close()
+
+
+class RebuildTableTests(MasterTestCase):
+    """表はある。列名が想定と違って1つも打ち込めないとき、作り直す。
+
+    現場の声:「アクセス権限に1行足す」を押しても入力欄が1つも出て
+    こない。sqlite3 のファイルはメモ帳では開けず、直す手段が他に無い。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        source_with_mismatched_columns(self.src, "アクセス権限")
+
+    def test_列が1つも一致しなければ作り直せる状態(self) -> None:
+        self.assertTrue(
+            master_admin.can_rebuild(self.conn, "アクセス権限", self.src))
+
+    def test_列名が一致していれば作り直せる状態ではない(self) -> None:
+        """通常のケース(想定どおりの表)では出さない。"""
+        source_without(self.src, "アクセス権限")
+        master_admin.create_table(self.conn, "アクセス権限", path=self.src)
+        self.assertFalse(
+            master_admin.can_rebuild(self.conn, "アクセス権限", self.src))
+
+    def test_表が無ければ作り直せる状態ではない(self) -> None:
+        """それは `create_table` の仕事。両方が同時に真にならない。"""
+        source_without(self.src, "アクセス権限")
+        self.assertFalse(
+            master_admin.can_rebuild(self.conn, "アクセス権限", self.src))
+
+    def test_作り直せる(self) -> None:
+        result = master_admin.rebuild_table(self.conn, "アクセス権限",
+                                            path=self.src)
+        self.assertTrue(result.ok, result.message)
+
+    def test_作り直すと想定どおりの列名になる(self) -> None:
+        master_admin.rebuild_table(self.conn, "アクセス権限", path=self.src)
+        names = [r[1] for r in sqlite3.connect(self.src).execute(
+            'PRAGMA table_info("アクセス権限")')]
+        self.assertEqual(
+            set(names),
+            {"管理番号", "ログインID", "PC名", "権限", "有効", "備考"})
+
+    def test_元の表は消さず退避する(self) -> None:
+        """**中身を失わない。** 黙って消すと取り返しがつかない。"""
+        conn = sqlite3.connect(self.src)
+        conn.execute("INSERT INTO アクセス権限 (LoginID, Permission) "
+                    "VALUES ('old_user', 'old_perm')")
+        conn.commit()
+        conn.close()
+
+        master_admin.rebuild_table(self.conn, "アクセス権限", path=self.src)
+
+        names = source_table_names(self.src)
+        backups = [n for n in names if n.startswith("アクセス権限_旧")]
+        self.assertEqual(len(backups), 1)
         conn = sqlite3.connect(self.src)
         try:
-            return {r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'")}
+            rows = conn.execute(f'SELECT * FROM "{backups[0]}"').fetchall()
         finally:
             conn.close()
+        self.assertEqual(len(rows), 1)   # 退避先に元のデータが残っている
+
+    def test_作り直したらそのまま行を足せる(self) -> None:
+        """作って終わりにしない。**足せるところまで通ることを確かめる。**"""
+        master_admin.rebuild_table(self.conn, "アクセス権限", path=self.src)
+        result = master_admin.add_row(
+            self.conn, "アクセス権限",
+            {"ログインID": "", "PC名": "NLM-PC-042",
+             "権限": access_control.mode_permission(modes.MATERIAL),
+             "有効": "1", "備考": ""}, path=self.src)
+        self.assertTrue(result.ok, result.message)
+
+    def test_権限が無ければ作り直せない(self) -> None:
+        self.conn.execute("DELETE FROM アクセス権限")
+        self.conn.execute(
+            'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
+            " VALUES ('','ほかのPC',?,1,'')",
+            (access_control.mode_permission(modes.MATERIAL),))
+        self.conn.commit()
+        result = master_admin.rebuild_table(self.conn, "アクセス権限",
+                                            path=self.src)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_ALLOWED)
+
+    def test_上流の表は作り直さない(self) -> None:
+        """`PalletMaster` のような上流の表は対象外。"""
+        result = master_admin.rebuild_table(self.conn, "PalletMaster",
+                                            path=self.src)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_CREATABLE)
+
+    def test_表がまだ無ければ断る(self) -> None:
+        source_without(self.src, "アクセス権限")
+        result = master_admin.rebuild_table(self.conn, "アクセス権限",
+                                            path=self.src)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_CREATABLE)
+        self.assertIn("取り込み元へ作る", result.message)
+
+    def test_列が一部でも一致していれば断る(self) -> None:
+        """一致している列まで巻き込んで消さない。"""
+        conn = sqlite3.connect(self.src)
+        conn.execute('DROP TABLE "アクセス権限"')
+        conn.execute(
+            'CREATE TABLE "アクセス権限" '
+            '(管理番号 INTEGER PRIMARY KEY, ログインID TEXT, PCName TEXT,'
+            ' Permission TEXT)')
+        conn.commit()
+        conn.close()
+        result = master_admin.rebuild_table(self.conn, "アクセス権限",
+                                            path=self.src)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_CREATABLE)
+        self.assertIn("一部一致", result.message)
 
 
 if __name__ == "__main__":                       # pragma: no cover

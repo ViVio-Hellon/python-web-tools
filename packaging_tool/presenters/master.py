@@ -45,6 +45,7 @@ def frame(conn: Optional[sqlite3.Connection]) -> MasterViewModel:
 
 
 def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
+           sort: str = "", sort_dir: str = "asc",
            path: Optional[Path] = None, message: str = "") -> MasterViewModel:
     """面を開いたとき / 直したあとに返す、まるごとの状態。
 
@@ -69,10 +70,23 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
     # は表が決まらないと判断できないので、表が決まった時点で引き直す
     view.can_edit, view.edit_why = master_admin.can_edit(conn, view.table)
 
-    view.page = master_admin.page(found, view.table, query=view.query)
+    view.page = master_admin.page(found, view.table, query=view.query,
+                                  sort=sort, sort_dir=sort_dir)
     # 打ち込める欄は、**取り込み元に本当にある列**だけにする。
     # 上流がまだ足していない列を出すと、保存の瞬間に断られる
     view.columns = master_admin.columns(conn, view.table, view.page.columns)
+    if (not view.columns and not view.page.missing and not view.page.error
+            and view.page.editable):
+        # 表はある(missing=False)のに1つも打ち込めない ── たいてい
+        # 列名が想定と違う。空の編集窓を出すだけでは分からないので、
+        # ここで理由を足す(既存の `why` は「見るだけの表」用なので、
+        # 直せる表のこの状況では元々空)
+        mismatch = master_admin.column_mismatch_why(view.table, view.page.columns)
+        if mismatch:
+            view.page.why = mismatch
+            # sqlite3 はテキストエディタで直せない。列名を直す他の
+            # 手段が無い前提で、ここから作り直せることを画面に伝える
+            view.page.rebuildable = True
     return view
 
 

@@ -260,3 +260,132 @@ export function applyBackground(image, map) {
   image.setAttribute("width", map.width * scale);
   image.setAttribute("height", map.height * scale);
 }
+
+/*
+  図の拡大縮小(棚検索・簡易在庫で共通の作法)。
+
+  以前は [1, 1.5, 2, 3] の4段階で、押すたびに大きく跳ねた
+  (100%→150%のように一気に50%動く)。「1回の変動が大きすぎて
+  微調整できない」という現場の声を受けて、**1%刻みで連続的に**
+  変えられる形に直した。
+
+  - `+`/`-` ボタンは押した瞬間に1%動き、**押し続けると連続して**動く
+    (キーリピートと同じ感覚)
+  - 数値(`100%`)を直接クリックすると入力欄に変わり、打ち込める
+
+  範囲は 25%〜400%。25%未満は図が小さすぎて掴めず、400%を超えると
+  枠外へすぐスクロールしてしまい実用にならない。
+*/
+export const ZOOM_MIN = 25;
+export const ZOOM_MAX = 400;
+const ZOOM_STEP = 1;              // ボタン1回・1ティックあたり(%)
+const ZOOM_HOLD_DELAY_MS = 400;   // 押しっぱなし判定までの猶予
+const ZOOM_HOLD_INTERVAL_MS = 40; // 連続変化の間隔
+
+function clampZoom(percent) {
+  return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(percent)));
+}
+
+/**
+ * ズームの道具一式を組み立てる。
+ *
+ * opts:
+ *   wrap        図を囲む要素(`--zoom` を持たせる)
+ *   zoomIn      `+` ボタン
+ *   zoomOut     `-` ボタン
+ *   zoomNow     いまの倍率を表示する要素(クリックで入力欄に変わる)
+ *   initial     初期値(%)。省略時 100
+ *   onChange(percent)  変わるたびに呼ぶ(任意)
+ */
+export function attachZoom(opts) {
+  let percent = clampZoom(opts.initial ?? 100);
+  let holdTimer = null;
+  let holdInterval = null;
+
+  function paint() {
+    opts.wrap.style.setProperty("--zoom", percent / 100);
+    opts.zoomNow.textContent = `${percent}%`;
+    opts.zoomOut.disabled = percent <= ZOOM_MIN;
+    opts.zoomIn.disabled = percent >= ZOOM_MAX;
+    opts.onChange?.(percent);
+  }
+
+  function setPercent(next) {
+    percent = clampZoom(next);
+    paint();
+  }
+
+  function step(direction) {
+    setPercent(percent + direction * ZOOM_STEP);
+  }
+
+  /** 押しっぱなしで連続変化。離す/カーソルが外れたら止める。 */
+  function startHold(direction) {
+    step(direction);
+    stopHold();
+    holdTimer = setTimeout(() => {
+      holdInterval = setInterval(() => step(direction), ZOOM_HOLD_INTERVAL_MS);
+    }, ZOOM_HOLD_DELAY_MS);
+  }
+
+  function stopHold() {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    if (holdInterval) { clearInterval(holdInterval); holdInterval = null; }
+  }
+
+  for (const [button, direction] of [[opts.zoomIn, 1], [opts.zoomOut, -1]]) {
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      startHold(direction);
+    });
+    button.addEventListener("pointerup", stopHold);
+    button.addEventListener("pointerleave", stopHold);
+    button.addEventListener("pointercancel", stopHold);
+  }
+
+  // 数値を直接編集。**クリックで入力欄に変わる** ── 常に <input> だと
+  // 見た目が数値表示のときと揃わないので、押したときだけ入力欄にする
+  opts.zoomNow.setAttribute("role", "button");
+  opts.zoomNow.setAttribute("tabindex", "0");
+  opts.zoomNow.title = "クリックすると数値を直接入力できます";
+  function openInput() {
+    const input = document.createElement("input");
+    input.type = "number";
+    input.className = "zoom__input";
+    input.min = String(ZOOM_MIN);
+    input.max = String(ZOOM_MAX);
+    input.value = String(percent);
+    input.inputMode = "numeric";
+    const finish = (commit) => {
+      if (commit) {
+        const value = Number(input.value);
+        if (Number.isFinite(value)) setPercent(value);
+        else paint();
+      } else {
+        paint();
+      }
+    };
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); input.blur(); }
+      if (event.key === "Escape") { event.preventDefault(); finish(false); }
+    });
+    opts.zoomNow.replaceChildren(input);
+    input.focus();
+    input.select();
+  }
+  opts.zoomNow.addEventListener("click", openInput);
+  opts.zoomNow.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openInput();
+    }
+  });
+
+  paint();
+  return {
+    get: () => percent,
+    set: setPercent,
+    reset: () => setPercent(100),
+  };
+}

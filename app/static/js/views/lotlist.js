@@ -52,6 +52,9 @@ function bodyRow(row, headers) {
   const tr = document.createElement("tr");
   tr.className = "pickable";
   tr.dataset.lotNo = row.lot_no;
+  // `busy.js` がこの目印を見て、開いている間の行を待機の姿にする
+  // (ダブルクリックで `openLot` がサーバへ取りに行く)
+  tr.dataset.rowAction = "1";
   tr.tabIndex = 0;
   // ダブルクリックが唯一の道にならないようにする。キーボードでも
   // 触っても同じことができる(§5 タッチ対応 / 認識は再生に勝る)

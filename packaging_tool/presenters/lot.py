@@ -208,7 +208,8 @@ def build(result: lot_service.LotSearchResult) -> LotViewModel:
                     for group, items in LOT_FIELD_GROUPS
                     for label, key in items],
         odr_fields=[_odr_field(odr, label, key) for label, key in ODR_FIELDS],
-        hiki=[_hiki_row(row) for row in result.hiki],
+        hiki=[_hiki_row(row, selected=(row.order_no == odr.order_no))
+              for row in result.hiki],
         packaging_spec=odr.packaging_spec,
         specific_gravity=f"{odr.specific_gravity:g}",
         prev_process_count=lot.prev_process_count,
@@ -293,11 +294,38 @@ def _odr_field(odr: lot_service.OdrInfo, label: str, key: str) -> Field:
     )
 
 
-def _hiki_row(row: lot_service.HikiRow) -> dict[str, Any]:
+def build_odr_switch(odr: lot_service.OdrInfo, lot: lot_service.LotInfo) -> dict[str, Any]:
+    """引当行をクリックしたときに差し替える、受注情報だけの断片。
+
+    `build()`(画面ぜんぶ)ではなく、ここだけを返す ── ロット情報・
+    引当一覧・図面は変わらないので、そこまで作り直すと重いだけでなく、
+    製品サイズの入力中だったものが再描画で消える(現場の声と同種の
+    「触っていないのに変わった」を起こす)。
+
+    `order_no` は `odr.order_no`(実際に解決された受注番号)をそのまま
+    返す。呼び出し元がURLで受け取るのは引当NOだが、画面が知りたいのは
+    「結果としてどの受注番号が出ているか」なので、ここは受注番号で返す。
+    """
+    return {
+        "order_no": odr.order_no,
+        "odr_badges": [_badge_dict(b) for b in _odr_badges(lot, odr)],
+        "odr_fields": [_field_dict(_odr_field(odr, label, key))
+                       for label, key in ODR_FIELDS],
+        "packaging_spec": odr.packaging_spec,
+        "specific_gravity": f"{odr.specific_gravity:g}",
+        "is_ex": odr.is_ex,
+    }
+
+
+def _hiki_row(row: lot_service.HikiRow, *, selected: bool = False) -> dict[str, Any]:
     """引当情報の1行。**引当番号の昇順**は `lot_service` が済ませている。
 
     引当数量の表示(`quantity_text`)は `lot_service` が決める。
     tkinter版も同じものを読むので、ここで作り直さない。
+
+    `selected` は、この行が指す受注番号が**いま受注情報欄に出ている
+    ものか**。クリックで切り替えられることを示す(押せる行だと
+    分からないと、そもそも押そうとされない)。
     """
     return {
         "order_no": row.order_no,
@@ -307,6 +335,7 @@ def _hiki_row(row: lot_service.HikiRow) -> dict[str, Any]:
         "hiki_no": row.hiki_no,
         "display_value": row.display_value,
         "is_all": row.is_all,
+        "selected": selected,
     }
 
 

@@ -693,8 +693,18 @@
                                  border-color:var(--state-error); }
   .modebar[data-kind="protec"] { background:var(--ok-bg); color:var(--state-ok);
                                  border-color:var(--state-ok); }
+  .modebar[data-kind="shared"] { background:var(--shared-bg); color:var(--shared-fg);
+                                 border-color:var(--shared-fg); }
   .modebar[data-kind="ex"]     { background:var(--info-bg); color:var(--info-fg);
                                  border-color:var(--info-fg); }
+  {# 上下共用+EXの複合。**どちらの色でもない**単色にすると、片方だけ
+     成立していると誤解されるので、2色の帯(横グラデーション)で
+     両方が立っていることを見た目でも示す #}
+  .modebar[data-kind="shared_ex"] {
+    background:linear-gradient(90deg, var(--shared-bg) 0%, var(--shared-bg) 48%,
+                                var(--info-bg) 52%, var(--info-bg) 100%);
+    color:var(--shared-fg); border-color:var(--shared-fg);
+  }
 
   .filters { display:flex; gap:6px; margin-left:auto; }
   /* 一覧は縦に長い。丈をここで決めておかないと、

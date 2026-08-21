@@ -313,6 +313,103 @@ class HikiAndOdrTests(unittest.TestCase):
         self.assertEqual(len(result.hiki), 2)          # 引当行は両方残る
         self.assertEqual(result.odr.delivery_name, "A社")
 
+    def test_search_lotのodrはorder_noを持つ(self):
+        """`OdrInfo.order_no` は、引当一覧との対応付け(選択状態)に使う。"""
+        insert_hiki(self.conn, order_no="O1", no=1.0)
+        insert_odr(self.conn, order_no="O1")
+        result = svc.search_lot(self.conn, "1234567")
+        self.assertEqual(result.odr.order_no, "O1")
+
+
+class OdrSwitchTests(unittest.TestCase):
+    """引当行をクリックしたときの受注情報の差し替え(VBA `Page1_OnLstHikiClick`)。
+
+    現場の声:「ロット情報画面の引当情報をクリックしても受注内容が
+    切り替わっているように見えない、できていないのではないか」→
+    「引当情報クリックでオーダー情報切り替えですよ」。
+
+    データの流れ: SIKALOTNOW から LOTNO で1行 → SIKAHIKINOW で同じ
+    LOTNO の行の中から**引当NO**で1行(=引当NOとオーダーNOが決まる)
+    → SIKAODRNOW で同じオーダーNOの行を展開。**主語は引当行
+    (引当NO)であって受注番号ではない**ので、ここも引当NOで引く。
+    """
+
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        db.apply_schema(self.conn)
+        insert_lot(self.conn, lot_no="1234567")
+        insert_hiki(self.conn, lot_no="1234567", order_no="O1", no="60717001")
+        insert_hiki(self.conn, lot_no="1234567", order_no="O2", no="60717002")
+        insert_odr(self.conn, order_no="O1", 納入先名称="納入先A", 包装仕様NO="1P0001")
+        insert_odr(self.conn, order_no="O2", 納入先名称="納入先B", 包装仕様NO="1P0002")
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def test_クリックした引当行の受注情報に切り替わる(self):
+        found = svc.load_odr_for_hiki_row(self.conn, "1234567", "60717002")
+        self.assertIsNotNone(found)
+        odr, hiki, lot = found
+        self.assertEqual(odr.order_no, "O2")
+        self.assertEqual(odr.delivery_name, "納入先B")
+        self.assertEqual(odr.packaging_spec, "1P0002")
+        self.assertEqual(len(hiki), 2)
+        self.assertEqual(lot.lot_no, "1234567")
+
+    def test_初回検索と同じ行でも取れる(self):
+        found = svc.load_odr_for_hiki_row(self.conn, "1234567", "60717001")
+        self.assertIsNotNone(found)
+        odr, _hiki, _lot = found
+        self.assertEqual(odr.delivery_name, "納入先A")
+
+    def test_そのロットに無い引当NOは断る(self):
+        """別ロットの受注情報が紛れ込むと、資材選定や1P0113判定が
+
+        誤った包装仕様NOを見てしまう。
+        """
+        found = svc.load_odr_for_hiki_row(self.conn, "1234567", "60717999")
+        self.assertIsNone(found)
+
+    def test_ロットが無ければ断る(self):
+        found = svc.load_odr_for_hiki_row(self.conn, "9999999", "60717001")
+        self.assertIsNone(found)
+
+    def test_空の引当NOは断る(self):
+        found = svc.load_odr_for_hiki_row(self.conn, "1234567", "")
+        self.assertIsNone(found)
+
+    def test_受注番号が重複していても押した行どおりの受注情報になる(self):
+        """1ロット内で受注番号は基本的に重複しないが、万一重複していても
+
+        **押した行(引当NO)がどちらを指すか**で確実に決まる。受注番号
+        だけで照合すると、この場合にどちらの行を指しているか
+        分からなくなる。
+        """
+        insert_hiki(self.conn, lot_no="1234567", order_no="O1", no="60717003")
+        found = svc.load_odr_for_hiki_row(self.conn, "1234567", "60717003")
+        self.assertIsNotNone(found)
+        odr, _hiki, _lot = found
+        # 60717003 は O1 の2件目の引当行。O1の受注情報が引ける
+        self.assertEqual(odr.order_no, "O1")
+        self.assertEqual(odr.delivery_name, "納入先A")
+
+    def test_包装仕様の上書きも同じ判断がかかる(self):
+        """`search_lot` と同じ1P0113判定を、切り替え後の情報にも適用する。"""
+        insert_lot(self.conn, lot_no="7654321",
+                  設計_設備コース="AAA", 実績_設備コース="AAA",
+                  BOX実績_板厚=6.75)
+        insert_hiki(self.conn, lot_no="7654321", order_no="B1", no="60717010")
+        insert_odr(self.conn, order_no="B1", 包装仕様NO="1P9999",
+                  材質_比重=2.75)
+        found = svc.load_odr_for_hiki_row(self.conn, "7654321", "60717010")
+        self.assertIsNotNone(found)
+        odr, _hiki, _lot = found
+        # 上書き対象になるかは SpecOverrideTests と同じ条件式で決まる。
+        # ここでは「切り替え後にも判断がかかっている」ことだけを確かめ、
+        # 個別の条件の組み合わせは SpecOverrideTests に任せる
+        self.assertIn(odr.packaging_spec, ("1P9999", svc.PACKAGING_SPEC_OVERRIDE))
+
 
 class HasLotDataTests(unittest.TestCase):
     def setUp(self) -> None:

@@ -21,6 +21,7 @@ from typing import Optional, Sequence
 
 from . import lot_service, printing
 from .board_scoring import get_best_orientation
+from .board_selection_algorithm import ProtecCutResult
 from .logging_utils import get_logger
 from .models import BoardModel
 
@@ -324,9 +325,13 @@ def build_label_report(data: LabelData) -> printing.Report:
 # ==================================================================
 # 丈方向のはみ出しがこれ以下なら丈カット不要とみなす(VBA `CUT_OVERL_THRESHOLD`)
 CUT_OVERL_THRESHOLD = 100
-# プロテックの切断許容。1P1216 は精度の都合で 10mm、それ以外は 80mm
-PROTEC_CUT_TOL_1P1216 = 10
-PROTEC_CUT_TOL_OTHER = 80
+# プロテックの切断許容は `board_selection_algorithm` の
+# `PROTEC_1P1216_TOLERANCE` / `PROTEC_OTHER_TOLERANCE` が定義元(SSOT)。
+# ここでは重複して持たない ── 選定側とカット依頼書側で別の値を
+# 持つと、片方だけ直し忘れて選定結果と帳票が食い違う原因になる
+# (現場の声で報告された不具合の一因)。`protec_cut_size_info` は
+# `ProtecCutResult`(選定の確定値)をそのまま表示するだけなので、
+# この関数自体はもう許容値を直接使わない。
 
 CUT_CSS = """
 table.cut { width: 100%; border-collapse: collapse; table-layout: fixed;
@@ -445,40 +450,52 @@ def get_cut_size_info(
     return out
 
 
-def protec_cut_size_info(
-    upper_boards: Sequence[object], product_width: int, product_length: int,
-    *, is_1p1216: bool,
-) -> CutSizeInfo:
+def protec_cut_size_info(protec_result: ProtecCutResult) -> CutSizeInfo:
     """プロテックモードの切断サイズ(VBA `CreateCuttingRequestForm` の分岐)。
 
-    プロテックは上下を分けず、上用の主ボード1種類だけを見る。
-    幅カットは「有効幅が製品幅を超えるとき」だけ発生し、その場合の
-    切断幅は 製品幅 - 許容(1P1216は10mm、他は80mm)。
-    丈方向のはみ出しが100mm以下なら丈カットは不要とみなす。
+    【全面書き換え】以前はここで `placedBoards`(配置座標)から寸法を
+    逆算し、`GetBestOrientation` で幅カット・丈カットの要否を
+    独自に再計算していた。選定(`select_protec_lower_boards` /
+    `select_upper_boards`)が既に `ProtecCutResult` として確定させた
+    値があるのに、ここでもう一度判定をやり直すと、丸め方や境界条件の
+    違いで選定結果と食い違う帳票が出てしまう(現場の声で報告された、
+    カット依頼が正しく出力されない不具合の一因)。
+
+    いまは再計算をせず、`ProtecCutResult` の値をそのまま表示用の形
+    (`CutSizeInfo`)に写すだけ。`get_cut_size_info`(通常モード)と
+    同じ「幅カットのみ/幅+丈カット」の2枠構成に合わせる:
+
+        丈カットも要る → 最後の1枚は `size_both`(丈カット後の短い方の
+        丈で仕上がる)。残りの枚数はカット済みの通常サイズなので
+        `size_width_only` に入れる(幅カットが無ければ`size_width_only`
+        自体は出さない ── 幅は元のサイズのままで良いため)
+        丈カットが要らない → 幅カットの有無だけで `size_width_only`
+        に全枚数をまとめる
     """
     out = CutSizeInfo()
-    if not upper_boards:
+    if not protec_result.valid:
         return out
 
-    tol = PROTEC_CUT_TOL_1P1216 if is_1p1216 else PROTEC_CUT_TOL_OTHER
-    main = upper_boards[0]
-    _rot, eff_w, eff_l = get_best_orientation(
-        BoardModel(width=main.width, length=main.length, board_category="上用"),
-        product_width, force_category="上用")
+    pr = protec_result
+    if pr.need_length_cut:
+        cnt_both = 1
+        cnt_width_only = max(0, pr.count - cnt_both)
+        out.size_both = f"{pr.cut_eff_width}x{pr.length_cut_eff}"
+        out.count_both = cnt_both
+        out.orig_both = f"{pr.orig_width}×{pr.orig_length}"
+        if pr.need_cut and cnt_width_only > 0:
+            out.size_width_only = f"{pr.cut_eff_width}x{pr.eff_length}"
+            out.count_width_only = cnt_width_only
+            out.orig_width_only = f"{pr.orig_width}×{pr.orig_length}"
+    elif pr.need_cut:
+        out.size_width_only = f"{pr.cut_eff_width}x{pr.eff_length}"
+        out.count_width_only = pr.count
+        out.orig_width_only = f"{pr.orig_width}×{pr.orig_length}"
 
-    has_width_cut = eff_w > product_width
-    cut_w = product_width - tol if has_width_cut else eff_w
-    over_l = eff_l * main.count - product_length
-    length_needed = over_l > CUT_OVERL_THRESHOLD
-
-    if has_width_cut:
-        out.size_width_only = f"{cut_w}x{eff_l}"
-        out.count_width_only = (main.count - 1) if length_needed else main.count
-    if length_needed:
-        out.size_both = f"{cut_w}x{eff_l - over_l}"
-        out.count_both = 1
-    log.debug("protec_cut_size_info: effW=%s 幅カット=%s 丈はみ出し=%s",
-              eff_w, has_width_cut, over_l)
+    log.debug("protec_cut_size_info: cutEffW=%s effL=%s needCut=%s "
+             "needLengthCut=%s lengthCutEff=%s count=%s",
+             pr.cut_eff_width, pr.eff_length, pr.need_cut,
+             pr.need_length_cut, pr.length_cut_eff, pr.count)
     return out
 
 

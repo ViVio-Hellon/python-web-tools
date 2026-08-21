@@ -75,6 +75,7 @@ from .board_selection_algorithm import (
     TAG_CUT_PREMISE,
     TAG_LENGTH_FILL,
     TAG_WIDTH_FILL,
+    ProtecCutResult,
 )
 from .board_selection_service import Palette, ProductSize, SelectedBoard
 from .logging_utils import get_logger
@@ -131,9 +132,27 @@ class PlacementContext:
     placed: list[PlacedBoardModel] = field(default_factory=list)
     lower_order: list[SelectedBoard] = field(default_factory=list)
     upper_order: list[SelectedBoard] = field(default_factory=list)
+    # プロテック確定値(選定が決めた「唯一の正解」)。カット前提ボードの
+    # 配置(`_place_cut_premise`)が、ここにある値をそのまま使う。
+    # valid=False(既定)なら、従来どおりパレット幅/製品幅で計算する
+    protec_result: ProtecCutResult = field(default_factory=lambda: ProtecCutResult())
 
     def limit_width(self, category: str) -> int:
-        """カテゴリごとの幅方向の基準値(VBA `limitW`)。"""
+        """カテゴリごとの幅方向の基準値(VBA `limitW`)。
+
+        上用は製品幅、下用はパレット幅が境界(通常モード)。
+
+        【プロテックも上用は製品幅が境界のまま】
+        プロテックは「上下とも製品幅よりマイナス(1P1216は-10mm、
+        それ以外は-80mm)」というルールで、上用も下用と同じく製品幅を
+        超えてはいけない ── 上用だけパレット幅まで緩めるのは誤り
+        (以前そう実装していたが誤りだったため元に戻した)。選定
+        (`decide_protec_orientation`)が既に「製品幅を超えない
+        カット後サイズ」を確定させているので、配置側で境界を緩める
+        必要はない。プロテックの下用がカット前提タグで配置される
+        ときも、実際に置くのは `ProtecCutResult.cut_eff_width`
+        (製品幅以下)であり、この境界と矛盾しない。
+        """
         return self.product.width if category == CATEGORY_UPPER else self.palette.width
 
     def max_x(self, category: str, *, fill: Optional[bool] = None, y: Optional[int] = None) -> int:
@@ -215,6 +234,10 @@ def can_place_board_at(
         # X<0 に加えて X >= 製品丈 も禁止
         if x < 0 or x >= ctx.product.length:
             return False
+        # 上用は製品幅+許容(両端で最大80mm)まで。プロテックも同じ境界
+        # (上下とも製品幅よりマイナスというルールで、選定
+        # (`decide_protec_orientation`)が既に製品幅を超えないカット後
+        # サイズを確定させているため、ここで別枠の緩和は不要)
         if y < 0 or y + board_width > ctx.product.width + UPPER_WIDTH_TOLERANCE:
             return False
     else:
@@ -327,7 +350,10 @@ def try_place_single_orientation(
     w, l = _dims(board, rotate)
 
     if board.board_category == CATEGORY_UPPER:
-        end_y = ctx.product.width - w        # 上用: 製品幅超過厳禁
+        # 上用は常に製品幅が境界(`ctx.limit_width` 参照)。プロテックも
+        # 例外ではない(上下とも製品幅よりマイナスというルールで、
+        # 製品幅を超えて配置してよいわけではない)
+        end_y = ctx.limit_width(CATEGORY_UPPER) - w
         end_x = ctx.palette.length * 5
     else:
         end_y = int(ctx.palette.width * LOWER_OVERHANG_Y) - w
@@ -706,11 +732,25 @@ def _place_cut_premise(
     """カット前提ボードの配置(VBA `PlaceBoardsFromList` 内のインライン処理)。
 
     長辺をY方向(幅)にして対象幅でカットし、短辺ぶんずつX方向に並べる。
+
+    【プロテックのときは確定値をそのまま使う】
+    以前は下用のカット前提ボードを常にパレット幅基準で独自に再カット
+    しており、プロテックの選定結果(`ProtecCutResult`。製品幅基準で
+    決めたカット後サイズ)と配置結果が食い違っていた。`ctx.protec_result`
+    が有効なときは、幅・向きとも選定の確定値をそのまま使い、ここでの
+    再カットを行わない。
     """
     model = _make_model(b, idx, category)
-    wc_short = min(b.width, b.length)
-    b_rot_cut = b.width < b.length          # 長辺をY方向(幅)へ
-    wc_target_w = ctx.limit_width(category)
+
+    pr = ctx.protec_result
+    if pr.valid:
+        wc_short = min(pr.orig_width, pr.orig_length)
+        b_rot_cut = pr.is_rotated
+        wc_target_w = pr.cut_eff_width
+    else:
+        wc_short = min(b.width, b.length)
+        b_rot_cut = b.width < b.length          # 長辺をY方向(幅)へ
+        wc_target_w = ctx.limit_width(category)
 
     xp_cut = 0
     for _ in range(b.count):
@@ -938,13 +978,28 @@ def auto_place_boards(
     lower: list[SelectedBoard], upper: list[SelectedBoard],
     palette: Palette, product: ProductSize,
     *, narrow_lower: bool = False, narrow_upper: bool = False,
+    protec_result: Optional[ProtecCutResult] = None,
 ) -> PlacementContext:
     """VBA `AutoPlaceBoards` の移植(下用→上用の順に配置する)。
 
     `narrow_lower`/`narrow_upper` は選定側の `mNarrowPaletteLower` /
     `mNarrowPaletteUpper`(狭幅パレット選定が使われたか)に対応する。
+
+    プロテックであっても、配置の境界(`limit_width`)は通常モードと
+    完全に同じ(上用は製品幅、下用はパレット幅) ── プロテックは
+    「上下とも製品幅よりマイナス」というルールで、製品幅を超えて
+    配置してよいわけではない。選定(`decide_protec_orientation`)が
+    既に製品幅を超えないカット後サイズを確定させているので、配置側で
+    境界を緩める必要はない(以前そう緩めていたのは誤りだったため
+    元に戻した)。
+
+    `protec_result` は選定(または手動追加後の後付け適用)が決めた
+    「唯一の正解」。カット前提ボードの配置(`_place_cut_premise`)が
+    これを参照し、独自の再計算をしない。
     """
-    ctx = PlacementContext(palette=palette, product=product)
+    ctx = PlacementContext(
+        palette=palette, product=product,
+        protec_result=protec_result or ProtecCutResult())
 
     if narrow_lower:
         place_narrow_palette_boards(ctx, lower, CATEGORY_LOWER)

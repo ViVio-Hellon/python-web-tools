@@ -367,14 +367,21 @@ class RoleSeparationTests(WarehouseWebTestCase):
                                          headers=self.auth()).get_json()
         self.assertFalse(any(row["can_confirm"] for row in body["rows"]))
 
-    def test_現場のURL一覧に確認が入っていない(self) -> None:
-        """登録そのものが無いことを、経路の一覧でも確かめる。"""
+    def test_確認と取消のURLは常に登録されている(self) -> None:
+        """以前は現場モードの端末ではURLごと登録しなかったが、いまは
+
+        **常に登録**し、`material_only.before_request` が権限を要求のたびに
+        確かめる(`app/routes/warehouse.py` の説明を参照)。これにより、
+        マスタ管理でアクセス権限を足したあと、サーバプロセスを終了して
+        起動し直さなくても、その場でモードを切り替えて使えるようになる。
+        現場モードの端末で実際に呼べないこと(404)は他のテストが確かめる。
+        """
         field = {r.rule for r in self.clients["field"].application.url_map.iter_rules()}
         material = {r.rule for r in
                     self.clients["material"].application.url_map.iter_rules()}
         for path in ("/api/warehouse/confirm", "/api/warehouse/cancel"):
             with self.subTest(path=path):
-                self.assertNotIn(path, field)
+                self.assertIn(path, field)
                 self.assertIn(path, material)
 
     def test_現場に取消のURLも存在しない(self) -> None:

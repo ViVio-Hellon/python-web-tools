@@ -260,9 +260,17 @@
          background:var(--sunken); touch-action:none; }
   .zoom { display:inline-flex; align-items:center; gap:6px; }
   .zoom__now { font-family:var(--mono); font-size: var(--fs-sm); color:var(--muted);
-               min-width:4em; text-align:center; }
+               min-width:4em; text-align:center; cursor:pointer;
+               border-radius:var(--radius-xs); padding:2px 4px; }
+  .zoom__now:hover { color:var(--ink); background:var(--sunken); }
+  .zoom__now:focus-visible { outline:2px solid var(--focus); outline-offset:1px; }
+  .zoom__input { font-family:var(--mono); font-size: var(--fs-sm);
+                  width:4em; text-align:center; background:var(--sunken);
+                  color:var(--ink); border:1px solid var(--field-line);
+                  border-radius:var(--radius-xs); padding:2px 0; }
   .btn--zoom { min-width:36px; min-height:36px; padding:4px 10px;
-               font-size: var(--fs-lg); line-height:1; }
+               font-size: var(--fs-lg); line-height:1;
+               touch-action:none; user-select:none; }
 
   .shelf { cursor:pointer; }
   .shelf rect { stroke-width:1; }

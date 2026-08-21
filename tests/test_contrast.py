@@ -180,5 +180,63 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self._run(["--path", path]), 1)
 
 
+class UndefinedVariableTests(unittest.TestCase):
+    """`var(--xxx)` が指す先が、`tokens.css` に本当にあるか。
+
+    現場の声(パレット自動選定):「一番小さい面積のパレットを選択して
+    おくが生きていない」の実体は、選んだ行のハイライト
+    (`.table tr.on td { background:var(--info-bg); ... }`)が
+    **未定義のCSS変数を指していたため、色が一切付かなかった**こと
+    だった(処理自体は正しく動いていた)。
+
+    未定義変数はブラウザが黙って無視する(エラーにならない)ため、
+    実機で気づくまで誰にも見えない。CSS/テンプレートを足すたびに
+    手で見比べるのは現実的でないので、機械的に洗い出す。
+    `var(--x, フォールバック)` の2引数形は安全(フォールバックが効く)
+    なので対象外。
+    """
+
+    # 意図的にフォールバック運用にしているトークン。ここに載せるのは
+    # 「まだ無い」ことを承知の上で残すもの限定 ── 見落としを隠す
+    # 抜け穴にしないよう、載せたら理由をコメントする
+    _FALLBACK_ONLY: frozenset[str] = frozenset({
+        "--night-muted",  # ログ画面の補助色。フォールバック運用で確定
+    })
+    # JS側が `style.setProperty` で都度書き込む変数(定義は要らない)
+    _JS_MANAGED: frozenset[str] = frozenset({"--zoom"})
+
+    def _referenced_vars(self) -> dict[str, set[Path]]:
+        """`var(--x)` の1引数形だけを集める。ファイルごとに出どころも持つ。"""
+        import re
+
+        pattern = re.compile(r"var\(\s*(--[a-z0-9-]+)\s*\)")
+        found: dict[str, set[Path]] = {}
+        targets = list((_ROOT / "app" / "static" / "css").glob("*.css"))
+        targets += list((_ROOT / "app" / "templates").glob("*.html"))
+        for path in targets:
+            text = path.read_text(encoding="utf-8")
+            for name in pattern.findall(text):
+                found.setdefault(name, set()).add(path)
+        return found
+
+    def test_参照している変数は全てtokens_cssにある(self) -> None:
+        themes = _themes()
+        # `parse_tokens` はキーから "--" を落として返す
+        light = {f"--{name}" for name in themes[cc.THEME_LIGHT]}
+        referenced = self._referenced_vars()
+
+        missing = {
+            name: sorted(str(p.relative_to(_ROOT)) for p in paths)
+            for name, paths in referenced.items()
+            if name not in light
+            and name not in self._FALLBACK_ONLY
+            and name not in self._JS_MANAGED
+        }
+        self.assertEqual(
+            missing, {},
+            "未定義のCSS変数があります(ブラウザは黙って無視するので、"
+            "気づかず色が付かないままになります): " + repr(missing))
+
+
 if __name__ == "__main__":
     unittest.main()

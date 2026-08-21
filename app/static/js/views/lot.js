@@ -12,7 +12,11 @@
 import { api, tokenUrl } from "../api.js";
 import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
-import * as lotlist from "./lotlist.js";
+// `lotlist.js` は動的に読み込む。理由は `settings.js` が `master.js` を
+// 動的に読み込んでいるのと同じ(このファイル自身と版クエリを合わせ、
+// 入れ替えたときに中身も必ず一緒に入れ替わるようにするため)
+const VERSION_QUERY = new URL(import.meta.url).search;
+const lotlist = await import(`./lotlist.js${VERSION_QUERY}`);
 
 // 包装仕様書の図面を取り終わるまでの見に行く間隔(ms)と、あきらめるまでの回数。
 // サーバ側の取得は最長15秒で切れるので、そこを少し越えるまで見る
@@ -98,6 +102,19 @@ function badge(item) {
 
 function hikiRow(row) {
   const tr = document.createElement("tr");
+  // **引当行は押せる。** 押すと、その行(引当NOで特定)が指す
+  // 受注番号の受注情報に差し替わる(VBA `Page1_OnLstHikiClick`)。
+  // 以前はこの経路が無く、受注情報欄は常に先頭1件のままだった
+  // (現場の声)。行の特定は**引当NO**で行う(受注番号ではない) ──
+  // SIKAHIKI は同じLOTNOの行の中から引当NOで1行を決め、そこから
+  // オーダーNOが決まる、という順で辿るデータの流れに合わせている
+  tr.dataset.hikiNo = row.hiki_no;
+  // `busy.js` がこの目印を見て、押した行を待機の姿にする
+  // (`<tr>` は `disabled` を持てないボタンとは別の作法が要る)
+  tr.dataset.rowAction = "1";
+  tr.tabIndex = 0;
+  tr.title = "クリックすると、この行の受注情報を表示します";
+  if (row.selected) tr.setAttribute("aria-selected", "true");
   // 引当数量は全量指定だと 0 が入っている。そのまま出すと
   // 「引当が無い」と読めるので、サーバが決めた表示値を使う
   for (const [value, numeric] of [[row.order_no, false], [row.quantity_text, true],
@@ -108,6 +125,44 @@ function hikiRow(row) {
     tr.appendChild(td);
   }
   return tr;
+}
+
+/** 引当行をクリック/Enterで押した。その行の受注情報に差し替える。 */
+async function onHikiClick(hikiNo) {
+  if (!current || !hikiNo) return;
+  try {
+    const body = await api.get(
+      `/api/lot/${encodeURIComponent(current.lot_no)}/hiki/${encodeURIComponent(hikiNo)}`);
+    applyOdrSwitch(body, hikiNo);
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+/** 受注情報の断片だけを塗り直す。ロット情報・引当一覧の中身・図面には触らない。 */
+function applyOdrSwitch(body, hikiNo) {
+  if (!current) return;
+  // 手元の`current`も更新する。**このあと別の行を押したときに
+  // 前回の状態と混ざらないようにするため**
+  current.odr_badges = body.odr_badges;
+  current.odr_fields = body.odr_fields;
+  current.packaging_spec = body.packaging_spec;
+  current.specific_gravity = body.specific_gravity;
+  current.is_ex = body.is_ex;
+  current.hiki = current.hiki.map((row) => ({
+    ...row,
+    selected: row.hiki_no === hikiNo,
+  }));
+
+  el.odrBadges.replaceChildren(...body.odr_badges.map(badge));
+  el.odrFields.replaceChildren(...groups(body.odr_fields));
+  el.gravity.textContent = body.specific_gravity;
+  for (const tr of el.hikiRows.querySelectorAll("tr")) {
+    if (tr.dataset.hikiNo === hikiNo) tr.setAttribute("aria-selected", "true");
+    else tr.removeAttribute("aria-selected");
+  }
+  // 図面は受注番号ではなく包装仕様NOに紐づく。切り替わったなら見に行き直す
+  specStart(body.packaging_spec || "");
 }
 
 /*
@@ -398,6 +453,18 @@ export function start(options) {
       event.preventDefault();
       copySpecNo();
     }
+  });
+  // 引当行を押すと、その行の受注情報に差し替わる(`hikiRow`/`onHikiClick`)
+  el.hikiRows.addEventListener("click", (event) => {
+    const tr = event.target.closest("tr[data-hiki-no]");
+    if (tr) onHikiClick(tr.dataset.hikiNo);
+  });
+  el.hikiRows.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const tr = event.target.closest("tr[data-hiki-no]");
+    if (!tr) return;
+    event.preventDefault();
+    onHikiClick(tr.dataset.hikiNo);
   });
   el.specReload.addEventListener("click", async () => {
     if (!specNo) return;
