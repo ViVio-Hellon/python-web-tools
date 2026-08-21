@@ -389,6 +389,29 @@ class PlaceLengthFillBoardsTests(unittest.TestCase):
         pl.place_length_fill_boards(ctx, boards, LOWER)
         self.assertEqual(ctx.placed[-1].x, 2400)
 
+    def test_uses_actual_long_side_when_smaller_than_limit(self):
+        # 【修正】在庫の長辺(1080)がパレット幅(1150)より小さいとき、
+        # 無条件でパレット幅まで引き伸ばしていた(=面積の水増し)。
+        # 実サイズの長辺のまま配置し、カットは発生しない。
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1150, 2000, LOWER))
+        boards = [SelectedBoard(1150, 2000, 1, "主"), SelectedBoard(295, 1080, 1, "丈補填")]
+        pl.place_length_fill_boards(ctx, boards, LOWER)
+        pb = ctx.placed[-1]
+        self.assertEqual((pb.width, pb.length), (1080, 295))
+        self.assertEqual(ctx.cut_info, {})
+
+    def test_records_cut_info_when_actual_long_side_exceeds_limit(self):
+        # 在庫の長辺(1200)がパレット幅(1150)を超えるときだけ、実際に
+        # カットが発生する(ctx.cut_infoに記録)。
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1150, 2000, LOWER))
+        boards = [SelectedBoard(1150, 2000, 1, "主"), SelectedBoard(100, 1200, 1, "丈補填")]
+        pl.place_length_fill_boards(ctx, boards, LOWER)
+        pb = ctx.placed[-1]
+        self.assertEqual((pb.width, pb.length), (1150, 100))
+        self.assertEqual(ctx.cut_info, {"100x1200": 100})
+
 
 class CheckLengthFillOverlapTests(unittest.TestCase):
     """`_check_length_fill_overlap` 単体の検証。

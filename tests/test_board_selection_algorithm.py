@@ -1218,15 +1218,11 @@ class SelectUpperBoardsTests(unittest.TestCase):
         self.assertTrue(any(b.tag == alg.TAG_LENGTH_FILL for b in r.boards))
 
 
-class UpperLengthFillMergeTests(unittest.TestCase):
-    """`_run_upper_length_fill` の「既存行への丈補填マージ」バグ修正の検証。
+class UpperLengthFillFixedCalcTests(unittest.TestCase):
+    """`_run_upper_length_fill` の「100mm板をCeiling(丈残/100)枚、最大4枚」
 
-    バグの内容(2026年 実機ログから発覚):
-    既存の "丈補填" 行へ+1するとき、丈残の減算量を `_orient()` の
-    再計算結果(幅フィット優先の向き)から取っていた。丈補填ボードは
-    短辺だけを丈方向に使う配置なので、実際には短辺(例:30mm)しか
-    埋めていないのに、`_orient()` が返す長辺(例:1600mm)を使って
-    「1600mm埋めた」と誤認していた。
+    という単純計算への置き換えの検証(VBA仕様更新)。旧来の「在庫全体から
+    短辺の近さで探す」5回ループは廃止され、100mm在庫の有無だけで決まる。
     """
 
     def setUp(self) -> None:
@@ -1234,65 +1230,52 @@ class UpperLengthFillMergeTests(unittest.TestCase):
         # 主900x190 x10 → 丈カバー1900。丈残は100(400以下なので主は増えない)
         self.main = SelectedBoard(900, 190, 10, alg.TAG_MAIN)
 
-    def test_existing_merge_uses_short_side_not_orientation_recalc(self):
-        """既存"丈補填"行への+1は短辺(30)ずつ減らす。長辺(1600)ではない。
-
-        30x1600 は在庫1種類のみなので、毎回同じ行への merge を繰り返す。
-        短辺(30)ずつ正しく減らせば丈残100mmを埋めるのに複数回のmergeが
-        起き、上限4枚まで積み増される。誤って長辺(1600)を使うと、
-        1回のmergeで丈残が大きく負の値になり、2回目のループ以降が
-        起きないまま止まる(=枚数が少ないまま終わる)。
-        """
-        boards = [
-            self.main,
-            SelectedBoard(30, 1600, 1, alg.TAG_LENGTH_FILL),
-        ]
-        available = [board(30, 1600)]
-        alg._run_upper_length_fill(boards, self.product, available, None)
+    def test_needed_count_is_ceiling_of_remaining_over_100(self):
+        # 丈残100mm → Ceiling(100/100)=1枚
+        boards = [self.main]
+        available = [board(100, 800)]
+        alg._run_upper_length_fill(boards, self.product, available)
 
         length_fill = next(b for b in boards if b.tag == alg.TAG_LENGTH_FILL)
-        self.assertEqual((length_fill.width, length_fill.length), (30, 1600))
-        # 短辺(30mm)ずつ正しく減算されていれば、100mmの丈残を埋めるのに
-        # 複数回mergeが起き、上限の4枚まで積み増される
+        self.assertEqual((length_fill.width, length_fill.length), (100, 800))
+        self.assertEqual(length_fill.count, 1)
+
+    def test_needed_count_rounds_up_and_caps_at_4(self):
+        # 主900x190 x9 → 丈カバー1710、製品丈2000に対し丈残290mm
+        # Ceiling(290/100)=3枚だが、丈残400mm超になる別ケースでの保険と
+        # して上限4枚のクランプも確認する
+        product = ProductSize(width=900, length=2390)
+        boards = [SelectedBoard(900, 190, 9, alg.TAG_MAIN)]  # 丈カバー1710、丈残680>400
+        available = [board(100, 800)]
+        alg._run_upper_length_fill(boards, product, available)
+
+        # 丈残680は400超なので主+1枚(丈カバー1710+190=1900、丈残490)
+        # Ceiling(490/100)=5枚だが上限4枚にクランプされる
+        length_fill = next(b for b in boards if b.tag == alg.TAG_LENGTH_FILL)
         self.assertEqual(length_fill.count, alg.LENGTH_FILL_COUNT_CAP)
 
-    def test_does_not_merge_into_width_fill_row_of_same_size(self):
-        """"幅補填" タグの行は丈カバーに寄与しない専用枠。マージ対象にしない。
+    def test_merges_into_existing_length_fill_row_of_same_size(self):
+        # 主900x190 x9 → 丈カバー1710。既存"丈補填"100x800 x1が短辺(100)分
+        # 寄与して1810、丈残190mm → Ceiling(190/100)=2枚を既存行に積む
+        main = SelectedBoard(900, 190, 9, alg.TAG_MAIN)
+        existing = SelectedBoard(100, 800, 1, alg.TAG_LENGTH_FILL)
+        boards = [main, existing]
+        available = [board(100, 800)]
+        alg._run_upper_length_fill(boards, self.product, available)
 
-        同じ(30,1600)が既に"幅補填"として1枚あっても、丈補填はそこへ
-        +1するのではなく、別の"丈補填"行を新規に作らなければならない。
-        タグを問わずマージすると、幅補填の専用枠に丈補填の枚数が
-        紛れ込み、実際の丈カバーは伸びないまま丈残だけ消費した扱いに
-        なってしまう。
-        """
-        width_fill = SelectedBoard(30, 1600, 1, alg.TAG_WIDTH_FILL)
-        boards = [self.main, width_fill]
-        available = [board(30, 1600)]
-        alg._run_upper_length_fill(boards, self.product, available, None)
-
-        # 幅補填行はそのまま(丈補填の+1が紛れ込んでいない)
-        self.assertEqual(width_fill.count, 1)
-        # 丈補填は別行として新規に作られている
+        # 別行を新規に作らず、既存の"丈補填"行にneeded(=2)を積む
         length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(len(length_fill_rows), 1)
-        self.assertEqual((length_fill_rows[0].width, length_fill_rows[0].length), (30, 1600))
+        self.assertEqual(length_fill_rows[0].count, 3)
 
-    def test_candidate_search_ignores_capped_wrong_tag_row(self):
-        """候補探索の上限チェック(ulSkipCap)もタグ限定が必要(バグ修正)。
+    def test_no_100mm_stock_defers_to_force_add_block(self):
+        # 幅・丈のどちらにも100mmを持つ在庫が無ければ何も追加しない
+        # (後続の「丈不足強制追加」ブロックに委ねる)
+        boards = [self.main]
+        available = [board(30, 1600), board(900, 300)]
+        alg._run_upper_length_fill(boards, self.product, available)
 
-        同サイズの"主"行が上限(4枚)に達していても、それは丈補填の候補選定
-        には無関係。タグを見ずにマッチすると誤って候補が除外され、
-        丈補填が一切追加されなくなってしまう。
-        """
-        # TAG_WIDTH_FILL を使うのは、_upper_total_length が幅補填行を丈合計
-        # から除外するため(丈補填以外のタグでも丈残の計算を汚さないように)
-        decoy = SelectedBoard(30, 1600, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_WIDTH_FILL)
-        boards = [self.main, decoy]
-        available = [board(30, 1600)]
-        alg._run_upper_length_fill(boards, self.product, available, None)
-
-        self.assertTrue(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
-        self.assertEqual(decoy.count, alg.LENGTH_FILL_COUNT_CAP)  # 汚染されない
+        self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
 
 
 class ForceAddForUpperLengthShortageTests(unittest.TestCase):

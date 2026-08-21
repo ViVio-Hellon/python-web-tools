@@ -136,6 +136,10 @@ class PlacementContext:
     # 配置(`_place_cut_premise`)が、ここにある値をそのまま使う。
     # valid=False(既定)なら、従来どおりパレット幅/製品幅で計算する
     protec_result: ProtecCutResult = field(default_factory=lambda: ProtecCutResult())
+    # 配置段階で判明した幅カット(VBA `mCutInfo`)。丈補填ボードの
+    # 在庫の実寸(長辺)が limit_w を超えるときだけ `place_length_fill_boards`
+    # が記録する。キーは在庫の"幅x丈"、値は短辺(丈方向のサイズ)
+    cut_info: dict[str, int] = field(default_factory=dict)
 
     def limit_width(self, category: str) -> int:
         """カテゴリごとの幅方向の基準値(VBA `limitW`)。
@@ -693,8 +697,12 @@ def place_length_fill_boards(
 
     丈補填ボードは「既存ボードの最大X端の続き・Y=0」に、
     長辺をY方向(幅方向)・短辺をX方向(丈方向)に固定して敷き詰める。
-    幅は `limit_w`(上用=製品幅 / 下用=パレット幅)で固定するため、
-    幅方向のギャップは原理的に発生しない。
+
+    【修正】幅方向を無条件で `limit_w`(製品幅/パレット幅)に引き伸ばして
+    いたため、在庫の実サイズ(長辺)より大きい架空の寸法で配置されて
+    いた(例: 在庫295×1080なのに1122×295として配置=面積が水増しされる)。
+    幅方向は「在庫の長辺」と `limit_w` の小さい方を使う。在庫の長辺が
+    `limit_w` を超える場合だけ、実際にカットが発生する(`ctx.cut_info` に記録)。
     """
     limit_w = ctx.limit_width(category)
 
@@ -706,20 +714,29 @@ def place_length_fill_boards(
         # 長辺をY方向(幅方向)にするため、lengthが長辺なら回転させる
         lf_rot = b.length > b.width
         b_short = min(b.width, b.length)
+        b_long = max(b.width, b.length)
+
+        needs_fill_cut = b_long > limit_w
+        place_w = limit_w if needs_fill_cut else b_long
+        if needs_fill_cut:
+            key = f"{b.width}x{b.length}"
+            if key not in ctx.cut_info:
+                ctx.cut_info[key] = b_short
+            log.debug("[丈補填][幅カット] %sx%s 幅%s→%smmへカット", b.width, b.length, b_long, limit_w)
 
         for _ in range(b.count):
             place_x = ctx.max_x(category)
 
-            if not _check_length_fill_overlap(ctx, category, place_x, b_short, limit_w):
+            if not _check_length_fill_overlap(ctx, category, place_x, b_short, place_w):
                 log.debug("[丈補填配置] 重なり検出 → スキップ %sx%s at(%s,0)",
                           b.width, b.length, place_x)
                 break
 
-            log.debug("[丈補填配置] %sx%s at(%s,0) bW=%s bL=%s",
-                      b.width, b.length, place_x, limit_w, b_short)
+            log.debug("[丈補填配置] %sx%s at(%s,0) placeW=%s bL=%s needsFillCut=%s",
+                      b.width, b.length, place_x, place_w, b_short, needs_fill_cut)
             place_board_at(
                 ctx, place_x, 0, model, lf_rot,
-                bypass_check=True, custom_width=limit_w, custom_length=b_short, is_fill=True,
+                bypass_check=True, custom_width=place_w, custom_length=b_short, is_fill=True,
             )
 
 
