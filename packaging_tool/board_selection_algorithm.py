@@ -1397,27 +1397,37 @@ def select_lower_boards(
 
     # 0.5. 業界標準サイズショートカット(通常モードのみ)。
     # PASS1本体(スコア順1件即採用ロジック)には一切手を入れず、その
-    # 手前で完全一致の在庫があるかだけを確認する
-    std_size = _industry_standard_board_size(product)
-    if std_size is not None:
-        std_stock = _find_industry_standard_stock(available, *std_size)
-        if std_stock is not None:
-            eff_l = min(std_stock.width, std_stock.length)
-            count, need_length_cut, length_cut_eff = decide_length_count_with_cut(
-                eff_l, palette.length)
-            board = SelectedBoard(
-                width=std_stock.width, length=std_stock.length,
-                count=count, tag=TAG_MAIN)
-            state = PassState(remaining_len=0, pass1_done=True)
-            length_cut_info: dict[str, int] = {}
-            if need_length_cut:
-                length_cut_info[f"L_{board.width}x{board.length}"] = length_cut_eff
-            log.debug("SelectLowerBoards [業界標準ショートカット]: %sx%s %s枚 "
-                     "(製品%sx%s、needLengthCut=%s)",
-                     board.width, board.length, count,
-                     product.width, product.length, need_length_cut)
-            return LowerSelectionResult(
-                boards=[board], state=state, length_cut_info=length_cut_info)
+    # 手前で完全一致の在庫があるかだけを確認する。
+    # 【バグ修正】is_protec_mode のガードが抜けていたため、プロテック
+    # 選定(SelectProtecLowerBoards)が適合する在庫を見つけられずに
+    # 通常選定へフォールバックしてきた場合、ここでプロテックの業務
+    # ルール(タグ・ProtecCutResult)を一切通さずに標準サイズを採用
+    # してしまっていた。その後 select_upper_boards は protec_result が
+    # 無効なので独自に通常選定へ進み、下用=標準サイズ・上用=無関係な
+    # 別ボードという「プロテックなのに上下が一致しない」不具合になる。
+    # 上用側の同名ショートカットは元から is_protec_mode を見ており、
+    # ここは下用だけ揃っていなかった非対称を直す
+    if not is_protec_mode:
+        std_size = _industry_standard_board_size(product)
+        if std_size is not None:
+            std_stock = _find_industry_standard_stock(available, *std_size)
+            if std_stock is not None:
+                eff_l = min(std_stock.width, std_stock.length)
+                count, need_length_cut, length_cut_eff = decide_length_count_with_cut(
+                    eff_l, palette.length)
+                board = SelectedBoard(
+                    width=std_stock.width, length=std_stock.length,
+                    count=count, tag=TAG_MAIN)
+                state = PassState(remaining_len=0, pass1_done=True)
+                length_cut_info: dict[str, int] = {}
+                if need_length_cut:
+                    length_cut_info[f"L_{board.width}x{board.length}"] = length_cut_eff
+                log.debug("SelectLowerBoards [業界標準ショートカット]: %sx%s %s枚 "
+                         "(製品%sx%s、needLengthCut=%s)",
+                         board.width, board.length, count,
+                         product.width, product.length, need_length_cut)
+                return LowerSelectionResult(
+                    boards=[board], state=state, length_cut_info=length_cut_info)
 
     boards: list[SelectedBoard] = []
     state = PassState(remaining_len=palette.length)
@@ -1618,10 +1628,19 @@ def decide_protec_orientation(
     呼ばれる共通ロジック ── 呼び出し元によって判定基準がずれると、
     上用が下用と無関係な結果になりうるため、ここに1つだけ置く。
 
-    向きは「有効幅が製品幅-許容 以上、かつ製品幅に最も近い(超過は
-    カットで丸める)」ものを選ぶ。長辺・短辺どちらを幅方向に使っても
-    条件を満たせない場合は `valid=False` を返す(この在庫サイズは
-    プロテックとして採用できない)。
+    向きは「有効幅が製品幅-許容 以上」を満たす向きの中から、**カット不要
+    (有効幅が製品幅以下)を最優先**で選ぶ。カット不要な向きが無いときだけ、
+    カットが要る向き(製品幅超過)から製品幅に最も近いものを選ぶ。
+    長辺・短辺どちらを幅方向に使っても条件を満たせない場合は
+    `valid=False` を返す(この在庫サイズはプロテックとして採用できない)。
+
+    【設計判断の見直し】以前は「絶対距離が最小」だけで選んでいたため、
+    「製品幅よりわずかに超過(カットが要る)」向きが「製品幅より余裕を
+    持って不足(カット不要)」向きより僅差で近いというだけで、カットが
+    要る側を選んでしまうことがあった。プロテックは在庫の種類が少なく
+    カットを避けたいという業務上の前提(この関数のあらゆる呼び出し元が
+    「唯一の正解」として扱う)と整合しないため、カット不要を常に優先する
+    ように変更した。
     """
     tol = PROTEC_1P1216_TOLERANCE if is_1p1216 else PROTEC_OTHER_TOLERANCE
     min_w = product_width - tol
@@ -1636,9 +1655,12 @@ def decide_protec_orientation(
     if not candidates:
         return ProtecCutResult(valid=False)
 
-    # 製品幅に最も近い(＝超過分が最小、無ければ不足が最小)ものを選ぶ。
-    # 同点なら回転しない向きを優先する(VBAの走査順を踏襲)
-    rotated, eff_w, eff_l = min(candidates, key=lambda c: (abs(c[1] - product_width), c[0]))
+    # カット不要(製品幅以下)な向きがあればその中から選ぶ。無ければ
+    # カットが要る向きの中から選ぶ。どちらも「製品幅に最も近いもの」
+    # (同点なら回転しない向きを優先、VBAの走査順を踏襲)
+    no_cut = [c for c in candidates if c[1] <= product_width]
+    pool = no_cut if no_cut else candidates
+    rotated, eff_w, eff_l = min(pool, key=lambda c: (abs(c[1] - product_width), c[0]))
 
     need_cut = eff_w > product_width
     # カットするなら、仕上がり幅は「製品幅そのもの」ではなく

@@ -206,11 +206,26 @@ def sort_boards_by_target_width(
         w1, l1 = board.width, board.length
         w2, l2 = board.length, board.width  # 回転した場合
 
+        # 【バグ修正】以前は fit_limit 以下の候補のうち「大きい方」を無条件で
+        # 採用していた。strict(上用)では fit_limit==target_width なので
+        # 「大きい方」と「target_widthに近い方」は一致するが、非strict
+        # (下用、fit_limit=target_width×1.2)では一致しない。target_width
+        # を20%超えてはみ出す向きのほうが、target_widthに収まりきらないが
+        # 近い向きより「大きい」という理由だけで選ばれ、しかもはみ出し側は
+        # 直後の不足ペナルティ(gap_ratio)が掛からないため無罰則の好条件
+        # として誤って高スコアになっていた。実際の選定(`get_best_orientation`
+        # 経由の `_orient_lower`)は常に「target_widthに最も近い向き」を
+        # 採用するため、ランキングの基準と実際の評価の基準が食い違い、
+        # 本来先に評価されるべき候補が並び順で後回しにされることがあった。
+        # target_widthに最も近い向きを採用するよう揃える(同点はw1優先)
         best_w = best_l = 0
-        if w1 <= fit_limit and w1 > best_w:
-            best_w, best_l = w1, l1
-        if w2 <= fit_limit and w2 > best_w:
-            best_w, best_l = w2, l2
+        best_dist: Optional[float] = None
+        if w1 <= fit_limit:
+            best_w, best_l, best_dist = w1, l1, abs(target_width - w1)
+        if w2 <= fit_limit:
+            dist2 = abs(target_width - w2)
+            if best_dist is None or dist2 < best_dist:
+                best_w, best_l, best_dist = w2, l2, dist2
 
         if best_w > 0:
             score = best_w * WIDTH_SCORE_MULTIPLIER + best_l

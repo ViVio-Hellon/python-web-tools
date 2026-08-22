@@ -794,6 +794,33 @@ class DecideProtecOrientationTests(unittest.TestCase):
         r = alg.decide_protec_orientation(500, 700, 900, is_1p1216=False)
         self.assertFalse(r.valid)
 
+    def test_prefers_no_cut_orientation_even_if_farther_than_cut_orientation(self):
+        """カット不要な向きがあれば、絶対距離ではより近いカットが要る
+
+        向きより優先する(設計判断の見直し: 以前は絶対距離が最小の
+        向きを無条件で選んでおり、「製品幅よりわずかに超過(カットが
+        要る)」が「余裕を持って不足(カット不要)」より僅差で近い
+        というだけでカットが要る側を選んでしまうことがあった)。
+
+        920x850(product_width=900, tol=80, min_w=820):
+            向き1(回転なし): 幅920(超過20、カット要、距離20)
+            向き2(回転あり): 幅850(不足50、カット不要、距離50)
+        距離だけなら向き1(20<50)が勝つが、カット不要な向き2を優先する。
+        """
+        r = alg.decide_protec_orientation(920, 850, 900, is_1p1216=False)
+        self.assertFalse(r.need_cut)
+        self.assertTrue(r.is_rotated)
+        self.assertEqual(r.cut_eff_width, 850)
+        self.assertEqual(r.eff_length, 920)
+
+    def test_picks_closest_among_cut_candidates_when_no_no_cut_option(self):
+        # 両方とも超過(カット要)しかない場合は、従来どおり最も近い方を選ぶ
+        r = alg.decide_protec_orientation(1000, 950, 900, is_1p1216=False)
+        self.assertTrue(r.need_cut)
+        # 1000(超過100)と950(超過50)なら950の方が近い
+        self.assertTrue(r.is_rotated)
+        self.assertEqual(r.eff_width_before_cut, 950)
+
 
 class SelectProtecLowerBoardsTests(unittest.TestCase):
     """`select_protec_lower_boards` の検証(VBA `SelectProtecLowerBoards`)。
@@ -1015,6 +1042,39 @@ class IndustryStandardShortcutTests(unittest.TestCase):
         available = [board(1030, 1520)]   # 標準サイズの在庫が無い
         r = alg.select_lower_boards(available, self.palette, product)
         self.assertEqual((r.boards[0].width, r.boards[0].length), (1030, 1520))
+
+    def test_protec_mode_takes_priority_over_shortcut_even_if_protec_search_fails(self):
+        """プロテックモードでは、SelectProtecLowerBoardsが適合する在庫を
+
+        見つけられずに通常フローへフォールバックしても、ショートカットを
+        使ってはいけない(上用側は元から `is_protec_mode` でガードして
+        いたが、下用側だけそのガードが抜けていたバグ修正)。
+
+        ガードが無いと、下用だけプロテックの業務ルールを一切通さずに
+        標準サイズを即採用し、上用は(protec_resultが無効なので)独自に
+        通常選定へ進むため、下用と上用が無関係な別ボードになる
+        (「プロテックなのに上下が一致しない」不具合)。
+
+        パレット幅(200mm)では標準サイズ(1000×2000)は物理的に置けない
+        ため、ガードが効いていれば通常選定(PASS1-3→狭幅パレット)に
+        回り、この板は採用されない。ガードが無ければ、パレット幅を
+        一切見ないショートカットがそのまま採用してしまう。
+        """
+        product = ProductSize(width=1000, length=2000)   # "1×2"の範囲内
+        palette = make_palette(200, 2600)                # 標準サイズが物理的に収まらない
+        available = [board(1000, 2000)]
+
+        with mock.patch.object(
+            alg, "select_protec_lower_boards",
+            return_value=([], alg.ProtecCutResult(valid=False)),
+        ):
+            r = alg.select_lower_boards(
+                available, palette, product,
+                is_protec_mode=True, is_protec_1p1216=True,
+            )
+
+        self.assertEqual(r.boards, [])
+        self.assertTrue(r.needs_narrow)
 
     def test_upper_boards_also_use_the_shortcut(self):
         """上用(`select_upper_boards`)にも同じ判定を適用する。"""

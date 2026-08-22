@@ -70,6 +70,25 @@ class SortBoardsTests(unittest.TestCase):
         result = svc.sort_boards_by_target_width(boards, 1000, fatigue_map=fatigue_map)
         self.assertEqual(result[0].length, 1200)  # 疲労度0の方が勝つ
 
+    def test_non_strict_prefers_closer_orientation_over_larger_one(self):
+        # target=1000, fit_limit=1200(非strict=下用)。
+        # 板A(1150x950): 向きは 1150(超過150) と 950(不足50) の2択で、
+        # 950の方が target に近い。以前は「fit_limit以下で大きい方」を
+        # 無条件採用しており、しかも超過側は直後の不足ペナルティ
+        # (gap_ratio)が掛からないため、実際には遠い(1150)向きが
+        # 「無罰則の好条件」として扱われていた。
+        # 板B(1100x1100、正方形): 向きは1100の1択のみ(超過100、無罰則)。
+        #
+        # 実際の選定(get_best_orientation)は板Aについて950(近い方、
+        # 不足50)を採用する。950採用なら不足ペナルティが掛かるため、
+        # 板Bの1100(超過100、無罰則)より板Aのスコアが低くなるはず。
+        # 修正前は板Aが1150(超過150、無罰則)採用のまま板Bより
+        # 高スコアになり、順位が逆転していた。
+        board_a = board(1150, 950)
+        board_b = board(1100, 1100)
+        result = svc.sort_boards_by_target_width([board_a, board_b], 1000, strict=False)
+        self.assertEqual((result[0].width, result[0].length), (1100, 1100))
+
     def test_fatigue_expected_count_scales_area(self):
         # base_lengthを与えると必要枚数(切り上げ)ぶん面積スコアが加算され、
         # 短いボードほど枚数が増えて不利になる
