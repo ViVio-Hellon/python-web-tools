@@ -17,8 +17,13 @@
   **色相は1つも動かしていない**ので、「橙っぽいのが印刷」という
   現場の記憶はそのまま通用します。
 
-  資材・図・保管位置の色は**情報そのもの**なので触っていません。
+  資材・図・保管位置の色は**情報そのもの**なので基本は触っていません。
   騒がしさの出どころは操作の色と罫線で、そこだけを直せば足ります。
+  ただし配置図のボード塗り(--mat-upper-fill/--mat-lower-fill/
+  --mat-fill-fill)だけは例外です。図の地(--mat-*-bg)を資材ごとに
+  淡く色分けしたことで、同じ色相の淡いボード塗りが地に埋もれて
+  「濁って見える」(現場の声)ようになっていたため、色相はVBAのまま
+  (上用=赤系/下用=緑系/補填=黄系)で濃さだけを地からはっきり離しました。
 
   【構造の色は操作の色から独立させる】
   画面の骨格(上の帯・現在地・焦点・選択行・タブ)は**ティール**で、
@@ -73,9 +78,12 @@
   --bar-focus:#7fe3ea;
   --ctl-h:38px; --ctl-r:10px;            /* 帯の上の操作の寸法(1つに統一) */
 
-  /* 資材の意味(入れ替え禁止)。**情報なので彩度も動かさない** */
-  --mat-upper:#b4232a; --mat-upper-bg:#fdf6f6; --mat-upper-fill:#f2c9cc; --mat-upper-line:#a94f57;
-  --mat-lower:#125334; --mat-lower-bg:#f5fbf7; --mat-lower-fill:#e8f6ed; --mat-lower-line:#448a68;
+  /* 資材の意味(入れ替え禁止)。色相は情報なので動かさない。
+     ボード塗り(-fill)・輪郭(-line)は、図の地(-bg)に埋もれて
+     「濁って見える」という現場の声を受け、地からはっきり離る濃さに
+     している(色相はVBAのまま) */
+  --mat-upper:#b4232a; --mat-upper-bg:#fdf6f6; --mat-upper-fill:#f19aa0; --mat-upper-line:#8c2f38;
+  --mat-lower:#125334; --mat-lower-bg:#f5fbf7; --mat-lower-fill:#93d8a8; --mat-lower-line:#2f6e4e;
   --mat-angle:#0f766e; --mat-angle-bg:#f3fafa;
   --mat-pallet:#1e3a8a; --mat-product:#c2410c;
   --cut-line:#b4232a; --cut-zone:#f6c99a;
@@ -83,7 +91,7 @@
      色相(黄系)にして、キャプションを読まなくても見分けられるようにする
      (現場の声:「補填ボードがあまりにも解かりにくい」)。上用/下用どちらの
      図でも同じ色(THIN_*の色分けと同じ考え方) */
-  --mat-fill:#8a6d1f; --mat-fill-fill:#f5e6b8; --mat-fill-line:#8a6d1f;
+  --mat-fill:#8a6d1f; --mat-fill-fill:#dcae2c; --mat-fill-line:#6e5618;
 
   /* 細くて文字が入らないボードの色分け(30/50/100mm ほか)。
      図の地(--mat-*-bg)の上に置かれ、幅mmは凡例で読む。
@@ -222,9 +230,9 @@
     --bar-face:#ffffff12; --bar-face-on:#ffffff22; --bar-edge:#ffffff2b;
     --bar-focus:#7fe3ea;
 
-    --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#6b3036; --mat-upper-line:#d98b90;
-    --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#112818; --mat-lower-line:#4f9c6f;
-    --mat-fill:#e0c264; --mat-fill-fill:#3d3312; --mat-fill-line:#e0c264;
+    --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#8a3f4a; --mat-upper-line:#eaacb0;
+    --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#2a5e39; --mat-lower-line:#6fc78f;
+    --mat-fill:#e0c264; --mat-fill-fill:#6b551c; --mat-fill-line:#e0c264;
     --mat-angle:#4fbdb2; --mat-angle-bg:#152726;
     --mat-pallet:#8fb4f5; --mat-product:#f59e5b;
     --cut-line:#f4a0a4; --cut-zone:#7a4a1e;
@@ -280,9 +288,9 @@
   --bar-face:#ffffff12; --bar-face-on:#ffffff22; --bar-edge:#ffffff2b;
   --bar-focus:#7fe3ea;
 
-  --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#6b3036; --mat-upper-line:#d98b90;
-  --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#112818; --mat-lower-line:#4f9c6f;
-  --mat-fill:#e0c264; --mat-fill-fill:#3d3312; --mat-fill-line:#e0c264;
+  --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#8a3f4a; --mat-upper-line:#eaacb0;
+  --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#2a5e39; --mat-lower-line:#6fc78f;
+  --mat-fill:#e0c264; --mat-fill-fill:#6b551c; --mat-fill-line:#e0c264;
   --mat-angle:#4fbdb2; --mat-angle-bg:#152726;
   --mat-pallet:#8fb4f5; --mat-product:#f59e5b;
   --cut-line:#f4a0a4; --cut-zone:#7a4a1e;
