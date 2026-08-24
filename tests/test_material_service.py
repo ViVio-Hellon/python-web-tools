@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -67,10 +68,35 @@ class GetUpperPartMaterialTests(unittest.TestCase):
         self.conn.execute(f"INSERT INTO 梱包保護材 ({cols}) VALUES ({placeholders})", list(kwargs.values()))
         self.conn.commit()
 
-    def test_out_of_scope_pack_returns_empty(self):
+    def test_blank_pack_returns_empty(self):
+        result = svc.get_upper_part_material(
+            self.conn, pack="", zai="A5052", tyo="H34", you="", atu=1, hab=100, tak=100,
+        )
+        self.assertEqual(result, "")
+
+    def test_pack_outside_target_hosonos_is_now_covered_by_default(self):
+        """【仮運用】既定(HOSOZAI_APPLY_ALL_PACKS=True)では、旧VBAの
+        TARGET_HOSONOS(対象8件のみ)に含まれない包装仕様でも梱包保護材
+        テーブルを参照する(現場の要望:「全包装仕様に対応できるか確認したい」)。
+        """
+        self._insert(包装仕様書="", 材質="A5052", 調質="H34", 用途コード="", 使用保護材="上蓋")
+        self.assertNotIn("9P9999", svc.TARGET_HOSONOS)
         result = svc.get_upper_part_material(
             self.conn, pack="9P9999", zai="A5052", tyo="H34", you="", atu=1, hab=100, tak=100,
         )
+        self.assertEqual(result, "上蓋")
+
+    def test_target_hosonos_restriction_can_be_switched_back_on(self):
+        """TARGET_HOSONOS自体は撤廃していない。環境変数
+        `PACKAGING_TOOL_HOSOZAI_ALL_PACKS=0` でコード変更なしに旧動作
+        (対象8件のみ)へ即座に戻せる(現場の要望:「一旦停止という扱いで
+        TARGET_HOSONOSは残してください」)。
+        """
+        self._insert(包装仕様書="", 材質="A5052", 調質="H34", 用途コード="", 使用保護材="上蓋")
+        with mock.patch.object(svc, "HOSOZAI_APPLY_ALL_PACKS", False):
+            result = svc.get_upper_part_material(
+                self.conn, pack="9P9999", zai="A5052", tyo="H34", you="", atu=1, hab=100, tak=100,
+            )
         self.assertEqual(result, "")
 
     def test_pass1_exact_pack_match(self):

@@ -9,6 +9,7 @@ VBA `PalletHistoryModule_v2` 内の以下の関数群の移植(実ソースを�
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from typing import Optional
 
@@ -17,10 +18,22 @@ from .logging_utils import get_logger
 
 log = get_logger("material_service")
 
-# 保護材自動選定の対象となる包装仕様書No一覧(VBA `C_TARGET_HOSONOS`)
+# 保護材自動選定の対象となる包装仕様書No一覧(VBA `C_TARGET_HOSONOS`)。
+# 【仮運用】既定では下の `HOSOZAI_APPLY_ALL_PACKS` によりこの一覧での
+# 絞り込みは効かない(全包装仕様が対象)。一覧そのものは、旧動作へ
+# 戻すときのために残してある。
 TARGET_HOSONOS = (
     "1P0001", "1P0104", "1P0110", "1P0115", "1P0116", "1P0118", "1P0119", "1P0120",
 )
+
+# 【仮運用】TARGET_HOSONOS(VBA由来、対象8件のみ)に含まれない包装仕様でも
+# 梱包保護材テーブルを参照するか(現場の要望:「全包装仕様に対応できるか
+# 確認したい」)。既定で有効。うまくいかなければ環境変数
+# `PACKAGING_TOOL_HOSOZAI_ALL_PACKS=0` で TARGET_HOSONOS 限定の旧動作へ
+# コード変更なしで戻せる(現場の要望:「一旦停止という扱いでTARGET_HOSONOS
+# は残してください」)。
+HOSOZAI_APPLY_ALL_PACKS = os.environ.get(
+    "PACKAGING_TOOL_HOSOZAI_ALL_PACKS", "1") != "0"
 
 # 保護材選定結果が「アングルを使う」ことを意味する値(VBA `C_HOSOZAI_ANGLE`)
 HOSOZAI_ANGLE = "アングル"
@@ -149,15 +162,20 @@ def get_upper_part_material(
 ) -> str:
     """VBA `GetUpperPartMaterial` の移植。
 
-    包装仕様書Noが `TARGET_HOSONOS` に含まれない場合は空文字列を返す
-    (対象外、"一致なし"とは区別される)。対象内であれば、
+    包装仕様書Noが空欄の場合は空文字列を返す(対象外、"一致なし"とは
+    区別される)。【仮運用】`HOSOZAI_APPLY_ALL_PACKS` が無効化されている
+    ときだけ、`TARGET_HOSONOS`(VBA由来、対象8件のみ)に含まれない
+    包装仕様も同様に対象外とする。対象内であれば、
     Pass1(包装仕様書が指定されている行を優先)→Pass2(包装仕様書が
     空欄の汎用行)の順で材質・調質・用途コード・板厚/板幅/板丈の
     範囲条件に一致する最初の行の `使用保護材` を返す。
     どちらのパスでも一致しなければ "一致なし" を返す。
     """
     pack = (pack or "").strip()
-    if pack not in TARGET_HOSONOS:
+    if not pack:
+        log.debug("get_upper_part_material: 包装仕様書Noが空のため対象外")
+        return ""
+    if not HOSOZAI_APPLY_ALL_PACKS and pack not in TARGET_HOSONOS:
         log.debug("get_upper_part_material: 対象外 pack=%s", pack)
         return ""
 
