@@ -1,6 +1,7 @@
 """ボード候補スコアリング・向き判定(board_scoring)のユニットテスト。"""
 from __future__ import annotations
 
+import logging
 import sqlite3
 import sys
 import unittest
@@ -88,6 +89,31 @@ class SortBoardsTests(unittest.TestCase):
         board_b = board(1100, 1100)
         result = svc.sort_boards_by_target_width([board_a, board_b], 1000, strict=False)
         self.assertEqual((result[0].width, result[0].length), (1100, 1100))
+
+    def test_log_label_emits_no_debug_lines_by_default(self):
+        # log_label を渡さないときは、選定ログを埋めるスコア一覧を出さない
+        with self.assertNoLogs(svc.log, level="DEBUG"):
+            svc.sort_boards_by_target_width([board(900, 1000)], 1000)
+
+    def test_log_label_emits_top_n_with_score(self):
+        boards = [board(w, w) for w in (600, 580, 550, 510, 500, 400)]
+        with self.assertLogs(svc.log, level="DEBUG") as ctx:
+            svc.sort_boards_by_target_width(
+                boards, 600, log_label="下用（PASS1）")
+        messages = [r.getMessage() for r in ctx.records]
+        self.assertTrue(any("下用（PASS1）ソート上位" in m for m in messages))
+        # 見出し1行 + 上位5件(6件中、下位1件は切り捨て)
+        self.assertEqual(len(messages), 6)
+        self.assertIn("score=", messages[1])
+        self.assertIn("effW=", messages[1])
+
+    def test_log_label_score_matches_the_documented_formula(self):
+        # 現場の例:「600×600 effW=600 score=6000600」(width * 10000 + length)
+        with self.assertLogs(svc.log, level="DEBUG") as ctx:
+            svc.sort_boards_by_target_width(
+                [board(600, 600)], 600, log_label="下用")
+        line = ctx.records[1].getMessage()
+        self.assertIn("score=6000600", line)
 
     def test_fatigue_expected_count_scales_area(self):
         # base_lengthを与えると必要枚数(切り上げ)ぶん面積スコアが加算され、

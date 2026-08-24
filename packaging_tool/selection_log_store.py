@@ -79,6 +79,7 @@ def append(entry: Any) -> None:
             "pc_name": entry.pc_name,
             "text": entry.text,
             "emphasis": bool(entry.emphasis),
+            "area": getattr(entry, "area", ""),
         }
         target = path_for(entry.at[:10] if entry.at else today())
         with _lock:

@@ -216,6 +216,7 @@ class SelectionSession:
         self.angle_drawn = False
 
     # --- パレット ---------------------------------------------------
+    @user_log_mod.tag_area("パレット")
     def apply_pallet(self, width_text: str, length_text: str) -> svc.ApplyResult:
         """VBA `btnApplyPalette_Click`。"""
         result, palette = svc.apply_pallet_size(width_text, length_text)
@@ -457,6 +458,7 @@ class SelectionSession:
                                  REFUSE_NEEDS_SIZES)
         return None
 
+    @user_log_mod.tag_area("ボード")
     def auto_select_boards(self) -> BoardOpResult:
         """自動選定(VBA `btnAutoSelect_Click` / tkinter `do_auto_select_boards`)。
 
@@ -500,7 +502,9 @@ class SelectionSession:
         try:
             # **却下と補正の理由をそのまま流す**(`user_log.bridge_from`)。
             # 現場が要るのは決まったことではなく、そこへ至った経緯
-            with user_log_mod.bridge_from(ulog):
+            with user_log_mod.bridge_from(
+                    ulog, "packaging_tool.board_selection_algorithm",
+                    "packaging_tool.board_scoring"):
                 result = alg.auto_select_boards(
                     available, self.palette, self.product,
                     fatigue_map_lower=fatigue_lower, fatigue_map_upper=fatigue_upper,
@@ -537,6 +541,7 @@ class SelectionSession:
             f"下用 {len(result.lower)}種類",
             notes=notes)
 
+    @user_log_mod.tag_area("ボード")
     def add_board(self, category: str, width: int, length: int,
                   count: int) -> BoardOpResult:
         """手動追加(VBA `btnAddBoardUpper/Lower_Click`)。
@@ -572,6 +577,7 @@ class SelectionSession:
             f"[手動] {label}に追加: {width} x {length} × {count}枚")
         return BoardOpResult(True, f"{label}に {width}×{length} を{count}枚 追加しました")
 
+    @user_log_mod.tag_area("ボード")
     def remove_board(self, category: str, index: int) -> BoardOpResult:
         """選定済みから1行外す(tkinter版 `_remove_selected`)。
 
@@ -600,6 +606,7 @@ class SelectionSession:
         return BoardOpResult(
             True, f"{label}から {removed.width}×{removed.length} を外しました")
 
+    @user_log_mod.tag_area("ボード")
     def place_boards(self) -> BoardOpResult:
         """「ボード配置」(VBA `btnAutoPlace_Click` / tkinter `do_auto_place`)。
 

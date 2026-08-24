@@ -56,6 +56,10 @@ def _serialize(entry: LogEntry) -> dict:
         "text": entry.text,
         "emphasis": bool(entry.emphasis),
         "kind": classify(entry),
+        # パレット/ボードどちらの途中で出た行か。空ならどちらでもない
+        # (アングル・手動操作など)。事実として`UserLog`側で付けている
+        # (種別=kindのような表示都合の推測ではない)
+        "area": entry.area,
         # 時刻は行の左に小さく出す。身元は**大きく出さない**が、
         # 後から追えるように渡しておく(画面では行の説明に入る)
         "at": entry.at,
@@ -73,7 +77,8 @@ def _stored(row: dict) -> dict:
                      emphasis=bool(row.get("emphasis")),
                      at=str(row.get("at", "")),
                      login_id=str(row.get("login_id", "")),
-                     pc_name=str(row.get("pc_name", "")))
+                     pc_name=str(row.get("pc_name", "")),
+                     area=str(row.get("area", "")))
     return _serialize(entry)
 
 

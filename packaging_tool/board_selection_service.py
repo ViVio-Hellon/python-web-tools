@@ -30,7 +30,7 @@ from typing import Optional
 
 from . import config, db, material_service
 from .logging_utils import get_logger
-from .user_log import RejectLog, UserLog
+from .user_log import RejectLog, UserLog, tag_area
 
 log = get_logger("board_selection_service")
 
@@ -592,6 +592,7 @@ def search_pallet_direct(
     return result
 
 
+@tag_area("パレット")
 def list_pallets_for_product(
     conn: sqlite3.Connection,
     *,
@@ -786,6 +787,7 @@ def list_pallets_by_product_dims(
         last_hosozai=last_hosozai)
 
 
+@tag_area("パレット")
 def auto_select_pallet(
     conn: sqlite3.Connection,
     *,

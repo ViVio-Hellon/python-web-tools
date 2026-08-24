@@ -15,6 +15,7 @@ const KIND_LABEL = { decide: "決定", exclude: "除外", warn: "警告", info: 
 let rows = [];          // 受け取った全行
 let lastSeq = 0;
 let kind = "all";
+let area = "all";       // パレット / ボード / all
 let query = "";
 
 const el = {
@@ -27,6 +28,7 @@ let liveRows = [];      // 「いま」の分。日ごとを見ているあい�
 
 function matches(row) {
   if (kind !== "all" && row.kind !== kind) return false;
+  if (area !== "all" && row.area !== area) return false;
   if (query && !row.text.toLowerCase().includes(query)) return false;
   return true;
 }
@@ -146,6 +148,7 @@ export function start(initial, seq) {
   liveRows = rows;
   lastSeq = seq || 0;
   kind = "all";
+  area = "all";
   query = "";
   scope = "live";
   render();
@@ -158,6 +161,18 @@ export function start(initial, seq) {
         (b) => b.classList.remove("is-on"));
       button.classList.add("is-on");
       kind = button.dataset.kind;
+      render();
+    });
+  });
+
+  // 対象(パレット/ボード)の絞り込み。「ボードの選定に疑問を感じたら
+  // ここだけ見る」ができるように(現場の声)
+  document.querySelectorAll(".filter[data-area]").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll(".filter[data-area]").forEach(
+        (b) => b.classList.remove("is-on"));
+      button.classList.add("is-on");
+      area = button.dataset.area;
       render();
     });
   });

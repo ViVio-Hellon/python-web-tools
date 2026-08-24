@@ -15,12 +15,14 @@ Python版も同じ役割を持たせるが、サービス層が画面に依存�
 """
 from __future__ import annotations
 
+import contextvars
+import functools
 import logging
 import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable, Optional, TypeVar
 
 
 def _identity() -> tuple[str, str]:
@@ -70,6 +72,10 @@ class LogEntry:
     at: str = ""
     login_id: str = ""
     pc_name: str = ""
+    # どの業務(パレット/ボード)の途中で出た行か。空文字はどちらでもない
+    # (アングル・手動操作など)。画面の「パレット/ボードで絞り込み」用
+    # (現場の声:「パレットとボードでフィルターできると良い」)。
+    area: str = ""
 
     def who(self) -> str:
         if self.login_id and self.pc_name:
@@ -78,6 +84,34 @@ class LogEntry:
 
 
 Listener = Callable[[Optional[LogEntry]], None]
+
+_F = TypeVar("_F", bound=Callable)
+
+# 「いまパレットの話をしているか、ボードの話をしているか」。
+# 呼び出し側の関数へ引数を1本足すのではなく(前述の「ログの都合を
+# 業務の読み筋に混ぜない」方針と同じ)、その関数が動いているあいだだけ
+# 値を持つ文脈変数にする。ネストしても(例: `list_pallets_by_product_dims`
+# が内部で`list_pallets_for_product`を呼ぶ)`ContextVar.reset`が
+# 呼び出し前の値へ正しく戻すので壊れない。
+_area: "contextvars.ContextVar[str]" = contextvars.ContextVar("_user_log_area", default="")
+
+
+def tag_area(name: str) -> Callable[[_F], _F]:
+    """この関数が動いているあいだのログ行すべてに `area=name` を付ける。
+
+    使い方: `@tag_area("パレット")` を関数/メソッドに付けるだけ。
+    本体のコードは一切変えなくてよい。
+    """
+    def decorator(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            token = _area.set(name)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _area.reset(token)
+        return wrapper  # type: ignore[return-value]
+    return decorator
 
 
 class UserLog:
@@ -101,7 +135,7 @@ class UserLog:
         login, pc = _identity()
         entry = LogEntry(text=text, emphasis=emphasis, seq=self._last_seq,
                          at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                         login_id=login, pc_name=pc)
+                         login_id=login, pc_name=pc, area=_area.get())
         self._entries.append(entry)
         if len(self._entries) > self.max_entries:
             # 古い行から捨てる。捨てた分は購読者側の表示とずれるため全再描画を促す

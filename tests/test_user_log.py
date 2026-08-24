@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import logging
 
 from packaging_tool import board_selection_service as svc, db
-from packaging_tool.user_log import LogEntry, RejectLog, UserLog, bridge_from
+from packaging_tool.user_log import LogEntry, RejectLog, UserLog, bridge_from, tag_area
 
 
 class UserLogTests(unittest.TestCase):
@@ -177,6 +177,63 @@ class BridgeFromRejectCappingTests(unittest.TestCase):
             for i in range(15):
                 self.logger.debug("却下(幅超過): %sx1000", i)
         self.assertTrue(any("ほか" in e.text for e in self.log.entries))
+
+
+class TagAreaTests(unittest.TestCase):
+    """`tag_area` が行に付ける `area`(パレット/ボード絞り込み用)。
+
+    現場の声:「パレットとボードでフィルターできると良い」。関数へ
+    引数を1本足すのではなく、動いているあいだだけ効く印を付ける。
+    """
+
+    def setUp(self) -> None:
+        self.log = UserLog()
+
+    def test_marks_entries_logged_inside_the_wrapped_call(self):
+        @tag_area("パレット")
+        def do_it():
+            self.log.log("中の行")
+
+        do_it()
+        self.assertEqual(self.log.entries[0].area, "パレット")
+
+    def test_entries_outside_the_wrapped_call_are_unmarked(self):
+        @tag_area("ボード")
+        def do_it():
+            self.log.log("中の行")
+
+        self.log.log("前の行")
+        do_it()
+        self.log.log("後の行")
+        self.assertEqual(self.log.entries[0].area, "")
+        self.assertEqual(self.log.entries[1].area, "ボード")
+        self.assertEqual(self.log.entries[2].area, "")
+
+    def test_nesting_restores_the_outer_area_afterward(self):
+        @tag_area("パレット")
+        def inner():
+            self.log.log("内側")
+
+        @tag_area("パレット")
+        def outer():
+            self.log.log("外側1")
+            inner()
+            self.log.log("外側2")
+
+        outer()
+        self.log.log("外の外")
+        areas = [e.area for e in self.log.entries]
+        self.assertEqual(areas, ["パレット", "パレット", "パレット", ""])
+
+    def test_exception_inside_still_resets_the_area(self):
+        @tag_area("ボード")
+        def boom():
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            boom()
+        self.log.log("あと")
+        self.assertEqual(self.log.entries[0].area, "")
 
 
 def _pallet(conn, **kw) -> None:

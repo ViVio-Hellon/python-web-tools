@@ -188,6 +188,7 @@ def sort_boards_by_target_width(
     fatigue_map: Optional[dict[str, FatigueEntry]] = None,
     base_length: int = 0,
     stock_aware: bool = False,
+    log_label: str = "",
 ) -> list[BoardModel]:
     """VBA `SortBoardsByTargetWidth` の移植。
 
@@ -195,13 +196,18 @@ def sort_boards_by_target_width(
     返す(同一W×Lは重複除去し初出のみ残す)。`strict=True`(上用向け)は
     `target_width`を超えるボードを候補外にする。`strict=False`(下用向け)
     は`LOWER_OVERHANG_Y`(20%)までのはみ出しを許容する。
+
+    `log_label` を渡すと、上位5件をスコア付きで選定ログへ出す
+    (現場の声:「スコアでやるとユーザーが納得しやすい」)。ここに出る
+    順位が最終的にそのまま採用されるとは限らない(この後さらに
+    PASS内の判定が続く)が、「なぜこの並び順になったか」の手がかりになる。
     """
     if not available_boards:
         return []
 
     fit_limit = target_width if strict else int(target_width * LOWER_OVERHANG_Y)
 
-    scored: list[tuple[float, BoardModel]] = []
+    scored: list[tuple[float, BoardModel, int, int]] = []
     for board in available_boards:
         w1, l1 = board.width, board.length
         w2, l2 = board.length, board.width  # 回転した場合
@@ -247,20 +253,41 @@ def sort_boards_by_target_width(
         if stock_aware and score > 0 and not board.stock_low:
             score += STOCK_BONUS  # 在庫あり -> 最上位層へ
 
-        scored.append((score, board))
+        scored.append((score, board, best_w, best_l))
 
     # VBA版はバブルソート(安定ソート)。Pythonのsortも安定ソートなので、
     # 同点時の順序(availableBoardsに現れた順)がそのまま保たれる。
     scored.sort(key=lambda item: item[0], reverse=True)
 
+    if log_label:
+        _log_top_candidates(log_label, scored, base_length)
+
     result: list[BoardModel] = []
     seen: set[tuple[int, int]] = set()
-    for _, board in scored:
+    for _, board, _best_w, _best_l in scored:
         key = (board.width, board.length)
         if key not in seen:
             seen.add(key)
             result.append(board)
     return result
+
+
+def _log_top_candidates(
+    label: str,
+    scored: list[tuple[float, BoardModel, int, int]],
+    base_length: int,
+    limit: int = 5,
+) -> None:
+    shown = [item for item in scored if item[0] > 0][:limit]
+    if not shown:
+        return
+    log.debug("%sソート上位%s件:", label, len(shown))
+    for i, (score, board, best_w, best_l) in enumerate(shown, start=1):
+        expected_cnt = 1
+        if base_length > 0 and best_l > 0:
+            expected_cnt = max(1, -(-base_length // best_l))  # 切り上げ除算
+        log.debug("  %s. %sx%s effW=%s score=%s x%s枚",
+                 i, board.width, board.length, best_w, round(score), expected_cnt)
 
 
 def get_best_orientation(

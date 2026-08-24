@@ -1435,6 +1435,7 @@ def select_lower_boards(
     sorted_lower = sort_boards_by_target_width(
         available, palette.width, strict=False, fatigue_map=fatigue_map,
         base_length=palette.length, stock_aware=stock_aware,
+        log_label="下用（PASS1）",
     )
 
     # 1. 1枚物優先
@@ -1458,6 +1459,7 @@ def select_lower_boards(
         sorted_strict = sort_boards_by_target_width(
             available, palette.width, strict=True, fatigue_map=fatigue_map,
             base_length=palette.length, stock_aware=stock_aware,
+            log_label="下用（PASS2）",
         )
         _select_lower_pass2(sorted_strict, boards, state, palette, product)
 
@@ -1898,6 +1900,7 @@ def select_upper_boards(
     sorted_upper = sort_boards_by_target_width(
         available, product.width, strict=True, fatigue_map=fatigue_map,
         base_length=product.length, stock_aware=stock_aware,
+        log_label="上用",
     )
     main_eff_w = 0
     for b in sorted_upper:
