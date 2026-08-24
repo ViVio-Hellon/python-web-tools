@@ -154,13 +154,14 @@ class BuildAnglePlanTests(unittest.TestCase):
         (現場の声:「アングルがどのサイズか配置後わからない」)。
 
         その後さらに「全画面表示・配置図印刷でも文字が小さくて読み取れない」
-        という声で3倍(9→27)にした。バー自体の高さ(ANGLE_BAR_H)も
-        同じ3倍にしてあるので、キャプションがバーからはみ出さない。
+        という声で2倍(9→18)にした(一度3倍にしたが「大きすぎる」と
+        声が出たため2倍に落ち着けた)。バー自体の高さ(ANGLE_BAR_H)も
+        同じ2倍にしてあるので、キャプションがバーからはみ出さない。
         """
         plan = ar.build_angle_plan([2000], product_len=1800, pallet_len=2600,
                                    leg_count=3, canvas_w=400)
         for bar in plan.bars:
-            self.assertEqual(bar.font_size, 27)
+            self.assertEqual(bar.font_size, 18)
             self.assertLess(bar.font_size, ar.ANGLE_BAR_H)
 
     def test_zero_length_angles_are_ignored(self):
