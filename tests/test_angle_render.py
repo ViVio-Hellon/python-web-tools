@@ -92,7 +92,7 @@ class ComputeBarRowsTests(unittest.TestCase):
         tops, order = ar.compute_bar_rows([2000, 1500, 2000], 3.0, 6000, 5500)
         self.assertEqual(order[-1], 1)                 # センターを最後に描く(前面)
         self.assertEqual(tops[1], 3.0)                 # センターは上段
-        self.assertAlmostEqual(tops[0], 3.0 + ar.ANGLE_BAR_H + 2)  # サイドは下段
+        self.assertAlmostEqual(tops[0], 3.0 + ar.ANGLE_BAR_H + ar.ANGLE_BAR_GAP)  # サイドは下段
 
     def test_even_multi_shares_one_row(self):
         tops, order = ar.compute_bar_rows([1000] * 4, 3.0, 5000, 4000)
@@ -151,11 +151,17 @@ class BuildAnglePlanTests(unittest.TestCase):
 
     def test_bar_captions_have_a_legible_font_size(self):
         """未指定(0)だと描画側の既定7になり、実機では読めない大きさだった
-        (現場の声:「アングルがどのサイズか配置後わからない」)。"""
+        (現場の声:「アングルがどのサイズか配置後わからない」)。
+
+        その後さらに「全画面表示・配置図印刷でも文字が小さくて読み取れない」
+        という声で3倍(9→27)にした。バー自体の高さ(ANGLE_BAR_H)も
+        同じ3倍にしてあるので、キャプションがバーからはみ出さない。
+        """
         plan = ar.build_angle_plan([2000], product_len=1800, pallet_len=2600,
                                    leg_count=3, canvas_w=400)
         for bar in plan.bars:
-            self.assertGreater(bar.font_size, 7)
+            self.assertEqual(bar.font_size, 27)
+            self.assertLess(bar.font_size, ar.ANGLE_BAR_H)
 
     def test_zero_length_angles_are_ignored(self):
         plan = ar.build_angle_plan([0, 0], product_len=2000, pallet_len=2600,

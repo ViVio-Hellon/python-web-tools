@@ -55,11 +55,16 @@ MAIN_BOARD_MIN_SIDE = 100
 # カット判定の許容差(VBA `DetectBoardCut` の -3 / > 3)
 CUT_TOLERANCE = 3
 
-# キャプションを出さずに色分けだけにする閾値(px)
-THIN_LABEL_LIMIT = 15
+# キャプションを出さずに色分けだけにする閾値(px)。
+# 【現場の声:「全画面でも文字が小さくて読み取れない」】フォントサイズを
+# 3倍に上げた(`build_caption`)のに合わせて、この閾値も3倍にする。
+# 論理キャンバス(980×460)自体は変えない ── フォントが同じキャンバスに
+# 対してより大きな比率を占めるようにするのが目的なので、キャンバスまで
+# 一緒に拡大すると比率が変わらず何も改善しない
+THIN_LABEL_LIMIT = 45
 
-# 凡例に載せる「細すぎるボード」の閾値(px)
-LEGEND_THIN_LIMIT = 15
+# 凡例に載せる「細すぎるボード」の閾値(px)。THIN_LABEL_LIMIT と同じ理由で3倍
+LEGEND_THIN_LIMIT = 45
 
 # 色(VBAのRGB値をそのまま16進に変換)
 COLOR_LOWER = "#c8ffc8"        # RGB(200,255,200)
@@ -115,7 +120,7 @@ class Rect:
     fill: str
     outline: str = ""
     caption: str = ""
-    font_size: int = 7
+    font_size: int = 21
     tooltip: str = ""
 
 
@@ -441,22 +446,30 @@ def build_caption(board: PlacedBoardModel, cut: CutInfo, screen_h: float) -> tup
     実際の画面では枠の大きさぶん縮んで描かれる ── 8 は縮む前の数字で、
     縮んだあとは記号にしか見えない大きさだった。実機の見え方(実測
     143px四方のボードで文字の高さが約7.6px)で確かめたうえで底上げする。
+
+    【さらに3倍】全画面表示・配置図印刷のどちらでも「文字サイズが
+    小さくて読み取れない」という声が再度出たため、フォントサイズを
+    この時点の3倍(12→36 / 11→33)にする。行数の切り替え閾値
+    (`screen_h`)も、文字が大きくなった分だけボードの高さに余裕が
+    要るため同じ3倍(30→90 / 14→42)にする ── 閾値だけそのままだと、
+    以前は2行キャプションが入っていた高さのボードで、大きくなった
+    文字がボード枠からはみ出す
     """
     cap_w = f"幅{board.width}"
     cap_l = f"丈{board.length}"
     note = cut.note
 
-    if screen_h >= 30:
+    if screen_h >= 90:
         caption = f"{cap_w}\n{cap_l}"
         if note:
             caption += f"\n{note}"
-        return caption, 12
-    if screen_h >= 14:
+        return caption, 36
+    if screen_h >= 42:
         caption = f"{cap_w} {cap_l}"
         if note:
             caption += f" {note}"
-        return caption, 12
-    return cap_w, 11
+        return caption, 36
+    return cap_w, 33
 
 
 # ------------------------------------------------------------------
@@ -518,7 +531,7 @@ def build_render_plan(
         tooltip = f"幅{board.width} × 丈{board.length}"
 
         if screen_w < THIN_LABEL_LIMIT or screen_h < THIN_LABEL_LIMIT:
-            caption, font_size = "", 7
+            caption, font_size = "", 21
             fill = thin_board_color(thin_side, screen_h)
         else:
             caption, font_size = build_caption(board, cut, screen_h)

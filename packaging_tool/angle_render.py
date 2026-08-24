@@ -17,13 +17,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
-# VBA の Private Const をそのまま
-ANGLE_BAR_H = 12.0        # バー高さ(pt)
-ANGLE_BAR_GAP = 2.0       # 上下段間隔(pt)
+# VBA の Private Const がそのまま出どころだったが、`placement_render.py`
+# のボードキャプションと同じ理由(現場の声:「全画面表示・配置図印刷の
+# どちらでも文字サイズが小さくて読み取れない」)で、バー・脚・キャプション
+# フォントをまとめて3倍にした。論理キャンバス(980×136)自体は変えていない
+# ── 変えるとフォントとキャンバスの比率が元に戻り、見た目の大きさが
+# 変わらなくなるため。`fitToContent`(svgplan.js)が実際の描画結果を見て
+# viewBoxを自動的に広げるので、3倍にしたぶんが136を超えても欠けない
+ANGLE_BAR_H = 36.0        # バー高さ(pt)
+ANGLE_BAR_GAP = 6.0       # 上下段間隔(pt)
 ANGLE_OLAP_THR = 50       # 被りなし判定閾値(mm) ※パレット丈が不明なときだけ使う
 
-PALLET_BAR_H = 5.0        # パレット面の厚み(pt)
-LEG_SIZE = 10.0           # 脚は正方形(pt)
+PALLET_BAR_H = 15.0       # パレット面の厚み(pt)
+LEG_SIZE = 30.0           # 脚は正方形(pt)
 CANVAS_FILL_RATIO = 0.88  # キャンバス幅に対する描画幅の割合
 
 # 色(VBAのRGB値をそのまま16進に変換)
@@ -174,7 +180,7 @@ def compute_bar_rows(
     center = (n - 1) // 2
     order = [i for i in range(n) if i != center] + [center]
     for i in range(n):
-        tops[i] = y_angle if i == center else y_angle + bar_h + 2
+        tops[i] = y_angle if i == center else y_angle + bar_h + ANGLE_BAR_GAP
     return tops, order
 
 
@@ -200,9 +206,9 @@ def build_angle_plan(
     pal_screen_w = base_len * scale
     pal_left = (canvas_w - pal_screen_w) / 2
 
-    y_angle = 3.0
-    y_pallet = y_angle + ANGLE_BAR_H * 2 + 6
-    y_leg = y_pallet + PALLET_BAR_H + 1
+    y_angle = 9.0
+    y_pallet = y_angle + ANGLE_BAR_H * 2 + 18
+    y_leg = y_pallet + PALLET_BAR_H + 3
 
     # パレット面
     plan.pallet_bar = Rect(x=pal_left, y=y_pallet, width=pal_screen_w,
@@ -221,8 +227,8 @@ def build_angle_plan(
     prod_left = pal_left + side_margin * scale
     prod_screen_w = product_len * scale
     for x in (prod_left, prod_left + prod_screen_w):
-        plan.product_edges.append(Rect(x=x, y=y_pallet - 2, width=1,
-                                       height=PALLET_BAR_H + 4, fill=COLOR_PRODUCT_EDGE))
+        plan.product_edges.append(Rect(x=x, y=y_pallet - 6, width=1,
+                                       height=PALLET_BAR_H + 12, fill=COLOR_PRODUCT_EDGE))
 
     lens = [a for a in angle_lens if a > 0]
     if not lens:
@@ -236,7 +242,7 @@ def build_angle_plan(
             x=lefts[idx], y=tops[idx], width=lens[idx] * scale, height=ANGLE_BAR_H,
             fill=BAR_COLORS[idx % len(BAR_COLORS)], outline=COLOR_BAR_BORDER,
             caption=f"{lens[idx]}mm", text_color=COLOR_BAR_TEXT, bold=True,
-            font_size=9,
+            font_size=27,
         ))
 
     # 1本をカットして使う場合は、切り落とす側を廃材として見せる
@@ -249,11 +255,11 @@ def build_angle_plan(
                 x=cut_x, y=tops[0], width=waste_w, height=ANGLE_BAR_H,
                 fill=COLOR_WASTE, outline=COLOR_WASTE_BORDER,
                 caption=f"廃材 {cut_amount}mm", text_color=COLOR_WASTE_TEXT,
-                font_size=9))
+                font_size=27))
         plan.cut_marks.append(Rect(
-            x=cut_x - 1, y=tops[0] - 4, width=2, height=ANGLE_BAR_H + 8, fill=COLOR_CUT_LINE))
+            x=cut_x - 1, y=tops[0] - 12, width=2, height=ANGLE_BAR_H + 24, fill=COLOR_CUT_LINE))
         plan.notes.append(TextItem(
-            x=cut_x + 10, y=tops[0] - 16,
+            x=cut_x + 30, y=tops[0] - 48,
             text=f"カット {lens[0]}->{product_len}mm", color=COLOR_CUT_LINE, bold=True))
 
     # 被り量(2本で「被りなし」と判定された場合は出さない)
@@ -261,7 +267,7 @@ def build_angle_plan(
     is_no_overlap = len(lens) == 2 and _no_overlap_2(lens, pallet_len, product_len)
     if overlap > 0 and len(lens) >= 2 and not is_no_overlap:
         plan.notes.append(TextItem(
-            x=prod_left + prod_screen_w / 2, y=48,
+            x=prod_left + prod_screen_w / 2, y=144,
             text=f"ｱﾝｸﾞﾙ被り{overlap}mm", color=COLOR_OVERLAP_TEXT, bold=True))
 
     return plan

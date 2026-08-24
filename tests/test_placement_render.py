@@ -128,22 +128,22 @@ class ColorTests(unittest.TestCase):
 
 class CaptionTests(unittest.TestCase):
     def test_two_lines_when_tall(self):
-        caption, size = render.build_caption(placed(0, 0, 1130, 750), render.CutInfo(), 40)
+        caption, size = render.build_caption(placed(0, 0, 1130, 750), render.CutInfo(), 100)
         self.assertEqual(caption, "幅1130\n丈750")
-        self.assertEqual(size, 12)
+        self.assertEqual(size, 36)
 
     def test_one_line_when_medium(self):
-        caption, _ = render.build_caption(placed(0, 0, 1130, 750), render.CutInfo(), 20)
+        caption, _ = render.build_caption(placed(0, 0, 1130, 750), render.CutInfo(), 60)
         self.assertEqual(caption, "幅1130 丈750")
 
     def test_width_only_when_short(self):
-        caption, size = render.build_caption(placed(0, 0, 1130, 750), render.CutInfo(), 10)
+        caption, size = render.build_caption(placed(0, 0, 1130, 750), render.CutInfo(), 20)
         self.assertEqual(caption, "幅1130")
-        self.assertEqual(size, 11)
+        self.assertEqual(size, 33)
 
     def test_cut_note_appended(self):
         cut = render.CutInfo(cut_length=True, amount_length=200)
-        caption, _ = render.build_caption(placed(0, 0, 1130, 750), cut, 40)
+        caption, _ = render.build_caption(placed(0, 0, 1130, 750), cut, 100)
         self.assertEqual(caption, "幅1130\n丈750\n←200カット")
 
 

@@ -209,10 +209,15 @@ export function angleSvg(plan, viewBox) {
   }
 
   for (const note of plan.notes || []) {
+    // バー・脚と同じ3倍(現場の声:「文字が小さくて読み取れない」)。
+    // `plan__extent` を付けて `fitToContent` の測定対象に含める
+    // (これが無いと、カット注記のように上端ぎりぎりに出る文字が
+    // viewBox の外へはみ出しても検知されない)
     const text = el("text", {
       x: note.x, y: note.y, fill: paint(note.color_token),
-      "font-size": 11, "text-anchor": "middle", "dominant-baseline": "hanging",
+      "font-size": 33, "text-anchor": "middle", "dominant-baseline": "hanging",
       "font-weight": note.bold ? 700 : null,
+      class: "plan__extent",
     });
     text.textContent = note.text;
     svg.appendChild(text);
