@@ -69,6 +69,18 @@ FILL_OVER_MARGIN = 30
 # 同一サイズのボードを丈補填で積み増せる上限枚数(VBA: existCnt < 4)
 LENGTH_FILL_COUNT_CAP = 4
 
+# 丈補填(上用・下用共通): 丈残がこの値を超える場合は主ボードを1枚増やし、
+# 以下なら LENGTH_FILL_BOARD_W(100mm)固定サイズで埋める(現場の声:
+# 「主サイズ決定⇒残り丈400越えの場合、主と同じサイズのボードを使用/
+# 残り丈400以下⇒100補填で丈を埋める(4回まで)、上下とも同じにしてほしい」)。
+LENGTH_FILL_THRESHOLD = 400
+
+# 丈補填の専用サイズ(mm)。`apply_length_fill_width_correction` の
+# smallSizes(30/50/100)とは切り離す ── 丈補填は「マイナス(未カバー)は
+# 禁止・超過は許容」なので、丈残400mm以下という前提(閾値=上記)であれば
+# 100mm板をCeiling(丈残/100)枚(最大4枚)追加するだけで必ずカバーできる。
+LENGTH_FILL_BOARD_W = 100
+
 # 「カバー済み」とみなす許容差(mm)。VBA各所の `> 3` 判定
 COVERED_TOLERANCE = 3
 # 残ギャップを小型ボードで埋める反復の上限(VBA `wfFillLoop < 5`)
@@ -646,92 +658,68 @@ def simulate_lower_width_fill(
     return main_eff_w + fill_sum
 
 
-def _run_length_fill_loop(
-    boards: list[SelectedBoard], sorted_boards: list[BoardModel], l_gap: int, sel_max_w: int,
-    fatigue_map: Optional[dict[str, FatigueEntry]], fatigue_mode: bool,
+def _run_main_or_fixed_length_fill(
+    boards: list[SelectedBoard], length_remaining: int, target_width: int,
+    available: list[BoardModel], *, category: str = "下用",
 ) -> None:
-    """VBA `RunLowerFillPhase` 内の「丈補填反復ループ」の移植(最大5回)。
+    """丈補填(上用・下用共通)。
 
-    残り丈ギャップに最も近い短辺(かつ長辺が主ボード最大幅以上)の
-    ボードを選び、同一サイズが既にあれば枚数+1、無ければ新規追加する。
-    既に幅補填として使われているサイズ、および同一サイズが上限枚数に
-    達しているものは対象外。
+    丈残が `LENGTH_FILL_THRESHOLD`(400mm)を超えるなら主ボード(`boards[0]`)を
+    1枚増やす。それ以下なら `LENGTH_FILL_BOARD_W`(100mm)固定サイズを
+    Ceiling(丈残/100)枚(最大 `LENGTH_FILL_COUNT_CAP`=4枚)追加する ──
+    「丈残400mm以下」という前提であればこれで必ずカバーできる。
+
+    【VBAからの修正】下用は以前、在庫全体から丈残に最も近い短辺のボードを
+    探す5回ループ(`RunLowerFillPhase` の丈補填反復ループ)を持っており、
+    上用の単純な閾値ルールとは別物だった。丈残400mm超で主サイズ以外の
+    ボードが選ばれてしまう(現場の声:「下ボードが、主サイズ決定⇒残り丈
+    400越えの場合、主サイズではないものを使用している」)原因はこの
+    差異にあったため、上用と同じ規則に揃えた。
     """
-    cur_gap = l_gap
-    for loop_idx in range(5):
-        if cur_gap <= 3:
-            return
-        log.debug("丈補填ループ%s: 残gap=%smm", loop_idx + 1, cur_gap)
+    if length_remaining <= 3 or not boards:
+        return
 
-        best: Optional[tuple[int, int, int, int]] = None  # short, long, bw, bl
-        best_diff = 999999
-        best_score = float("inf")
+    if length_remaining > LENGTH_FILL_THRESHOLD:
+        main = boards[0]
+        _, _, main_eff_l = _orient(main.width, main.length, target_width, category=category)
+        main.count += 1
+        length_remaining -= main_eff_l
+        log.debug("丈補填[%s]: 丈残400超 → 主+1枚 計%s枚 丈残=%s",
+                 category, main.count, length_remaining)
+    else:
+        log.debug("丈補填[%s]: 丈残400以下のため主ボード追加せず小型補填へ remaining=%s",
+                 category, length_remaining)
 
-        for b in sorted_boards:
-            f_short, f_long = min(b.width, b.length), max(b.width, b.length)
-            if f_short < 10 or f_long < sel_max_w:
-                continue
-            # 幅補填として既に使われているサイズは除外
-            if any(s.width == b.width and s.length == b.length and s.tag == TAG_WIDTH_FILL for s in boards):
-                continue
-            # 同一サイズが上限枚数に達していれば除外
-            # 【VBAからの修正】タグを見ずに幅・丈だけでマッチしていたため、同サイズの
-            # 「主」や「幅補填」ボードが存在すると、そちらの上限判定を誤って見てしまって
-            # いた(skipCapped)。丈補填タグの行だけを対象にする。
-            existing = next(
-                (s for s in boards if s.width == b.width and s.length == b.length
-                 and s.tag == TAG_LENGTH_FILL),
-                None,
-            )
-            if existing is not None and existing.count >= LENGTH_FILL_COUNT_CAP:
-                continue
+    if length_remaining <= 3:
+        return
 
-            fat_score = 0.0
-            if fatigue_mode and fatigue_map is not None:
-                entry = fatigue_map.get(f"{b.width}x{b.length}")
-                if entry is not None:
-                    fat_score = entry.dist + entry.area
+    needed = -(-length_remaining // LENGTH_FILL_BOARD_W)  # 切り上げ
+    if needed > LENGTH_FILL_COUNT_CAP:
+        needed = LENGTH_FILL_COUNT_CAP  # 丈残400以下の前提を超える異常値の保険
 
-            if f_short <= cur_gap:
-                if best is not None and best[0] > cur_gap:
-                    continue
-                this_diff = cur_gap - f_short
-                full_score = this_diff * 10 + fat_score
-                if this_diff < best_diff or (this_diff <= best_diff + 5 and full_score < best_score):
-                    best_diff, best_score = this_diff, full_score
-                    best = (f_short, f_long, b.width, b.length)
-            elif f_short <= cur_gap + 50:
-                if best is None or best[0] > cur_gap:
-                    this_diff = f_short - cur_gap
-                    full_score = this_diff * 10 + fat_score
-                    if best is None or full_score < best_score:
-                        best_diff, best_score = this_diff, full_score
-                        best = (f_short, f_long, b.width, b.length)
+    board100 = next(
+        (b for b in available
+         if b.width == LENGTH_FILL_BOARD_W or b.length == LENGTH_FILL_BOARD_W),
+        None,
+    )
+    if board100 is None:
+        log.debug("丈補填[%s]: 100mm在庫なし → 丈不足強制追加ブロックへ委譲", category)
+        return
 
-        if best is None:
-            return
-
-        b_short, _, bw, bl = best
-        # 【VBAからの修正】同サイズの「主」「幅補填」行を誤ってマージ対象にしないよう、
-        # 丈補填タグの行に限定する。上限(4枚)到達時は既存行を+1→4クランプするだけで
-        # 済ませず、新規行の作成に回す(下用側と上用側で挙動を統一)。
-        existing = next(
-            (s for s in boards if s.width == bw and s.length == bl
-             and s.tag == TAG_LENGTH_FILL),
-            None,
-        )
-        if existing is not None and existing.count < LENGTH_FILL_COUNT_CAP:
-            existing.count += 1
-            added_eff_l = min(bw, bl)
-            log.debug("丈補填(既存+1): %sx%s 計%s枚", bw, bl, existing.count)
-        else:
-            boards.append(SelectedBoard(width=bw, length=bl, count=1, tag=TAG_LENGTH_FILL))
-            added_eff_l = b_short
-            log.debug("丈補填(新規): %sx%s 1枚", bw, bl)
-
-        cur_gap -= added_eff_l
-        if cur_gap <= 3:
-            return
+    existing = next(
+        (s for s in boards if s.width == board100.width and s.length == board100.length
+         and s.tag == TAG_LENGTH_FILL),
+        None,
+    )
+    if existing is not None:
+        existing.count += needed
+        log.debug("丈補填[%s](100mm固定・既存+%s): %sx%s 計%s枚",
+                 category, needed, board100.width, board100.length, existing.count)
+    else:
+        boards.append(SelectedBoard(width=board100.width, length=board100.length,
+                                     count=needed, tag=TAG_LENGTH_FILL))
+        log.debug("丈補填[%s](100mm固定・新規): %sx%s %s枚 丈残=%s",
+                 category, board100.width, board100.length, needed, length_remaining)
 
 
 def apply_length_fill_width_correction(
@@ -921,7 +909,7 @@ def run_lower_fill_phase(
     )
 
     if l_gap > 3:
-        _run_length_fill_loop(boards, sorted_fill, l_gap, sel_max_w, fatigue_map, fatigue_mode)
+        _run_main_or_fixed_length_fill(boards, l_gap, palette.width, available, category="下用")
 
     apply_length_fill_width_correction(boards, sel_max_w, palette, product, available)
     _drop_length_fill_when_covered(boards, palette, product)
@@ -1568,14 +1556,8 @@ def select_lower_boards(
 #   - 幅不足は UPPER_WIDTH_TOLERANCE(80mm、両端-40mm)まで許容
 # ==================================================================
 
-# 丈残がこの値を超える場合は主ボードを1枚増やし、以下なら小型補填を優先する
-UPPER_LENGTH_FILL_THRESHOLD = 400
-
-# 上用丈補填の専用サイズ(mm)。`_apply_upper_fill_width_correction` の
-# smallSizes(30/50/100)とは切り離す ── 丈補填は「マイナス(未カバー)は
-# 禁止・超過は許容」なので、丈残400mm以下という前提(閾値=上記)であれば
-# 100mm板をCeiling(丈残/100)枚(最大4枚)追加するだけで必ずカバーできる。
-UPPER_LENGTH_FILL_BOARD_W = 100
+# 丈補填の閾値・専用サイズは下用と共通(`LENGTH_FILL_THRESHOLD`/
+# `LENGTH_FILL_BOARD_W`、モジュール冒頭で定義)。
 
 # プロテックの上用/下用が製品幅より小さくてよい許容量(mm)。
 # 1P1216 のみ精度の都合で厳しめの10mm(本来は-20mmだが切断精度を
@@ -1723,59 +1705,13 @@ def _upper_total_length(boards: list[SelectedBoard], product: ProductSize) -> in
 def _run_upper_length_fill(
     boards: list[SelectedBoard], product: ProductSize, available: list[BoardModel],
 ) -> None:
-    """VBA「上用:丈補填フェーズ」の移植。
-
-    丈残が400mm超なら先に主ボードを1枚増やす(安全弁。ここは変更なし)。
-    その後の小型補填は「100mm板をCeiling(丈残/100)枚、最大4枚」という
-    単純計算に置き換えた ── 丈残400mm以下という前提(上記の閾値)なら
-    これで必ずカバーできるため、旧来の「在庫全体から短辺の近さで探す」
-    5回ループ(候補が通常サイズまで含んでしまい、後から幅不足に気づいて
-    後追い幅補填する二階建て構造の原因だった)は廃止した。
+    """VBA「上用:丈補填フェーズ」の移植。下用と同じ規則
+    (`_run_main_or_fixed_length_fill`)を使う。
     """
     total_upper_l = _upper_total_length(boards, product)
     length_remaining = product.length - total_upper_l
-    if length_remaining <= 3:
-        return
-
-    if length_remaining > UPPER_LENGTH_FILL_THRESHOLD and boards:
-        main = boards[0]
-        _, _, t_eff_l = _orient(main.width, main.length, product.width, category="上用")
-        main.count += 1
-        length_remaining -= t_eff_l
-        log.debug("上用丈補填: 丈残400超 → 主+1枚 計%s枚 丈残=%s", main.count, length_remaining)
-    else:
-        log.debug("上用丈補填: 丈残400以下のため主ボード追加せず小型補填へ remaining=%s", length_remaining)
-
-    if length_remaining <= 3:
-        return
-
-    needed = -(-length_remaining // UPPER_LENGTH_FILL_BOARD_W)  # 切り上げ
-    if needed > LENGTH_FILL_COUNT_CAP:
-        needed = LENGTH_FILL_COUNT_CAP  # 丈残400以下の前提を超える異常値の保険
-
-    board100 = next(
-        (b for b in available
-         if b.width == UPPER_LENGTH_FILL_BOARD_W or b.length == UPPER_LENGTH_FILL_BOARD_W),
-        None,
-    )
-    if board100 is None:
-        log.debug("上用丈補填: 100mm在庫なし → 丈不足強制追加ブロックへ委譲")
-        return
-
-    existing = next(
-        (s for s in boards if s.width == board100.width and s.length == board100.length
-         and s.tag == TAG_LENGTH_FILL),
-        None,
-    )
-    if existing is not None:
-        existing.count += needed
-        log.debug("上用丈補填(100mm固定・既存+%s): %sx%s 計%s枚",
-                  needed, board100.width, board100.length, existing.count)
-    else:
-        boards.append(SelectedBoard(width=board100.width, length=board100.length,
-                                     count=needed, tag=TAG_LENGTH_FILL))
-        log.debug("上用丈補填(100mm固定・新規): %sx%s %s枚 丈残=%s",
-                  board100.width, board100.length, needed, length_remaining)
+    _run_main_or_fixed_length_fill(
+        boards, length_remaining, product.width, available, category="上用")
 
 
 def select_upper_boards(

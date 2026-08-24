@@ -555,42 +555,79 @@ class LengthFillWidthCorrectionTests(unittest.TestCase):
         self.assertEqual(boards[0].count, 3)
 
 
-class LengthFillLoopTagTests(unittest.TestCase):
-    """`_run_length_fill_loop`(丈補填反復ループ)のタグ限定バグ修正の検証。
+class MainOrFixedLengthFillTests(unittest.TestCase):
+    """`_run_main_or_fixed_length_fill`(丈補填・上用/下用共通)。
 
-    バグの内容(RunLowerFillPhase全体精査で発覚): 候補の上限チェック
-    (skipCapped)・既存行マージ(li)がいずれもタグを見ずに幅・丈だけで
-    マッチしていたため、同サイズの「主」行が存在すると、その上限や
-    カウントを誤って見てしまっていた。
+    現場の声:「主サイズ決定⇒残り丈400越えの場合、主と同じサイズの
+    ボードを使用/残り丈400以下⇒100補填で丈を埋める(4回まで)、上下とも
+    同じにしてほしい」。下用は以前、在庫全体から丈残に近い短辺を探す
+    別の5回ループ(旧`_run_length_fill_loop`)を持っており、丈残400mm超で
+    主サイズ以外が選ばれることがあった。上用と同じ規則に揃えた。
     """
 
-    def setUp(self) -> None:
-        self.sel_max_w = 900
-
-    def test_skip_cap_check_ignores_wrong_tag_row(self):
-        """同サイズの"主"行が上限(4枚)でも、丈補填の候補選定には無関係。"""
-        boards = [SelectedBoard(300, 1000, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_MAIN)]
-        alg._run_length_fill_loop(
-            boards, [board(300, 1000)], l_gap=300, sel_max_w=self.sel_max_w,
-            fatigue_map=None, fatigue_mode=False,
-        )
-        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
-        self.assertEqual(len(length_fill_rows), 1)
-        self.assertEqual((length_fill_rows[0].width, length_fill_rows[0].length), (300, 1000))
-
-    def test_merge_does_not_touch_wrong_tag_row(self):
-        """既存行マージも"丈補填"タグの行だけを対象にする。"主"行を汚染しない。"""
-        main = SelectedBoard(300, 1000, 2, alg.TAG_MAIN)
+    def test_over_400_repeats_the_main_board(self):
+        main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._run_length_fill_loop(
-            boards, [board(300, 1000)], l_gap=300, sel_max_w=self.sel_max_w,
-            fatigue_map=None, fatigue_mode=False,
+        alg._run_main_or_fixed_length_fill(
+            boards, length_remaining=500, target_width=300,
+            available=[board(100, 100)], category="下用",
         )
-        # "主"行は汚染されず据え置き、新規の"丈補填"行が作られる
+        # 主ボードの枚数が増えるだけで、新しい種類は増えない
+        self.assertEqual(len(boards), 1)
         self.assertEqual(main.count, 2)
-        length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
-        self.assertEqual(len(length_fill_rows), 1)
-        self.assertEqual(length_fill_rows[0].count, 1)
+
+    def test_400_or_less_fills_with_100mm_boards(self):
+        main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
+        boards = [main]
+        alg._run_main_or_fixed_length_fill(
+            boards, length_remaining=350, target_width=300,
+            available=[board(100, 100)], category="下用",
+        )
+        self.assertEqual(main.count, 1)  # 主ボードは増えない
+        fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(fill_rows), 1)
+        self.assertEqual((fill_rows[0].width, fill_rows[0].length), (100, 100))
+        self.assertEqual(fill_rows[0].count, 4)  # ceil(350/100) = 4
+
+    def test_100mm_fill_count_is_capped_at_4(self):
+        main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
+        boards = [main]
+        alg._run_main_or_fixed_length_fill(
+            boards, length_remaining=400, target_width=300,
+            available=[board(100, 100)], category="下用",
+        )
+        fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(fill_rows[0].count, alg.LENGTH_FILL_COUNT_CAP)
+
+    def test_no_100mm_stock_defers_without_crashing(self):
+        main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
+        boards = [main]
+        alg._run_main_or_fixed_length_fill(
+            boards, length_remaining=200, target_width=300,
+            available=[board(250, 250)], category="下用",
+        )
+        self.assertEqual(len(boards), 1)  # 100mm在庫が無ければ何も足さない
+
+    def test_existing_length_fill_row_is_merged_not_duplicated(self):
+        main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
+        existing = SelectedBoard(100, 100, 1, alg.TAG_LENGTH_FILL)
+        boards = [main, existing]
+        alg._run_main_or_fixed_length_fill(
+            boards, length_remaining=200, target_width=300,
+            available=[board(100, 100)], category="下用",
+        )
+        fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(fill_rows), 1)
+        self.assertEqual(fill_rows[0].count, 1 + 2)  # 既存1枚 + ceil(200/100)=2枚
+
+    def test_works_the_same_way_for_upper_category(self):
+        main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
+        boards = [main]
+        alg._run_main_or_fixed_length_fill(
+            boards, length_remaining=500, target_width=300,
+            available=[board(100, 100)], category="上用",
+        )
+        self.assertEqual(main.count, 2)
 
 
 class DropLengthFillTests(unittest.TestCase):
