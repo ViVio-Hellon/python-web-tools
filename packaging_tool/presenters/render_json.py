@@ -64,6 +64,7 @@ def rect_to_dict(rect: Optional[placement_render.Rect]) -> Optional[dict[str, An
         "width": round_px(rect.width), "height": round_px(rect.height),
         "fill": rect.fill, "outline": rect.outline,
         "caption": rect.caption, "font_size": rect.font_size,
+        "outline_width": round_px(rect.outline_width),
     }
 
 
@@ -182,6 +183,8 @@ FILL_TOKENS: dict[str, str] = {
     placement_render.COLOR_THIN_TINY: "--coded-tiny",
     placement_render.COLOR_THIN_SMALL: "--coded-small",
     placement_render.COLOR_THIN_OTHER: "--coded-other",
+    # 補填ボード(幅補填/丈補填)。主/補填を色でも見分けられるようにする
+    placement_render.COLOR_FILL: "--mat-fill-fill",
     # アングル図
     angle_render.COLOR_PALLET: "--angle-pallet",
     angle_render.COLOR_LEG: "--faint",
@@ -197,6 +200,10 @@ FILL_TOKENS: dict[str, str] = {
 # 「脚の塗り」では要る濃さが違うため(1.4.11 は接する相手ごとに見る)
 LINE_TOKENS: dict[str, str] = {
     placement_render.COLOR_BORDER: "--ink",
+    placement_render.COLOR_FILL_OUTLINE: "--mat-fill-line",
+    # はみ出したボードの輪郭。「注意」の意味を持つ既存の状態色を使う
+    # (新しい色相を増やさない)
+    placement_render.COLOR_OVERHANG_LINE: "--state-warn",
     angle_render.COLOR_LEG_BORDER: "--muted",
     angle_render.COLOR_WASTE_BORDER: "--muted",
     angle_render.COLOR_BAR_BORDER: "--ink",

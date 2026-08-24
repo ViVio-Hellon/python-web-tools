@@ -225,6 +225,51 @@ class BuildRenderPlanTests(unittest.TestCase):
         self.assertEqual(len(plan.boards), 1)
         self.assertEqual(plan.boards[0].fill, render.COLOR_UPPER)
 
+    def test_fill_board_gets_distinct_color_when_large_enough_for_caption(self):
+        """補填ボードは、キャプションが入る大きさなら主ボードと同じ
+
+        赤/緑ではなく専用色にする(現場の声:「補填ボードが解かりにくい」)。
+        既存のTHIN_*色分け(細すぎて文字が入らないとき)とは別の仕組み。
+        """
+        boards = [placed(0, 0, 1150, 2650, is_fill=True)]
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        rect = plan.boards[0]
+        self.assertNotEqual(rect.caption, "")   # 主ボードと同じ大きさ扱い
+        self.assertEqual(rect.fill, render.COLOR_FILL)
+        self.assertEqual(rect.outline, render.COLOR_FILL_OUTLINE)
+
+    def test_main_board_keeps_category_color(self):
+        boards = [placed(0, 0, 1150, 2650, is_fill=False)]
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        self.assertEqual(plan.boards[0].fill, render.COLOR_LOWER)
+
+    def test_overhanging_board_gets_warning_outline(self):
+        # 枠(1150x2650)の丈を大きく超える配置
+        boards = [placed(0, 0, 1150, 4000)]
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        rect = plan.boards[0]
+        self.assertEqual(rect.outline, render.COLOR_OVERHANG_LINE)
+        self.assertGreater(rect.outline_width, 1.0)
+        self.assertIn("はみ出し", rect.tooltip)
+        # 塗りは変えない(縁取りだけで示す)
+        self.assertEqual(rect.fill, render.COLOR_LOWER)
+
+    def test_non_overhanging_board_keeps_normal_outline(self):
+        boards = [placed(0, 0, 1150, 2650)]
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        rect = plan.boards[0]
+        self.assertEqual(rect.outline, render.COLOR_BOARD_OUTLINE)
+        self.assertEqual(rect.outline_width, 1.0)
+        self.assertNotIn("はみ出し", rect.tooltip)
+
+    def test_overhanging_fill_board_prefers_warning_outline(self):
+        # はみ出し(警告)と補填(専用色)が両方成り立つ場合、輪郭は警告を優先
+        boards = [placed(0, 0, 1150, 4000, is_fill=True)]
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        rect = plan.boards[0]
+        self.assertEqual(rect.fill, render.COLOR_FILL)
+        self.assertEqual(rect.outline, render.COLOR_OVERHANG_LINE)
+
 
 class UsageRatioByCategoryTests(unittest.TestCase):
     """VBA `CalculateUsageRatioByCategory` の移植。基準は常にパレット面積。"""

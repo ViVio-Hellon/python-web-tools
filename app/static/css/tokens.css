@@ -79,6 +79,11 @@
   --mat-angle:#0f766e; --mat-angle-bg:#f3fafa;
   --mat-pallet:#1e3a8a; --mat-product:#c2410c;
   --cut-line:#b4232a; --cut-zone:#f6c99a;
+  /* 補填ボード(幅補填/丈補填)。主ボード(上用=赤系/下用=緑系)とは別の
+     色相(黄系)にして、キャプションを読まなくても見分けられるようにする
+     (現場の声:「補填ボードがあまりにも解かりにくい」)。上用/下用どちらの
+     図でも同じ色(THIN_*の色分けと同じ考え方) */
+  --mat-fill:#8a6d1f; --mat-fill-fill:#f5e6b8; --mat-fill-line:#8a6d1f;
 
   /* 細くて文字が入らないボードの色分け(30/50/100mm ほか)。
      図の地(--mat-*-bg)の上に置かれ、幅mmは凡例で読む。
@@ -219,6 +224,7 @@
 
     --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#6b3036; --mat-upper-line:#d98b90;
     --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#112818; --mat-lower-line:#4f9c6f;
+    --mat-fill:#e0c264; --mat-fill-fill:#3d3312; --mat-fill-line:#e0c264;
     --mat-angle:#4fbdb2; --mat-angle-bg:#152726;
     --mat-pallet:#8fb4f5; --mat-product:#f59e5b;
     --cut-line:#f4a0a4; --cut-zone:#7a4a1e;
@@ -276,6 +282,7 @@
 
   --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#6b3036; --mat-upper-line:#d98b90;
   --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#112818; --mat-lower-line:#4f9c6f;
+  --mat-fill:#e0c264; --mat-fill-fill:#3d3312; --mat-fill-line:#e0c264;
   --mat-angle:#4fbdb2; --mat-angle-bg:#152726;
   --mat-pallet:#8fb4f5; --mat-product:#f59e5b;
   --cut-line:#f4a0a4; --cut-zone:#7a4a1e;

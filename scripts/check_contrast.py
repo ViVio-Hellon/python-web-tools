@@ -123,6 +123,7 @@ TEXT_PAIRS: tuple[tuple[str, str, str], ...] = (
     # 配置図のキャプション(ボードの塗りの上に寸法を書く)
     ("mat-upper-fill", "ink", "上用ボードの寸法"),
     ("mat-lower-fill", "ink", "下用ボードの寸法"),
+    ("mat-fill-fill", "ink", "補填ボードの寸法"),
     ("mat-upper-bg", "ink", "上用キャンバスの地"),
     ("mat-lower-bg", "ink", "下用キャンバスの地"),
     ("mat-angle-bg", "ink", "アングルキャンバスの地"),
@@ -170,6 +171,17 @@ UI_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("mat-lower-fill", "mat-lower-line", "下用ボードの輪郭(隣と)"),
     ("mat-upper-bg", "mat-upper-line", "上用ボードの輪郭(空き領域と)"),
     ("mat-lower-bg", "mat-lower-line", "下用ボードの輪郭(空き領域と)"),
+    # 補填ボード(幅補填/丈補填)の専用色。上用/下用どちらの図にも出る
+    ("mat-fill-fill", "mat-fill-line", "補填ボードの輪郭(隣と)"),
+    ("mat-upper-bg", "mat-fill-line", "補填ボードの輪郭(上用の空き領域と)"),
+    ("mat-lower-bg", "mat-fill-line", "補填ボードの輪郭(下用の空き領域と)"),
+    # はみ出したボードの警告輪郭。既存の状態色(--state-warn)を流用するので、
+    # 実際に隣り合う地(各図の塗り・空き領域)との組を確かめる
+    ("mat-upper-fill", "state-warn", "はみ出しボードの警告輪郭(上用ボードと)"),
+    ("mat-lower-fill", "state-warn", "はみ出しボードの警告輪郭(下用ボードと)"),
+    ("mat-fill-fill", "state-warn", "はみ出しボードの警告輪郭(補填ボードと)"),
+    ("mat-upper-bg", "state-warn", "はみ出しボードの警告輪郭(上用の空き領域と)"),
+    ("mat-lower-bg", "state-warn", "はみ出しボードの警告輪郭(下用の空き領域と)"),
     ("surface", "cut-line", "カット線"),
     ("mat-lower-bg", "cut-line", "カット線(下用の図の上)"),
     ("mat-upper-bg", "cut-line", "カット線(上用の図の上)"),

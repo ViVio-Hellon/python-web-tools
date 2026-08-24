@@ -80,6 +80,21 @@ COLOR_THIN_TINY = "#c83c3c"    # RGB(200,60,60)   高さ6px未満
 COLOR_THIN_SMALL = "#e67850"   # RGB(230,120,80)  高さ12px未満
 COLOR_THIN_OTHER = "#3c8c8c"   # RGB(60,140,140)
 
+# 【VBA由来ではない、現場の声への対応】補填ボード(幅補填/丈補填)は
+# 主ボードと同じ塗り(上用=薄赤/下用=薄緑)だったため、キャプションの
+# 数字を読んで比べない限り見分けが付かなかった(現場の声:「はみ出しも
+# 補填ボードもあまりにも解かりにくい」)。キャプションが入る大きさの
+# ボードにも、主/補填を問わず常に見分けが付くよう専用の色を割り当てる
+# (「細すぎて文字が入らない」ときの色分け=THIN_* とは別物)
+COLOR_FILL = "#e0c264"        # 補填ボードの塗り
+COLOR_FILL_OUTLINE = "#8a6d1f"  # 補填ボードの輪郭
+
+# 【VBA由来ではない】パレット/製品の枠を超えて配置された(はみ出した)
+# ボードは、以前は枠内のボードと見分けが付かなかった(現場の声:同上)。
+# 塗りは変えず、警告色の輪郭だけを太くして示す
+# (`--state-warn` と同じ値。render_json.py でそのトークンに対応付ける)
+COLOR_OVERHANG_LINE = "#883c02"
+
 
 @dataclass
 class CutInfo:
@@ -122,6 +137,9 @@ class Rect:
     caption: str = ""
     font_size: int = 14
     tooltip: str = ""
+    # はみ出したボードの輪郭を太くして警告色と合わせて目立たせる
+    # (`outline` を `COLOR_OVERHANG_LINE` にするのとセットで使う)
+    outline_width: float = 1.0
 
 
 @dataclass
@@ -473,6 +491,18 @@ def build_caption(board: PlacedBoardModel, cut: CutInfo, screen_h: float) -> tup
     return cap_w, 22
 
 
+def _is_overhanging(board: PlacedBoardModel, base_w: int, base_l: int) -> bool:
+    """ボードが基準枠(パレット/製品)を超えて配置されているか。
+
+    枠の外へ出た部分は既に描画上そのまま見せているが(補正しない仕様)、
+    どのボードがはみ出しているかは塗り色だけでは分からなかった
+    (現場の声)。ここで判定し、輪郭の色分けに使う。
+    """
+    return (board.x < 0 or board.y < 0
+            or board.x + board.length > base_l
+            or board.y + board.width > base_w)
+
+
 # ------------------------------------------------------------------
 # 描画計画の組み立て
 # ------------------------------------------------------------------
@@ -536,14 +566,22 @@ def build_render_plan(
             fill = thin_board_color(thin_side, screen_h)
         else:
             caption, font_size = build_caption(board, cut, screen_h)
-            fill = board_color(board.board_category)
+            fill = COLOR_FILL if board.is_fill_board else board_color(board.board_category)
 
         if board.is_fill_board and cut.note:
             tooltip += f" / カット:{cut.note}"
 
+        if _is_overhanging(board, base_w, base_l):
+            outline, outline_width = COLOR_OVERHANG_LINE, 2.5
+            tooltip += " / はみ出し"
+        elif board.is_fill_board:
+            outline, outline_width = COLOR_FILL_OUTLINE, 1.0
+        else:
+            outline, outline_width = COLOR_BOARD_OUTLINE, 1.0
+
         plan.boards.append(Rect(
             x=px, y=py, width=screen_w, height=screen_h,
-            fill=fill, outline=COLOR_BOARD_OUTLINE,
+            fill=fill, outline=outline, outline_width=outline_width,
             caption=caption, font_size=font_size, tooltip=tooltip,
         ))
 

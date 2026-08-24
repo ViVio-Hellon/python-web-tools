@@ -50,7 +50,7 @@ class RenderPlanTests(unittest.TestCase):
     def test_矩形の項目がそろっている(self) -> None:
         rect = self.plan["boards"][0]
         for key in ("x", "y", "width", "height", "fill", "outline",
-                    "caption", "font_size"):
+                    "caption", "font_size", "outline_width"):
             self.assertIn(key, rect)
 
     def test_元の計画と同じ値になる(self) -> None:

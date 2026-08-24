@@ -130,7 +130,7 @@ export function boardSvg(plan, viewBox) {
     group.appendChild(el("rect", {
       x: rect.x, y: rect.y, width: rect.width, height: rect.height,
       fill: paint(rect.fill_token), stroke: paint(rect.line_token),
-      "stroke-width": 1,
+      "stroke-width": rect.outline_width || 1,
     }));
     const text = caption(rect, "--ink");
     if (text) group.appendChild(text);
@@ -230,16 +230,24 @@ export function angleSvg(plan, viewBox) {
 const EXTENT_SELECTOR = ".plan__board, .plan__frame, .plan__extent";
 
 /**
- * はみ出したぶんまで見えるように `viewBox` を広げる。
+ * `viewBox` を実際に描かれた内容の外接矩形へ合わせる。
  *
- * 計画は論理キャンバス(980×460)に収める前提で作られているが、
- * `placement_render` は**枠からはみ出したボードを補正しない**
- * (はみ出しをそのまま見せるのがVBA/tkinter版からの仕様)。
- * その結果、はみ出しの大きい配置では板が枠の外へ出る。
+ * 計画は論理キャンバス(980×460 / 980×136)を基準に座標を作るが、
+ * これは**サーバ側の計算に使う共通の物差し**であって、画面に映す枠の
+ * 大きさそのものではない。以前は「はみ出して基準キャンバスを超えたときだけ
+ * 広げる」実装だったため、パレット/製品の縦横比が基準キャンバス
+ * (約2.13:1 / 7.2:1)と大きく違う場合、枠がキャンバスの中央に小さく
+ * 収まったまま周囲に大きな余白が残っていた(現場の声:「キャンバスは
+ * 余っているのに中央に小さく展開しているように見える」)。
  *
- * tkinter の Canvas はそこで切り落としていた ── 「はみ出し37.4%」と
- * 数字では出ていても、**どれだけ出ているのかは図から読めなかった**。
- * SVG は `viewBox` を広げるだけで全体を写せる。
+ * `getBBox()` で実際に描かれた要素(枠・ボード・アングルのバー等)の
+ * 外接矩形を求め、**収まっているときも含めて常に**それへ合わせる。
+ * 枠(`.plan__frame`/`.plan__extent`)自体は必ず含まれるので、パレット/
+ * 製品のうち実際にボードが置かれていない余白は今までどおり見える
+ * (隠すのは基準キャンバスの無駄な余白だけ)。
+ *
+ * はみ出し配置(枠を超えて置かれたボード)も引き続きそのまま写る
+ * (`placement_render` は補正しない仕様)。
  *
  * 【切り落とし部を数に入れない理由】
  * 幅を1350mmカットするようなときの切り落とし部は板より大きくなる。
@@ -257,12 +265,11 @@ export function fitToContent(svg, viewBox) {
   const base = String(viewBox || "").split(/\s+/).map(Number);
   if (base.length !== 4 || base.some(Number.isNaN)) return;
 
-  let minX = base[0];
-  let minY = base[1];
-  let maxX = base[0] + base[2];
-  let maxY = base[1] + base[3];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
   const pad = 6;
-  let grew = false;
 
   for (const node of svg.querySelectorAll(EXTENT_SELECTOR)) {
     let box;
@@ -272,13 +279,14 @@ export function fitToContent(svg, viewBox) {
       continue;                               // 描画されていないと例外になる
     }
     if (!box || (!box.width && !box.height)) continue;
-    if (box.x - pad < minX) { minX = box.x - pad; grew = true; }
-    if (box.y - pad < minY) { minY = box.y - pad; grew = true; }
-    if (box.x + box.width + pad > maxX) { maxX = box.x + box.width + pad; grew = true; }
-    if (box.y + box.height + pad > maxY) { maxY = box.y + box.height + pad; grew = true; }
+    minX = Math.min(minX, box.x);
+    minY = Math.min(minY, box.y);
+    maxX = Math.max(maxX, box.x + box.width);
+    maxY = Math.max(maxY, box.y + box.height);
   }
-  if (!grew) return;                          // 収まっている。tkinter版と同じ図
+  if (!Number.isFinite(minX)) return;          // 描かれた要素が無い
 
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
   svg.setAttribute("viewBox", `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
   svg.dataset.fitted = "1";
 }

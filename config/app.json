@@ -1,7 +1,7 @@
 {
   "app_id": "nlm.packaging-tool",
   "display_name": "梱包資材総合ツール",
-  "version": "2.36.1",
+  "version": "2.37.0",
   "monitor_level": 2,
 
   "local_dir_name": "PackagingTool",
