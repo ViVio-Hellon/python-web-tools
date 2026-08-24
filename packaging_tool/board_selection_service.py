@@ -30,7 +30,7 @@ from typing import Optional
 
 from . import config, db, material_service
 from .logging_utils import get_logger
-from .user_log import UserLog
+from .user_log import RejectLog, UserLog
 
 log = get_logger("board_selection_service")
 
@@ -631,11 +631,16 @@ def list_pallets_for_product(
     決まったことは画面を見れば分かるが、「なぜこのパレットが候補から
     外れたのか」は記録にしか残らない(現場の声:「決定事項は見れば
     わかる。必要なのは経緯」)。
+
+    【除外ログの上限】マスタの件数が多いと「×除外」の行が際限なく
+    伸び、本当に必要な「○候補」の行が埋もれてしまう(現場の声)。
+    上位`RejectLog`の既定件数だけそのまま出し、残りは件数にまとめる。
     """
     # auto_select_pallet の各パスは厳密/±5mmの許容差を使う。ここも同じ
     # 5mmにして、決定されたパレットが検索結果から漏れないようにする
     tol = 5
     ulog = user_log if user_log is not None else UserLog()   # 未指定なら捨てバッファ
+    rejects = RejectLog(ulog)
     rows = db.fetch_all(conn, "SELECT * FROM PalletMaster ORDER BY 管理番号",
                         caller_name="list_pallets_for_product") or []
     ex_only_mode = is_ex_order and ex_only
@@ -674,7 +679,7 @@ def list_pallets_for_product(
         if not w or not l:
             continue                       # 寸法が入っていない行は数えない
         if not _fit_range_ok(row) or _fit_range_inverted(row):
-            ulog.log(f"  ×除外: {label} 適合範囲がマスタ側で不正です")
+            rejects.log(f"  ×除外: {label} 適合範囲がマスタ側で不正です")
             continue
 
         industry = row["業界"] or ""
@@ -685,7 +690,7 @@ def list_pallets_for_product(
         allowed = [(sw, sl, rot, kind) for sw, sl, rot, kind in tries
                    if _two_stack_ok(kind, industry, row["桁数"], row["脚数"])]
         if two_stack and not allowed:
-            ulog.log(f"  ×除外: {label} 2山積の条件に合いません"
+            rejects.log(f"  ×除外: {label} 2山積の条件に合いません"
                      f"(業界 {industry or '(なし)'} /"
                      f" 桁数 {row['桁数']} / 脚数 {row['脚数']})")
             continue
@@ -693,7 +698,7 @@ def list_pallets_for_product(
         hit = next(((sw, sl, rot, kind) for sw, sl, rot, kind in allowed
                     if _size_ok(row, sw, sl, tol)), None)
         if hit is None:
-            ulog.log(f"  ×除外: {label} 適合範囲外"
+            rejects.log(f"  ×除外: {label} 適合範囲外"
                      f"(巾{row['巾適合min']}〜{row['巾適合max']} /"
                      f" 丈{row['丈適合min']}〜{row['丈適合max']})")
             continue
@@ -702,7 +707,7 @@ def list_pallets_for_product(
         if not _physically_fits(row, search_w, search_l):
             # 適合範囲には入るのに現物には載らない。**マスタの適合範囲が
             # 現物より広い**行で起きる ── 見分けが付かないと直せない
-            ulog.log(f"  ×除外: {label} 現物に載りません"
+            rejects.log(f"  ×除外: {label} 現物に載りません"
                      f"(製品 {search_w}x{search_l})")
             continue
 
@@ -710,16 +715,16 @@ def list_pallets_for_product(
         is_ex = "EX" in symbol.upper()
         if ex_only_mode:
             if not is_ex:
-                ulog.log(f"  ×除外: {label} EXオンリーですがEXではありません")
+                rejects.log(f"  ×除外: {label} EXオンリーですがEXではありません")
                 continue
         elif not show_all and is_ex:
-            ulog.log(f"  ×除外: {label} EX({symbol})なので既定では出しません")
+            rejects.log(f"  ×除外: {label} EX({symbol})なので既定では出しません")
             continue
 
         if industry == "5×10":
             ok, _needs_warning = _thickness_5x10_ok(symbol, manufactured_thickness)
             if not ok:
-                ulog.log(f"  ×除外: {label} 5×10の板厚条件に合いません"
+                rejects.log(f"  ×除外: {label} 5×10の板厚条件に合いません"
                          f"(記号 {symbol} / 板厚 {manufactured_thickness})")
                 continue
 
@@ -735,6 +740,7 @@ def list_pallets_for_product(
                  + (f"({stacked})" if stacked else "")
                  + ("(厳密)" if exact else f"(+{tol}mm)"))
 
+    rejects.flush()
     ulog.log(f"[パレット絞り込み] {len(result)}件が候補です", emphasis=True)
     return result
 

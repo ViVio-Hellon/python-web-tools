@@ -8,8 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import logging
+
 from packaging_tool import board_selection_service as svc, db
-from packaging_tool.user_log import LogEntry, UserLog
+from packaging_tool.user_log import LogEntry, RejectLog, UserLog, bridge_from
 
 
 class UserLogTests(unittest.TestCase):
@@ -73,6 +75,108 @@ class UserLogTests(unittest.TestCase):
             log.log(str(i))
         self.assertEqual([e.text for e in log.entries], ["1", "2", "3"])
         self.assertIsNone(received[-1])   # 巻き戻しは全再描画を促す
+
+
+class RejectLogTests(unittest.TestCase):
+    """現場の声:「候補が多いと除外の行が際限なく出る」への対応。"""
+
+    def setUp(self) -> None:
+        self.log = UserLog()
+
+    def test_shows_up_to_the_limit(self):
+        rej = RejectLog(self.log, limit=3)
+        for i in range(3):
+            rej.log(f"除外{i}")
+        self.assertEqual(len(self.log), 3)
+
+    def test_suppresses_beyond_the_limit(self):
+        rej = RejectLog(self.log, limit=3)
+        for i in range(10):
+            rej.log(f"除外{i}")
+        # 上位3件だけが実際にログへ出ている(まだflush前)
+        self.assertEqual(len(self.log), 3)
+
+    def test_flush_summarizes_suppressed_count(self):
+        rej = RejectLog(self.log, limit=3)
+        for i in range(10):
+            rej.log(f"除外{i}")
+        rej.flush()
+        self.assertEqual(len(self.log), 4)  # 上位3件 + まとめ1行
+        self.assertIn("ほか7件", self.log.entries[-1].text)
+
+    def test_flush_is_noop_when_nothing_suppressed(self):
+        rej = RejectLog(self.log, limit=10)
+        rej.log("除外0")
+        rej.flush()
+        self.assertEqual(len(self.log), 1)  # まとめ行は追加されない
+
+    def test_limit_is_cumulative_across_flushes(self):
+        """`flush()` は省略件数の集計だけをリセットする(表示上限は
+
+        セッション全体で1つ)。パスをまたいで際限なく出続けないように
+        するのが目的なので、パスごとに上限が復活してしまうと意味が無い。
+        """
+        rej = RejectLog(self.log, limit=1)
+        for i in range(5):
+            rej.log(f"A除外{i}")
+        rej.flush()
+        for i in range(5):
+            rej.log(f"B除外{i}")
+        rej.flush()
+        # 表示は最初の1件だけ。まとめ行は1回目(A側4件)・2回目(B側5件)の2行
+        shown = [e.text for e in self.log.entries if "除外" in e.text and "ほか" not in e.text]
+        self.assertEqual(shown, ["A除外0"])
+        summaries = [e.text for e in self.log.entries if "ほか" in e.text]
+        self.assertEqual(summaries, ["  …ほか4件を除外(表示は先頭1件まで)",
+                                     "  …ほか5件を除外(表示は先頭1件まで)"])
+
+
+class BridgeFromRejectCappingTests(unittest.TestCase):
+    """`bridge_from` を通る「却下」系のログが上位N件に絞られること。
+
+    board_selection_algorithm の `log.debug()` は、候補ボードが多いと
+    却下の行を何十行も出しうる。採用やカットの行が埋もれないよう、
+    却下系だけ上位N件に絞り、それ以外の行はそのまま素通しする。
+    """
+
+    def setUp(self) -> None:
+        self.log = UserLog()
+        self.logger = logging.getLogger("packaging_tool.board_selection_algorithm")
+
+    def test_reject_lines_are_capped(self):
+        with bridge_from(self.log):
+            for i in range(30):
+                self.logger.debug("却下(幅超過): %sx1000 effW=%s", i, i)
+        reject_lines = [e for e in self.log.entries if "却下" in e.text]
+        # 上位10件(既定) + まとめの1行 = 11行に収まる
+        self.assertLessEqual(len(reject_lines), 11)
+        self.assertTrue(any("ほか" in e.text for e in reject_lines))
+
+    def test_non_reject_lines_always_pass_through(self):
+        with bridge_from(self.log):
+            for i in range(30):
+                self.logger.debug("却下(幅超過): %sx1000", i)
+            self.logger.debug("採用: 900x600 3枚")
+        self.assertTrue(any("採用" in e.text for e in self.log.entries))
+
+    def test_summary_appears_before_the_next_non_reject_line(self):
+        # 却下の束のすぐあとに続く「採用」より前に、まとめ行が入ること
+        # (どの段階の却下がまとまったのか、順番から追えるようにする)
+        with bridge_from(self.log):
+            for i in range(15):
+                self.logger.debug("却下(幅超過): %sx1000", i)
+            self.logger.debug("採用: 900x600 3枚")
+        texts = [e.text for e in self.log.entries]
+        summary_idx = next(i for i, t in enumerate(texts) if "ほか" in t)
+        adopt_idx = next(i for i, t in enumerate(texts) if "採用" in t)
+        self.assertLess(summary_idx, adopt_idx)
+
+    def test_trailing_rejects_are_flushed_on_exit(self):
+        # 最後の行が却下系のまま with を抜けても、まとめ行が出ること
+        with bridge_from(self.log):
+            for i in range(15):
+                self.logger.debug("却下(幅超過): %sx1000", i)
+        self.assertTrue(any("ほか" in e.text for e in self.log.entries))
 
 
 def _pallet(conn, **kw) -> None:

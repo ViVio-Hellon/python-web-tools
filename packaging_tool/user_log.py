@@ -164,6 +164,43 @@ class UserLog:
                 pass
 
 
+# 既定の上限件数(除外ログの上位何件を出すか)。
+DEFAULT_REJECT_LIMIT = 10
+
+
+class RejectLog:
+    """「候補を1件ずつ却下していく」ログの上位N件だけを出し、残りは
+
+    件数にまとめる(VBAには無い、Python版だけの追加)。
+
+    現場の声:「パレット/ボードの候補を絞り込むたびに、除外の行が
+    際限なく出て、本当に効いた判断(採用・カット等)が埋もれてしまう」。
+    在庫やマスタの件数が多いほど、除外だけの行が数十〜数百行に伸びる。
+    上位 `limit` 件だけそのまま出し、それ以降は件数だけ最後にまとめる。
+    """
+
+    def __init__(self, target: "UserLog", limit: int = DEFAULT_REJECT_LIMIT) -> None:
+        self._target = target
+        self.limit = limit
+        self._shown = 0
+        self._suppressed = 0
+
+    def log(self, text: str) -> None:
+        if self._shown < self.limit:
+            self._target.log(text)
+            self._shown += 1
+        else:
+            self._suppressed += 1
+
+    def flush(self, label: str = "除外") -> None:
+        """溜まった省略件数を1行にまとめて出す。呼んだあとは0に戻る。"""
+        if self._suppressed:
+            self._target.log(
+                f"  …ほか{self._suppressed}件を{label}"
+                f"(表示は先頭{self.limit}件まで)")
+            self._suppressed = 0
+
+
 # アプリ全体で共有するインスタンス(VBAのフォーム単位の txtUserLog に相当)。
 # サービス層の関数は原則として引数で `UserLog` を受け取るが、
 # 省略時はこれが使われる。
@@ -224,19 +261,39 @@ def keep_on_disk(target: Optional[UserLog] = None) -> None:
 # その出力をユーザーログへ流す。
 _BRIDGED = "packaging_tool.board_selection_algorithm"
 
+# 「却下」系の行だと判断する目印。この文言を含む行だけ上位N件に絞る。
+# 「採用」「[丈カット]」等の**決まったことを伝える行**はここに当たらず、
+# 何件出ても素通しする(埋もれさせたくないのはこちらの方だから)
+_REJECT_MARKER = "却下"
+
 
 class _Bridge(logging.Handler):
-    """`logging` の1行を `UserLog` の1行にする。"""
+    """`logging` の1行を `UserLog` の1行にする。
 
-    def __init__(self, target: "UserLog") -> None:
+    **却下系の行は上位N件だけ**にする(現場の声:「候補が多いと除外の
+    行が際限なく出て、採用やカットの行が埋もれる」)。却下以外の行が
+    来た時点(=次の段階に進んだ時点)で、それまでの省略件数を1行に
+    まとめて出す。`RejectLog` と同じ考え方をロガー橋渡し側にも適用した形。
+    """
+
+    def __init__(self, target: "UserLog", limit: int = DEFAULT_REJECT_LIMIT) -> None:
         super().__init__(level=logging.DEBUG)
         self._target = target
+        self._rejects = RejectLog(target, limit=limit)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            self._target.log("  " + record.getMessage())
+            message = record.getMessage()
+            if _REJECT_MARKER in message:
+                self._rejects.log("  " + message)
+                return
+            self._rejects.flush("却下")
+            self._target.log("  " + message)
         except Exception:                         # noqa: BLE001 - ログで止めない
             pass
+
+    def flush_rejects(self) -> None:
+        self._rejects.flush("却下")
 
 
 @contextmanager
@@ -253,5 +310,7 @@ def bridge_from(target: "UserLog", *names: str):
     try:
         yield
     finally:
+        # 最後の行が却下系だった場合、まとめずに終わらせない
+        handler.flush_rejects()
         for one in loggers:
             one.removeHandler(handler)
