@@ -1181,6 +1181,64 @@ class IndustryStandardShortcutTests(unittest.TestCase):
         self.assertIn("L_1000x2000", r2.length_cut_info)
 
 
+class Shortcut5x8Tests(unittest.TestCase):
+    """"5×8"専用サイズショートカット(上用・下用)。
+
+    "1×2"/"4×8"と違い1枚では収まらないため、主+補填の複数枚構成を
+    直接組み立てる。使用する全サイズが在庫にあるときだけ発動し、
+    1つでも欠品していれば一般ロジックへ落とす。
+    """
+
+    def setUp(self) -> None:
+        self.palette = make_palette(1600, 2600)
+        self.product = ProductSize(width=1520, length=2502)  # 5×8の範囲内
+
+    def test_lower_shortcut_builds_main_plus_length_fill(self):
+        available = [board(1030, 1520), board(450, 1520)]
+        r = alg.select_lower_boards(available, self.palette, self.product)
+        self.assertEqual(len(r.boards), 2)
+        main, fill = r.boards
+        self.assertEqual((main.width, main.length, main.count, main.tag),
+                         (1030, 1520, 2, alg.TAG_MAIN))
+        self.assertEqual((fill.width, fill.length, fill.count, fill.tag),
+                         (450, 1520, 1, alg.TAG_LENGTH_FILL))
+
+    def test_lower_falls_back_when_fill_size_missing(self):
+        available = [board(1030, 1520)]  # 450x1520が欠品
+        r = alg.select_lower_boards(available, self.palette, self.product)
+        self.assertNotEqual(
+            [(b.width, b.length) for b in r.boards], [(1030, 1520), (450, 1520)])
+
+    def test_upper_shortcut_builds_main_plus_two_width_fills(self):
+        available = [board(1250, 2500), board(100, 2500), board(30, 2500)]
+        lower = [SelectedBoard(width=1030, length=1520, count=2, tag=alg.TAG_MAIN)]
+        r = alg.select_upper_boards(lower, available, self.palette, self.product)
+        self.assertEqual(len(r.boards), 3)
+        main, fill1, fill2 = r.boards
+        self.assertEqual((main.width, main.length, main.count), (1250, 2500, 1))
+        self.assertEqual((fill1.width, fill1.length, fill1.count, fill1.tag),
+                         (100, 2500, 2, alg.TAG_WIDTH_FILL))
+        self.assertEqual((fill2.width, fill2.length, fill2.count, fill2.tag),
+                         (30, 2500, 1, alg.TAG_WIDTH_FILL))
+
+    def test_upper_falls_back_when_any_fill_size_missing(self):
+        available = [board(1250, 2500), board(100, 2500)]  # 30x2500が欠品
+        lower = [SelectedBoard(width=1030, length=1520, count=2, tag=alg.TAG_MAIN)]
+        r = alg.select_upper_boards(lower, available, self.palette, self.product)
+        self.assertNotEqual(
+            [(b.width, b.length) for b in r.boards],
+            [(1250, 2500), (100, 2500), (30, 2500)])
+
+    def test_outside_5x8_range_does_not_trigger_shortcut(self):
+        # 幅が範囲外。ショートカット専用サイズが在庫に無いので、
+        # 発動していれば候補ゼロで狭幅パレット扱いになるはず
+        product = ProductSize(width=1490, length=2502)
+        available = [board(900, 1600)]
+        r = alg.select_lower_boards(available, self.palette, product)
+        self.assertFalse(r.needs_narrow)
+        self.assertEqual((r.boards[0].width, r.boards[0].length), (900, 1600))
+
+
 class SelectUpperBoardsTests(unittest.TestCase):
     """VBA `SelectUpperBoards` の移植の検証。"""
 

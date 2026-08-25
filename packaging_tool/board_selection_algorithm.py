@@ -1405,6 +1405,39 @@ SC_4X8_W_MIN, SC_4X8_W_MAX = 1248, 1255
 SC_4X8_L_MIN, SC_4X8_L_MAX = 2499, 2505
 SC_4X8_BOARD_W, SC_4X8_BOARD_L = 1250, 2500
 
+# "5×8"業界: 幅1498〜1535mm、丈2499〜2505mm。"1×2"/"4×8"と異なり1枚では
+# 収まらず、上下で別々の複数枚構成になる。実運用では製品幅によって
+# 1498〜1505→1000×1500 3枚、1506〜1535→1030×1520 2枚+450×1520 1枚の
+# 2ルートに分かれるが、「5×8なのに構成が2種類ある」ことを作業者が
+# 取り違えるリスクのほうが大きいため、範囲全域を単一構成に決め打ちする
+# (現場の運用判断)。
+SC_5X8_W_MIN, SC_5X8_W_MAX = 1498, 1535
+SC_5X8_L_MIN, SC_5X8_L_MAX = 2499, 2505
+
+# 上用構成: 1250×2500 1枚(主) + 100×2500 2枚(幅補填) + 30×2500 1枚(幅補填) = 幅1480
+SC_5X8_U_MAIN_W, SC_5X8_U_MAIN_L = 1250, 2500
+SC_5X8_U_FILL1_W, SC_5X8_U_FILL1_L, SC_5X8_U_FILL1_C = 100, 2500, 2
+SC_5X8_U_FILL2_W, SC_5X8_U_FILL2_L, SC_5X8_U_FILL2_C = 30, 2500, 1
+
+# 下用構成: 1030×1520 2枚(主) + 450×1520 1枚(丈補填) = 丈2510
+SC_5X8_L_MAIN_W, SC_5X8_L_MAIN_L, SC_5X8_L_MAIN_C = 1030, 1520, 2
+SC_5X8_L_FILL_W, SC_5X8_L_FILL_L, SC_5X8_L_FILL_C = 450, 1520, 1
+
+
+def _has_available_board(available: list[BoardModel], w: int, l: int) -> bool:
+    """VBA `HasAvailableBoard` の移植。
+
+    `availableBoards` に指定サイズ(向き不問)が存在するか。"5×8"のように
+    複数サイズを揃えて使う構成で、1つでも欠品していればショートカット
+    自体を諦めるための判定に使う。
+    """
+    return any((b.width, b.length) in ((w, l), (l, w)) for b in available)
+
+
+def _is_5x8_range(product: ProductSize) -> bool:
+    return (SC_5X8_W_MIN <= product.width <= SC_5X8_W_MAX
+            and SC_5X8_L_MIN <= product.length <= SC_5X8_L_MAX)
+
 
 def _industry_standard_board_size(product: ProductSize) -> Optional[tuple[int, int]]:
     """製品サイズが業界標準("1×2"/"4×8")の範囲に入っていれば
@@ -1504,6 +1537,27 @@ def select_lower_boards(
                          product.width, product.length, need_length_cut)
                 return LowerSelectionResult(
                     boards=[board], state=state, length_cut_info=length_cut_info)
+
+    # 0.6. "5×8"専用サイズショートカット(下用、通常モードのみ)。
+    # 上用と対になる構成(主2枚+丈補填1枚で丈2510を確保する)。使用する
+    # 2サイズのいずれかが在庫に無い場合はショートカットを諦めて一般
+    # ロジックへ落とす(中途半端な構成で確定させる事故を避けるため)。
+    if not is_protec_mode and _is_5x8_range(product):
+        if (_has_available_board(available, SC_5X8_L_MAIN_W, SC_5X8_L_MAIN_L)
+                and _has_available_board(available, SC_5X8_L_FILL_W, SC_5X8_L_FILL_L)):
+            board_main = SelectedBoard(
+                width=SC_5X8_L_MAIN_W, length=SC_5X8_L_MAIN_L,
+                count=SC_5X8_L_MAIN_C, tag=TAG_MAIN)
+            board_fill = SelectedBoard(
+                width=SC_5X8_L_FILL_W, length=SC_5X8_L_FILL_L,
+                count=SC_5X8_L_FILL_C, tag=TAG_LENGTH_FILL)
+            state = PassState(remaining_len=0, pass1_done=True)
+            log.debug("SelectLowerBoards [5×8ショートカット]: %sx%s %s枚 + %sx%s %s枚 (製品%sx%s)",
+                     SC_5X8_L_MAIN_W, SC_5X8_L_MAIN_L, SC_5X8_L_MAIN_C,
+                     SC_5X8_L_FILL_W, SC_5X8_L_FILL_L, SC_5X8_L_FILL_C,
+                     product.width, product.length)
+            return LowerSelectionResult(boards=[board_main, board_fill], state=state)
+        log.debug("SelectLowerBoards: 5×8該当だが必要サイズが在庫にない → 一般ロジックへ")
 
     boards: list[SelectedBoard] = []
     state = PassState(remaining_len=palette.length)
@@ -1991,6 +2045,31 @@ def select_upper_boards(
                          board.width, board.length, count,
                          product.width, product.length, need_length_cut)
                 return result
+
+    # 2.6. "5×8"専用サイズショートカット(上用、通常モードでのみ発動)。
+    # "1×2"/"4×8"と違い1枚では収まらないため、主1枚+幅補填2種を直接
+    # 組み立てる。使用する3サイズのいずれかが在庫に無い場合は、中途半端な
+    # 構成で確定させず一般ロジックへ落とす。
+    if not is_protec_mode and not (last_hosozai and last_hosozai not in ("アングル", "一致なし")):
+        if _is_5x8_range(product):
+            if (_has_available_board(available, SC_5X8_U_MAIN_W, SC_5X8_U_MAIN_L)
+                    and _has_available_board(available, SC_5X8_U_FILL1_W, SC_5X8_U_FILL1_L)
+                    and _has_available_board(available, SC_5X8_U_FILL2_W, SC_5X8_U_FILL2_L)):
+                result.boards = [
+                    SelectedBoard(width=SC_5X8_U_MAIN_W, length=SC_5X8_U_MAIN_L,
+                                  count=1, tag=""),
+                    SelectedBoard(width=SC_5X8_U_FILL1_W, length=SC_5X8_U_FILL1_L,
+                                  count=SC_5X8_U_FILL1_C, tag=TAG_WIDTH_FILL),
+                    SelectedBoard(width=SC_5X8_U_FILL2_W, length=SC_5X8_U_FILL2_L,
+                                  count=SC_5X8_U_FILL2_C, tag=TAG_WIDTH_FILL),
+                ]
+                log.debug("SelectUpperBoards [5×8ショートカット]: %sx%s 1枚 + %sx%s %s枚 + %sx%s %s枚 (製品%sx%s)",
+                         SC_5X8_U_MAIN_W, SC_5X8_U_MAIN_L,
+                         SC_5X8_U_FILL1_W, SC_5X8_U_FILL1_L, SC_5X8_U_FILL1_C,
+                         SC_5X8_U_FILL2_W, SC_5X8_U_FILL2_L, SC_5X8_U_FILL2_C,
+                         product.width, product.length)
+                return result
+            log.debug("SelectUpperBoards: 5×8該当だが必要サイズが在庫にない → 一般ロジックへ")
 
     # 3. 主ボード選択(最初に条件を満たしたものを採用)
     sorted_upper = sort_boards_by_target_width(
