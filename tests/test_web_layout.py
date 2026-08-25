@@ -202,6 +202,33 @@ class EditTests(LayoutWebTestCase):
                          expect=400)
         self.assertIn("配置編集", body["error"]["message"])
 
+    def test_編集ONで検索の当たりが消える(self) -> None:
+        """現場の声:「棚検索の配置編集でつかみ→移動がないと強調表示
+        水色枠が消えない」。検索と配置編集は別の作業なので、編集に入った
+        時点で前の検索結果の色分け(STATE_HIT)は捨てる。動かして
+        初めて消える、という偶然の回避策に頼らせない。
+        """
+        name = self.first_shelf()
+        insert_board(self.conn, width=750, length=1130, label=name)
+        self.post("/api/layout/search", {"kind": "board", "width": 750, "length": 1130})
+        state = self.get()
+        hit = [s for s in state["shelves"] if s["state"] == presenter.STATE_HIT]
+        self.assertEqual([s["name"] for s in hit], [name])
+
+        state = self.post("/api/layout/edit", {"on": True})
+        hit = [s for s in state["shelves"] if s["state"] == presenter.STATE_HIT]
+        self.assertEqual(hit, [])
+
+    def test_編集OFFでも検索の当たりが消える(self) -> None:
+        name = self.first_shelf()
+        insert_board(self.conn, width=750, length=1130, label=name)
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/search", {"kind": "board", "width": 750, "length": 1130})
+
+        state = self.post("/api/layout/edit", {"on": False})
+        hit = [s for s in state["shelves"] if s["state"] == presenter.STATE_HIT]
+        self.assertEqual(hit, [])
+
         self.post("/api/layout/edit", {"on": True})
         self.post("/api/layout/move", {"name": name, "x": 10, "y": 10})
 
