@@ -555,34 +555,19 @@ class LengthFillWidthCorrectionTests(unittest.TestCase):
         self.assertEqual(boards[0].count, 3)
 
 
-class MainOrFixedLengthFillTests(unittest.TestCase):
-    """`_run_main_or_fixed_length_fill`(丈補填・上用/下用共通)。
+class FixedLengthFill100mmTests(unittest.TestCase):
+    """`_apply_fixed_length_fill_100mm`(丈補填の100mm固定ロジック、上用/下用共通)。
 
-    現場の声:「主サイズ決定⇒残り丈400越えの場合、主と同じサイズの
-    ボードを使用/残り丈400以下⇒100補填で丈を埋める(4回まで)、上下とも
-    同じにしてほしい」。下用は以前、在庫全体から丈残に近い短辺を探す
-    別の5回ループ(旧`_run_length_fill_loop`)を持っており、丈残400mm超で
-    主サイズ以外が選ばれることがあった。上用と同じ規則に揃えた。
+    現場の声:「残り丈400以下⇒100補填で丈を埋める(4回まで)、上下とも
+    同じにしてほしい」。丈残400mm以下という前提であれば、100mm板を
+    Ceiling(丈残/100)枚(最大4枚)追加するだけで必ずカバーできる。
     """
-
-    def test_over_400_repeats_the_main_board(self):
-        main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
-        boards = [main]
-        alg._run_main_or_fixed_length_fill(
-            boards, length_remaining=500, target_width=300,
-            available=[board(100, 100)], category="下用",
-        )
-        # 主ボードの枚数が増えるだけで、新しい種類は増えない
-        self.assertEqual(len(boards), 1)
-        self.assertEqual(main.count, 2)
 
     def test_400_or_less_fills_with_100mm_boards(self):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._run_main_or_fixed_length_fill(
-            boards, length_remaining=350, target_width=300,
-            available=[board(100, 100)], category="下用",
-        )
+        alg._apply_fixed_length_fill_100mm(
+            boards, 350, available=[board(100, 100)], category="下用")
         self.assertEqual(main.count, 1)  # 主ボードは増えない
         fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(len(fill_rows), 1)
@@ -592,30 +577,33 @@ class MainOrFixedLengthFillTests(unittest.TestCase):
     def test_100mm_fill_count_is_capped_at_4(self):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._run_main_or_fixed_length_fill(
-            boards, length_remaining=400, target_width=300,
-            available=[board(100, 100)], category="下用",
-        )
+        alg._apply_fixed_length_fill_100mm(
+            boards, 400, available=[board(100, 100)], category="下用")
         fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(fill_rows[0].count, alg.LENGTH_FILL_COUNT_CAP)
+
+    def test_over_400_is_deferred_to_force_add(self):
+        # 400mm超はここでは扱わない(4枚クランプで埋めきれず、後続の
+        # 丈不足強制追加と二重取りになるため)
+        main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
+        boards = [main]
+        alg._apply_fixed_length_fill_100mm(
+            boards, 500, available=[board(100, 100)], category="下用")
+        self.assertEqual(len(boards), 1)
 
     def test_no_100mm_stock_defers_without_crashing(self):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._run_main_or_fixed_length_fill(
-            boards, length_remaining=200, target_width=300,
-            available=[board(250, 250)], category="下用",
-        )
+        alg._apply_fixed_length_fill_100mm(
+            boards, 200, available=[board(250, 250)], category="下用")
         self.assertEqual(len(boards), 1)  # 100mm在庫が無ければ何も足さない
 
     def test_existing_length_fill_row_is_merged_not_duplicated(self):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         existing = SelectedBoard(100, 100, 1, alg.TAG_LENGTH_FILL)
         boards = [main, existing]
-        alg._run_main_or_fixed_length_fill(
-            boards, length_remaining=200, target_width=300,
-            available=[board(100, 100)], category="下用",
-        )
+        alg._apply_fixed_length_fill_100mm(
+            boards, 200, available=[board(100, 100)], category="下用")
         fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(len(fill_rows), 1)
         self.assertEqual(fill_rows[0].count, 1 + 2)  # 既存1枚 + ceil(200/100)=2枚
@@ -623,11 +611,43 @@ class MainOrFixedLengthFillTests(unittest.TestCase):
     def test_works_the_same_way_for_upper_category(self):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._run_main_or_fixed_length_fill(
-            boards, length_remaining=500, target_width=300,
-            available=[board(100, 100)], category="上用",
-        )
-        self.assertEqual(main.count, 2)
+        alg._apply_fixed_length_fill_100mm(
+            boards, 350, available=[board(100, 100)], category="上用")
+        fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(fill_rows[0].count, 4)
+
+
+class LowerLengthFillLoopSameWidthTests(unittest.TestCase):
+    """`_run_length_fill_loop`(丈補填反復ループ)の同幅完全一致への変更。
+
+    現場の声:「主サイズ決定⇒残り丈400越えの場合、主と同じサイズの
+    ボードを使用してほしいのに、主サイズではないものを使用している」。
+    在庫全体から丈残に近い短辺を探す5回ループ自体は維持しつつ、候補を
+    「主ボードと同幅(長辺が完全一致)」に限定する(以前は「同幅以上」)。
+    """
+
+    def test_picks_a_same_width_candidate_over_400mm_gap(self):
+        # 主の実効幅(sel_max_w)=1250。500x1250は長辺1250で主と同幅
+        sorted_boards = [board(500, 1250), board(1200, 1250)]
+        boards = [SelectedBoard(1250, 2500, 1, alg.TAG_MAIN)]
+        remaining = alg._run_length_fill_loop(
+            boards, sorted_boards, l_gap=600, sel_max_w=1250,
+            fatigue_map=None, fatigue_mode=False)
+        fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
+        self.assertEqual(len(fill_rows), 1)
+        self.assertEqual((fill_rows[0].width, fill_rows[0].length), (500, 1250))
+        self.assertEqual(remaining, 600 - 500)
+
+    def test_rejects_candidates_wider_than_the_main_board(self):
+        # 長辺が主の実効幅より大きい(1300)候補は、以前は"同幅以上"で
+        # 拾えていたが、いまは完全一致のみなので対象外
+        sorted_boards = [board(600, 1300)]
+        boards = [SelectedBoard(1250, 2500, 1, alg.TAG_MAIN)]
+        remaining = alg._run_length_fill_loop(
+            boards, sorted_boards, l_gap=600, sel_max_w=1250,
+            fatigue_map=None, fatigue_mode=False)
+        self.assertEqual(boards, [SelectedBoard(1250, 2500, 1, alg.TAG_MAIN)])
+        self.assertEqual(remaining, 600)
 
 
 class DropLengthFillTests(unittest.TestCase):
@@ -1337,19 +1357,21 @@ class UpperLengthFillFixedCalcTests(unittest.TestCase):
         self.assertEqual((length_fill.width, length_fill.length), (100, 800))
         self.assertEqual(length_fill.count, 1)
 
-    def test_needed_count_rounds_up_and_caps_at_4(self):
-        # 主900x190 x9 → 丈カバー1710、製品丈2000に対し丈残290mm
-        # Ceiling(290/100)=3枚だが、丈残400mm超になる別ケースでの保険と
-        # して上限4枚のクランプも確認する
+    def test_same_width_loop_runs_first_when_gap_exceeds_400(self):
+        # 主900x190 x9 → 丈カバー1710、製品丈2390に対し丈残680(400超)。
+        # 【仕様更新】丈残400超のときはもう主ボードを増やさず、同幅(900)
+        # の候補(500x900)を探して丈残を180まで縮めてから、100mm固定で
+        # 残りを埋める(下用の丈補填反復ループと同じ規則)
         product = ProductSize(width=900, length=2390)
-        boards = [SelectedBoard(900, 190, 9, alg.TAG_MAIN)]  # 丈カバー1710、丈残680>400
-        available = [board(100, 800)]
+        boards = [SelectedBoard(900, 190, 9, alg.TAG_MAIN)]
+        available = [board(100, 800), board(500, 900)]
         alg._run_upper_length_fill(boards, product, available)
 
-        # 丈残680は400超なので主+1枚(丈カバー1710+190=1900、丈残490)
-        # Ceiling(490/100)=5枚だが上限4枚にクランプされる
-        length_fill = next(b for b in boards if b.tag == alg.TAG_LENGTH_FILL)
-        self.assertEqual(length_fill.count, alg.LENGTH_FILL_COUNT_CAP)
+        self.assertEqual(boards[0].count, 9)  # 主ボードは増えない
+        same_width_row = next(b for b in boards if (b.width, b.length) == (500, 900))
+        self.assertEqual(same_width_row.tag, alg.TAG_LENGTH_FILL)
+        fixed_100_row = next(b for b in boards if (b.width, b.length) == (100, 800))
+        self.assertEqual(fixed_100_row.count, 2)  # ceil(180/100)=2
 
     def test_merges_into_existing_length_fill_row_of_same_size(self):
         # 主900x190 x9 → 丈カバー1710。既存"丈補填"100x800 x1が短辺(100)分
@@ -1389,10 +1411,13 @@ class ForceAddForUpperLengthShortageTests(unittest.TestCase):
         self.main = SelectedBoard(900, 190, 10, alg.TAG_MAIN)
 
     def test_skip_cap_check_ignores_wrong_tag_row(self):
-        """候補と同サイズの"幅補填"行が上限でも、丈不足強制追加には無関係(sfSkipCap)。"""
-        decoy = SelectedBoard(150, 1600, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_WIDTH_FILL)
+        """候補と同サイズの"幅補填"行が上限でも、丈不足強制追加には無関係(sfSkipCap)。
+
+        候補は主ボード(900x190、effW=900)と同幅(長辺900)の150x900。
+        """
+        decoy = SelectedBoard(150, 900, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_WIDTH_FILL)
         boards = [self.main, decoy]
-        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 1600)], None)
+        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 900)], None)
 
         self.assertEqual(self.main.count, 10)  # フォールバック(主+1枚)は発動しない
         self.assertEqual(decoy.count, alg.LENGTH_FILL_COUNT_CAP)  # 汚染されない
@@ -1401,14 +1426,26 @@ class ForceAddForUpperLengthShortageTests(unittest.TestCase):
 
     def test_merge_ignores_wrong_tag_row(self):
         """マージ(sfExists)も"丈補填"タグの行だけを対象にする。"""
-        decoy = SelectedBoard(150, 1600, 1, alg.TAG_WIDTH_FILL)
+        decoy = SelectedBoard(150, 900, 1, alg.TAG_WIDTH_FILL)
         boards = [self.main, decoy]
-        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 1600)], None)
+        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 900)], None)
 
         self.assertEqual(decoy.count, 1)  # "幅補填"行は汚染されない
         length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(len(length_fill_rows), 1)
         self.assertEqual(length_fill_rows[0].count, 1)
+
+    def test_candidate_must_match_main_boards_effective_width(self):
+        """【仕様更新】候補は主ボードと同幅(長辺完全一致)のみ対象。
+
+        150x1600は長辺1600で主(effW=900)と一致しないため対象外となり、
+        主ボードを増やすフォールバックへ回る。
+        """
+        boards = [self.main]
+        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 1600)], None)
+
+        self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
+        self.assertEqual(self.main.count, 11)  # フォールバック(主+1枚)が発動する
 
 
 class NarrowPaletteSelectionTests(unittest.TestCase):
