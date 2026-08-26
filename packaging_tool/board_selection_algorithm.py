@@ -899,7 +899,7 @@ def _drop_length_fill_when_covered(boards: list[SelectedBoard], palette: Palette
 
 def _force_add_for_length_shortage(
     boards: list[SelectedBoard], palette: Palette, product: ProductSize, available: list[BoardModel],
-    fatigue_map: Optional[dict[str, FatigueEntry]],
+    fatigue_map: Optional[dict[str, FatigueEntry]], sel_max_w: int,
 ) -> None:
     """VBA「丈不足強制追加」の移植。
 
@@ -935,6 +935,18 @@ def _force_add_for_length_shortage(
     for cand in lf_sorted:
         lf_short, lf_long = min(cand.width, cand.length), max(cand.width, cand.length)
         if lf_short < final_gap or lf_short > final_gap * 3 or lf_long < 10:
+            continue
+        # 【仕様更新】主ボードと同幅(完全一致)のみ候補とする。理由は丈補填
+        # 反復ループ(`_run_length_fill_loop`)と同一。これが欠けていたため、
+        # 丈不足強制追加ブロックだけは主ボードと異なる幅の板(実例:
+        # 295x1080)を選んでしまう不具合が、丈補填反復ループを直した後も
+        # 残っていた。
+        if lf_long != sel_max_w:
+            continue
+        # 【仕様更新】30/50/100mmは幅補填専用サイズのため、丈不足強制追加の
+        # 候補にもしない。理由は上用の同幅探索ループの除外と同一
+        # (補填専用サイズが主ボード代替として選ばれ続ける穴)。
+        if lf_short in (FILL_SIZE_30, FILL_SIZE_50, FILL_SIZE_100):
             continue
         # 【VBAからの修正】タグを見ずに幅・丈だけでマッチしていたため、同サイズの
         # 「主」や「幅補填」ボードが存在すると、そちらの上限/カウントを誤って見て
@@ -1001,7 +1013,7 @@ def run_lower_fill_phase(
 
     apply_length_fill_width_correction(boards, sel_max_w, palette, product, available)
     _drop_length_fill_when_covered(boards, palette, product)
-    _force_add_for_length_shortage(boards, palette, product, available, fatigue_map)
+    _force_add_for_length_shortage(boards, palette, product, available, fatigue_map, sel_max_w)
 
     # 補填以外の行のうち最小の有効幅と、その幅を担う行の丈合計
     post_min_main_w = 999999
@@ -1887,6 +1899,13 @@ def _run_upper_length_fill_loop(
             short, long_side = min(b.width, b.length), max(b.width, b.length)
             if long_side != main_eff_w or short < 10:
                 continue
+            # 【仕様更新】30/50/100mmは丈残400以下用の補填専用サイズであり、
+            # このループ(丈残400超が対象)の候補にしてはならない。除外しないと、
+            # 同幅の在庫がこれらしか無い場合に延々と選ばれ続け、5回の上限まで
+            # 使い切ってしまう(現場の声:「ループが同じ50mm板を何度でも選べて
+            # しまう構造になっている」)。
+            if short in (FILL_SIZE_30, FILL_SIZE_50, FILL_SIZE_100):
+                continue
             if short <= length_remaining:
                 diff = length_remaining - short
             elif short <= length_remaining + 50:
@@ -2181,6 +2200,10 @@ def _force_add_for_upper_length_shortage(
         # 幅の狭い通常サイズ板が選ばれて後追い幅補填が必要になる
         # 構造的不具合の原因だった(下用のRunLowerFillPhase側と同一)
         if long_side != main_eff_w:
+            continue
+        # 【仕様更新】30/50/100mmは幅補填専用サイズのため、丈不足強制追加の
+        # 候補にもしない。理由は同幅探索ループの除外と同一。
+        if short in (FILL_SIZE_30, FILL_SIZE_50, FILL_SIZE_100):
             continue
         # 【VBAからの修正】タグを見ずに幅・丈だけでマッチしていたため、同サイズの
         # 「主」や「幅補填」ボードが存在すると、そちらの上限判定を誤って見てしまって

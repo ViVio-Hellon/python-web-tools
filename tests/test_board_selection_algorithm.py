@@ -685,7 +685,7 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
         # ギャップ300mm、短辺400mm(<=900=300*3)の在庫あり → 丈補填として追加
         boards = [SelectedBoard(width=1000, length=1600, count=1, tag=alg.TAG_MAIN)]
         alg._force_add_for_length_shortage(
-            boards, self.palette, self.product, [board(400, 1000)], None,
+            boards, self.palette, self.product, [board(400, 1000)], None, sel_max_w=1000,
         )
         self.assertEqual(len(boards), 2)
         self.assertEqual(boards[1].tag, alg.TAG_LENGTH_FILL)
@@ -694,7 +694,7 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
         # 在庫が主ボードのみ(短辺1600 > 300*3=900)で候補なし → 主ボードを増やす
         boards = [SelectedBoard(width=1000, length=1600, count=1, tag=alg.TAG_MAIN)]
         alg._force_add_for_length_shortage(
-            boards, self.palette, self.product, [board(1000, 1600)], None,
+            boards, self.palette, self.product, [board(1000, 1600)], None, sel_max_w=1000,
         )
         self.assertEqual(len(boards), 1)
         self.assertEqual(boards[0].count, 2)  # ceil(300/1600)=1 追加
@@ -702,7 +702,7 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
     def test_no_change_when_gap_within_3mm(self):
         boards = [SelectedBoard(width=1000, length=1900, count=1, tag=alg.TAG_MAIN)]
         alg._force_add_for_length_shortage(
-            boards, self.palette, self.product, [board(400, 1000)], None,
+            boards, self.palette, self.product, [board(400, 1000)], None, sel_max_w=1000,
         )
         self.assertEqual(len(boards), 1)
         self.assertEqual(boards[0].count, 1)
@@ -724,12 +724,38 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
         boards = [main, wrong_tag_row]
         product = ProductSize(width=900, length=3500)
         alg._force_add_for_length_shortage(
-            boards, self.palette, product, [board(400, 1000)], None,
+            boards, self.palette, product, [board(400, 1000)], None, sel_max_w=1000,
         )
         self.assertEqual(main.count, 1)  # フォールバック(主+1枚)は発動しない
         self.assertEqual(wrong_tag_row.count, alg.LENGTH_FILL_COUNT_CAP)  # 汚染されない
         length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(len(length_fill_rows), 1)
+
+    def test_rejects_candidate_wider_than_the_main_board(self):
+        """【仕様更新】主ボードと同幅(完全一致)の候補のみ対象。
+
+        400x1050は長辺1050で主(sel_max_w=1000)と一致しないため対象外と
+        なり、主ボードを増やすフォールバックへ回る。
+        """
+        boards = [SelectedBoard(width=1000, length=1600, count=1, tag=alg.TAG_MAIN)]
+        alg._force_add_for_length_shortage(
+            boards, self.palette, self.product, [board(400, 1050)], None, sel_max_w=1000,
+        )
+        self.assertEqual(len(boards), 1)
+        self.assertEqual(boards[0].count, 2)  # フォールバック(主+1枚)
+
+    def test_excludes_fill_only_sizes_30_50_100(self):
+        """【仕様更新】30/50/100mmは幅補填専用サイズなので、丈不足強制追加の
+
+        候補にもしない。ギャップ300mmに対し短辺100mm(同幅1000)は対象外に
+        なり、主ボードを増やすフォールバックへ回る。
+        """
+        boards = [SelectedBoard(width=1000, length=1600, count=1, tag=alg.TAG_MAIN)]
+        alg._force_add_for_length_shortage(
+            boards, self.palette, self.product, [board(100, 1000)], None, sel_max_w=1000,
+        )
+        self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
+        self.assertEqual(boards[0].count, 2)
 
 
 class DecideLengthCountWithCutTests(unittest.TestCase):
@@ -1431,6 +1457,22 @@ class UpperLengthFillFixedCalcTests(unittest.TestCase):
         fixed_100_row = next(b for b in boards if (b.width, b.length) == (100, 800))
         self.assertEqual(fixed_100_row.count, 2)  # ceil(180/100)=2
 
+    def test_same_width_loop_excludes_fill_only_sizes(self):
+        """【仕様更新】30/50/100mmは丈残400以下用の補填専用サイズであり、
+
+        同幅探索ループ(丈残400超が対象)の候補にしてはならない。除外しないと
+        同じ板が5回連続で選ばれ続け、上限まで使い切ってしまう
+        (現場の声:「ループが同じ50mm板を何度でも選べてしまう」)。
+        同幅(900)の50x900しか無い場合、ループは何も採用できずに終わり、
+        丈残は400超のまま丈不足強制追加ブロックへ引き継がれる。
+        """
+        product = ProductSize(width=900, length=2390)
+        boards = [SelectedBoard(900, 190, 9, alg.TAG_MAIN)]  # 丈カバー1710、丈残680
+        available = [board(50, 900)]
+        alg._run_upper_length_fill(boards, product, available)
+
+        self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
+
     def test_merges_into_existing_length_fill_row_of_same_size(self):
         # 主900x190 x9 → 丈カバー1710。既存"丈補填"100x800 x1が短辺(100)分
         # 寄与して1810、丈残190mm → Ceiling(190/100)=2枚を既存行に積む
@@ -1504,6 +1546,18 @@ class ForceAddForUpperLengthShortageTests(unittest.TestCase):
 
         self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
         self.assertEqual(self.main.count, 11)  # フォールバック(主+1枚)が発動する
+
+    def test_excludes_fill_only_sizes_30_50_100(self):
+        """【仕様更新】30/50/100mmは幅補填専用サイズなので、丈不足強制追加の
+
+        候補にもしない。同幅(900)の100x900しか在庫が無い場合は対象外になり、
+        主ボードを増やすフォールバックへ回る。
+        """
+        boards = [self.main]
+        alg._force_add_for_upper_length_shortage(boards, self.product, [board(100, 900)], None)
+
+        self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
+        self.assertEqual(self.main.count, 11)
 
 
 class NarrowPaletteSelectionTests(unittest.TestCase):
