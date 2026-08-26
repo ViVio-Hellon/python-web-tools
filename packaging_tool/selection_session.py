@@ -657,7 +657,9 @@ class SelectionSession:
                     self.selected.lower, self.selected.upper,
                     self.palette, self.product,
                     narrow_lower=narrow_lower, narrow_upper=narrow_upper,
-                    protec_result=protec_result)
+                    protec_result=protec_result,
+                    is_protec_mode=self.presenter.protec.is_protec,
+                    is_1p1216=self.presenter.protec.is_1p1216)
         except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
             log.exception("配置エラー")
             self.placement = None

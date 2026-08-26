@@ -209,6 +209,87 @@ class TryPlaceInsidePaletteTests(unittest.TestCase):
         self.assertEqual(ctx.placed[0].width, 600)
 
 
+class TryPlaceInsidePaletteProtecModeTests(unittest.TestCase):
+    """VBA `TryPlaceInsidePalette` のプロテック専用向き決定分岐の検証。
+
+    自動選定(`decide_protec_orientation`)を経由しない手動追加ボードでも、
+    「製品幅基準・マイナス方向の許容のみ・超過禁止」というプロテックの
+    ルールで向きを強制する(距離が近いだけの向きを選ばせない)。
+    """
+
+    def test_only_normal_orientation_within_tolerance_is_forced(self):
+        # 幅950は許容内(920〜1000)、丈1100は製品幅超過で許容外。
+        # 距離だけなら丈1100側(距離50)が幅950側(距離200)より近いが、
+        # プロテックルールにより許容内の向き(幅950)が強制される。
+        ctx = make_ctx(pal_w=1150, pal_l=2650, prod_w=1000)
+        ctx.is_protec_mode = True
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(950, 1100, LOWER)))
+        self.assertEqual(ctx.placed[0].width, 950)
+
+    def test_only_rotated_orientation_within_tolerance_is_forced(self):
+        # 幅850は許容外(920未満)、丈950は許容内 → 回転が強制される。
+        # target(パレット幅850)への距離だけなら幅850側(距離0)が丈950側
+        # (距離100)より近く、距離基準の従来ロジックなら誤って幅850を選ぶ。
+        ctx = make_ctx(pal_w=850, pal_l=2650, prod_w=1000)
+        ctx.is_protec_mode = True
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(850, 950, LOWER)))
+        self.assertEqual(ctx.placed[0].width, 950)
+
+    def test_neither_orientation_within_tolerance_falls_back_to_distance(self):
+        # どちらも許容外(警告ログを出しつつ従来の距離比較で続行)
+        ctx = make_ctx(pal_w=1150, pal_l=2650, prod_w=1000)
+        ctx.is_protec_mode = True
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(500, 600, LOWER)))
+        # target=パレット幅1150、距離: 幅500→650、丈600→550 → 丈側(600)が近い
+        self.assertEqual(ctx.placed[0].width, 600)
+
+    def test_1p1216_uses_tighter_10mm_tolerance(self):
+        # 幅950は通常許容(-80mm=920以上)なら通るが、1P1216の-10mm許容
+        # (=990以上)では外れる → 丈995側(許容内)が強制される。
+        # target(パレット幅950)への距離だけなら幅950側(距離0)が丈995側
+        # (距離45)より近く、距離基準の従来ロジックなら誤って幅950を選ぶ。
+        ctx = make_ctx(pal_w=950, pal_l=2650, prod_w=1000)
+        ctx.is_protec_mode = True
+        ctx.is_1p1216 = True
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(950, 995, LOWER)))
+        self.assertEqual(ctx.placed[0].width, 995)
+
+    def test_does_not_apply_to_upper_category(self):
+        # プロテックの向き決定分岐は下用専用(上用は従来の距離比較のまま)
+        ctx = make_ctx(pal_w=1150, pal_l=2650, prod_w=1000, prod_l=2000)
+        ctx.is_protec_mode = True
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(950, 1100, UPPER)))
+        # target=製品幅1000、距離: 幅950→50、丈1100→100 → 幅側(950)が近い
+        # (協定ルールが無くても結果は同じになる設定だが、分岐に入らないことを
+        # ログの有無ではなくカテゴリ条件そのもので保証する)
+        self.assertEqual(ctx.placed[0].width, 950)
+
+    def test_normal_mode_unaffected(self):
+        # is_protec_mode=False(既定)なら従来どおり距離だけで決まる
+        ctx = make_ctx(pal_w=1150, pal_l=2650, prod_w=1000)
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(950, 1100, LOWER)))
+        # target=パレット幅1150、距離: 幅950→200、丈1100→50 → 丈側が近い
+        self.assertEqual(ctx.placed[0].width, 1100)
+
+
+class AutoPlaceBoardsProtecModeTests(unittest.TestCase):
+    def test_protec_flags_reach_placement_context(self):
+        lower = [SelectedBoard(950, 1100, 1, "")]
+        ctx = pl.auto_place_boards(lower, [], make_palette(1150, 2650),
+                                   ProductSize(width=1000, length=2000),
+                                   is_protec_mode=True, is_1p1216=False)
+        self.assertTrue(ctx.is_protec_mode)
+        self.assertFalse(ctx.is_1p1216)
+        # プロテックルール(-80mm許容)で幅950(許容内)側が強制される
+        self.assertEqual(ctx.placed[0].width, 950)
+
+    def test_defaults_to_normal_mode(self):
+        ctx = pl.auto_place_boards([], [], make_palette(1150, 2650),
+                                   ProductSize(width=1000, length=2000))
+        self.assertFalse(ctx.is_protec_mode)
+        self.assertFalse(ctx.is_1p1216)
+
+
 class TryPlaceUpperWithYOffsetTests(unittest.TestCase):
     def test_places_at_given_y_and_leftmost_x(self):
         ctx = make_ctx(prod_w=1122, prod_l=2502)

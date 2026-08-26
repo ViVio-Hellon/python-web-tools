@@ -72,6 +72,8 @@ from .board_scoring import (
     get_best_orientation,
 )
 from .board_selection_algorithm import (
+    PROTEC_1P1216_TOLERANCE,
+    PROTEC_OTHER_TOLERANCE,
     TAG_CUT_PREMISE,
     TAG_LENGTH_FILL,
     TAG_WIDTH_FILL,
@@ -136,6 +138,11 @@ class PlacementContext:
     # 配置(`_place_cut_premise`)が、ここにある値をそのまま使う。
     # valid=False(既定)なら、従来どおりパレット幅/製品幅で計算する
     protec_result: ProtecCutResult = field(default_factory=lambda: ProtecCutResult())
+    # プロテックモード中かどうか(VBA `MaterialMasterForm.mIsProtecMode`)。
+    # `try_place_inside_palette` が、選定(`decide_protec_orientation`)を
+    # 経由しない手動追加ボードにも向き決定ルールを適用するために使う。
+    is_protec_mode: bool = False
+    is_1p1216: bool = False
     # 配置段階で判明した幅カット(VBA `mCutInfo`)。丈補填ボードの
     # 在庫の実寸(長辺)が limit_w を超えるときだけ `place_length_fill_boards`
     # が記録する。キーは在庫の"幅x丈"、値は短辺(丈方向のサイズ)
@@ -421,11 +428,47 @@ def try_place_inside_palette(ctx: PlacementContext, board: BoardModel, y_start: 
     `y_start`(既定0)は `try_place_single_orientation` にそのまま渡す
     (幅補填を主ボードの上下に振り分ける際のオフセット、
     `place_boards_from_list` 参照)。
+
+    【プロテックモード下用の向き決定】プロテックは上下とも「製品幅基準・
+    マイナス方向の許容のみ・超過禁止」というルールで向きを決める
+    (`decide_protec_orientation` 参照)。自動選定を経由したボードは
+    既にこのルールに沿った向きで登録されているが、手動追加ボードは
+    これを経由しないため、ここでも同じルールを適用しないと「製品幅を
+    大きく下回る向き」がそのまま配置されてしまう(VBA
+    `TryPlaceInsidePalette` のプロテック分岐と同じ意図)。
     """
     target_width = ctx.limit_width(board.board_category)
     dist_normal = abs(board.width - target_width)
     dist_rotated = abs(board.length - target_width)
-    try_normal_first = dist_normal <= dist_rotated
+
+    if ctx.is_protec_mode and board.board_category == CATEGORY_LOWER:
+        tol = PROTEC_1P1216_TOLERANCE if ctx.is_1p1216 else PROTEC_OTHER_TOLERANCE
+        min_allowed = ctx.product.width - tol
+        normal_ok = ctx.product.width >= board.width >= min_allowed
+        rotated_ok = ctx.product.width >= board.length >= min_allowed
+
+        if normal_ok and rotated_ok:
+            try_normal_first = dist_normal <= dist_rotated
+        elif normal_ok:
+            try_normal_first = True
+        elif rotated_ok:
+            try_normal_first = False
+        else:
+            log.debug(
+                "TryPlaceInsidePalette[プロテック][警告] %sx%s はどちらの向きも"
+                "製品幅許容(-%smm〜0mm)を満たしません。"
+                "SelectProtecLowerBoardsを経由しない追加の可能性があります。productWidth=%s",
+                board.width, board.length, tol, ctx.product.width,
+            )
+            try_normal_first = dist_normal <= dist_rotated
+
+        log.debug(
+            "TryPlaceInsidePalette[プロテック]: %sx%s target=%s protecTol=%s "
+            "normalOK=%s rotatedOK=%s normalFirst=%s",
+            board.width, board.length, target_width, tol, normal_ok, rotated_ok, try_normal_first,
+        )
+    else:
+        try_normal_first = dist_normal <= dist_rotated
 
     log.debug("TryPlaceInsidePalette: %sx%s target=%s distN=%s distR=%s normalFirst=%s",
               board.width, board.length, target_width, dist_normal, dist_rotated, try_normal_first)
@@ -1108,11 +1151,16 @@ def auto_place_boards(
     palette: Palette, product: ProductSize,
     *, narrow_lower: bool = False, narrow_upper: bool = False,
     protec_result: Optional[ProtecCutResult] = None,
+    is_protec_mode: bool = False, is_1p1216: bool = False,
 ) -> PlacementContext:
     """VBA `AutoPlaceBoards` の移植(下用→上用の順に配置する)。
 
     `narrow_lower`/`narrow_upper` は選定側の `mNarrowPaletteLower` /
     `mNarrowPaletteUpper`(狭幅パレット選定が使われたか)に対応する。
+
+    `is_protec_mode`/`is_1p1216` は `MaterialMasterForm.mIsProtecMode` /
+    `mIsProtec1P1216` に対応し、`try_place_inside_palette` の
+    プロテック向き決定分岐(手動追加ボード向けのガード)に使われる。
 
     プロテックであっても、配置の境界(`limit_width`)は通常モードと
     完全に同じ(上用は製品幅、下用はパレット幅) ── プロテックは
@@ -1128,7 +1176,8 @@ def auto_place_boards(
     """
     ctx = PlacementContext(
         palette=palette, product=product,
-        protec_result=protec_result or ProtecCutResult())
+        protec_result=protec_result or ProtecCutResult(),
+        is_protec_mode=is_protec_mode, is_1p1216=is_1p1216)
 
     if narrow_lower:
         place_narrow_palette_boards(ctx, lower, CATEGORY_LOWER)
