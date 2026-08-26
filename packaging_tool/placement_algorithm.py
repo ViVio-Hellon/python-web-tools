@@ -342,6 +342,7 @@ def place_board_at(
 # ------------------------------------------------------------------
 def try_place_single_orientation(
     ctx: PlacementContext, board: BoardModel, rotate: bool, min_waste: float,
+    y_start: int = 0,
 ) -> Optional[tuple[int, int, float]]:
     """VBA `TryPlaceSingleOrientation` の移植(単一向きでの位置探索)。
 
@@ -350,6 +351,10 @@ def try_place_single_orientation(
         PASS2: (下用のみ)既存ボードの右端にスナップして5mm刻みで探索
         PASS3: 最良位置の周辺±20mmを1mm刻みで細探索
     戻り値は (x, y, 更新後のminWaste)。見つからなければ None。
+
+    `y_start` は探索開始Y(既定0)。幅補填を主ボードの上下に振り分ける際、
+    上側補填ぶんだけ下げた位置から主ボードを探索させるために指定する
+    (`place_boards_from_list` 参照)。既定値0では従来と完全に同一挙動。
     """
     w, l = _dims(board, rotate)
 
@@ -366,13 +371,15 @@ def try_place_single_orientation(
     # end_y < 0 は本当に配置不可。end_x < 0 でもスナップ探索は試す
     if end_y < 0:
         return None
+    if y_start > end_y:
+        return None
 
     best_x = best_y = 0
     found = False
 
     # PASS1: グリッド粗探索
     if end_x >= 0:
-        for y in range(0, end_y + 1, GRID_STEP):
+        for y in range(y_start, end_y + 1, GRID_STEP):
             for x in range(0, end_x + 1, GRID_STEP):
                 if can_place_board_at(ctx, x, y, board, rotate):
                     waste = evaluate_placement(x, y)
@@ -385,7 +392,7 @@ def try_place_single_orientation(
             if pb.board_category != board.board_category:
                 continue
             snap_x = pb.x + pb.length
-            for y in range(0, end_y + 1, SNAP_STEP):
+            for y in range(y_start, end_y + 1, SNAP_STEP):
                 if can_place_board_at(ctx, snap_x, y, board, rotate):
                     waste = evaluate_placement(snap_x, y)
                     if waste < min_waste:
@@ -395,7 +402,7 @@ def try_place_single_orientation(
     if found:
         f_start_x = max(0, best_x - FINE_RANGE)
         f_end_x = best_x + FINE_RANGE
-        f_start_y = max(0, best_y - FINE_RANGE)
+        f_start_y = max(y_start, best_y - FINE_RANGE)
         f_end_y = min(best_y + FINE_RANGE, end_y)
         for fy in range(f_start_y, f_end_y + 1):
             for fx in range(f_start_x, f_end_x + 1):
@@ -407,10 +414,13 @@ def try_place_single_orientation(
     return (best_x, best_y, min_waste) if found else None
 
 
-def try_place_inside_palette(ctx: PlacementContext, board: BoardModel) -> bool:
+def try_place_inside_palette(ctx: PlacementContext, board: BoardModel, y_start: int = 0) -> bool:
     """VBA `TryPlaceInsidePalette` の移植。
 
     対象幅に近い向きを先に試し、駄目ならもう一方の向きを試す。
+    `y_start`(既定0)は `try_place_single_orientation` にそのまま渡す
+    (幅補填を主ボードの上下に振り分ける際のオフセット、
+    `place_boards_from_list` 参照)。
     """
     target_width = ctx.limit_width(board.board_category)
     dist_normal = abs(board.width - target_width)
@@ -425,7 +435,7 @@ def try_place_inside_palette(ctx: PlacementContext, board: BoardModel) -> bool:
     # 場合 minWaste は更新されないため、素直に初期値のまま渡してよい。
     min_waste = 1e15
     for rotate in order:
-        result = try_place_single_orientation(ctx, board, rotate, min_waste)
+        result = try_place_single_orientation(ctx, board, rotate, min_waste, y_start)
         if result is not None:
             x, y, _ = result
             return place_board_at(ctx, x, y, board, rotate)
@@ -433,11 +443,14 @@ def try_place_inside_palette(ctx: PlacementContext, board: BoardModel) -> bool:
 
 
 def try_place_with_fixed_rotation(
-    ctx: PlacementContext, board: BoardModel, use_rotation: bool,
+    ctx: PlacementContext, board: BoardModel, use_rotation: bool, y_start: int = 0,
 ) -> bool:
-    """VBA `TryPlaceWithFixedRotation` の移植(向きを固定した配置)。"""
+    """VBA `TryPlaceWithFixedRotation` の移植(向きを固定した配置)。
+
+    `y_start`(既定0)は `try_place_single_orientation` にそのまま渡す。
+    """
     min_waste = float(ctx.palette.length) * float(ctx.palette.width) * 10
-    result = try_place_single_orientation(ctx, board, use_rotation, min_waste)
+    result = try_place_single_orientation(ctx, board, use_rotation, min_waste, y_start)
     if result is None:
         return False
     x, y, _ = result
@@ -537,24 +550,34 @@ def try_place_upper_length_fill(ctx: PlacementContext, board: BoardModel) -> boo
     return place_board_at(ctx, max_x, 0, board, rotate_flag, bypass_check=True)
 
 
-def try_place_y_companion(ctx: PlacementContext, board: BoardModel) -> bool:
+def try_place_y_companion(
+    ctx: PlacementContext, board: BoardModel, place_upper: bool = False,
+) -> bool:
     """VBA `TryPlaceYCompanion` の移植(幅補填ボードの配置)。
 
     主ボードのうち「幅方向のカバレッジが最も足りない1枚」(`gap_board`)を
     基準にして、そのY端・X位置から幅補填を敷いていく。
     既に補填行があり右端に余裕があれば同じ行に継ぎ足し、
-    行が埋まっていれば次の行(Y方向に1段下)へ送る。
+    行が埋まっていれば次の行へ送る。
+
+    `place_upper`(既定False): 幅補填を主ボードの上下に振り分けるための
+    向き指定。False(従来)は主ボードの「下側」(Y大方向)へ、Trueは
+    「上側」(Y小方向)へ段を積む。X方向のロジック(同一段への丈方向
+    継ぎ足し・availLクランプ)は上下共通のため分岐しない。
     """
     category = board.board_category
 
-    # Step1: 幅方向カバレッジが最も短い主ボードを特定
+    # Step1: 幅方向カバレッジが最も短い主ボードを特定。
+    # main_min_y(上側モード用)は主ボードの上端の最小値
     gap_board: Optional[PlacedBoardModel] = None
     min_end_y = 2147483647
+    main_min_y = 2147483647
     for pb in ctx.placed:
         if pb.board_category == category and not pb.is_fill_board:
             if pb.y + pb.width < min_end_y:
                 min_end_y = pb.y + pb.width
                 gap_board = pb
+            main_min_y = min(main_min_y, pb.y)
     if gap_board is None:
         return False
 
@@ -563,32 +586,71 @@ def try_place_y_companion(ctx: PlacementContext, board: BoardModel) -> bool:
     if category == CATEGORY_UPPER:
         main_x_end = min(main_x_end, ctx.product.length)
 
-    # Step3: 既存の幅補填ボードの状態(最新行のY座標とその右端)
-    fill_max_y = min_end_y - 1  # 初期値: 補填行なし
-    for pb in ctx.placed:
-        if pb.board_category == category and pb.is_fill_board:
-            fill_max_y = max(fill_max_y, pb.y)
-    cur_row_end_x = ctx.max_x(category, fill=True, y=fill_max_y)
+    # Step3: 既存の幅補填ボードの状態。
+    # 下側(従来): 主ボード下端(min_end_y)より下にある補填のうち最大Y。
+    # 上側(新規): 主ボード上端(main_min_y)より上にある補填のうち最小Y。
+    # 丈補填ボードを誤って拾わないよう、X範囲(gap_board.x以上
+    # main_x_end未満)でフィルタする(丈補填はX>=main_x_endに置かれるため
+    # 本来ここには入らないが、上側モードではY=0付近が初期値と重なり
+    # 誤って「既存の上側段」と誤認されていた)。
+    row_exists = False
+    if not place_upper:
+        fill_max_y = min_end_y - 1  # 初期値: 補填行なし
+        for pb in ctx.placed:
+            if pb.board_category == category and pb.is_fill_board:
+                fill_max_y = max(fill_max_y, pb.y)
+        row_exists = fill_max_y >= min_end_y
+    else:
+        fill_max_y = main_min_y + 1  # 初期値: 上側に段は無い
+        for pb in ctx.placed:
+            if (pb.board_category == category and pb.is_fill_board
+                    and pb.y < main_min_y and pb.x >= gap_board.x and pb.x < main_x_end):
+                if not row_exists or pb.y < fill_max_y:
+                    fill_max_y = pb.y
+                    row_exists = True
 
-    # Step4: placeY と fillEndX を決定
-    if fill_max_y >= min_end_y and cur_row_end_x < main_x_end:
-        # 既存行に空きあり → 同じ行に続けて配置
+    # 最新行(fill_max_y)の右端を取得。上側モードは同じX範囲フィルタが要る
+    # (丈補填がy=0付近・main_x_end以降に置かれ、fill_max_y=0の初期値と
+    # 一致してcur_row_end_xに混入するのを防ぐ)。
+    cur_row_end_x = 0
+    if row_exists:
+        for pb in ctx.placed:
+            if pb.board_category == category and pb.is_fill_board and pb.y == fill_max_y:
+                if not place_upper or (pb.x >= gap_board.x and pb.x < main_x_end):
+                    cur_row_end_x = max(cur_row_end_x, pb.x + pb.length)
+
+    # Step4: placeY と fillEndX を決定。
+    # 「同じ行に空きがあれば続けて置く」「無ければ新しい段」は上下共通で、
+    # 違うのは新しい段のY座標の計算だけ。
+    if row_exists and cur_row_end_x < main_x_end:
         place_y = fill_max_y
         fill_end_x = cur_row_end_x
-    elif fill_max_y >= min_end_y:
-        # 新しい行へ: 前の行の実幅ぶんだけY方向に下げる
+    elif row_exists:
+        # 新行へ: 前の行の実幅を取得してY座標を決める
         prev_row_bw = 0
         for pb in ctx.placed:
             if pb.board_category == category and pb.is_fill_board and pb.y == fill_max_y:
                 prev_row_bw = max(prev_row_bw, pb.width)
         if prev_row_bw <= 0:
             prev_row_bw = min(board.width, board.length)
-        place_y = fill_max_y + prev_row_bw
+        if not place_upper:
+            place_y = fill_max_y + prev_row_bw  # 下側: 前の段のさらに下へ
+        else:
+            place_y = fill_max_y - min(board.width, board.length)  # 上側: 前の段のさらに上へ
         fill_end_x = 0
     else:
-        # 補填ボードが1枚もない場合は gap_board のY端から始める
-        place_y = min_end_y
+        # 補填ボードが1枚もない場合
+        if not place_upper:
+            place_y = min_end_y  # 下側: 主ボード下端が基準
+        else:
+            place_y = main_min_y - min(board.width, board.length)  # 上側: 主ボード上端から短辺ぶん上
         fill_end_x = 0
+
+    # 上側モードでY=0を割り込む場合は配置不可
+    # (主ボードのオフセット量が不足している=集計と実配置の食い違い)
+    if place_upper and place_y < 0:
+        log.debug("TryPlaceYCompanion[上側] placeY=%s が負 → オフセット不足のため配置不可", place_y)
+        return False
 
     # Step5: placeX を決定(補填行が無ければ gap_board のX位置が起点)
     place_x = fill_end_x if fill_end_x > 0 else gap_board.x
@@ -608,8 +670,8 @@ def try_place_y_companion(ctx: PlacementContext, board: BoardModel) -> bool:
     if b_length <= 0:
         return False
 
-    log.debug("TryPlaceYCompanion: %sx%s → at(%s,%s) bW=%s bL=%s",
-              board.width, board.length, place_x, place_y, b_width, b_length)
+    log.debug("TryPlaceYCompanion%s: %sx%s → at(%s,%s) bW=%s bL=%s",
+              "[上側]" if place_upper else "", board.width, board.length, place_x, place_y, b_width, b_length)
 
     return place_board_at(
         ctx, place_x, place_y, board, rot_flag,
@@ -642,6 +704,35 @@ def get_effective_tag(
     main_model = BoardModel(width=main.width, length=main.length, board_category=category)
     _, main_eff_w, _ = get_best_orientation(main_model, limit_w)
     return TAG_LENGTH_FILL if abs(main_eff_w - limit_w) <= COVERED_TOLERANCE else TAG_WIDTH_FILL
+
+
+def count_width_fill_strips(
+    boards: list[SelectedBoard], category: str, ctx: PlacementContext,
+) -> tuple[int, int, int]:
+    """VBA `CountWidthFillStrips` の移植。
+
+    `boards` 内の「幅補填」タグの行数(=ストリップ本数)を数え、上側に
+    配置する本数(本数 // 2)と、そのオフセット量(上側に置く分の短辺の
+    合計、主ボードを下げる量になる)を算出する。2本未満なら上側0本・
+    オフセット0で従来どおり全て下側に置く。
+
+    振り分け仕様: 1本→上0/下1、2本→上1/下1、3本→上1/下2、4本→上2/下2。
+
+    行のcount(丈方向の枚数)は幅方向のストリップ本数ではないため数えない
+    (`RunWidthFillPhase` は1ストリップ=1行としてAddItemしている)。
+    """
+    short_sides: list[int] = []
+    for i, b in enumerate(boards):
+        if get_effective_tag(boards, i, category, ctx) == TAG_WIDTH_FILL:
+            short_sides.append(min(b.width, b.length))
+
+    total = len(short_sides)
+    if total < 2:
+        return total, 0, 0
+
+    upper = total // 2
+    offset = sum(short_sides[:upper])
+    return total, upper, offset
 
 
 def sort_fill_boards(boards: list[SelectedBoard], start_idx: int, remaining_y: int) -> None:
@@ -824,6 +915,16 @@ def place_boards_from_list(
 
     limit_w = ctx.limit_width(category)
 
+    # VBA `CountWidthFillStrips`: 幅補填を上下に振り分け、主ボードのYオフセットを
+    # 事前に確保する(先に上側の分だけ主ボードを下にずらしておく)。
+    wf_total, wf_upper, wf_offset = count_width_fill_strips(boards, category, ctx)
+    wf_upper_used = 0
+    if wf_upper > 0:
+        log.debug(
+            "%s 幅補填振り分け: 計%s本 → 上%s本/下%s本 主ボードYオフセット=%s",
+            category, wf_total, wf_upper, wf_total - wf_upper, wf_offset,
+        )
+
     # VBA側は Sub スコープの Dim なので、ループを跨いで値が残る。
     # 特に pNum=2 では GetBestOrientation を呼ばないため、rot/eff_w/eff_l は
     # pNum=1 で最後に計算された値がそのまま使われる(VBAの挙動を踏襲)。
@@ -834,7 +935,7 @@ def place_boards_from_list(
     last_b: Optional[PlacedBoardModel] = None
 
     for pass_num in (1, 2):
-        y_off = 0
+        y_off = wf_offset if pass_num == 1 else 0
         if pass_num == 2:
             for pb in ctx.placed:
                 if pb.board_category == category and not pb.is_fill_board:
@@ -864,6 +965,12 @@ def place_boards_from_list(
             if pass_num == 2 and effective_tag != TAG_WIDTH_FILL:
                 continue
 
+            wf_use_upper = False
+            if pass_num == 2 and effective_tag == TAG_WIDTH_FILL:
+                if wf_upper_used < wf_upper:
+                    wf_use_upper = True
+                    wf_upper_used += 1
+
             model = _make_model(b, i, category)
 
             # pNum=2(幅補填)は try_place_y_companion が独自に向きを決めるため
@@ -890,7 +997,12 @@ def place_boards_from_list(
                         last_b = ctx.placed[-1]
                         y_off += last_b.width
                 elif pass_num == 2:
-                    placed_ok = try_place_y_companion(ctx, model)
+                    if wf_use_upper:
+                        placed_ok = try_place_y_companion(ctx, model, True)
+                        if not placed_ok:
+                            placed_ok = try_place_y_companion(ctx, model, False)
+                    else:
+                        placed_ok = try_place_y_companion(ctx, model)
                 elif category == CATEGORY_UPPER and i > 0:
                     rem_y = ctx.product.width - y_off
                     s_side = min(b.width, b.length)
@@ -902,7 +1014,7 @@ def place_boards_from_list(
                 elif tag == TAG_LENGTH_FILL:
                     placed_ok = try_place_with_fixed_rotation(ctx, model, state.first_rotation)
                 elif not state.first_placed:
-                    placed_ok = try_place_inside_palette(ctx, model)
+                    placed_ok = try_place_inside_palette(ctx, model, wf_offset)
                     if placed_ok:
                         state.first_placed = True
                         last_b = ctx.placed[-1]
@@ -912,7 +1024,7 @@ def place_boards_from_list(
                         else:
                             state.first_rotation = last_b.width != b.width
                 else:
-                    placed_ok = try_place_with_fixed_rotation(ctx, model, state.first_rotation)
+                    placed_ok = try_place_with_fixed_rotation(ctx, model, state.first_rotation, wf_offset)
 
                 if not placed_ok:
                     break

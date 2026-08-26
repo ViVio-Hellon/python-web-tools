@@ -587,6 +587,156 @@ class PlaceNarrowPaletteBoardsTests(unittest.TestCase):
         self.assertEqual(ctx.placed[0].y, 0)
 
 
+class CountWidthFillStripsTests(unittest.TestCase):
+    def test_zero_or_one_strip_yields_no_upper_allocation(self):
+        ctx = make_ctx(pal_w=1150)
+        boards = [SelectedBoard(1080, 750, 3, "主")]
+        self.assertEqual(pl.count_width_fill_strips(boards, LOWER, ctx), (0, 0, 0))
+        boards.append(SelectedBoard(50, 1200, 1, "幅補填"))
+        self.assertEqual(pl.count_width_fill_strips(boards, LOWER, ctx), (1, 0, 0))
+
+    def test_two_strips_split_one_and_one(self):
+        ctx = make_ctx(pal_w=1150)
+        boards = [
+            SelectedBoard(1080, 750, 3, "主"),
+            SelectedBoard(50, 1200, 1, "幅補填"),
+            SelectedBoard(30, 1200, 1, "幅補填"),
+        ]
+        self.assertEqual(pl.count_width_fill_strips(boards, LOWER, ctx), (2, 1, 50))
+
+    def test_three_strips_split_one_and_two(self):
+        ctx = make_ctx(pal_w=1150)
+        boards = [
+            SelectedBoard(1080, 750, 3, "主"),
+            SelectedBoard(50, 1200, 1, "幅補填"),
+            SelectedBoard(30, 1200, 1, "幅補填"),
+            SelectedBoard(20, 1200, 1, "幅補填"),
+        ]
+        self.assertEqual(pl.count_width_fill_strips(boards, LOWER, ctx), (3, 1, 50))
+
+    def test_four_strips_split_two_and_two(self):
+        ctx = make_ctx(pal_w=1150)
+        boards = [
+            SelectedBoard(1080, 750, 3, "主"),
+            SelectedBoard(50, 1200, 1, "幅補填"),
+            SelectedBoard(30, 1200, 1, "幅補填"),
+            SelectedBoard(20, 1200, 1, "幅補填"),
+            SelectedBoard(10, 1200, 1, "幅補填"),
+        ]
+        self.assertEqual(pl.count_width_fill_strips(boards, LOWER, ctx), (4, 2, 80))
+
+    def test_ignores_non_width_fill_rows(self):
+        ctx = make_ctx(pal_w=1150)
+        boards = [
+            SelectedBoard(1080, 750, 3, "主"),
+            SelectedBoard(500, 1200, 1, "丈補填"),
+            SelectedBoard(50, 1200, 1, "幅補填"),
+            SelectedBoard(30, 1200, 1, "幅補填"),
+        ]
+        self.assertEqual(pl.count_width_fill_strips(boards, LOWER, ctx), (2, 1, 50))
+
+
+class TryPlaceYCompanionUpperModeTests(unittest.TestCase):
+    def test_first_fill_starts_above_main_top_edge(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        # 主ボードを y=80 から配置(幅補填分のオフセットを事前に確保済み想定)
+        ctx.placed.append(placed(0, 80, 1000, 1200, LOWER))
+        self.assertTrue(pl.try_place_y_companion(ctx, model(50, 1200, LOWER), True))
+        pb = ctx.placed[-1]
+        self.assertEqual((pb.x, pb.y), (0, 30))
+        self.assertTrue(pb.is_fill_board)
+
+    def test_second_fill_continues_same_upper_row(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 80, 1000, 2000, LOWER))
+        b = model(50, 800, LOWER)
+        pl.try_place_y_companion(ctx, b, True)
+        pl.try_place_y_companion(ctx, b, True)
+        first, second = ctx.placed[-2], ctx.placed[-1]
+        self.assertEqual((first.x, first.y), (0, 30))
+        self.assertEqual((second.x, second.y), (800, 30))
+
+    def test_new_upper_row_when_current_row_is_full(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 150, 1000, 1000, LOWER))
+        b = model(50, 1000, LOWER)
+        pl.try_place_y_companion(ctx, b, True)   # 1段目(全幅)を埋め切る
+        pl.try_place_y_companion(ctx, b, True)   # 2段目(さらに上)へ
+        self.assertEqual((ctx.placed[-1].x, ctx.placed[-1].y), (0, 50))
+
+    def test_length_fill_boards_are_not_mistaken_for_an_upper_row(self):
+        # 丈補填はY≈0・X=主ボード右端以降に置かれるため、上側モードの
+        # 「既存の上段」検出に誤って引っかからないことを確認する。
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 80, 1000, 1200, LOWER))
+        ctx.placed.append(placed(1200, 0, 1150, 100, LOWER, is_fill=True))  # 丈補填
+        self.assertTrue(pl.try_place_y_companion(ctx, model(50, 1200, LOWER), True))
+        pb = ctx.placed[-1]
+        self.assertEqual((pb.x, pb.y), (0, 30))
+
+    def test_negative_offset_is_rejected(self):
+        # 主ボードのYオフセットが不足(0のまま)だと上側placeYが負になり配置不可
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1000, 1200, LOWER))
+        self.assertFalse(pl.try_place_y_companion(ctx, model(50, 1200, LOWER), True))
+        self.assertEqual(len(ctx.placed), 1)
+
+
+class YStartThreadingTests(unittest.TestCase):
+    def test_default_y_start_is_unchanged(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        got = pl.try_place_single_orientation(ctx, model(1130, 750, LOWER), False, 1e15)
+        self.assertEqual(got[:2], (0, 0))
+
+    def test_y_start_shifts_search_floor(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        got = pl.try_place_single_orientation(ctx, model(1130, 750, LOWER), False, 1e15, y_start=100)
+        self.assertIsNotNone(got)
+        self.assertEqual(got[1], 100)
+
+    def test_y_start_past_upper_bound_is_unplaceable(self):
+        ctx = make_ctx(pal_w=1000)  # 下用のY上限は1200
+        self.assertIsNone(
+            pl.try_place_single_orientation(ctx, model(500, 400, LOWER), False, 1e15, y_start=1201))
+
+    def test_try_place_inside_palette_honors_y_start(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(750, 1130, LOWER), 100))
+        self.assertEqual(ctx.placed[0].y, 100)
+
+    def test_try_place_with_fixed_rotation_honors_y_start(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        self.assertTrue(pl.try_place_with_fixed_rotation(ctx, model(750, 1130, LOWER), False, 100))
+        self.assertEqual(ctx.placed[0].y, 100)
+
+
+class PlaceBoardsFromListUpperDownAllocationTests(unittest.TestCase):
+    def test_two_width_fills_split_one_upper_one_lower(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        boards = [
+            SelectedBoard(1000, 2000, 1, "主"),
+            SelectedBoard(50, 2000, 1, "幅補填"),
+            SelectedBoard(30, 2000, 1, "幅補填"),
+        ]
+        pl.place_boards_from_list(ctx, boards, LOWER)
+        main = next(p for p in ctx.placed if not p.is_fill_board)
+        fills = [p for p in ctx.placed if p.is_fill_board]
+        self.assertEqual(len(fills), 2)
+        # 主ボードは上側1本ぶん(短辺50)だけ下にオフセットされる
+        self.assertEqual(main.y, 50)
+        self.assertEqual({p.y for p in fills}, {0, main.y + main.width})
+
+    def test_single_width_fill_stays_below_only(self):
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        boards = [SelectedBoard(1000, 2000, 1, "主"), SelectedBoard(50, 2000, 1, "幅補填")]
+        pl.place_boards_from_list(ctx, boards, LOWER)
+        main = next(p for p in ctx.placed if not p.is_fill_board)
+        fills = [p for p in ctx.placed if p.is_fill_board]
+        self.assertEqual(main.y, 0)
+        self.assertEqual(len(fills), 1)
+        self.assertEqual(fills[0].y, main.width)
+
+
 class AutoPlaceBoardsTests(unittest.TestCase):
     def test_places_both_categories_independently(self):
         lower = [SelectedBoard(750, 1130, 3, "主")]
