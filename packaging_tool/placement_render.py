@@ -399,12 +399,23 @@ def _bounding_box(
         max_y=main_max_y,
     )
 
+    # 判定基準は固定値で持つ(ループ中にbox.min_yを書き換えるため、
+    # 条件式にbox.min_yを直接使うと2本目以降の基準がズレる。
+    # 下端側がbox.max_yではなくmain_max_yを基準にしているのと同じ理由)
+    main_top_y = box.min_y
+
     # 主ボードのX端/Y端に直接接する補填ボードのみ取り込む
     for pb in placed:
         if pb.board_category != category or not pb.is_fill_board:
             continue
         if pb.y >= main_max_y:
             box.max_y = max(box.max_y, pb.y + pb.width)
+        # 主ボード上端に接する幅補填(上側)をmin_yに含める(幅補填を
+        # 主ボードの上下に振り分ける配置に対応)。丈補填はy=main_top_y
+        # 付近に置かれるため pb.y + pb.width > main_top_y となり、
+        # この条件から自然に外れる。
+        if pb.y + pb.width <= main_top_y:
+            box.min_y = min(box.min_y, pb.y)
         if pb.x >= main_max_x:
             box.max_x = max(box.max_x, pb.x + pb.length)
     return box

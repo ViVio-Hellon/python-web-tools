@@ -109,6 +109,32 @@ class BoundingBoxTests(unittest.TestCase):
         box = render.main_boards_bounding_box(boards, LOWER, 2650, 1150)
         self.assertEqual(box.max_x, 2000)
 
+    def test_fill_adjacent_to_main_top_edge_extends_min_y(self):
+        # 主ボードはy=30から始まり(幅補填を上に振り分けたぶんオフセット
+        # 済み)、上側の幅補填(短辺30)はy=0〜30に接する → min_yが0に広がる
+        boards = [placed(0, 30, 1080, 2000), placed(0, 0, 30, 2000, is_fill=True)]
+        box = render.main_boards_bounding_box(boards, LOWER, 2650, 1150)
+        self.assertEqual(box.min_y, 0)
+
+    def test_fill_ending_past_main_top_edge_does_not_extend_min_y(self):
+        # 補填の下端(y+width=35)が主ボード上端(30)を超えている
+        # (=主ボードの範囲に食い込んでいる)ので取り込まない
+        boards = [placed(0, 30, 1080, 2000), placed(0, 25, 10, 2000, is_fill=True)]
+        box = render.main_boards_bounding_box(boards, LOWER, 2650, 1150)
+        self.assertEqual(box.min_y, 30)
+
+    def test_length_fill_at_y_zero_is_not_mistaken_for_upper_row(self):
+        # 丈補填はy=main_top_y付近・x=主ボード右端以降に置かれるため、
+        # pb.y + pb.width が main_top_y を超え、min_yの取り込み対象から
+        # 自然に外れる(このテストの丈補填は主ボードと同じy=30に置かれ、
+        # y+width=30+1150=1180 > main_top_y=30 → 対象外)
+        boards = [
+            placed(0, 30, 1080, 2000),
+            placed(2000, 30, 1150, 100, is_fill=True),  # 丈補填
+        ]
+        box = render.main_boards_bounding_box(boards, LOWER, 2650, 1150)
+        self.assertEqual(box.min_y, 30)
+
 
 class ColorTests(unittest.TestCase):
     def test_category_colors(self):
