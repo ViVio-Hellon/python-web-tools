@@ -2535,45 +2535,61 @@ def _pick_wide_cut_board(
 
 def _wide_cut_length_fill(
     boards: list[SelectedBoard], short_side: int, cnt: int, product: ProductSize,
-    available: list[BoardModel],
+    available: list[BoardModel], target_width: int,
 ) -> None:
     """カット前提選定後の丈補填(上用・下用共通)。
 
-    丈残が400mm超なら主ボードを1枚増やし、それ以下なら小型ボードを
-    丈補填として追加する(最大5回)。
+    丈残に収まる中で**最も短辺が大きい**ボードを丈補填として追加する
+    (最大5回)。候補が1枚も無いときだけ主ボードを1枚増やす。
+
+    【早期強制追加の撤去】以前は冒頭に「丈残400超 → 主ボード+1枚」という
+    分岐があった。下用PASS2/PASS3・PASS共通ブロック・上用丈補填フェーズで
+    撤去済みの「早期強制追加」と同じ性質の処理で、この関数がフォールバック
+    経路だったために撤去対象から漏れていた。丈残が400以下になるまで主ボード
+    だけで消化してしまい、直後の同幅補填探索に一度も到達できないため、
+    同幅の短いボードを使う余地を消していた。丈残はそのまま補填探索へ
+    引き渡し、候補が無い場合のみ既存の「主ボード+1枚」分岐が受け持つ。
+
+    【この関数は現状到達しない】`_pick_wide_cut_board` の枚数が
+    `ceil(製品丈 / 短辺)` なので `短辺 × 枚数 >= 製品丈` が常に成り立ち、
+    `len_gap` は 0 以下にしかならない(VBA `SelectBoardsForWideLower` の
+    `cntL` も同じ天井計算なので、VBA側も同様に到達しない)。枚数の決め方が
+    変わったときに正しく動くよう、仕様どおりに保守してある。
     """
     len_gap = product.length - short_side * cnt
     if len_gap <= 3:
         return
     log.debug("[幅広丈補填] 丈残=%smm", len_gap)
 
+    # VBA `SortBoardsByTargetWidth(Palette.width)`。採用は「丈残に収まる中で
+    # 短辺が最大」なので順序は同点時の決まり方にだけ効く(VBAは先に現れた方)
+    sorted_boards = sort_boards_by_target_width(available, target_width)
+
     for _ in range(5):
         if len_gap <= 3:
             return
-        if len_gap > 400:
-            boards[0].count += 1
-            len_gap -= short_side
-            log.debug("[幅広丈補填] 丈残400超 → 主+1枚 計%s枚", boards[0].count)
-            continue
 
-        found = next(
-            (a for a in available
-             if min(a.width, a.length) <= len_gap + 50 and min(a.width, a.length) >= NARROW_MIN_SHORT_SIDE),
-            None,
-        )
+        found: Optional[BoardModel] = None
+        best_short = 0
+        for cand in sorted_boards:
+            c_short = min(cand.width, cand.length)
+            if c_short < NARROW_MIN_SHORT_SIDE:
+                continue
+            if c_short <= len_gap + 3 and c_short > best_short:
+                best_short, found = c_short, cand
+
         if found is None:
             boards[0].count += 1
             len_gap -= short_side
             log.debug("[幅広丈補填] 小ボードなし → 主+1枚 計%s枚", boards[0].count)
             continue
 
-        f_short = min(found.width, found.length)
         existing = next((s for s in boards if s.width == found.width and s.length == found.length), None)
         if existing is not None:
             existing.count += 1
         else:
             boards.append(SelectedBoard(width=found.width, length=found.length, count=1, tag=TAG_LENGTH_FILL))
-        len_gap -= f_short
+        len_gap -= best_short
         log.debug("[幅広丈補填] 小ボード補填 %sx%s 残=%smm", found.width, found.length, len_gap)
 
 
@@ -2595,7 +2611,7 @@ def _select_wide_cut(
         result.cut_info.setdefault(f"{board_obj.width}x{board_obj.length}", short_side)
         log.debug("幅広選定: %sx%s 最大辺=%s 短辺=%s %s枚 (カット前提)",
                   board_obj.width, board_obj.length, max_side, short_side, cnt)
-        _wide_cut_length_fill(result.boards, short_side, cnt, product, available)
+        _wide_cut_length_fill(result.boards, short_side, cnt, product, available, target_width)
         return result
 
     # 最大辺が対象幅に届くボードが無い → 最大辺が最大のボードを採用(カットなし)

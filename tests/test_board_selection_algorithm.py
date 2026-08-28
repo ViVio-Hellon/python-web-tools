@@ -1696,6 +1696,81 @@ class WideCutSelectionTests(unittest.TestCase):
         self.assertEqual(min(r.boards[0].width, r.boards[0].length), 450)
 
 
+class WideCutLengthFillTests(unittest.TestCase):
+    """`_wide_cut_length_fill`(カット前提選定後の丈補填)の検証。
+
+    **この関数は公開経路からは到達しない。** `_pick_wide_cut_board` の
+    枚数が `ceil(製品丈 / 短辺)` なので `短辺 × 枚数 >= 製品丈` が常に
+    成り立ち、丈残は0以下にしかならない(VBA側の `cntL` も同じ天井計算)。
+    枚数の決め方が変わったときに仕様どおり動くことを保証するため、
+    ここでは関数を直接呼んで検証する。
+    """
+
+    def _fill(self, boards, available, *, gap, short_side=300, target_width=1000):
+        """丈残がちょうど `gap` になる条件で呼ぶ(枚数1・製品丈=短辺+gap)。"""
+        product = ProductSize(width=900, length=short_side + gap)
+        alg._wide_cut_length_fill(
+            boards, short_side, 1, product, available, target_width)
+
+    def test_gap_over_400_now_searches_a_fill_board_first(self):
+        """撤去した「丈残400超 → 主+1枚」が主ボードを増やさないこと。
+
+        丈残500。以前は400超なので問答無用で主ボードが1枚増えていたが、
+        いまは丈残に収まる補填ボードの探索が先に走る。
+        """
+        main = SelectedBoard(width=300, length=1200, count=1, tag=alg.TAG_CUT_PREMISE)
+        boards = [main]
+        # 短辺500がちょうど丈残を埋める
+        self._fill(boards, [board(500, 1200)], gap=500)
+        self.assertEqual(main.count, 1)          # 主ボードは増えない
+        self.assertEqual(len(boards), 2)
+        self.assertEqual(boards[1].tag, alg.TAG_LENGTH_FILL)
+        self.assertEqual(min(boards[1].width, boards[1].length), 500)
+
+    def test_picks_the_largest_short_side_that_fits(self):
+        """丈残に収まる中で最も短辺が大きいものを採る(VBA `lfS > lfBestShort`)。"""
+        main = SelectedBoard(width=300, length=1200, count=1, tag=alg.TAG_CUT_PREMISE)
+        boards = [main]
+        # 丈残500。100/300/500 のうち500が採られる(最初に当たる100ではない)
+        self._fill(boards, [board(100, 1200), board(300, 1200), board(500, 1200)], gap=500)
+        self.assertEqual(min(boards[1].width, boards[1].length), 500)
+        self.assertEqual(main.count, 1)
+
+    def test_candidate_must_fit_within_three_mm_tolerance(self):
+        """丈残+3mmを超える短辺は候補にしない(VBA `lfS <= lLenGap + 3`)。"""
+        main = SelectedBoard(width=600, length=1200, count=1, tag=alg.TAG_CUT_PREMISE)
+        boards = [main]
+        # 丈残500に対し短辺504は +3 を超えるので不採用 → 主ボード+1枚に倒れる
+        self._fill(boards, [board(504, 1200)], gap=500, short_side=600)
+        self.assertEqual(main.count, 2)
+        self.assertEqual(len(boards), 1)
+
+    def test_falls_back_to_main_when_no_candidate_fits(self):
+        main = SelectedBoard(width=600, length=1200, count=1, tag=alg.TAG_CUT_PREMISE)
+        boards = [main]
+        # 短辺10未満は候補外(NARROW_MIN_SHORT_SIDE)
+        self._fill(boards, [board(5, 1200)], gap=500, short_side=600)
+        self.assertEqual(main.count, 2)
+        self.assertEqual(len(boards), 1)
+
+    def test_merges_into_an_existing_row_of_the_same_size(self):
+        main = SelectedBoard(width=300, length=1200, count=1, tag=alg.TAG_CUT_PREMISE)
+        fill = SelectedBoard(width=250, length=1200, count=1, tag=alg.TAG_LENGTH_FILL)
+        boards = [main, fill]
+        # 丈残500 → 250を2回採って埋める(新しい行は増えない)
+        self._fill(boards, [board(250, 1200)], gap=500)
+        self.assertEqual(len(boards), 2)
+        self.assertEqual(fill.count, 3)
+        self.assertEqual(main.count, 1)
+
+    def test_no_fill_when_the_gap_is_already_closed(self):
+        main = SelectedBoard(width=300, length=1200, count=1, tag=alg.TAG_CUT_PREMISE)
+        boards = [main]
+        self._fill(boards, [board(500, 1200)], gap=0)
+        self.assertEqual(boards, [main])
+        self.assertEqual(main.count, 1)
+
+
 class UpperWideCutTests(unittest.TestCase):
     def test_tops_up_count_for_length_shortage(self):
         product = ProductSize(width=900, length=1800)
