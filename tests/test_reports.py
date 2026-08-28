@@ -217,6 +217,38 @@ class GetCutSizeInfoTests(unittest.TestCase):
             {"1250x2500": 2500, "1000x2000": 2000}, {}, {})
         self.assertEqual(out.orig_width_only, "1250×2500")
 
+    def test_use_len_cut_false_folds_length_cut_into_width_only(self):
+        # 丈カットなし指定: 丈カットせず全枚数を幅カットのみへ寄せる。
+        # サイズは丈カット前の実効丈(2500)のまま
+        board = SelectedBoard(width=1250, length=2500, count=1, tag="")
+        out = reports.get_cut_size_info(
+            [board], "上用", 1221, 2440,
+            {"1250x2500": 2500}, {"U_1250x2500": 1250}, {"U_1250x2500": 1},
+            use_len_cut=False)
+        self.assertEqual(out.size_both, "")
+        self.assertEqual(out.count_both, 0)
+        self.assertEqual(out.size_width_only, "1221x2500")
+        self.assertEqual(out.count_width_only, 1)
+
+    def test_use_len_cut_false_without_width_cut_needs_no_request(self):
+        # 幅カットも無ければ丈カットをしない以上、カット自体が不要
+        board = SelectedBoard(width=1250, length=2500, count=1, tag="")
+        out = reports.get_cut_size_info(
+            [board], "上用", 1221, 2440,
+            {}, {"U_1250x2500": 1250}, {"U_1250x2500": 1}, use_len_cut=False)
+        self.assertEqual(out.size_width_only, "")
+        self.assertEqual(out.count_width_only, 0)
+
+    def test_use_len_cut_false_merges_matching_sizes_across_boards(self):
+        board1 = SelectedBoard(width=1250, length=2500, count=2, tag="")
+        board2 = SelectedBoard(width=1250, length=2500, count=1, tag="")
+        out = reports.get_cut_size_info(
+            [board1, board2], "上用", 1221, 2440,
+            {"1250x2500": 2500}, {"U_1250x2500": 1250}, {"U_1250x2500": 1},
+            use_len_cut=False)
+        self.assertEqual(out.size_width_only, "1221x2500")
+        self.assertEqual(out.count_width_only, 3)
+
 
 class ProtecCutSizeTests(unittest.TestCase):
     """`protec_cut_size_info` は `ProtecCutResult`(選定の確定値)を
@@ -294,6 +326,40 @@ class ProtecCutSizeTests(unittest.TestCase):
         out = reports.protec_cut_size_info(alg.ProtecCutResult(valid=False))
         self.assertEqual(out.size_both, "")
         self.assertEqual(out.size_width_only, "")
+
+    def test_use_len_cut_false_merges_length_cut_into_width_only(self):
+        # 丈カットなし指定: 丈カット分(1枚)を幅カットのみの枚数へ合算する
+        pr = alg.ProtecCutResult(
+            valid=True, orig_width=1250, orig_length=1000, cut_eff_width=1020,
+            eff_length=1000, need_cut=True, need_length_cut=True,
+            length_cut_eff=910, count=3)
+        out = reports.protec_cut_size_info(pr, use_len_cut=False)
+        self.assertEqual(out.size_both, "")
+        self.assertEqual(out.count_both, 0)
+        self.assertEqual(out.size_width_only, "1020x1000")
+        self.assertEqual(out.count_width_only, 3)
+
+    def test_use_len_cut_false_without_width_cut_needs_no_request(self):
+        # 幅カットも無ければ丈カットをしない以上、カット自体が不要
+        pr = alg.ProtecCutResult(
+            valid=True, orig_width=1090, orig_length=1000, cut_eff_width=1090,
+            eff_length=1000, need_cut=False, need_length_cut=True,
+            length_cut_eff=910, count=3)
+        out = reports.protec_cut_size_info(pr, use_len_cut=False)
+        self.assertEqual(out.size_width_only, "")
+        self.assertEqual(out.count_width_only, 0)
+        self.assertEqual(out.size_both, "")
+
+    def test_use_len_cut_true_is_unaffected(self):
+        pr = alg.ProtecCutResult(
+            valid=True, orig_width=1250, orig_length=1000, cut_eff_width=1020,
+            eff_length=1000, need_cut=True, need_length_cut=True,
+            length_cut_eff=910, count=3)
+        out = reports.protec_cut_size_info(pr, use_len_cut=True)
+        self.assertEqual(out.size_both, "1020x910")
+        self.assertEqual(out.count_both, 1)
+        self.assertEqual(out.size_width_only, "1020x1000")
+        self.assertEqual(out.count_width_only, 2)
 
 
 def _cut(**kw) -> reports.CutRequestData:

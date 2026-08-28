@@ -378,6 +378,7 @@ def get_cut_size_info(
     boards: Sequence[object], category: str, target_w: int, target_l: int,
     cut_info: dict[str, int], length_cut_info: dict[str, int],
     length_cut_count: dict[str, int],
+    *, use_len_cut: bool = True,
 ) -> CutSizeInfo:
     """VBA `GetCutSizeInfo` の移植。
 
@@ -386,6 +387,11 @@ def get_cut_size_info(
     補填ボード(幅補填・丈補填)は切断対象外なので飛ばす。
 
     `target_w`/`target_l` は上用なら製品サイズ、下用ならパレットサイズ。
+
+    `use_len_cut`(既定True)がFalseのとき、丈カットが要るボードは
+    丈カットせず、幅カットのみの枠に全枚数を寄せて出す(現場が
+    丈カット済みの端材を用意せず、幅カットだけで済ませたい場合)。
+    サイズ文字列は丈カット前の実効丈(`eff_l`)のまま使う。
     """
     out = CutSizeInfo()
     if not boards:
@@ -416,6 +422,20 @@ def get_cut_size_info(
         cut_out_w = target_w if has_width_cut else eff_w
 
         if has_length_cut:
+            # 丈カットなし指定のときは丈カットせず、全枚数を幅カットのみに寄せる
+            if not use_len_cut:
+                if has_width_cut:
+                    size_no_len = f"{cut_out_w}x{eff_l}"
+                    if not found_width_only:
+                        out.size_width_only = size_no_len
+                        out.count_width_only = brd_c
+                        out.orig_width_only = f"{brd_w}×{brd_l}"
+                        found_width_only = True
+                    elif out.size_width_only == size_no_len:
+                        out.count_width_only += brd_c
+                    # else: 既出と別サイズのため合算せず除外(VBA踏襲)
+                # else: 幅カットも無いためカット不要
+                continue
             if found_both:
                 continue
             cnt_both = len_cut_cnt
@@ -450,7 +470,9 @@ def get_cut_size_info(
     return out
 
 
-def protec_cut_size_info(protec_result: ProtecCutResult) -> CutSizeInfo:
+def protec_cut_size_info(
+    protec_result: ProtecCutResult, *, use_len_cut: bool = True,
+) -> CutSizeInfo:
     """プロテックモードの切断サイズ(VBA `CreateCuttingRequestForm` の分岐)。
 
     【全面書き換え】以前はここで `placedBoards`(配置座標)から寸法を
@@ -471,25 +493,35 @@ def protec_cut_size_info(protec_result: ProtecCutResult) -> CutSizeInfo:
         自体は出さない ── 幅は元のサイズのままで良いため)
         丈カットが要らない → 幅カットの有無だけで `size_width_only`
         に全枚数をまとめる
+
+    `use_len_cut`(既定True)がFalseのとき、丈カットが要るケースでも
+    丈カットせず、その1枚も幅カットのみの枠(通常の実効丈)へ合算する
+    (`get_cut_size_info` の同名パラメータと揃えた挙動)。
     """
     out = CutSizeInfo()
     if not protec_result.valid:
         return out
 
     pr = protec_result
-    if pr.need_length_cut:
-        cnt_both = 1
-        cnt_width_only = max(0, pr.count - cnt_both)
+    need_length_cut = pr.need_length_cut
+    cnt_both = 1 if need_length_cut else 0
+    cnt_width_only = max(0, pr.count - cnt_both)
+
+    # 丈カットなし指定なら丈カット分を通常カットへ合算する
+    if not use_len_cut and need_length_cut:
+        cnt_width_only = cnt_width_only + cnt_both if pr.need_cut else 0
+        need_length_cut = False
+        cnt_both = 0
+        log.debug("protec_cut_size_info[丈カットなし] 合算後 countWidthOnly=%s", cnt_width_only)
+
+    if need_length_cut:
         out.size_both = f"{pr.cut_eff_width}x{pr.length_cut_eff}"
         out.count_both = cnt_both
         out.orig_both = f"{pr.orig_width}×{pr.orig_length}"
-        if pr.need_cut and cnt_width_only > 0:
-            out.size_width_only = f"{pr.cut_eff_width}x{pr.eff_length}"
-            out.count_width_only = cnt_width_only
-            out.orig_width_only = f"{pr.orig_width}×{pr.orig_length}"
-    elif pr.need_cut:
+
+    if pr.need_cut and cnt_width_only > 0:
         out.size_width_only = f"{pr.cut_eff_width}x{pr.eff_length}"
-        out.count_width_only = pr.count
+        out.count_width_only = cnt_width_only
         out.orig_width_only = f"{pr.orig_width}×{pr.orig_length}"
 
     log.debug("protec_cut_size_info: cutEffW=%s effL=%s needCut=%s "

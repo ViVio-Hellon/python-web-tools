@@ -521,7 +521,10 @@ def report(name: str):
         refusal = outputs.cut_request_refusal(session)
         if refusal is not None:
             return _report_problem(refusal)
-        built, refusal = outputs.build_cut_request(session)
+        # VBA側の「丈カットを行いますか」確認(押した人が選ぶ)に対応。
+        # クエリで来なければ既定どおり丈カットする(VBAの既定ボタン=はい)
+        use_len_cut = request.args.get("use_len_cut", "1") != "0"
+        built, refusal = outputs.build_cut_request(session, use_len_cut=use_len_cut)
         if built is None:
             return _report_problem(refusal)
     else:

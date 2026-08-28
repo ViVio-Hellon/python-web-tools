@@ -328,8 +328,8 @@ def build_label(session: Any) -> printing.Report:
     return reports.build_label_report(data)
 
 
-def build_cut_request(session: Any) -> tuple[Optional[printing.Report],
-                                             Optional[Refusal]]:
+def build_cut_request(session: Any, *, use_len_cut: bool = True) -> tuple[
+        Optional[printing.Report], Optional[Refusal]]:
     """切断依頼(VBA `btnCutRequest_Click` → `CreateCuttingRequestForm`)。
 
     カットが1つも無ければ帳票にならない。**それは失敗ではない**ので、
@@ -340,6 +340,11 @@ def build_cut_request(session: Any) -> tuple[Optional[printing.Report],
     存在しない)には頼れない。`place_boards` と同じ手順
     (`select_result` があればそこから、手動で増減した後なら後付け
     適用)を、ここでも独立して行い、`ProtecCutResult` を用意する。
+
+    `use_len_cut`(既定True)は、VBA側で追加された「丈カットを行いますか」
+    という確認(押した人が選ぶ)に対応する。Falseなら丈カット分を
+    幅カットのみへ合算して出す(`reports.get_cut_size_info`/
+    `reports.protec_cut_size_info` の同名パラメータ参照)。
     """
     from .. import board_selection_algorithm as alg
     from .. import user_settings
@@ -361,17 +366,17 @@ def build_cut_request(session: Any) -> tuple[Optional[printing.Report],
             protec_result = alg.apply_protec_rules_to_lower_list(
                 session.selected.lower, session.product, session.palette.length,
                 is_1p1216=presenter.protec.is_1p1216)
-        upper = reports.protec_cut_size_info(protec_result)
+        upper = reports.protec_cut_size_info(protec_result, use_len_cut=use_len_cut)
         lower = reports.CutSizeInfo()
     else:
         upper = reports.get_cut_size_info(
             session.selected.upper, "上用",
             session.product.width, session.product.length,
-            cut_info, length_cut_info, length_cut_count)
+            cut_info, length_cut_info, length_cut_count, use_len_cut=use_len_cut)
         lower = reports.get_cut_size_info(
             session.selected.lower, "下用",
             session.palette.width, session.palette.length,
-            cut_info, length_cut_info, length_cut_count)
+            cut_info, length_cut_info, length_cut_count, use_len_cut=use_len_cut)
 
     if not any((upper.size_width_only, upper.size_both,
                 lower.size_width_only, lower.size_both)):

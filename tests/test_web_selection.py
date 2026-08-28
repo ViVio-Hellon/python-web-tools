@@ -1687,6 +1687,29 @@ class SendTests(SelectionWebTestCase):
         self.assertEqual(res.mimetype, "text/html")
         self.assertIn("1234567", res.get_data(as_text=True))
 
+    def test_切断依頼の丈カットなし指定はクエリで通る(self) -> None:
+        """`?use_len_cut=0`(VBA『丈カットを行いますか』のいいえ)を受け付ける。
+
+        このシナリオは幅カットが無く丈カットのみ記録される(上のテストの
+        ログ参照)。丈カットなし指定では丈カット分を幅カットへ合算するが、
+        合算先の幅カットが無い=カット自体が不要になる(VBA踏襲)ため
+        422になるのが正しい。具体的な計算は
+        `reports.get_cut_size_info`/`protec_cut_size_info` のユニット
+        テストで検証済み。ここでは配線(クエリ→帳票生成)だけ確かめる。
+        """
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1100, length=2000)
+        insert_board(self.conn, width=550, length=1000)
+        self.post("/api/selection/boards/auto-select")
+
+        res = self.client.get("/report/cut-request?use_len_cut=0", headers=self.auth())
+        self.assertEqual(res.status_code, 422, res.get_data(as_text=True)[:300])
+        self.assertIn("カットが必要なボードはありません",
+                      res.get_data(as_text=True))
+
     def test_配置していなければ配置図印刷は出せない(self) -> None:
         """候補を選んだだけでは足りない。配置してあることが前提。"""
         self.post("/api/selection/pallet/apply",

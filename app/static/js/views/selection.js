@@ -939,7 +939,20 @@ export function start(initial) {
   for (const button of document.querySelectorAll("[data-report]")) {
     // 帳票はサーバがHTMLをそのまま返す。別窓で開いて印刷する
     button.addEventListener("click", () => {
-      const win = window.open(tokenUrl(button.dataset.url), "_blank");
+      let url = tokenUrl(button.dataset.url);
+      // 切断依頼だけ「丈カットを行うか」を確認する(VBA `CreateCuttingRequestForm`
+      // 冒頭のMsgBox)。OK=丈カットを行う(既定) / キャンセル=丈カット分を
+      // 幅カットへまとめて出す。ブラウザの確認ダイアログは2択なので、
+      // VBAの3択(はい/いいえ/キャンセル=中止)のうち「中止」は割り切って
+      // 対象外にしている(押した後にやめたければ開いた窓を閉じればよい)
+      if (button.dataset.report === "cut-request") {
+        const wantsLenCut = confirm(
+          "丈カットを行いますか？\n\n" +
+          "[OK]  幅カットと幅＋丈カットを分けて出力\n" +
+          "[キャンセル]  丈カット分を幅カットにまとめて出力");
+        url += (url.includes("?") ? "&" : "?") + `use_len_cut=${wantsLenCut ? "1" : "0"}`;
+      }
+      const win = window.open(url, "_blank");
       if (!win) toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
     });
   }
