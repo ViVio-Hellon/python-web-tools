@@ -120,6 +120,37 @@ class ListPalletSizesTests(BoardSelectionTestCase):
         insert_pallet(self.conn, width=0, length=2000, w_min=0, w_max=0, l_min=0, l_max=0, unit="台")
         self.assertEqual(len(svc.list_pallet_sizes(self.conn, show_all=True)), 0)
 
+    def test_1p1185_mode_only_shows_tight_1300x1300(self):
+        insert_pallet(self.conn, width=1300, length=1300, w_min=1200, w_max=1400,
+                      l_min=1200, l_max=1400, industry="タイト", unit="台")
+        insert_pallet(self.conn, width=1150, length=2650, w_min=1000, w_max=1200,
+                      l_min=2500, l_max=2800, industry="タイト", unit="台")
+        insert_pallet(self.conn, width=1300, length=1300, w_min=1200, w_max=1400,
+                      l_min=1200, l_max=1400, industry="一般", unit="台")
+        rows = svc.list_pallet_sizes(self.conn, is_1p1185_mode=True)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0].width, rows[0].length, rows[0].industry), (1300, 1300, "タイト"))
+
+    def test_1p1185_mode_off_shows_everything(self):
+        insert_pallet(self.conn, width=1150, length=2650, w_min=1000, w_max=1200,
+                      l_min=2500, l_max=2800, industry="タイト", unit="台")
+        self.assertEqual(len(svc.list_pallet_sizes(self.conn, is_1p1185_mode=False)), 1)
+
+    def test_matrix_row_suppressed_when_real_code_exists_for_same_size(self):
+        insert_pallet(self.conn, width=1100, length=2000, w_min=1000, w_max=1200,
+                      l_min=1900, l_max=2100, code="単価表のマトリックス", unit="台")
+        insert_pallet(self.conn, width=1100, length=2000, w_min=1000, w_max=1200,
+                      l_min=1900, l_max=2100, code="058901", unit="台")
+        rows = svc.list_pallet_sizes(self.conn)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].code, "058901")
+
+    def test_matrix_row_kept_when_no_real_code_exists(self):
+        insert_pallet(self.conn, width=1100, length=2000, w_min=1000, w_max=1200,
+                      l_min=1900, l_max=2100, code="単価表のマトリックス", unit="台")
+        rows = svc.list_pallet_sizes(self.conn)
+        self.assertEqual(len(rows), 1)
+
 
 # ------------------------------------------------------------------
 # ボード一覧
@@ -283,6 +314,51 @@ class AutoSelectPalletTests(BoardSelectionTestCase):
         self.assertEqual(result.pass_label, "強制フォールバック")
         self.assertFalse(result.rotated)
 
+    def test_1p1185_mode_only_matches_tight_1300x1300(self):
+        # 特定業界の1300x1300は幅丈こそ合うが業界がタイトでないため
+        # 1P1185モードでは選ばれない
+        insert_pallet(self.conn, width=1300, length=1300, w_min=1200, w_max=1400,
+                      l_min=1200, l_max=1400, industry="1×2")
+        insert_pallet(self.conn, width=1300, length=1300, w_min=1200, w_max=1400,
+                      l_min=1200, l_max=1400, industry="タイト")
+        result = svc.auto_select_pallet(
+            self.conn, product_width_text="1245", product_length_text="1245",
+            is_1p1185_mode=True)
+        self.assertTrue(result.ok)
+        self.assertEqual((result.width, result.length, result.industry), (1300, 1300, "タイト"))
+
+    def test_1p1185_mode_excludes_tight_pallets_of_other_sizes(self):
+        # 業界=タイトだが1300x1300ではないので候補にならない
+        insert_pallet(self.conn, width=1150, length=2650, w_min=1000, w_max=1200,
+                      l_min=2500, l_max=2800, industry="タイト")
+        result = svc.auto_select_pallet(
+            self.conn, product_width_text="1245", product_length_text="1245",
+            is_1p1185_mode=True)
+        self.assertFalse(result.ok)
+
+    def test_1p1185_mode_applies_to_the_fallback_too(self):
+        # EX記号のため通常パス(EX除外)には引っかからずフォールバックで
+        # 拾われる行でも、1P1185の絞り込み(候補行そのものから除外)は
+        # フォールバックにも及んでいることを確認する
+        insert_pallet(self.conn, width=1300, length=1300, w_min=1, w_max=9999,
+                      l_min=1, l_max=9999, industry="タイト", symbol="EX")
+        result = svc.auto_select_pallet(
+            self.conn, product_width_text="1245", product_length_text="1245",
+            is_1p1185_mode=True)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.pass_label, "強制フォールバック")
+        self.assertEqual(result.industry, "タイト")
+
+    def test_1p1185_mode_removes_non_matching_rows_before_the_fallback(self):
+        # 一般業界のEX行はフォールバックなら本来拾われるはずだが、
+        # 1P1185モードでは候補行から完全に除外されるため拾われない
+        insert_pallet(self.conn, width=500, length=500, w_min=1, w_max=99999,
+                      l_min=1, l_max=99999, industry="一般", symbol="EX")
+        result = svc.auto_select_pallet(
+            self.conn, product_width_text="500", product_length_text="500",
+            is_1p1185_mode=True)
+        self.assertFalse(result.ok)
+
 
 class SearchPalletDirectTests(BoardSelectionTestCase):
     def test_within_tolerance(self):
@@ -304,6 +380,17 @@ class SearchPalletDirectTests(BoardSelectionTestCase):
         self.assertEqual(len(rows), 0)  # show_all=False -> EX除外
         rows = svc.search_pallet_direct(self.conn, pallet_width_text="1000", pallet_length_text="2000", show_all=True)
         self.assertEqual(len(rows), 1)
+
+    def test_1p1185_mode_only_matches_tight_1300x1300(self):
+        insert_pallet(self.conn, width=1300, length=1300, w_min=1200, w_max=1400,
+                      l_min=1200, l_max=1400, industry="タイト", unit="台")
+        insert_pallet(self.conn, width=1150, length=2650, w_min=1000, w_max=1200,
+                      l_min=2500, l_max=2800, industry="タイト", unit="台")
+        rows = svc.search_pallet_direct(
+            self.conn, pallet_width_text="1300", pallet_length_text="1300",
+            show_all=True, is_1p1185_mode=True)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0].width, rows[0].length), (1300, 1300))
 
 
 class ListPalletsForProductTests(BoardSelectionTestCase):
@@ -504,6 +591,19 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
             self.conn, product_width=1000, product_length=2500,
             manufactured_thickness=40.0)
         self.assertEqual(len(rows), 1)
+
+    def test_1p1185_mode_only_matches_tight_1300x1300(self):
+        insert_pallet(self.conn, width=1300, length=1300,
+                      w_min=1200, w_max=1400, l_min=1200, l_max=1400,
+                      industry="タイト", unit="台")
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                      industry="タイト", unit="台")
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1245, product_length=1245,
+            is_1p1185_mode=True)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0].width, rows[0].length), (1300, 1300))
 
 
 class ListPalletsByProductDimsTests(BoardSelectionTestCase):

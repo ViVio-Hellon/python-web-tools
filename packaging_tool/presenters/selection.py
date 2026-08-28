@@ -55,6 +55,7 @@ TITLE_LOWER_SHARED = "【上下共用ボード配置】"
 BANNER_NONE = ""
 BANNER_1P0113 = "1p0113"
 BANNER_PROTEC = "protec"
+BANNER_1P1185 = "1p1185"
 BANNER_SHARED = "shared"
 BANNER_EX = "ex"
 BANNER_SHARED_EX = "shared_ex"
@@ -139,6 +140,7 @@ class SelectionPresenter:
     mode_1p0113: bool = False
     force_1p0113: bool = False
     protec: spk.ProtecState = field(default_factory=spk.ProtecState)
+    mode_1p1185: spk.Mode1P1185State = field(default_factory=spk.Mode1P1185State)
     last_hosozai: str = ""
     materials_1p0113: spk.Materials1P0113 = field(default_factory=spk.Materials1P0113)
 
@@ -293,6 +295,26 @@ class SelectionPresenter:
                 f" (上用は下用と同サイズ・許容"
                 f"-{5 if self.protec.is_1p1216 else 80}mm)", emphasis=True)
         return result
+
+    # ------------------------------------------------------------------
+    # 2.5. 1P1185(タイト限定)モード
+    # ------------------------------------------------------------------
+    def check_and_set_1p1185_mode(
+        self, packaging_spec: str, customer_name: str,
+        manufactured_width: float, manufactured_length: float,
+    ) -> None:
+        """VBA `CheckAndSet1P1185Mode` の移植。
+
+        発動条件(AND): 包装仕様NO=1P1185、取引先名称に「ﾅﾒｶﾜｱﾙﾐ」を
+        含む、製造板幅・製造板丈がそれぞれ1242〜1249。有効になった
+        瞬間だけ選定ログに記録する(VBA `changed` 判定と同じ)。
+        """
+        was_on = self.mode_1p1185.is_1p1185
+        self.mode_1p1185 = spk.check_1p1185_mode(
+            packaging_spec, customer_name, manufactured_width, manufactured_length)
+        if self.mode_1p1185.is_1p1185 and not was_on:
+            self.user_log.log(
+                f"[1P1185タイト限定モード] 有効 取引先={customer_name}", emphasis=True)
 
     # ------------------------------------------------------------------
     # 3. 保護材 → アングルの要否 / 上下共用
@@ -469,6 +491,8 @@ class SelectionPresenter:
         protec = self.check_and_set_protec_mode(
             spec, available_board_types=available_board_types,
             current_board_type=current_board_type)
+        self.check_and_set_1p1185_mode(
+            spec, result.odr.customer_name, result.lot.width, result.lot.length)
         hosozai = self.apply_hosozai(self.lookup_hosozai(result))
 
         return {
@@ -518,6 +542,8 @@ class SelectionPresenter:
                 f"【{spk.HOSOSIYO_1P0113} 裸梱包モード】角材+松板で組みます")
         if self.protec.is_protec:
             return ModeBanner(BANNER_PROTEC, "【プロテックボードオーダー選択中】")
+        if self.mode_1p1185.is_1p1185:
+            return ModeBanner(BANNER_1P1185, "【1P1185モード タイトサイズ限定表示】")
         if self.is_shared_board_mode:
             if self.is_ex_order:
                 return ModeBanner(
@@ -1659,7 +1685,8 @@ def list_rows(session: Any) -> list[Any]:
             conn, pallet_width_text=session.direct_width,
             pallet_length_text=session.direct_length,
             show_all=session.show_all,
-            last_hosozai=session.presenter.last_hosozai)
+            last_hosozai=session.presenter.last_hosozai,
+            is_1p1185_mode=session.presenter.mode_1p1185.is_1p1185)
 
     return svc.list_pallet_sizes(
         conn, last_hosozai=session.presenter.last_hosozai, **flags)

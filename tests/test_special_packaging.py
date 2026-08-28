@@ -44,6 +44,51 @@ class ModeDetectionTests(unittest.TestCase):
         self.assertEqual(spk.protec_state("1P0100").board_type, spk.DEFAULT_BOARD_TYPE)
 
 
+class Mode1P1185Tests(unittest.TestCase):
+    """発動条件(AND): 包装仕様NO=1P1185/取引先にﾅﾒｶﾜｱﾙﾐ/製造板幅・丈が1242〜1249。"""
+
+    def test_all_conditions_met_turns_mode_on(self):
+        state = spk.check_1p1185_mode("1P1185", "ｶ)ﾅﾒｶﾜｱﾙﾐ", 1245, 1245)
+        self.assertTrue(state.is_1p1185)
+
+    def test_wrong_spec_keeps_mode_off(self):
+        state = spk.check_1p1185_mode("1P1186", "ｶ)ﾅﾒｶﾜｱﾙﾐ", 1245, 1245)
+        self.assertFalse(state.is_1p1185)
+
+    def test_missing_customer_substring_keeps_mode_off(self):
+        state = spk.check_1p1185_mode("1P1185", "ｶ)ﾍﾞﾂ会社", 1245, 1245)
+        self.assertFalse(state.is_1p1185)
+
+    def test_width_out_of_range_keeps_mode_off(self):
+        state = spk.check_1p1185_mode("1P1185", "ﾅﾒｶﾜｱﾙﾐ", 1250, 1245)
+        self.assertFalse(state.is_1p1185)
+
+    def test_length_out_of_range_keeps_mode_off(self):
+        state = spk.check_1p1185_mode("1P1185", "ﾅﾒｶﾜｱﾙﾐ", 1245, 1241)
+        self.assertFalse(state.is_1p1185)
+
+    def test_range_boundaries_are_inclusive(self):
+        self.assertTrue(spk.check_1p1185_mode("1P1185", "ﾅﾒｶﾜｱﾙﾐ", 1242, 1249).is_1p1185)
+
+    def test_spec_comparison_ignores_case_and_spaces(self):
+        state = spk.check_1p1185_mode(" 1p1185 ", "ﾅﾒｶﾜｱﾙﾐ", 1245, 1245)
+        self.assertTrue(state.is_1p1185)
+
+
+class Reject1P1185Tests(unittest.TestCase):
+    def test_mode_off_never_rejects(self):
+        self.assertFalse(spk.reject_1p1185(False, "一般", 900, 1800))
+
+    def test_only_tight_1300x1300_passes(self):
+        self.assertFalse(spk.reject_1p1185(True, "タイト", 1300, 1300))
+
+    def test_non_tight_industry_rejected(self):
+        self.assertTrue(spk.reject_1p1185(True, "一般", 1300, 1300))
+
+    def test_wrong_size_rejected_even_if_tight(self):
+        self.assertTrue(spk.reject_1p1185(True, "タイト", 1150, 2650))
+
+
 class AValueTests(unittest.TestCase):
     """松板の丈(A値)は製品丈の帯で決まる(VBA `Load1P0113Materials`)。"""
 

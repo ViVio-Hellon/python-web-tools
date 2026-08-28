@@ -1344,6 +1344,60 @@ class ProtecBoardTypeTests(SelectionWebTestCase):
 
 
 # ==================================================================
+# 1P1185(タイト限定)モード
+# ==================================================================
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class Mode1P1185Tests(SelectionWebTestCase):
+    """発動条件(AND): 包装仕様NO=1P1185/取引先にﾅﾒｶﾜｱﾙﾐ/製造板幅・丈1242〜1249。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from app.routes import lot as lot_routes
+        from tests.test_lot_service import insert_hiki, insert_lot, insert_odr
+
+        self._lot_original = lot_routes.get_db
+        lot_routes.get_db = lambda: self.conn
+        self.addCleanup(lambda: setattr(lot_routes, "get_db", self._lot_original))
+        insert_hiki(self.conn)
+        self._insert_lot = insert_lot
+        self._insert_odr = insert_odr
+
+    def search(self, *, lot=None, odr=None) -> dict:
+        self._insert_lot(self.conn, **(lot or {}))
+        self._insert_odr(self.conn, **(odr or {}))
+        self.client.get("/api/lot/1234567", headers=self.auth())
+        return self.get()
+
+    def test_全条件を満たすとバーが出てタイト以外は隠れる(self) -> None:
+        insert_pallet(self.conn, width=1300, length=1300, w_min=1200, w_max=1400,
+                     l_min=1200, l_max=1400, industry="タイト")
+        insert_pallet(self.conn, width=1150, length=2650, w_min=1000, w_max=1200,
+                     l_min=2500, l_max=2800, industry="タイト")
+        state = self.search(
+            lot={"製造板幅": 1245.0, "製造板丈": 1245.0},
+            odr={"包装仕様NO": "1P1185", "取引先名称": "ｶ)ﾅﾒｶﾜｱﾙﾐ"})
+        self.assertEqual(state["banner"]["kind"], "1p1185")
+        self.assertEqual([row["width"] for row in state["rows"]], [1300])
+
+    def test_取引先が違えば発動しない(self) -> None:
+        insert_pallet(self.conn, width=1300, length=1300, w_min=1200, w_max=1400,
+                     l_min=1200, l_max=1400, industry="タイト")
+        state = self.search(
+            lot={"製造板幅": 1245.0, "製造板丈": 1245.0},
+            odr={"包装仕様NO": "1P1185", "取引先名称": "ｶ)ﾍﾞﾂ会社"})
+        self.assertEqual(state["banner"]["kind"], "")
+        self.assertEqual([row["width"] for row in state["rows"]], [1300])
+
+    def test_幅丈が範囲外なら発動しない(self) -> None:
+        insert_pallet(self.conn, width=1300, length=1300, w_min=1200, w_max=1400,
+                     l_min=1200, l_max=1400, industry="タイト")
+        state = self.search(
+            lot={"製造板幅": 1300.0, "製造板丈": 1245.0},
+            odr={"包装仕様NO": "1P1185", "取引先名称": "ﾅﾒｶﾜｱﾙﾐ"})
+        self.assertEqual(state["banner"]["kind"], "")
+
+
+# ==================================================================
 # 管理者と実績パターン (Phase 6d)
 # ==================================================================
 class AdminTests(BoardTestCase):

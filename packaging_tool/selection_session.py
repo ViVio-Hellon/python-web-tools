@@ -1016,6 +1016,7 @@ class SelectionSession:
             "show_all": self.show_all,
             "ex_only": self.ex_only,
             "is_ex_order": self.presenter.is_ex_order,
+            "is_1p1185_mode": self.presenter.mode_1p1185.is_1p1185,
         }
 
 

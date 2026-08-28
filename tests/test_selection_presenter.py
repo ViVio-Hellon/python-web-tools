@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from packaging_tool import db, material_service, special_packaging as spk  # noqa: E402
 from packaging_tool.presenters.selection import (  # noqa: E402
     BANNER_1P0113,
+    BANNER_1P1185,
     BANNER_EX,
     BANNER_NONE,
     BANNER_PROTEC,
@@ -54,6 +55,7 @@ class FakeLot:
 class FakeOdr:
     packaging_spec: str = ""
     is_ex: bool = False
+    customer_name: str = ""
 
 
 @dataclass
@@ -62,8 +64,9 @@ class FakeResult:
     odr: FakeOdr = field(default_factory=FakeOdr)
 
 
-def _make_result(*, spec: str = "", is_ex: bool = False, **lot_kwargs) -> FakeResult:
-    return FakeResult(lot=FakeLot(**lot_kwargs), odr=FakeOdr(spec, is_ex))
+def _make_result(*, spec: str = "", is_ex: bool = False,
+                  customer_name: str = "", **lot_kwargs) -> FakeResult:
+    return FakeResult(lot=FakeLot(**lot_kwargs), odr=FakeOdr(spec, is_ex, customer_name))
 
 
 class PresenterTestCase(unittest.TestCase):
@@ -435,6 +438,19 @@ class ModeBannerTests(PresenterTestCase):
         self.p.apply_1p0113_mode(spk.HOSOSIYO_1P0113)
         self.assertEqual(self.p.mode_banner().kind, BANNER_1P0113)
 
+    def test_1P1185はEXや上下共用より優先(self) -> None:
+        self.p.set_ex_order(True)
+        self.p.apply_hosozai("ザラ板")
+        self.p.check_and_set_1p1185_mode("1P1185", "ﾅﾒｶﾜｱﾙﾐ", 1245, 1245)
+        banner = self.p.mode_banner()
+        self.assertEqual(banner.kind, BANNER_1P1185)
+        self.assertIn("1P1185", banner.text)
+
+    def test_プロテックは1P1185より優先(self) -> None:
+        self.p.check_and_set_protec_mode("1P1216")
+        self.p.check_and_set_1p1185_mode("1P1185", "ﾅﾒｶﾜｱﾙﾐ", 1245, 1245)
+        self.assertEqual(self.p.mode_banner().kind, BANNER_PROTEC)
+
 
 # ==================================================================
 # ロット確定 — 状態機械の順序
@@ -500,6 +516,28 @@ class ApplyLotTests(PresenterTestCase):
         self.p.apply_lot(_make_result(spec="1P1216"))
         self.assertFalse(self.p.mode_1p0113)
         self.assertTrue(self.p.protec.is_protec)
+
+    def test_1P1185の全条件を満たすロットでモードに入る(self) -> None:
+        self.p.apply_lot(_make_result(
+            spec="1P1185", customer_name="ｶ)ﾅﾒｶﾜｱﾙﾐ", width=1245, length=1245))
+        self.assertTrue(self.p.mode_1p1185.is_1p1185)
+
+    def test_1P1185は取引先が違えばモードに入らない(self) -> None:
+        self.p.apply_lot(_make_result(
+            spec="1P1185", customer_name="ｶ)ﾍﾞﾂ会社", width=1245, length=1245))
+        self.assertFalse(self.p.mode_1p1185.is_1p1185)
+
+    def test_1P1185は幅丈が範囲外ならモードに入らない(self) -> None:
+        self.p.apply_lot(_make_result(
+            spec="1P1185", customer_name="ﾅﾒｶﾜｱﾙﾐ", width=1300, length=1245))
+        self.assertFalse(self.p.mode_1p1185.is_1p1185)
+
+    def test_ロットを切り替えると1P1185モードも解除される(self) -> None:
+        self.p.apply_lot(_make_result(
+            spec="1P1185", customer_name="ﾅﾒｶﾜｱﾙﾐ", width=1245, length=1245))
+        self.assertTrue(self.p.mode_1p1185.is_1p1185)
+        self.p.apply_lot(_make_result(spec=""))
+        self.assertFalse(self.p.mode_1p1185.is_1p1185)
 
 
 class SelectionFlagsTests(PresenterTestCase):

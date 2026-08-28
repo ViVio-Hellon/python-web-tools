@@ -92,6 +92,17 @@ PROTEC_SPEC_1P1216 = "1P1216"   # ｺｰﾐ金属。上用の幅許容が -5mm �
 PROTEC_BOARD_TYPE = "プロテックボード"
 DEFAULT_BOARD_TYPE = "ハードボード"
 
+# ==================================================================
+# 1P1185(タイト限定)モード 定数 — VBA `CheckAndSet1P1185Mode`
+# ==================================================================
+HOSO_1P1185 = "1P1185"
+IND_TIGHT = "タイト"
+TORI_1P1185 = "ﾅﾒｶﾜｱﾙﾐ"
+P1185_W_MIN, P1185_W_MAX = 1242, 1249
+P1185_L_MIN, P1185_L_MAX = 1242, 1249
+# 1P1185モードで使用するパレットサイズ(固定)
+P1185_PAL_W, P1185_PAL_L = 1300, 1300
+
 
 # ==================================================================
 # モード判定
@@ -122,6 +133,51 @@ def protec_state(packaging_spec: str) -> ProtecState:
     log.debug("protec_state: spec=%s is_protec=%s is_1p1216=%s",
               spec, state.is_protec, state.is_1p1216)
     return state
+
+
+@dataclass
+class Mode1P1185State:
+    """VBA `m_is1P1185Mode` の組。"""
+
+    is_1p1185: bool = False
+
+
+def check_1p1185_mode(
+    packaging_spec: str, customer_name: str,
+    manufactured_width: float, manufactured_length: float,
+) -> Mode1P1185State:
+    """VBA `CheckAndSet1P1185Mode` の移植(判定部分だけ)。
+
+    発動条件(AND):
+        包装仕様NO = 1P1185
+        取引先名称に "ﾅﾒｶﾜｱﾙﾐ" を含む
+        製造板幅 が 1242〜1249
+        製造板丈 が 1242〜1249
+    """
+    spec = (packaging_spec or "").strip()
+    cond1 = spec.upper().replace(" ", "") == HOSO_1P1185
+    cond2 = TORI_1P1185 in (customer_name or "")
+    w = int(manufactured_width or 0)
+    l = int(manufactured_length or 0)
+    cond3 = P1185_W_MIN <= w <= P1185_W_MAX
+    cond4 = P1185_L_MIN <= l <= P1185_L_MAX
+    is_on = cond1 and cond2 and cond3 and cond4
+    log.debug("check_1p1185_mode: hosoNo=%s 取引先=%s 幅=%s 丈=%s "
+              "cond1=%s cond2=%s cond3=%s cond4=%s -> %s",
+              spec, customer_name, w, l, cond1, cond2, cond3, cond4, is_on)
+    return Mode1P1185State(is_1p1185=is_on)
+
+
+def reject_1p1185(is_1p1185_mode: bool, industry: str, width: int, length: int) -> bool:
+    """VBA `Reject1P1185` の移植。True ならこのレコードは載せない。
+
+    1P1185モードでは業界=タイト かつ 幅=1300・丈=1300 のみを通す。
+    """
+    if not is_1p1185_mode:
+        return False
+    if (industry or "").strip() != IND_TIGHT:
+        return True
+    return width != P1185_PAL_W or length != P1185_PAL_L
 
 
 # ==================================================================

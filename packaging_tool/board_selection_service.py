@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from . import config, db, material_service
+from . import special_packaging as spk
 from .logging_utils import get_logger
 from .user_log import RejectLog, UserLog, tag_area
 
@@ -181,6 +182,34 @@ def _row_to_pallet_size_row(row: sqlite3.Row) -> PalletSizeRow:
     )
 
 
+# 単価表のマトリックス行は、同じ幅・丈で実コードを持つ行が別にあるなら
+# 重複表示になるので載せない(VBA `BuildMatrixSuppressMap`/`IsSuppressedMatrix`)
+CODE_MATRIX = "単価表のマトリックス"
+
+
+def build_matrix_suppress_map(rows) -> set[tuple[str, str]]:
+    """VBA `BuildMatrixSuppressMap` の移植。
+
+    幅|丈が同じで実コード(マトリックス以外)を持つ行が存在する
+    組み合わせ(幅, 丈)の集合を作る。
+    """
+    suppress: set[tuple[str, str]] = set()
+    for row in rows:
+        code = (row["コード"] or "").strip()
+        if code and code != CODE_MATRIX:
+            suppress.add((str(row["幅"] or ""), str(row["丈"] or "")))
+    return suppress
+
+
+def is_suppressed_matrix(
+    suppress_map: set[tuple[str, str]], width, length, code: str,
+) -> bool:
+    """VBA `IsSuppressedMatrix` の移植。True ならこの行は載せない。"""
+    if (code or "").strip() != CODE_MATRIX:
+        return False
+    return (str(width or ""), str(length or "")) in suppress_map
+
+
 def find_pallet_row(conn: sqlite3.Connection, width: int, length: int, symbol: str) -> Optional[PalletSizeRow]:
     """幅・丈・記号からPalletMasterの1行を引く(コード・単位を知りたいだけの単純参照)。
 
@@ -204,6 +233,7 @@ def list_pallet_sizes(
     ex_only: bool = False,
     is_ex_order: bool = False,
     last_hosozai: str = "",
+    is_1p1185_mode: bool = False,
 ) -> list[PalletSizeRow]:
     """VBA `InitializePalletSizeList`/`FilterPalletList` の移植(統合版)。
 
@@ -216,14 +246,21 @@ def list_pallet_sizes(
               アングル/一致なし のいずれでもなければ 単位∈{台,組}、
               それ以外は 単位=台 のみ許可
             EX除外: 記号に"EX"を含む行(大文字小文字問わず)は除外
+        - is_1p1185_mode=Trueなら業界=タイト・幅=1300・丈=1300以外を除外
+        - 幅|丈が同じで実コードを持つ行がある「単価表のマトリックス」行は除外
     """
     rows = db.fetch_all(conn, "SELECT * FROM PalletMaster ORDER BY 幅", caller_name="list_pallet_sizes") or []
     ex_only_mode = is_ex_order and ex_only
+    suppress_map = build_matrix_suppress_map(rows)
 
     result: list[PalletSizeRow] = []
     for row in rows:
         w, l = row["幅"], row["丈"]
         if not w or not l:
+            continue
+        if spk.reject_1p1185(is_1p1185_mode, row["業界"], w, l):
+            continue
+        if is_suppressed_matrix(suppress_map, w, l, row["コード"]):
             continue
         symbol = (row["記号"] or "").strip()
         is_ex = "EX" in symbol.upper()
@@ -557,6 +594,7 @@ def search_pallet_direct(
     pallet_length_text: str = "",
     show_all: bool = False,
     last_hosozai: str = "",
+    is_1p1185_mode: bool = False,
 ) -> list[PalletSizeRow]:
     """VBA `btnAutoSelectPallet_Click`の「直接検索モード」の移植。
 
@@ -567,10 +605,15 @@ def search_pallet_direct(
     pl = int(float(pallet_length_text)) if _is_numeric(pallet_length_text) else 0
 
     rows = db.fetch_all(conn, "SELECT * FROM PalletMaster ORDER BY 管理番号", caller_name="search_pallet_direct") or []
+    suppress_map = build_matrix_suppress_map(rows)
     result: list[PalletSizeRow] = []
     for row in rows:
         w, l = row["幅"], row["丈"]
         if not w or not l:
+            continue
+        if spk.reject_1p1185(is_1p1185_mode, row["業界"], w, l):
+            continue
+        if is_suppressed_matrix(suppress_map, w, l, row["コード"]):
             continue
         if pw and abs(w - pw) > config.SEARCH_RANGE_TOLERANCE:
             continue
@@ -604,6 +647,7 @@ def list_pallets_for_product(
     two_stack: bool = False,
     manufactured_thickness: Optional[float] = None,
     user_log: Optional[UserLog] = None,
+    is_1p1185_mode: bool = False,
 ) -> list[PalletSizeRow]:
     """製品サイズが適合範囲に収まるパレットだけを返す(検索結果リスト表示用)。
 
@@ -645,6 +689,7 @@ def list_pallets_for_product(
     rows = db.fetch_all(conn, "SELECT * FROM PalletMaster ORDER BY 管理番号",
                         caller_name="list_pallets_for_product") or []
     ex_only_mode = is_ex_order and ex_only
+    suppress_map = build_matrix_suppress_map(rows)
 
     ulog.log(f"[パレット絞り込み] 製品 {product_width} x {product_length}"
              + ("【2山積】" if two_stack else ""), emphasis=True)
@@ -679,6 +724,12 @@ def list_pallets_for_product(
         label = f"{w}x{l}"
         if not w or not l:
             continue                       # 寸法が入っていない行は数えない
+        if spk.reject_1p1185(is_1p1185_mode, row["業界"], w, l):
+            rejects.log(f"  ×除外: {label} 1P1185モード対象外です")
+            continue
+        if is_suppressed_matrix(suppress_map, w, l, row["コード"]):
+            rejects.log(f"  ×除外: {label} 単価表のマトリックス(実コード行と重複)です")
+            continue
         if not _fit_range_ok(row) or _fit_range_inverted(row):
             rejects.log(f"  ×除外: {label} 適合範囲がマスタ側で不正です")
             continue
@@ -758,6 +809,7 @@ def list_pallets_by_product_dims(
     last_hosozai: str = "",
     manufactured_thickness: Optional[float] = None,
     user_log: Optional[UserLog] = None,
+    is_1p1185_mode: bool = False,
 ) -> list[PalletSizeRow]:
     """製品 幅・丈を**入力している最中**の一覧絞り込み(確定前)。
 
@@ -776,15 +828,17 @@ def list_pallets_by_product_dims(
             product_length=int(float(product_length_text)),
             show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order,
             two_stack=two_stack,
-            manufactured_thickness=manufactured_thickness, user_log=user_log)
+            manufactured_thickness=manufactured_thickness, user_log=user_log,
+            is_1p1185_mode=is_1p1185_mode)
     if has_width or has_length:
         return search_pallet_direct(
             conn, pallet_width_text=product_width_text,
             pallet_length_text=product_length_text,
-            show_all=show_all, last_hosozai=last_hosozai)
+            show_all=show_all, last_hosozai=last_hosozai,
+            is_1p1185_mode=is_1p1185_mode)
     return list_pallet_sizes(
         conn, show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order,
-        last_hosozai=last_hosozai)
+        last_hosozai=last_hosozai, is_1p1185_mode=is_1p1185_mode)
 
 
 @tag_area("パレット")
@@ -800,6 +854,7 @@ def auto_select_pallet(
     last_hosozai: str = "",
     manufactured_thickness: Optional[float] = None,
     user_log: Optional[UserLog] = None,
+    is_1p1185_mode: bool = False,
 ) -> AutoSelectPalletResult:
     """VBA `btnAutoSelectPallet_Click`(製品サイズ入力済み時)の移植。
 
@@ -821,6 +876,10 @@ def auto_select_pallet(
           パスの名前が誤って使い回されるバグがあったが、Python版では
           素直に「強制フォールバック」と表示する(選定結果そのものは
           元VBAのフォールバック探索ロジックを忠実に再現している)。
+
+    `is_1p1185_mode` がTrueのとき、探索対象を業界=タイト・幅丈=1300x1300
+    のみに絞る(`special_packaging.reject_1p1185`)。この絞り込みは
+    候補行そのものから外すので、フォールバック探索にも自然に及ぶ。
     """
     ulog = user_log if user_log is not None else UserLog()  # 未指定なら捨てバッファ
 
@@ -842,7 +901,17 @@ def auto_select_pallet(
         ulog.log("製造板厚: 未取得（Lot未検索）")
 
     rows = db.fetch_all(conn, "SELECT * FROM PalletMaster ORDER BY 管理番号", caller_name="auto_select_pallet") or []
-    candidate_rows = [r for r in rows if r["幅"] and r["丈"] and _fit_range_ok(r)]
+    suppress_map = build_matrix_suppress_map(rows)
+    candidate_rows = [
+        r for r in rows if r["幅"] and r["丈"] and _fit_range_ok(r)
+        and not spk.reject_1p1185(is_1p1185_mode, r["業界"], r["幅"], r["丈"])
+        and not is_suppressed_matrix(suppress_map, r["幅"], r["丈"], r["コード"])
+    ]
+    if is_1p1185_mode:
+        # 1P1185モード: 業界=タイト かつ 1300x1300 のみが探索対象になる。
+        # 特定業界/一般/全面のパスは自然に候補ゼロになるので、VBAの
+        # パス番号ジャンプ(9〜12,17〜20のみ実行)を再現する必要はない
+        ulog.log("【1P1185モード】業界=タイト・1300x1300限定で検索します", emphasis=True)
 
     # 探索に入る前に落ちている行を先に知らせる(「なんで検索に乗らないの?」対策)。
     # ここはVBAには無い追加ログ。
