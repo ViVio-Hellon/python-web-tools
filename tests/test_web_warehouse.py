@@ -123,13 +123,38 @@ class PresenterTests(unittest.TestCase):
         self.assertFalse(field.rows[0].can_confirm)
         self.assertTrue(warehouse.rows[0].can_confirm)
 
-    def test_取り消しも倉庫だけ(self) -> None:
-        """tkinter版 `warehouse_view` も確認・取り消しの両方を倉庫だけに
-        置いていた。現場から状態を動かせると、倉庫が実際に受け取ったかに
-        関わらず消せてしまう。"""
+    def test_取り消しは現場からもできる(self) -> None:
+        """**出した本人が引っ込められる。**
+
+        VBAでも取り消しは現場の送信確認ダイアログ
+        (`frmSendConfirm.btnDelete_Click`)の操作で、資材側の
+        `frmWarehouseOrder` にあったのは確認だけだった。移植のときに
+        確認とまとめて資材専用にしてしまい、送った本人が間違いに
+        気づいても引っ込められなくなっていた(現場の声)。
+        止めるのは状態だけで、モードでは止めない。
+        """
         self.add()
-        self.assertFalse(presenter.build(self.conn, mode=modes.FIELD).rows[0].can_cancel)
+        self.assertTrue(presenter.build(self.conn, mode=modes.FIELD).rows[0].can_cancel)
         self.assertTrue(presenter.build(self.conn, mode=modes.MATERIAL).rows[0].can_cancel)
+
+    def test_確認は倉庫だけのまま(self) -> None:
+        """**取り消しを開けても、確認は開けない。**
+
+        現場から確認済みにできると、倉庫が実際に受け取ったかに関わらず
+        現場の都合で確認済みにでき、確認という工程が意味を失う。
+        """
+        self.add()
+        self.assertFalse(presenter.build(self.conn, mode=modes.FIELD).rows[0].can_confirm)
+        self.assertTrue(presenter.build(self.conn, mode=modes.MATERIAL).rows[0].can_confirm)
+
+    def test_倉庫が確認したら現場からも取り消せない(self) -> None:
+        """現場に開けたのは「まだ誰も受けていない依頼の取り下げ」まで。
+
+        受け取ったことを確認したものを消すと、現物と帳簿が合わなくなる。
+        """
+        mgr_no = self.add()
+        svc.confirm_order(self.conn, mgr_no)
+        self.assertFalse(presenter.build(self.conn, mode=modes.FIELD).rows[0].can_cancel)
 
     def test_確認済みは確認も取消もできない(self) -> None:
         mgr_no = self.add()
@@ -384,12 +409,24 @@ class RoleSeparationTests(WarehouseWebTestCase):
                 self.assertIn(path, field)
                 self.assertIn(path, material)
 
-    def test_現場に取消のURLも存在しない(self) -> None:
-        """確認と同じ扱い。現場は出して見るだけ。"""
+    def test_現場からも取り消せる(self) -> None:
+        """**確認とは扱いが違う。** 出した本人が引っ込められる操作なので、
+        現場モードのサーバにも登録する(VBA `frmSendConfirm` の取り消し)。
+        """
         mgr_no = self.send().get_json()["mgr_no"]
         res = self.clients["field"].post(
             "/api/warehouse/cancel", json={"mgr_no": mgr_no}, headers=self.auth())
-        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(svc.list_orders(self.conn, include_cancelled=True)[0]["状態"],
+                         svc.STATUS_CANCELLED)
+
+    def test_現場から確認済みのものは取り消せない(self) -> None:
+        """止めるのは状態。モードではない。"""
+        mgr_no = self.send().get_json()["mgr_no"]
+        svc.confirm_order(self.conn, mgr_no)
+        res = self.clients["field"].post(
+            "/api/warehouse/cancel", json={"mgr_no": mgr_no}, headers=self.auth())
+        self.assertEqual(res.status_code, 409, res.get_json())
 
     def test_発注はどちらのモードからでも出せる(self) -> None:
         """出すのは現場の仕事だが、資材モードから代行することもある。"""
@@ -409,14 +446,19 @@ class RoleSeparationTests(WarehouseWebTestCase):
 
         資材課の人が現場モードで作業している最中に、手が滑って
         確認済みにできてしまうのを防ぐ。
+
+        **かかるのは確認だけ。** 取り消しは現場の操作なので、現場モードで
+        見ていても断らない(断ると、送った本人が引っ込められなくなる)。
         """
         mgr_no = self.send().get_json()["mgr_no"]
-        for path in ("/api/warehouse/confirm", "/api/warehouse/cancel"):
-            with self.subTest(path=path):
-                res = self.clients["field-allowed"].post(
-                    path, json={"mgr_no": mgr_no}, headers=self.auth())
-                self.assertEqual(res.status_code, 403)
-                self.assertEqual(res.get_json()["error"]["code"], "wrong_mode")
+        res = self.clients["field-allowed"].post(
+            "/api/warehouse/confirm", json={"mgr_no": mgr_no}, headers=self.auth())
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"], "wrong_mode")
+
+        res = self.clients["field-allowed"].post(
+            "/api/warehouse/cancel", json={"mgr_no": mgr_no}, headers=self.auth())
+        self.assertEqual(res.status_code, 200, res.get_json())
 
     def test_権限が無い端末とある端末で404と403を使い分ける(self) -> None:
         """**404 は「無い」、403 は「今はできない」。** 混ぜると、

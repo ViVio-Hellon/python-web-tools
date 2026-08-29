@@ -35,6 +35,12 @@ function render(view) {
   el.found.textContent = view.found ? `${view.found} 件` : "";
   el.pending.hidden = !view.pending;
   el.pending.textContent = `未確認 ${view.pending}`;
+  // 数字だけでは何の数か読めない(現場の声:「未確認 4とはなんだ」)。
+  // 見えている一覧のうち、倉庫がまだ受けていない件数
+  el.pending.title = isMaterial
+    ? `倉庫がまだ確認していない発注が ${view.pending} 件あります`
+    : `送った発注のうち、倉庫がまだ確認していないものが ${view.pending} 件`
+      + "(この間は取り消せます)";
 }
 
 /**
@@ -105,10 +111,18 @@ function actionsCell(row) {
     const why = document.createElement("span");
     why.className = "why";
     why.style.margin = "0";
-    // 「できない」ことを空欄で示さない。なぜ押せないのかを書く
-    if (!isMaterial) why.textContent = "確認・取り消しは資材の操作です";
-    else if (row.status === "確認済み") why.textContent = "確認済みです";
-    else why.textContent = "取り消し済みです";
+    // 「できない」ことを空欄で示さない。なぜ押せないのかを書く。
+    // **理由は状態で決まる。** 取り消しは現場でもできるので、
+    // 「資材の操作です」で片付けると嘘になる
+    if (row.status === "確認済み") {
+      why.textContent = isMaterial ? "確認済みです"
+        : "倉庫が確認済みのため取り消せません";
+    } else if (row.status === "取消済") {
+      why.textContent = "取り消し済みです";
+    } else {
+      // 未確認なのにボタンが無いのは、現場モードで確認だけができない場合
+      why.textContent = "確認は資材の操作です";
+    }
     box.appendChild(why);
   }
 

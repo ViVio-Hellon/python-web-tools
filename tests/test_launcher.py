@@ -409,12 +409,22 @@ class RoleSeparationTests(unittest.TestCase):
         return app.test_client()
 
     def test_権限が無ければ資材の窓口は無い(self) -> None:
+        """資材の権限が無ければ「確認」は存在しない(404)。
+
+        **取り消しはここに含めない。** 出した本人が引っ込める操作なので
+        現場にも要る(VBA `frmSendConfirm` の取り消し)。止めるのは
+        状態だけで、権限やモードでは止めない。
+        """
         from packaging_tool import access_control
         client = self._client("field", access_control.grant_of("mode:field"))
-        for path in ("/api/warehouse/confirm", "/api/warehouse/cancel"):
-            with self.subTest(path=path):
-                res = client.post(path, json={}, headers={"X-Tool-Token": "t"})
-                self.assertEqual(res.status_code, 404, f"{path} が存在しています")
+        res = client.post("/api/warehouse/confirm", json={},
+                          headers={"X-Tool-Token": "t"})
+        self.assertEqual(res.status_code, 404, "確認が存在しています")
+
+        # 取り消しは存在する(対象が無いので400になるが、404ではない)
+        res = client.post("/api/warehouse/cancel", json={},
+                          headers={"X-Tool-Token": "t"})
+        self.assertNotEqual(res.status_code, 404, "取り消しが存在しません")
 
     def test_モードが応答に出る(self) -> None:
         for mode in ("field", "material"):

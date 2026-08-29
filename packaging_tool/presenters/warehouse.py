@@ -193,12 +193,17 @@ def _row(item: dict, *, is_material: bool) -> OrderRow:
         mgr_no=item.get("管理番号", 0),
         values={label: _cell(item.get(label)) for label, _, _ in ORDER_COLUMNS},
         status=status,
-        # **確認も取り消しも倉庫だけ**(tkinter版 `warehouse_view` と同じ)。
-        # 現場からできてしまうと、倉庫が実際に受け取ったかに関わらず
-        # 現場の都合で状態を動かせ、確認という工程が意味を失う。
-        # 現場は「出す」と「見る」だけ
+        # **確認は倉庫だけ。** 現場からできてしまうと、倉庫が実際に
+        # 受け取ったかに関わらず現場の都合で確認済みにでき、確認という
+        # 工程が意味を失う
         can_confirm=is_material and status == svc.STATUS_PENDING,
-        can_cancel=is_material and status == svc.STATUS_PENDING,
+        # **取り消しは現場でもできる。** VBAでも取り消しは現場の送信確認
+        # ダイアログ(`frmSendConfirm.btnDelete_Click`)の操作で、資材側の
+        # `frmWarehouseOrder` にあったのは確認だけだった。移植のときに
+        # 確認とまとめて資材専用にしてしまい、送った本人が間違いに
+        # 気づいても引っ込められなくなっていた(現場の声)。
+        # 止めるのは状態だけ ── 倉庫が確認したあとは誰も取り消せない
+        can_cancel=status == svc.STATUS_PENDING,
     )
 
 
