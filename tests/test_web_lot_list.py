@@ -85,9 +85,27 @@ class StateTests(ListWebTestCase):
     def test_一覧が出る(self) -> None:
         body = self.get()
         self.assertEqual(self.lots(body), ["1111111", "2222222", "3333333"])
-        self.assertEqual([h["label"] for h in body["headers"]][:3],
-                         ["ロット番号", "用途コード", "用途名"])
+        self.assertEqual([h["label"] for h in body["headers"]][:4],
+                         ["ロット番号", "引当有無", "用途コード", "用途名"])
         self.assertEqual(body["count_note"], "3 件")
+
+    def test_引当有無が一覧に出る(self) -> None:
+        """同じロット番号が仕掛引当(SIKAHIKINOW)にあれば1、無ければ0。"""
+        self.conn.execute(
+            "INSERT INTO 仕掛引当 (ロット番号, 引当番号) VALUES ('2222222','60000001')")
+        self.conn.commit()
+        body = self.get()
+        at = [h["key"] for h in body["headers"]].index("hiki")
+        got = {r["lot_no"]: r["values"][at] for r in body["rows"]}
+        self.assertEqual(got, {"1111111": "0", "2222222": "1", "3333333": "0"})
+
+    def test_引当有無で絞り込める(self) -> None:
+        self.conn.execute(
+            "INSERT INTO 仕掛引当 (ロット番号, 引当番号) VALUES ('2222222','60000001')")
+        self.conn.commit()
+        body = self.post("/api/lot/list/filter/add",
+                         {"column": "hiki", "op": "=", "value": "1"})
+        self.assertEqual(self.lots(body), ["2222222"])
 
     def test_数値の列は右寄せの印が付く(self) -> None:
         """寄せ方を決めるのもサーバ。画面が列名で判断すると分裂する。"""

@@ -217,6 +217,79 @@ class SuggestTests(unittest.TestCase):
         self.assertLessEqual(len(self.labels("X")), q.SUGGEST_TOTAL)
 
 
+class HikiFlagTests(unittest.TestCase):
+    """引当有無(SIKAHIKINOW に同じロット番号があるか)の 1/0 フラグ。
+
+    仕掛ロットには実体が無い**計算列**なので、表示だけでなく
+    絞り込み・並べ替え・横断検索まで実列と同じに効くことを確かめる。
+    """
+
+    def setUp(self) -> None:
+        self.conn = make_conn()
+        for lot_no in ("1111111", "2222222", "3333333"):
+            insert(self.conn, lot_no)
+        # 引当があるのは1番と3番だけ。1番は2件あるが、行が増えてはいけない
+        for lot_no, hiki_no in (("1111111", "60000001"), ("1111111", "60000002"),
+                                ("3333333", "60000003")):
+            self.conn.execute(
+                "INSERT INTO 仕掛引当 (ロット番号, 引当番号) VALUES (?,?)",
+                (lot_no, hiki_no))
+        self.conn.commit()
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def _flags(self, rows) -> dict[str, int]:
+        return {str(r["ロット番号"]): r["引当有無"] for r in rows}
+
+    def test_有は1_無は0(self) -> None:
+        self.assertEqual(self._flags(q.fetch(self.conn, [])),
+                         {"1111111": 1, "2222222": 0, "3333333": 1})
+
+    def test_引当が複数あっても行は増えない(self) -> None:
+        """1番は引当2件。`EXISTS` なので件数ではなく有無だけを見る。"""
+        rows = q.fetch(self.conn, [])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(self._flags(rows)["1111111"], 1)
+
+    def test_有無で絞れる(self) -> None:
+        has = q.Condition("hiki", q.OP_EQ, "1")
+        self.assertEqual([str(r["ロット番号"]) for r in q.fetch(self.conn, [has])],
+                         ["1111111", "3333333"])
+        none = q.Condition("hiki", q.OP_EQ, "0")
+        self.assertEqual([str(r["ロット番号"]) for r in q.fetch(self.conn, [none])],
+                         ["2222222"])
+
+    def test_絞った件数も合う(self) -> None:
+        """`count` は `SELECT *` を通らないので、別経路として確かめる。"""
+        self.assertEqual(q.count(self.conn, [q.Condition("hiki", q.OP_EQ, "1")]), 2)
+        self.assertEqual(q.count(self.conn, [q.Condition("hiki", q.OP_EQ, "0")]), 1)
+
+    def test_並べ替えに使える(self) -> None:
+        rows = q.fetch(self.conn, [], sort="hiki", descending=True)
+        self.assertEqual([r["引当有無"] for r in rows], [1, 1, 0])
+        rows = q.fetch(self.conn, [], sort="hiki")
+        self.assertEqual([r["引当有無"] for r in rows], [0, 1, 1])
+
+    def test_一覧の表示は1と0(self) -> None:
+        col = q.BY_KEY["hiki"]
+        self.assertEqual(q.format_value(col, 1), "1")
+        self.assertEqual(q.format_value(col, 0), "0")
+
+    def test_候補は0と1のときだけ出す(self) -> None:
+        """取りうる値が 0/1 しか無い列に「= 3」を勧めても0件にしかならない。"""
+        labels = [s.label for s in q.suggest(self.conn, "1")]
+        self.assertIn("引当有無 = 1", labels)
+        # 帯(≥ / ≤)は2値には意味が無いので出さない
+        self.assertNotIn("引当有無 ≥ 1", labels)
+        self.assertEqual(
+            [s for s in q.suggest(self.conn, "3") if s.column == "hiki"], [])
+
+    def test_数値の列より前に出す(self) -> None:
+        """候補は12件で打ち切られる。埋もれると一度も出てこない。"""
+        self.assertEqual(q.suggest(self.conn, "1")[0].label, "引当有無 = 1")
+
+
 class FormatTests(unittest.TestCase):
 
     def test_小数の末尾は落とす(self) -> None:
