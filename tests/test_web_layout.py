@@ -202,32 +202,66 @@ class EditTests(LayoutWebTestCase):
                          expect=400)
         self.assertIn("配置編集", body["error"]["message"])
 
-    def test_編集ONで検索の当たりが消える(self) -> None:
+    def marks(self, state) -> tuple[list, str]:
+        """図に出ている強調表示を**2つとも**返す。
+
+        **片方だけ見ない。** 見た目の違う2つがあり、片方を消しても
+        現場からは何も変わって見えない:
+
+            塗りつぶし → `state == STATE_HIT`(`session.highlight` 由来)
+            3pxの水色枠 → `selected`(`session.selected` 由来。
+                          画面では `.shelf.is-selected` が描く)
+
+        現場が「強調表示水色枠」と呼んでいるのは後者。以前ここで
+        塗りつぶしだけを確かめていたため、枠が残ったままなのに試験は
+        通り、同じ指摘を3度受けることになった。
+        """
+        fill = [s["name"] for s in state["shelves"]
+                if s["state"] == presenter.STATE_HIT]
+        return fill, state["selected"]
+
+    def test_編集ONで検索の強調表示が塗りも枠も消える(self) -> None:
         """現場の声:「棚検索の配置編集でつかみ→移動がないと強調表示
         水色枠が消えない」。検索と配置編集は別の作業なので、編集に入った
-        時点で前の検索結果の色分け(STATE_HIT)は捨てる。動かして
-        初めて消える、という偶然の回避策に頼らせない。
+        時点で前の検索結果の強調表示は捨てる。動かして初めて消える、
+        という偶然の回避策に頼らせない。
+
+        **検索は塗りと枠の両方を点ける**(`search` は最寄りの置き場を
+        `selected` にも入れる)ので、両方消えるまでが直ったということ。
         """
         name = self.first_shelf()
         insert_board(self.conn, width=750, length=1130, label=name)
         self.post("/api/layout/search", {"kind": "board", "width": 750, "length": 1130})
-        state = self.get()
-        hit = [s for s in state["shelves"] if s["state"] == presenter.STATE_HIT]
-        self.assertEqual([s["name"] for s in hit], [name])
+        fill, frame = self.marks(self.get())
+        self.assertEqual(fill, [name])
+        self.assertEqual(frame, name, "検索は枠(selected)も点けるはず")
 
-        state = self.post("/api/layout/edit", {"on": True})
-        hit = [s for s in state["shelves"] if s["state"] == presenter.STATE_HIT]
-        self.assertEqual(hit, [])
+        fill, frame = self.marks(self.post("/api/layout/edit", {"on": True}))
+        self.assertEqual(fill, [])
+        self.assertEqual(frame, "", "水色枠(selected)が残っている")
 
-    def test_編集OFFでも検索の当たりが消える(self) -> None:
+    def test_編集OFFでも検索の強調表示が塗りも枠も消える(self) -> None:
         name = self.first_shelf()
         insert_board(self.conn, width=750, length=1130, label=name)
         self.post("/api/layout/edit", {"on": True})
         self.post("/api/layout/search", {"kind": "board", "width": 750, "length": 1130})
 
-        state = self.post("/api/layout/edit", {"on": False})
-        hit = [s for s in state["shelves"] if s["state"] == presenter.STATE_HIT]
-        self.assertEqual(hit, [])
+        fill, frame = self.marks(self.post("/api/layout/edit", {"on": False}))
+        self.assertEqual(fill, [])
+        self.assertEqual(frame, "", "水色枠(selected)が残っている")
+
+    def test_置き場を押した枠も編集に入れば消える(self) -> None:
+        """検索を通さず、置き場を押して中身を見ただけでも枠は点く。
+
+        簡易在庫が `clearSelection()`(Shift複数選択)だけでなく
+        `picked`(単発クリック)も捨てているのと同じ ── 片方だけでは
+        「編集にしても強調表示が残る」になる。
+        """
+        name = self.first_shelf()
+        self.post("/api/layout/select", {"name": name})
+        self.assertEqual(self.get()["selected"], name)
+
+        self.assertEqual(self.post("/api/layout/edit", {"on": True})["selected"], "")
 
         self.post("/api/layout/edit", {"on": True})
         self.post("/api/layout/move", {"name": name, "x": 10, "y": 10})
