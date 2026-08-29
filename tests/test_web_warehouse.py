@@ -123,19 +123,19 @@ class PresenterTests(unittest.TestCase):
         self.assertFalse(field.rows[0].can_confirm)
         self.assertTrue(warehouse.rows[0].can_confirm)
 
-    def test_取り消しは現場からもできる(self) -> None:
-        """**出した本人が引っ込められる。**
+    def test_取り消せるのは現場だけ(self) -> None:
+        """**出した側が引っ込める操作。** 資材は受けて確認する側で、
+        消す立場ではない。
 
         VBAでも取り消しは現場の送信確認ダイアログ
-        (`frmSendConfirm.btnDelete_Click`)の操作で、資材側の
+        (`frmSendConfirm.btnDelete_Click`)にあり、資材側の
         `frmWarehouseOrder` にあったのは確認だけだった。移植のときに
-        確認とまとめて資材専用にしてしまい、送った本人が間違いに
-        気づいても引っ込められなくなっていた(現場の声)。
-        止めるのは状態だけで、モードでは止めない。
+        確認とまとめて資材専用にしてしまい、**逆**になっていた
+        (現場の声:「送った発注を取り消せない」)。
         """
         self.add()
         self.assertTrue(presenter.build(self.conn, mode=modes.FIELD).rows[0].can_cancel)
-        self.assertTrue(presenter.build(self.conn, mode=modes.MATERIAL).rows[0].can_cancel)
+        self.assertFalse(presenter.build(self.conn, mode=modes.MATERIAL).rows[0].can_cancel)
 
     def test_確認は倉庫だけのまま(self) -> None:
         """**取り消しを開けても、確認は開けない。**
@@ -428,17 +428,30 @@ class RoleSeparationTests(WarehouseWebTestCase):
             "/api/warehouse/cancel", json={"mgr_no": mgr_no}, headers=self.auth())
         self.assertEqual(res.status_code, 409, res.get_json())
 
-    def test_発注はどちらのモードからでも出せる(self) -> None:
-        """出すのは現場の仕事だが、資材モードから代行することもある。"""
-        for mode in ("field", "material"):
-            with self.subTest(mode=mode):
-                self.assertTrue(self.send(mode).get_json()["ok"])
+    def test_発注を出せるのは現場だけ(self) -> None:
+        """**出すのは現場の仕事。** 資材は受けて確認する側なので出さない。
 
-    def test_資材では取り消せる(self) -> None:
+        資材課の人でも、現場モードに切り替えれば出せる(断るのは
+        「いまどちらのモードで見ているか」だけ)。
+        """
+        self.assertTrue(self.send("field").get_json()["ok"])
+        res = self.send("material")
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"], "wrong_mode")
+
+    def test_取り消せるのは現場だけ(self) -> None:
+        """**取り消すのは出した側の操作。** 資材は確認する側で、
+        受けたものを消す立場ではない。
+        """
         mgr_no = self.send().get_json()["mgr_no"]
         res = self.clients["material"].post(
             "/api/warehouse/cancel", json={"mgr_no": mgr_no}, headers=self.auth())
-        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"], "wrong_mode")
+
+        res = self.clients["field"].post(
+            "/api/warehouse/cancel", json={"mgr_no": mgr_no}, headers=self.auth())
+        self.assertEqual(res.status_code, 200, res.get_json())
 
     def test_権限があっても現場モードでは断る(self) -> None:
         """守りは2段。**登録の可否(誰か)と、いまのモード(誤操作)**は
@@ -555,12 +568,16 @@ class ActionApiTests(WarehouseWebTestCase):
                           headers=self.auth())
         self.assertEqual(res.status_code, 409)
 
-    def test_確認済みは倉庫からも取り消せない(self) -> None:
-        """受け取ったことを確認したものを消すと、現物と帳簿が合わなくなる。"""
+    def test_確認済みは現場からも取り消せない(self) -> None:
+        """受け取ったことを確認したものを消すと、現物と帳簿が合わなくなる。
+
+        取り消せるのは現場だけだが、**倉庫が確認したあとはその現場でも
+        取り消せない**(止めるのは状態)。
+        """
         mgr_no = self.send().get_json()["mgr_no"]
         self.clients["material"].post(
             "/api/warehouse/confirm", json={"mgr_no": mgr_no}, headers=self.auth())
-        res = self.clients["material"].post(
+        res = self.clients["field"].post(
             "/api/warehouse/cancel", json={"mgr_no": mgr_no}, headers=self.auth())
         self.assertEqual(res.status_code, 409)
 

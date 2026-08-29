@@ -427,9 +427,14 @@ def _register_routes(app: Flask) -> None:
     # 動いている最中に変わる(この画面から入れられる)。起動時に決めて
     # しまうと食い違うので、要求のたびに見る(`app/routes/master.py`)
     app.register_blueprint(master.bp)
-    # 発注の**一覧・登録・取消**は現場も資材も使う。
-    # 現場は出して取り消す、資材は受け取って確認する
+    # 発注の**一覧**は現場も資材も見る(現場は送った分、資材は受けた分)。
+    # 出す・取り消すのは現場だけ、確認するのは資材だけなので、それぞれ
+    # 別のブループリントに分けて `before_request` で断る
     app.register_blueprint(warehouse.bp)
+    # **常に登録する。** いま現場モードかどうかは
+    # `warehouse.field_only` の `before_request` が要求のたびに確かめる
+    # (`mode:field` は誰でも持つ既定の権限なので、権限では分けない)
+    app.register_blueprint(warehouse.field_only)
 
     grant: access_control.Grant = app.config["STARTUP_GRANT"]
 

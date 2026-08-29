@@ -2,19 +2,26 @@
 
 **この画面はモードで中身が変わります。**
 
-    現場モード … 発注を出す。自分が送ったものを見て、まだ倉庫が
-                 受けていないものは取り消せる(確認はできない)
-    資材モード … 受け取った発注を確認する。取り消しもできる
+    現場モード … 発注を**出す**。自分が送ったものを見て、まだ倉庫が
+                 受けていないものは**取り消せる**(確認はできない)
+    資材モード … 受け取った発注を**確認する**(出すことも取り消すことも
+                 しない)
 
-VBA版は現場用と資材用が別のフォームで、**確認ボタンは資材のフォームに
-しかありませんでした**。現場のアプリから「確認済みにする」ができると、
-資材が実際に受け取ったかに関わらず現場の都合で確認済みにでき、
-**確認という工程そのものが意味を失います**。
+**役割は3つに分かれます。**
 
-**取り消しは逆で、もともと現場側の操作でした**
-(`frmSendConfirm.btnDelete_Click`)。送った本人が間違いに気づいて
-引っ込めるためのもので、確認の意味を壊しません。止めるのは状態だけ
-── 倉庫が確認したあとは誰も取り消せません。
+    出せるのは現場だけ
+    確認できるのは倉庫(資材)だけ
+    取り消せるのは現場だけ、かつ倉庫が確認する前だけ
+
+VBA版は現場用(`frmSendConfirm`)と資材用(`frmWarehouseOrder`)が別の
+フォームで、**確認ボタンは資材のフォームにしかなく、取り消しは現場の
+フォームにしかありませんでした**。移植のときに確認と取り消しを
+まとめて資材専用にしてしまい、取り消しが**逆**になっていました。
+
+現場から確認できてはいけないのは、資材が実際に受け取ったかに関わらず
+確認済みにでき、**確認という工程そのものが意味を失う**からです。
+資材から取り消せてはいけないのは、取り消しが「出した側が自分の依頼を
+取り下げる」操作だからです。
 
 Web版は確認の保証を2段で作ります。
 
@@ -46,8 +53,16 @@ from ..shell import shell_context
 
 log = get_logger("app.routes.warehouse")
 
-# どのモードにもある部分(一覧・検索・発注・取消)
+# どのモードにもある部分(一覧・検索)
 bp = Blueprint("warehouse", __name__)
+# 現場モードで見ているときだけ使える部分(発注・取消)。
+#
+# **権限では分けない。** `mode:field` は誰でも持つ既定の権限
+# (`access_control` は権限行にモードが1つも無ければ現場モードを足す)
+# なので、権限で断っても誰も断れない。分かれ目は「いまどちらのモードで
+# 見ているか」だけ ── 資材課の人でも、現場モードに切り替えれば
+# 発注も取り消しもできる
+field_only = Blueprint("field_only", __name__)
 # 資材モードの権限がある端末でだけ使える部分(確認)。
 # **常に登録する**(起動時の権限では決めない)。誰が使えるかは
 # `_require_material_mode` が要求のたびに確かめる
@@ -94,6 +109,25 @@ def _require_material_mode():
     return None
 
 
+@field_only.before_request
+def _require_field_mode():
+    """いま現場モードで見ているかだけを断る。
+
+    **権限は見ない。** `mode:field` は誰でも持つ既定の権限なので、
+    権限で断っても誰も断れない(`field_only` の宣言を参照)。
+    資材モードで見ているあいだだけ断る ── 資材課の人が受け側の画面を
+    開いたまま、手が滑って発注を出したり取り消したりするのを防ぐ。
+    現場モードに切り替えれば使える。
+    """
+    if current_mode() != modes.FIELD:
+        log.info("現場モードではないため断りました: %s", request.path)
+        return jsonify({"error": {
+            "code": "wrong_mode",
+            "message": "この操作は現場モードでのみ行えます。"
+                       "右上でモードを切り替えてください。"}}), 403
+    return None
+
+
 def _mode() -> str:
     return current_mode()
 
@@ -133,9 +167,9 @@ def orders():
     return jsonify(presenter.to_dict(view))
 
 
-@bp.post("/api/warehouse/send")
+@field_only.post("/api/warehouse/send")
 def send():
-    """発注を出す(VBA `SendWarehouseRow`)。"""
+    """発注を出す(VBA `SendWarehouseRow`)。**出せるのは現場だけ。**"""
     body = request.get_json(silent=True) or {}
     values, problem = presenter.validate(body)
     if problem:
@@ -156,7 +190,7 @@ def send():
     return jsonify(presenter.order_dict(result))
 
 
-@bp.post("/api/warehouse/cancel")
+@field_only.post("/api/warehouse/cancel")
 def cancel():
     """取り消し。**出した本人が引っ込められる**ので、現場でも使えます。
 

@@ -4,10 +4,16 @@ UIツールキットに依存しない。tkinter からも Flask からも同じ
 
 【権限の分離がこの画面の要点】
 VBA版は現場が使う送信側(`frmSendConfirm`)と、倉庫が使う受け側
-(`frmWarehouseOrder`)が**別のフォーム**だった。
+(`frmWarehouseOrder`)が**別のフォーム**だった。役割は3つに分かれる:
+
+    出せるのは現場だけ
+    確認できるのは倉庫だけ
+    取り消せるのは現場だけ、かつ倉庫が確認する前だけ
+
 現場のアプリから「確認済みにする」ができてしまうと、倉庫が実際に
 受け取ったかどうかに関わらず現場側の都合で確認済みにでき、
-**確認という工程そのものが意味を失う**。
+**確認という工程そのものが意味を失う**。逆に倉庫から取り消せると、
+出した覚えのない側が依頼を消せてしまう。
 
 tkinter版は「現場アプリにはボタンをそもそも作らない」ことでこれを保った。
 Web版は同じ保証をHTTPの層で作る ── 倉庫用のエンドポイントを
@@ -131,7 +137,8 @@ class OrderRow:
     mgr_no: int
     values: dict[str, Any] = field(default_factory=dict)
     status: str = svc.STATUS_PENDING
-    # 資材モードでその行に何ができるか。**判断はサーバが持つ**
+    # そのモードでその行に何ができるか。**判断はサーバが持つ**
+    # (確認=資材だけ / 取消=現場だけ、どちらも未確認のときだけ)
     can_confirm: bool = False
     can_cancel: bool = False
 
@@ -160,9 +167,8 @@ def build(conn: sqlite3.Connection, *, mode: str,
           include_cancelled: bool = False) -> WarehouseViewModel:
     """一覧を組み立てる。
 
-    `mode` で**できること**が変わる。現場は自分が送った
-    ものを見るだけで、確認・取消は資材だけ(VBA のフォーム分けを
-    そのまま引き継ぐ)。
+    `mode` で**できること**が変わる(VBA のフォーム分けをそのまま
+    引き継ぐ)。現場は出して取り消す、資材は受けて確認する。
     """
     from .. import modes
 
@@ -197,13 +203,14 @@ def _row(item: dict, *, is_material: bool) -> OrderRow:
         # 受け取ったかに関わらず現場の都合で確認済みにでき、確認という
         # 工程が意味を失う
         can_confirm=is_material and status == svc.STATUS_PENDING,
-        # **取り消しは現場でもできる。** VBAでも取り消しは現場の送信確認
-        # ダイアログ(`frmSendConfirm.btnDelete_Click`)の操作で、資材側の
-        # `frmWarehouseOrder` にあったのは確認だけだった。移植のときに
-        # 確認とまとめて資材専用にしてしまい、送った本人が間違いに
-        # 気づいても引っ込められなくなっていた(現場の声)。
-        # 止めるのは状態だけ ── 倉庫が確認したあとは誰も取り消せない
-        can_cancel=status == svc.STATUS_PENDING,
+        # **取り消しは現場だけ。** 出した側が引っ込める操作で、資材は
+        # 受けて確認する側なので消す立場ではない。VBAでも取り消しは
+        # 現場の送信確認ダイアログ(`frmSendConfirm.btnDelete_Click`)に
+        # あり、資材側の `frmWarehouseOrder` にあったのは確認だけだった。
+        # 移植のときに確認とまとめて資材専用にしてしまい、**逆**に
+        # なっていた(現場の声:「送った発注を取り消せない」)。
+        # 現場であっても、倉庫が確認したあとは取り消せない
+        can_cancel=not is_material and status == svc.STATUS_PENDING,
     )
 
 
