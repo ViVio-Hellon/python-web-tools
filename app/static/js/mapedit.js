@@ -120,7 +120,19 @@ export function attach(svg, opts) {
 
   function onDown(event) {
     const group = event.target.closest(opts.selector);
-    if (!group) return;
+    if (!group) {
+      // **何も無いところを押したら複数選択を捨てる。**
+      // 以前はここで何もしていなかったため、選んだ輪郭を消す手段が
+      // 「別の箱を掴む」か「配置編集をOFFにする」しかなかった
+      // (現場の声:「空き領域を押しても消えない」)。
+      // 選ぶのをやめる動作としていちばん自然なのは、何も無いところを
+      // 押すこと ── 掴み直させない
+      if (opts.editing() && selected.size) {
+        selected.clear();
+        markSelected();
+      }
+      return;
+    }
     const name = group.dataset.name;
 
     if (!opts.editing()) {
@@ -143,15 +155,21 @@ export function attach(svg, opts) {
     if (!item) return;
 
     // 掴んだ箱が複数選択に入っていれば、選択ぜんぶをまとめて動かす。
-    // 入っていなければ、複数選択はこの1つに絞ってから掴む
-    // (まとめて動かすつもりがないのに、前の選択が紛れ込まないように)
+    // 入っていなければ前の複数選択は捨てて、この1つだけを動かす
+    // (まとめて動かすつもりがないのに、前の選択が紛れ込まないように)。
+    //
+    // **掴んだ箱を複数選択に入れてはいけない。** 以前は入れていたため、
+    // Shiftを押さずに1つ動かしただけで「選択中」の輪郭(`.is-multi`)が
+    // 付き、別の箱を掴むまで消えなかった(現場の声)。Shift+クリックで
+    // 選んだわけではないので、選択中として見せるほうが誤り
     let names;
     if (selected.has(name) && selected.size > 1) {
       names = [...selected];
     } else {
-      selected.clear();
-      selected.add(name);
-      markSelected();
+      if (selected.size) {
+        selected.clear();
+        markSelected();
+      }
       names = [name];
     }
     const items = {};
