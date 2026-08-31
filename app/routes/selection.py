@@ -418,6 +418,18 @@ def place_boards():
     return _apply(session, session.place_boards())
 
 
+@bp.post("/api/selection/boards/candidate")
+def change_candidate():
+    """「候補変更」(VBA `TileChangeCandidate`)。
+
+    敷き詰め方式の A→B→C を1つ進め、選定リストの入れ替えと配置まで
+    行う。**現行の「ボード選定」「ボード配置」には触らない補助**なので、
+    エンドポイントも別にしてある。
+    """
+    session = _session()
+    return _apply(session, session.change_candidate())
+
+
 @bp.post("/api/selection/boards/clear")
 def clear_boards():
     """「クリア」(VBA `btnClearAll_Click`)。"""

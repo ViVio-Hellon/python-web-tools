@@ -504,6 +504,11 @@ function renderBoards(boards) {
   why(el.selectWhy, boards.select_why);
   el.place.disabled = !boards.can_place;
   why(el.placeWhy, boards.place_why);
+  // いまA/B/Cのどれが出ているか。**押した結果が変わったのかどうか**は
+  // 一覧を見比べるより、ここを読むほうが早い
+  el.changeCandidate.disabled = !boards.can_change;
+  el.changeAxis.textContent = boards.change_axis;
+  why(el.changeWhy, boards.change_why);
 }
 
 /* ================================================================
@@ -723,6 +728,7 @@ export function start(initial) {
                     "addCount", "addUpper", "addLower",
                     "autoSelect", "autoSelectLabel", "fatigue", "fatigueWhy",
                     "fatigueBase", "place", "clearBoards", "selectWhy",
+                    "changeCandidate", "changeAxis", "changeWhy",
                     "stockAware", "upperCard", "upperTitle", "upperRows",
                     "lowerTitle", "lowerRows", "selectedSummary", "placeWhy",
                     "showOnMap",
@@ -886,6 +892,16 @@ export function start(initial) {
     send("/api/selection/boards/clear"));
   el.place.addEventListener("click", () =>
     send("/api/selection/boards/place"));
+  // 敷き詰め方式の別解。選定と配置まで一度に入れ替わるので、
+  // 「選定」「配置」とは別のエンドポイント
+  el.changeCandidate.addEventListener("click", () => {
+    // **押した段を開いたままにする。** 配置まで済むとボードの段は
+    // 「決まった」扱いで畳まれるが、このボタンは A→B→C と**続けて
+    // 押すもの**なので、1回ごとに畳まれると見出しを開き直す手間が
+    // 押す回数だけ増える(「配置」は一度押せば終わりなので畳んでよい)
+    el.boardCard.classList.add("is-open");
+    send("/api/selection/boards/candidate");
+  });
 
   // --- 配置図 ---------------------------------------------------
   for (const box of [el.planUpper, el.planLower]) {

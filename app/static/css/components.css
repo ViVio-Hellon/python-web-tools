@@ -133,6 +133,31 @@ a.btn { text-decoration: none; }
    出たまま**になる(管理者パスワードの欄がそれで最初から見えていた) */
 .btn-row[hidden] { display: none; }
 
+/* **左が実行、右がその効き方**の2列(資材選択のボード欄)。
+   横1列に並べていたころは、押すもの(選定・配置)と効き方を決めるもの
+   (疲労度優先・在庫考慮)が混ざり、どれが実行なのか色でしか読めなかった。
+   列幅は中身に合わせる(`max-content`)── 等分にすると、短い語の
+   ボタンだけが不自然に広がる。
+   幅が足りなくなったら1列に落とす。2列のまま縮めると語が折り返し、
+   ボタンの高さがそろわなくなって表に見えなくなる */
+.btn-grid {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  gap: 8px; justify-content: start; align-items: center;
+}
+/* 列いっぱいに広げて、左右の列で幅をそろえる */
+.btn-grid > .btn { width: 100%; }
+@media (max-width: 620px) {
+  .btn-grid { grid-template-columns: max-content; }
+  /* 空けてある左のマスは、1列になると**ただの隙間**になる */
+  .btn-grid > span[aria-hidden] { display: none; }
+}
+
+/* いま何番目の候補が出ているか。ボタンの語より小さく、後ろに添える ──
+   語そのものが変わると別のボタンに見える */
+.axis { font-size: var(--fs-xs); opacity: .85; margin-left: .4em; }
+.axis:empty { display: none; }
+
 /* 押せない理由を必ず添える。押してから叱られるのを避ける */
 .why { font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; line-height: 1.55; }
 

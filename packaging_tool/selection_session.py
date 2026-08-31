@@ -36,6 +36,7 @@ from . import board_selection_algorithm as alg
 from . import board_selection_service as svc
 from . import location_service, material_service, pattern_service
 from . import placement_algorithm as place
+from . import tiling_algorithm as tiling
 from . import user_log as user_log_mod
 from . import user_settings, work_context
 from .logging_utils import get_logger
@@ -98,6 +99,25 @@ class BoardOpResult:
 
 
 @dataclass
+class TilingState:
+    """敷き詰め方式(「候補変更」)が出した3つの候補と、いま出している軸。
+
+    `key` は**この候補を作ったときの前提**。パレット・製品サイズ・
+    ボード種別・在庫考慮・上下共用が変われば候補は作り直しになるので、
+    押されるたびに突き合わせます ── これをしないと、寸法を変えたあとに
+    押しても前の寸法で作った候補が出ます(VBA が `mTileReady` の
+    置きっぱなしで踏んだ落とし穴と同じもの)。
+
+    `axis` が -1 なら「まだ一度も出していない」。
+    """
+
+    key: tuple = ()
+    lower: tuple[Optional[tiling.TileCand], ...] = (None, None, None)
+    upper: tuple[Optional[tiling.TileCand], ...] = (None, None, None)
+    axis: int = -1
+
+
+@dataclass
 class SelectionSession:
     """資材選択画面で決まっていること。"""
 
@@ -140,6 +160,9 @@ class SelectionSession:
     # 自動選定の結果まるごと。狭幅パレット判定とカット情報を配置が見る。
     # 手動で増減したら捨てる ── 自動選定時の前提が成り立たなくなるため
     select_result: Optional[alg.AutoSelectResult] = None
+    # 敷き詰め方式(「候補変更」)。**現行の選定・配置には一切影響しません。**
+    # 押されたときだけ作られ、押されなければ最後まで None のまま
+    tiling: Optional[TilingState] = None
 
     # --- 1P0113 裸梱包 (VBA `spn1P0113Qty`) ---
     # 乗数。角材本数・松板枚数にそのまま掛かる。製品サイズが変わったときだけ
@@ -521,6 +544,10 @@ class SelectionSession:
         self.select_result = result
         self.selected.lower = list(result.lower)
         self.selected.upper = list(result.upper)
+        # 現行の選定に戻ったのだから、「候補変更」の回り位置も戻す。
+        # 残しておくと、次に押したときにAではなくBから出てきて
+        # 「同じ操作で違うものが出る」ことになる
+        self.tiling = None
         self.invalidate_placement()
         # **何が選ばれたのかを1枚ずつ残す。** 「上用2種類」とだけ言われても、
         # あとから「なぜこの寸法になったのか」を追えない(現場の声)
@@ -674,6 +701,143 @@ class SelectionSession:
         ulog.log(f"ボード配置 完了: {len(placed)}枚", emphasis=True)
         return BoardOpResult(True, f"ボードを配置しました({len(placed)}枚)")
 
+    # ------------------------------------------------------------------
+    # 候補変更(敷き詰め方式) ── 現行の選定・配置には触らない
+    # ------------------------------------------------------------------
+    def _tiling_key(self) -> tuple:
+        """候補を作った前提。1つでも変われば作り直す。"""
+        return (self.palette.width, self.palette.length,
+                self.product.width, self.product.length,
+                self.board_type, self.stock_aware,
+                self.presenter.is_shared_board_mode)
+
+    def _next_tiling_axis(self, state: TilingState) -> int:
+        """次に出す軸。中身のある軸だけを回る(VBA `NextValidAxis`)。
+
+        初回も**中身のある軸から**始めます。VBA は初回を必ず A に
+        していたため、Aが空(要カット0の解が無い)の品では押しても
+        リストが空になっていました。
+        """
+        start = state.axis + 1 if state.axis >= 0 else 0
+        for i in range(3):
+            axis = (start + i) % 3
+            if state.lower[axis] is not None or state.upper[axis] is not None:
+                return axis
+        return -1
+
+    @user_log_mod.tag_area("ボード")
+    def change_candidate(self) -> BoardOpResult:
+        """「候補変更」(VBA `TileChangeCandidate`)。
+
+        敷き詰め方式で作った A(枚数最小)→B(種類最小)→C(カット1枚許容)
+        を押すたびに切り替え、**選定リストの入れ替えと配置までここで
+        完結させます。** 現行の「ボード選定」「ボード配置」の経路には
+        一切入りません ── VBA では配置側に分岐を入れたために、現行で
+        選定し直しても図だけが古い敷き詰め候補を描く事故が起きました。
+        """
+        ulog = self.presenter.user_log
+        refusal = self._require_sizes()
+        if refusal is not None:
+            return refusal
+        if self.presenter.protec.is_protec:
+            # カット前提の別ロジックで、在庫が3種/1種しかなく敷き詰めが
+            # 成立しない(成立率 上用0.8% / IK 0.1%)。現行のプロテック
+            # 選定を使う
+            return BoardOpResult(
+                False, "プロテックは「候補変更」の対象外です。"
+                       "「ボード選定」を使ってください。",
+                REFUSE_NO_CANDIDATES)
+
+        available = self.candidates()
+        if not available:
+            return BoardOpResult(
+                False, "候補ボードがありません。ボード種別を確認してください。",
+                REFUSE_NO_CANDIDATES)
+
+        key = self._tiling_key()
+        if self.tiling is None or self.tiling.key != key:
+            self.tiling = self._build_tiling(available, key)
+        axis = self._next_tiling_axis(self.tiling)
+        if axis < 0:
+            ulog.log("[候補変更] 別候補が見つかりませんでした", emphasis=True)
+            return BoardOpResult(False, "別候補が見つかりませんでした。",
+                                 REFUSE_NOT_FOUND)
+
+        self.tiling.axis = axis
+        return self._apply_tiling(axis)
+
+    def _build_tiling(self, available: list, key: tuple) -> TilingState:
+        """3つの軸を作る(VBA `BuildTileCandidates`)。"""
+        ulog = self.presenter.user_log
+        stock = tiling.build_stock(available)
+        share = self.presenter.is_shared_board_mode
+        ulog.log("[候補変更] 敷き詰め方式で候補を作ります", emphasis=True)
+        ulog.log(f"  パレット: {self.palette.width} x {self.palette.length}"
+                 f" / 製品: {self.product.width} x {self.product.length}"
+                 f" / 在庫: {len(stock)}種")
+
+        def solve(is_upper: bool) -> tuple[Optional[tiling.TileCand], ...]:
+            bounds = tiling.get_bounds(is_upper, share, self.product, self.palette)
+            cands = tiling.solve_tiling(stock, bounds)
+            ulog.log(f"  {'上用' if is_upper else '下用'}"
+                     f" 許容幅[{bounds.w_lo},{bounds.w_hi}]"
+                     f" 許容丈[{bounds.l_lo},{bounds.l_hi}]"
+                     f" → 候補 {len(cands)}件")
+            return tiling.pick_axes(cands)
+
+        lower = solve(False)
+        # 上下共用は「上用=下用と同サイズ」。別々に解くと、たまたま同点の
+        # 別候補が選ばれて上下がずれることがあるので下用をそのまま使う
+        upper = lower if share else solve(True)
+        for i, name in enumerate(tiling.AXIS_NAMES):
+            ulog.log(f"  候補{name}: "
+                     + " / ".join(
+                         f"{label}{_tiling_note(cands[i])}"
+                         for label, cands in (("下用", lower), ("上用", upper))))
+        return TilingState(key=key, lower=lower, upper=upper)
+
+    def _apply_tiling(self, axis: int) -> BoardOpResult:
+        """選んだ軸を選定リストと配置に反映する。"""
+        assert self.tiling is not None
+        ulog = self.presenter.user_log
+        share = self.presenter.is_shared_board_mode
+        lower_cand = self.tiling.lower[axis]
+        upper_cand = self.tiling.upper[axis]
+
+        self.selected.lower = (tiling.cand_to_selected(lower_cand)
+                               if lower_cand is not None else [])
+        self.selected.upper = (tiling.cand_to_selected(upper_cand)
+                               if upper_cand is not None else [])
+        # 狭幅パレットの前提は持ち込まない(VBA も `NarrowLower/Upper` を
+        # False に戻す)。敷き詰めは狭幅の専用経路を行構成の数え上げに
+        # 吸収しているので、当時の前提を引き継ぐ意味が無い
+        self.select_result = None
+
+        ctx = place.PlacementContext(palette=self.palette, product=self.product)
+        if lower_cand is not None:
+            tiling.place_tiling_boards(ctx, lower_cand, place.CATEGORY_LOWER)
+        if upper_cand is not None and not share:
+            tiling.place_tiling_boards(ctx, upper_cand, place.CATEGORY_UPPER)
+        self.placement = ctx
+
+        name = tiling.AXIS_NAMES[axis]
+        ulog.log(f"[候補変更] 候補{name} に切り替えました", emphasis=True)
+        for label, boards in (("上用", self.selected.upper),
+                              ("下用", self.selected.lower)):
+            if not boards:
+                ulog.log(f"  {label}: なし")
+                continue
+            for board in boards:
+                ulog.log(f"  {label}: {board.width} x {board.length}"
+                         f" × {board.count}枚 [{board.tag}]")
+        log.info("候補変更: 軸=%s 上用%s種 下用%s種 配置%s枚",
+                 name, len(self.selected.upper), len(self.selected.lower),
+                 len(ctx.placed))
+        return BoardOpResult(
+            True, f"候補{name} に切り替えました。"
+                  f"上用 {len(self.selected.upper)}種類 / "
+                  f"下用 {len(self.selected.lower)}種類")
+
     def map_items(self) -> list[dict]:
         """棚検索へ渡す資材(旧版 `btnMap`)。
 
@@ -728,6 +892,8 @@ class SelectionSession:
         """
         self.selected = svc.SelectedBoards()
         self.select_result = None
+        # 「候補変更」の回り位置も戻す。消したあとに押したら**Aから**
+        self.tiling = None
         self.invalidate_placement()
         return BoardOpResult(True, "選定したボードをクリアしました")
 
@@ -1000,6 +1166,7 @@ class SelectionSession:
         self.clear_sizes()
         self.selected = svc.SelectedBoards()
         self.select_result = None
+        self.tiling = None
         self.selected_angles = []
         self.angle_drawn = False
         self.angle_need_cut = False
@@ -1025,6 +1192,14 @@ class SelectionSession:
 # ------------------------------------------------------------------
 _session: Optional[SelectionSession] = None
 _lock = threading.Lock()
+
+
+def _tiling_note(cand: Optional[tiling.TileCand]) -> str:
+    """選定ログに出す候補1件の要約。**決め手が読めるように出す。**"""
+    if cand is None:
+        return "なし"
+    return (f" {cand.board_count}枚 {cand.type_count}種"
+            f" カット{cand.cuts}枚 超過{cand.over_w + cand.over_l}mm")
 
 
 def get_session(conn: sqlite3.Connection) -> SelectionSession:

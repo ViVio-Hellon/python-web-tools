@@ -716,6 +716,13 @@ class BoardsViewModel:
     can_place: bool = False
     place_why: str = ""
 
+    # 「候補変更」(敷き詰め方式)。押すたびに A→B→C と回る。
+    # いまどれが出ているのかを出さないと、押した結果が変わったのか
+    # 変わらなかったのかが画面から読めない
+    can_change: bool = False
+    change_why: str = ""
+    change_axis: str = ""
+
 
 @dataclass
 class MaterialRow:
@@ -1339,6 +1346,23 @@ def build_boards(session: Any) -> BoardsViewModel:
     elif not (session.selected.upper or session.selected.lower):
         view.place_why = "先にボードを選定してください。"
     view.can_place = not view.place_why
+
+    # 「候補変更」は敷き詰め方式の補助。要るのは寸法と候補だけで、
+    # 先に「ボード選定」を押しておく必要はない ── 現行の選定を
+    # 通さずに別の解を出すのがこのボタンの役目
+    if missing:
+        view.change_why = missing
+    elif not candidates:
+        view.change_why = "候補ボードがありません。ボード種別を確認してください。"
+    elif presenter.protec.is_protec:
+        # カット前提の別ロジックで、在庫が3種/1種しかなく敷き詰めが
+        # 成立しない。押させておいて断るより、先に理由を出す
+        view.change_why = "プロテックは「候補変更」の対象外です。"
+    view.can_change = not view.change_why
+    state = getattr(session, "tiling", None)
+    if state is not None and state.axis >= 0:
+        from .. import tiling_algorithm as tiling
+        view.change_axis = tiling.AXIS_NAMES[state.axis]
     return view
 
 
@@ -1881,6 +1905,9 @@ def boards_to_dict(view: BoardsViewModel) -> dict[str, Any]:
         "select_why": view.select_why,
         "can_place": view.can_place,
         "place_why": view.place_why,
+        "can_change": view.can_change,
+        "change_why": view.change_why,
+        "change_axis": view.change_axis,
     }
 
 

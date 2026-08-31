@@ -992,6 +992,158 @@ class SharedBoardTests(BoardTestCase):
 
 
 # ==================================================================
+# 候補変更(敷き詰め方式) ── 現行の選定・配置の**補助**
+# ==================================================================
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class ChangeCandidateTests(SelectionWebTestCase):
+    """押すたびに A→B→C と回り、選定と配置がまとめて入れ替わる。
+
+    **現行の「ボード選定」「ボード配置」には触らない。** 押せばいつでも
+    現行に戻せることを、ここで確かめておく。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        insert_pallet(self.conn, width=1540, length=2550)
+        # 丈から入れば 1250×2500 で丈カットゼロに届く在庫
+        for width, length in ((1250, 2500), (1030, 1520), (30, 2500),
+                              (50, 1600), (100, 2000), (100, 2500)):
+            insert_board(self.conn, width=width, length=length)
+
+    def sizes(self) -> None:
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1540", "length": "2550"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1505", "length": "2502"})
+
+    def change(self, expect=200) -> dict:
+        return self.post("/api/selection/boards/candidate", expect=expect)
+
+    def dims(self, state, side="lower") -> list[tuple[int, int]]:
+        return [(r["width"], r["length"]) for r in state["boards"][side]]
+
+    # --- 押せるかどうか -------------------------------------------
+    def test_サイズが決まるまで押せない(self) -> None:
+        boards = self.get()["boards"]
+        self.assertFalse(boards["can_change"])
+        self.assertIn("パレット", boards["change_why"])
+        self.sizes()
+        self.assertTrue(self.get()["boards"]["can_change"])
+
+    def test_選定を先に押しておく必要は無い(self) -> None:
+        """現行の選定を通さずに別の解を出すのが、このボタンの役目。"""
+        self.sizes()
+        self.assertFalse(self.get()["boards"]["lower"])
+        self.assertTrue(self.get()["boards"]["can_change"])
+        self.assertTrue(self.change()["boards"]["lower"])
+
+    def test_サイズが無いまま送ったら422(self) -> None:
+        body = self.change(expect=422)
+        self.assertIn("boards", body, "断られても画面ぜんぶが返る")
+        self.assertIn("パレット", body["message"])
+
+    def test_プロテックは対象外(self) -> None:
+        """カット前提の別ロジックで、在庫が少なく敷き詰めが成立しない。"""
+        self.sizes()
+        session = self.session()
+        session.presenter.protec.is_protec = True
+        boards = self.get()["boards"]
+        self.assertFalse(boards["can_change"])
+        self.assertIn("プロテック", boards["change_why"])
+        body = self.change(expect=422)
+        self.assertIn("プロテック", body["message"])
+
+    # --- 何が出るか -----------------------------------------------
+    def test_現行では出ない丈カットゼロの解が出る(self) -> None:
+        self.sizes()
+        current = self.post("/api/selection/boards/auto-select")
+        self.assertNotIn((1250, 2500), self.dims(current))
+
+        state = self.change()
+        self.assertIn((1250, 2500), self.dims(state))
+        self.assertIn((1250, 2500), self.dims(state, "upper"))
+
+    def test_押すたびにABCと回る(self) -> None:
+        self.sizes()
+        seen = []
+        for _ in range(4):
+            seen.append(self.change()["boards"]["change_axis"])
+        self.assertEqual(seen[0][0], "A")
+        self.assertEqual(seen[1][0], "B")
+        self.assertEqual(seen[2][0], "C")
+        self.assertEqual(seen[3][0], "A", "一周したらAへ戻る")
+
+    def test_Cはカット前提で枚数が減る(self) -> None:
+        self.sizes()
+        a = self.change()
+        self.change()                      # B
+        c = self.change()
+        self.assertLess(sum(r["count"] for r in c["boards"]["lower"]),
+                        sum(r["count"] for r in a["boards"]["lower"]))
+        self.assertIn("カット前提",
+                      {r["tag"] for r in c["boards"]["lower"]})
+
+    def test_配置まで入れ替わる(self) -> None:
+        """選定だけ替えて図が古いままだと、図と一覧が食い違う。"""
+        self.sizes()
+        state = self.change()
+        self.assertTrue(state["plans"]["lower"])
+        placed = self.session().placement.placed
+        self.assertTrue(placed)
+        # 行モデルは丈方向に積む。1行なら全部 X=0 から始まる
+        self.assertEqual({p.x for p in placed if p.board_category == "下用"},
+                         {0})
+
+    # --- 現行に触らないこと ---------------------------------------
+    def test_現行の選定を押せば戻る(self) -> None:
+        self.sizes()
+        self.change()
+        state = self.post("/api/selection/boards/auto-select")
+        self.assertNotIn((1250, 2500), self.dims(state))
+        self.assertEqual(state["boards"]["change_axis"], "",
+                         "現行に戻ったのだから、回り位置も戻す")
+
+    def test_現行に戻ったあとはAから始まる(self) -> None:
+        self.sizes()
+        self.change()
+        self.change()                      # B まで進めておく
+        self.post("/api/selection/boards/auto-select")
+        self.assertEqual(self.change()["boards"]["change_axis"][0], "A")
+
+    def test_狭幅パレットの前提は持ち込まない(self) -> None:
+        """敷き詰めは狭幅の専用経路を数え上げに吸収している。"""
+        self.sizes()
+        self.post("/api/selection/boards/auto-select")
+        self.change()
+        self.assertIsNone(self.session().select_result)
+
+    def test_クリアで回り位置も戻る(self) -> None:
+        self.sizes()
+        self.change()
+        self.post("/api/selection/boards/clear")
+        self.assertEqual(self.get()["boards"]["change_axis"], "")
+        self.assertEqual(self.change()["boards"]["change_axis"][0], "A")
+
+    def test_寸法を変えたら作り直してAから(self) -> None:
+        """前の寸法で作った候補が出ると、図と現物が合わない。"""
+        self.sizes()
+        self.change()
+        self.change()                      # B
+        self.post("/api/selection/product/apply",
+                  {"width": "1500", "length": "2500"})
+        self.assertEqual(self.change()["boards"]["change_axis"][0], "A")
+
+    def test_選定ログに決め手が残る(self) -> None:
+        """どの軸のどこで決まったのかを後から追えるようにする。"""
+        self.sizes()
+        self.change()
+        text = "\n".join(e.text for e in self.session().presenter.user_log.entries)
+        self.assertIn("候補変更", text)
+        self.assertIn("枚", text)
+        self.assertIn("カット", text)
+
+
+# ==================================================================
 # アングル (Phase 6b)
 # ==================================================================
 class AngleTests(BoardTestCase):

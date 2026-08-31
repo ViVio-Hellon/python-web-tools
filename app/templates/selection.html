@@ -316,9 +316,9 @@
           <option value="{{ name }}" {% if name == view.boards.board_type %}selected{% endif %}>{{ name }}</option>
           {% endfor %}
         </select>
-        {# 在庫考慮はモードのトグル。ONの見た目を 2山積 とそろえる #}
-        <button class="btn" type="button" id="stockAware"
-                aria-pressed="{{ 'true' if view.boards.stock_aware else 'false' }}">在庫考慮</button>
+        {# 在庫考慮は実行ボタンの並び(下の `.btn-grid`)へ移した。
+           種別の隣にあったころは、選定の考え方を決めるトグルなのに
+           一覧の絞り込みに見えていた #}
         <span class="eyebrow" id="candidateNote">{{ view.boards.candidate_note }}</span>
       </div>
 
@@ -393,8 +393,16 @@
         (合計疲労度も出ます)。
       </p>
 
-      {# 実行ボタンは作業順に。色は操作の種類を表す(VBA btnColLeft の並び) #}
-      <div class="btn-row">
+      {# **左が実行、右がその効き方。**
+             選定 │ 疲労度優先
+             配置 │ 在庫考慮
+                  │ 候補変更
+         左の列は作業順(選ぶ→置く)、右の列は「どう選ぶか」を決める
+         もの。1行に4つ並べていたころは、押すもの(選定・配置)と
+         効き方を決めるもの(疲労度・在庫考慮)が横一列に混ざっていて、
+         どれが実行なのか色でしか分からなかった。
+         クリアは**消す**操作なので、この表には入れず下に離す #}
+      <div class="btn-grid">
         {# 色は操作の種類(選定)なので疲労度で変えない。効いていることは
            語で示す(VBA `SELECT_ON_TEXT` = 「疲労考慮ﾎﾞｰﾄﾞ」) #}
         <button class="btn btn--select" type="button" id="autoSelect"
@@ -411,6 +419,26 @@
         <button class="btn btn--run" type="button" id="place"
                 {% if not view.boards.can_place %}disabled{% endif %}>
           <span class="gl">▶</span>ボード配置</button>
+        {# 在庫考慮はモードのトグル。ONの見た目を 2山積 とそろえる #}
+        <button class="btn" type="button" id="stockAware"
+                aria-pressed="{{ 'true' if view.boards.stock_aware else 'false' }}">在庫考慮</button>
+        {# 左は空ける。候補変更に対になる実行は無い(自分で配置まで済ませる) #}
+        <span aria-hidden="true"></span>
+        {# 敷き詰め方式の別解。押すたびに A→B→C と回る #}
+        <button class="btn" type="button" id="changeCandidate"
+                {% if not view.boards.can_change %}disabled{% endif %}>候補変更<span
+            class="axis" id="changeAxis">{{ view.boards.change_axis }}</span></button>
+      </div>
+      <p class="why" id="changeWhy" {% if not view.boards.change_why %}hidden{% endif %}>{{ view.boards.change_why }}</p>
+      <p class="why">
+        <b>候補変更</b>は別の考え方(敷き詰め方式)で選び直します。
+        幅からではなく<b>行を丈方向に積んで</b>面を作るので、
+        現行の選定では出ない「丈カットゼロ」の解が出ることがあります。
+        押すたびに <b>A(枚数最小)→B(種類最小)→C(カット1枚許容)</b> と
+        変わり、選定と配置まで入れ替わります。<b>現行の「ボード選定」は
+        そのまま</b>で、押せばいつでも戻せます。
+      </p>
+      <div class="btn-row">
         <button class="btn btn--danger" type="button" id="clearBoards">
           <span class="gl">×</span>クリア</button>
       </div>
