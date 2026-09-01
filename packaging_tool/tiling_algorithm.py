@@ -612,6 +612,36 @@ def pick_axes(cands: Sequence[TileCand]) -> tuple[Optional[TileCand], ...]:
     return tuple(best)
 
 
+def cand_signature(cand: Optional[TileCand]) -> Optional[tuple]:
+    """**画面に出るものが同じか**を見るための鍵。
+
+    A(枚数最小)とB(種類最小)は、しばしば**同じ候補**が両方の1位に
+    なります。「3枚1種」のように枚数でも種類でも最適なものが1つしか
+    無ければ当然そうなり、全件検証でも3軸すべて同じになるのが
+    上用15.3% / 下用42.4% ── 珍しいことではありません。
+
+    軸が違っても中身が同じなら、押しても画面は何も変わりません。
+    使う側からは**押しても反応しない=壊れている**に見えるので、
+    呼ぶ側(`selection_session`)はこの鍵で見比べて飛ばします。
+
+    見るのは**選定リストと図に出るものすべて**です。使うSKUだけを
+    比べると、同じ寸法を違う積み方で並べた候補を「同じ」と誤判定して
+    図だけが変わる候補を飛ばしてしまいます。
+    """
+    if cand is None:
+        return None
+
+    def comp(c: Optional[TileRowComp], height: int, rows: int):
+        if c is None:
+            return None
+        return (height, rows, tuple(c.dims), tuple(c.qty),
+                c.thin_qty, c.thin_th, c.width, c.w_cut)
+
+    return (comp(cand.c1, cand.h1, cand.n1),
+            comp(cand.c2, cand.h2, cand.n2),
+            tuple(cand.thin_rows))
+
+
 # ==================================================================
 # 候補 → 選定リスト
 # ==================================================================

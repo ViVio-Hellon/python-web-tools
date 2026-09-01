@@ -1063,21 +1063,43 @@ class ChangeCandidateTests(SelectionWebTestCase):
         self.assertIn((1250, 2500), self.dims(state))
         self.assertIn((1250, 2500), self.dims(state, "upper"))
 
-    def test_押すたびにABCと回る(self) -> None:
+    def test_中身が変わる軸だけを回る(self) -> None:
+        """**押しても画面が変わらないのは「壊れている」に見える。**
+
+        A(枚数最小)とB(種類最小)は、しばしば同じ候補が両方の1位に
+        なる(この在庫では「1250×2500 ×1 + 100×2500 ×3」が枚数でも
+        種類でも最適)。軸だけ進めて中身が同じものを出すと、押した側には
+        反応が無いのと区別がつかない。
+        """
         self.sizes()
-        seen = []
-        for _ in range(4):
-            seen.append(self.change()["boards"]["change_axis"])
-        self.assertEqual(seen[0][0], "A")
-        self.assertEqual(seen[1][0], "B")
-        self.assertEqual(seen[2][0], "C")
-        self.assertEqual(seen[3][0], "A", "一周したらAへ戻る")
+        seen = [self.change()["boards"]["change_axis"] for _ in range(4)]
+        self.assertEqual([s[0] for s in seen], ["A", "C", "A", "C"],
+                         "AとBが同じ内容なので、Bは飛ばしてCへ進む")
+
+    def test_飛ばしたことを画面と選定ログに残す(self) -> None:
+        """黙って飛ばすと「AのつぎがCなのはなぜか」が読めない。"""
+        self.sizes()
+        self.change()                              # A
+        body = self.change()                       # B を飛ばして C
+        self.assertTrue(any("飛ばしました" in note
+                            for note in body.get("notes", [])), body.get("notes"))
+        text = "\n".join(e.text
+                         for e in self.session().presenter.user_log.entries)
+        self.assertIn("同じ内容のため飛ばしました", text)
+
+    def test_作った時点で同じ軸に印を付ける(self) -> None:
+        """押す前から「AとBは同じ」と分かっていれば、驚かずに済む。"""
+        self.sizes()
+        self.change()
+        text = "\n".join(e.text
+                         for e in self.session().presenter.user_log.entries)
+        self.assertIn("と同じ内容", text)
 
     def test_Cはカット前提で枚数が減る(self) -> None:
         self.sizes()
-        a = self.change()
-        self.change()                      # B
-        c = self.change()
+        a = self.change()                          # A
+        c = self.change()                          # B は飛ばされて C
+        self.assertEqual(c["boards"]["change_axis"][0], "C")
         self.assertLess(sum(r["count"] for r in c["boards"]["lower"]),
                         sum(r["count"] for r in a["boards"]["lower"]))
         self.assertIn("カット前提",
@@ -1124,14 +1146,117 @@ class ChangeCandidateTests(SelectionWebTestCase):
         self.assertEqual(self.get()["boards"]["change_axis"], "")
         self.assertEqual(self.change()["boards"]["change_axis"][0], "A")
 
+    # --- 前提が変わったら候補を捨てる -----------------------------
+    #
+    # **ここが崩れると、いま入力してある寸法と何の関係も無いボードが
+    # 選定され、そのまま図になる。** 図と現物が食い違ったまま切断依頼や
+    # 倉庫送信まで進めてしまう ── 静かに間違うたぐいの中でいちばん重い。
     def test_寸法を変えたら作り直してAから(self) -> None:
-        """前の寸法で作った候補が出ると、図と現物が合わない。"""
         self.sizes()
         self.change()
-        self.change()                      # B
+        self.change()                      # C まで進めておく
         self.post("/api/selection/product/apply",
                   {"width": "1500", "length": "2500"})
         self.assertEqual(self.change()["boards"]["change_axis"][0], "A")
+
+    def test_変えた寸法で選び直す(self) -> None:
+        """軸が戻るだけでは足りない。**中身も新しい寸法のもの**になる。"""
+        self.sizes()
+        before = self.change()["boards"]["lower"]
+        # 製品を大きく変える。前の候補(1250×2500)は幅が足りなくなる
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "1600"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1060", "length": "1560"})
+        after = self.change()["boards"]["lower"]
+        self.assertNotEqual([(r["width"], r["length"]) for r in before],
+                            [(r["width"], r["length"]) for r in after])
+        # 図も新しいパレットに収まっている。**在庫の実寸ではなく、
+        # 置かれた大きさで見る** ── 細ボードは長辺を切って使うので、
+        # 在庫の丈(2000等)がそのまま図の大きさになるとは限らない
+        placed = [p for p in self.session().placement.placed
+                  if p.board_category == "下用"]
+        self.assertTrue(placed)
+        self.assertLessEqual(max(p.x + p.length for p in placed), 1600 * 1.2)
+
+    def test_パレットだけ変えても作り直す(self) -> None:
+        self.sizes()
+        self.change()
+        self.change()                      # C
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1540", "length": "2600"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1505", "length": "2502"})
+        self.assertEqual(self.change()["boards"]["change_axis"][0], "A")
+
+    def test_ボード種別を変えても作り直す(self) -> None:
+        """寸法は同じでも、引いてくる候補が変われば答えも変わる。"""
+        insert_board(self.conn, width=1200, length=2400,
+                     board_type="プロテックボード")
+        self.sizes()
+        self.change()
+        self.change()                      # C
+        self.post("/api/selection/board-type",
+                  {"board_type": "プロテックボード"})
+        self.post("/api/selection/board-type", {"board_type": "ハードボード"})
+        self.assertEqual(self.change()["boards"]["change_axis"][0], "A",
+                         "種別を往復しても、途中で前提が変わっている")
+
+    def test_ボードマスタを入れ直したら作り直す(self) -> None:
+        """**寸法もモードも変わらないのに候補だけ変わる**唯一の経路。
+
+        取り込み直しでマスタが入れ替わったあと、もう無い寸法を出し
+        続けると、現物が取れないボードで図が描かれる。
+        """
+        self.sizes()
+        before = self.change()["boards"]["lower"]
+        self.assertIn((1250, 2500), [(r["width"], r["length"]) for r in before])
+
+        self.conn.execute("DELETE FROM BoardMaster WHERE ボード幅 = 1250")
+        insert_board(self.conn, width=1500, length=2500)
+        self.conn.commit()
+
+        after = self.change()
+        self.assertEqual(after["boards"]["change_axis"][0], "A")
+        self.assertNotIn((1250, 2500),
+                         [(r["width"], r["length"]) for r in after["boards"]["lower"]])
+
+    def test_作り直したことを選定ログに残す(self) -> None:
+        self.sizes()
+        self.change()
+        self.post("/api/selection/product/apply",
+                  {"width": "1500", "length": "2500"})
+        self.change()
+        text = "\n".join(e.text
+                         for e in self.session().presenter.user_log.entries)
+        self.assertIn("前提が変わったので候補を作り直します", text)
+
+    def test_3軸とも同じなら理由を言って断る(self) -> None:
+        """全件検証で3軸すべて同じは上用15.3% / 下用42.4%。珍しくない。
+
+        「候補が作れなかった」のと「作れたが全部同じだった」のとでは、
+        次にすることが違う ── 前者は在庫や寸法を疑い、後者はこれが
+        唯一の答えだと分かる。同じ文言で返してはいけない。
+        """
+        self.conn.execute("DELETE FROM BoardMaster")
+        self.conn.execute("DELETE FROM PalletMaster")
+        insert_pallet(self.conn, width=1100, length=2000)
+        for width, length in ((1000, 1000), (500, 1000), (100, 2000)):
+            insert_board(self.conn, width=width, length=length)
+        self.conn.commit()
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+
+        first = self.change()
+        self.assertEqual(first["boards"]["change_axis"][0], "A")
+        body = self.change(expect=422)
+        self.assertIn("ほかに別の候補はありません", body["message"])
+        self.assertIn("A", body["message"])
+        # **断られても、いま出ている候補はそのまま残る**
+        self.assertEqual(body["boards"]["lower"], first["boards"]["lower"])
+        self.assertEqual(body["boards"]["change_axis"][0], "A")
 
     def test_選定ログに決め手が残る(self) -> None:
         """どの軸のどこで決まったのかを後から追えるようにする。"""

@@ -180,6 +180,50 @@ class 評価順序(unittest.TestCase):
                               T.tile_tier(1000)}), 3)
 
 
+class 軸の重なり(unittest.TestCase):
+    """AとBは**しばしば同じ候補**になる。押しても変わらないのは困る。"""
+
+    def test_枚数でも種類でも最適なものが1つならAとBは一致する(self) -> None:
+        _, (a, b, _), _ = solve(1540, 2550, 1505, 2502)
+        self.assertIs(a, b, "この在庫では3枚1種が両方の1位になる")
+        self.assertEqual(T.cand_signature(a), T.cand_signature(b))
+
+    def test_中身が同じなら鍵も同じ(self) -> None:
+        def comp():
+            return T.TileRowComp(height=2500, dims=[1250], qty=[1],
+                                 thin_qty=(0, 0, 3), thin_th=(30, 50, 100),
+                                 width=1550, boards=4)
+        # 別のオブジェクトでも、出るものが同じなら同じ鍵
+        self.assertEqual(T.cand_signature(T.TileCand(h1=2500, n1=1, c1=comp())),
+                         T.cand_signature(T.TileCand(h1=2500, n1=1, c1=comp())))
+
+    def test_使うSKUが同じでも積み方が違えば別の鍵(self) -> None:
+        """SKUだけを比べると、**図だけが変わる候補**を取り逃がす。"""
+        one_row = T.TileRowComp(height=1000, dims=[500], qty=[2], width=1000,
+                                boards=2)
+        two_rows = T.TileRowComp(height=1000, dims=[500], qty=[1], width=500,
+                                 boards=1)
+        flat = T.TileCand(h1=1000, n1=1, c1=one_row)
+        tall = T.TileCand(h1=1000, n1=2, c1=two_rows)
+        # 選定リストは同じ(500×1000 が2枚)
+        self.assertEqual([(r.width, r.length, r.count)
+                          for r in T.cand_to_selected(flat)],
+                         [(r.width, r.length, r.count)
+                          for r in T.cand_to_selected(tall)])
+        # それでも並べ方が違うので、別の候補として扱う
+        self.assertNotEqual(T.cand_signature(flat), T.cand_signature(tall))
+
+    def test_丈補填の行が違えば別の鍵(self) -> None:
+        comp = T.TileRowComp(height=2500, dims=[1250], qty=[1], width=1250,
+                             boards=1)
+        self.assertNotEqual(
+            T.cand_signature(T.TileCand(h1=2500, n1=1, c1=comp, thin_rows=[30])),
+            T.cand_signature(T.TileCand(h1=2500, n1=1, c1=comp, thin_rows=[50])))
+
+    def test_空の軸の鍵はNone(self) -> None:
+        self.assertIsNone(T.cand_signature(None))
+
+
 class 行構成(unittest.TestCase):
     def test_パレート絞り込みが効いている(self) -> None:
         """これが無いと下用1件に1.7秒かかって実用にならない。"""

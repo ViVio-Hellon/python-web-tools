@@ -704,26 +704,83 @@ class SelectionSession:
     # ------------------------------------------------------------------
     # 候補変更(敷き詰め方式) ── 現行の選定・配置には触らない
     # ------------------------------------------------------------------
-    def _tiling_key(self) -> tuple:
-        """候補を作った前提。1つでも変われば作り直す。"""
+    def _tiling_key(self, available: list) -> tuple:
+        """候補を作った前提。**1つでも変われば作り直す。**
+
+        古い候補を出してしまうと、**いま入力してある寸法と何の関係も
+        無いボードが選定され、そのまま図になる**。図と現物が食い違った
+        まま切断依頼や倉庫送信まで進めるので、静かに間違うたぐいの中でも
+        いちばん重い。
+
+        だから「作り直す条件」を推し量らず、**候補の中身を決めるもの
+        すべて**を鍵にする。
+
+            パレット・製品サイズ … 許容範囲そのもの
+            ボード種別・在庫考慮 … 候補ボードの引き方
+            上下共用            … 上用の許容範囲が下用と同じになる
+            候補ボードの寸法    … 取り込み直しで**寸法が増減する**。
+                                  これを入れないと、マスタを入れ直した
+                                  あとに「もう無い寸法」が出続ける
+
+        VBA側は寸法の4つだけを文字列にして持っている(`mTileKey`)。
+        残り3つも変われば候補は変わるので、そちらも足すのが正しい。
+        """
         return (self.palette.width, self.palette.length,
                 self.product.width, self.product.length,
                 self.board_type, self.stock_aware,
-                self.presenter.is_shared_board_mode)
+                self.presenter.is_shared_board_mode,
+                tuple(sorted((row.width, row.length) for row in available)))
 
-    def _next_tiling_axis(self, state: TilingState) -> int:
-        """次に出す軸。中身のある軸だけを回る(VBA `NextValidAxis`)。
+    def _axis_signature(self, state: TilingState, axis: int) -> tuple:
+        """その軸で画面に出るもの。上下そろって同じなら「同じ候補」。"""
+        return (tiling.cand_signature(state.lower[axis]),
+                tiling.cand_signature(state.upper[axis]))
+
+    def _next_tiling_axis(self, state: TilingState) -> tuple[int, list[str]]:
+        """次に出す軸。**中身が変わる軸だけ**を回る(VBA `NextValidAxis`)。
+
+        飛ばすものが2つあります。
+
+            空の軸       … その軸に候補が無い(要カット0の解が無い等)
+            同じ中身の軸 … いま出ているものと**選定も図も同じ**
+
+        2つ目が要るのは、A(枚数最小)とB(種類最小)がしばしば同じ候補に
+        なるためです。「3枚1種」のように枚数でも種類でも最適なものが
+        1つしか無ければ両方の1位が一致し、全件検証でも3軸すべて同じに
+        なるのが上用15.3% / 下用42.4%。**押しても画面が変わらないと、
+        現場からは壊れているように見えます**(空の軸だけを飛ばして
+        いたころは実際にそうなっていました)。
 
         初回も**中身のある軸から**始めます。VBA は初回を必ず A に
-        していたため、Aが空(要カット0の解が無い)の品では押しても
-        リストが空になっていました。
+        していたため、Aが空の品では押してもリストが空になっていました。
+
+        戻りは `(次の軸, 飛ばした軸の名前)`。飛ばしたことは**画面にも
+        出します** ── 選定ログを開かないと分からないのでは、押した回数と
+        出た候補が合わない理由に気づけません。
         """
+        ulog = self.presenter.user_log
+        current = (self._axis_signature(state, state.axis)
+                   if state.axis >= 0 else None)
         start = state.axis + 1 if state.axis >= 0 else 0
+        skipped: list[str] = []
         for i in range(3):
             axis = (start + i) % 3
-            if state.lower[axis] is not None or state.upper[axis] is not None:
-                return axis
-        return -1
+            if state.lower[axis] is None and state.upper[axis] is None:
+                log.debug("候補変更: 軸%s は空なので飛ばします",
+                          tiling.AXIS_NAMES[axis])
+                continue
+            if current is not None and self._axis_signature(state, axis) == current:
+                # **黙って飛ばさない。** 押した回数と出た候補が合わないと、
+                # 「押し損ねたのか、同じものが出たのか」が分からなくなる
+                name = tiling.AXIS_NAMES[axis]
+                skipped.append(name)
+                ulog.log(f"  候補{name} は候補{tiling.AXIS_NAMES[state.axis]}"
+                         " と同じ内容のため飛ばしました")
+                log.info("候補変更: 軸%s は軸%s と同じ内容なので飛ばしました",
+                         name, tiling.AXIS_NAMES[state.axis])
+                continue
+            return axis, skipped
+        return -1, skipped
 
     @user_log_mod.tag_area("ボード")
     def change_candidate(self) -> BoardOpResult:
@@ -754,17 +811,34 @@ class SelectionSession:
                 False, "候補ボードがありません。ボード種別を確認してください。",
                 REFUSE_NO_CANDIDATES)
 
-        key = self._tiling_key()
+        # **前提が変わっていたら候補を捨てて作り直す。** 押すたびに
+        # 突き合わせる ── 「変わったときに捨てる」を変更のたびに
+        # 書き足していく形にすると、いつか1か所書き忘れる
+        key = self._tiling_key(available)
         if self.tiling is None or self.tiling.key != key:
+            if self.tiling is not None:
+                ulog.log("[候補変更] 前提が変わったので候補を作り直します")
+                log.info("候補変更: 前提が変わったので候補を捨てます")
             self.tiling = self._build_tiling(available, key)
-        axis = self._next_tiling_axis(self.tiling)
+        axis, skipped = self._next_tiling_axis(self.tiling)
         if axis < 0:
+            # **どちらなのかを言い分ける。** 「候補が作れなかった」のと
+            # 「作れたが全部同じ内容だった」のとでは、次にすることが違う
+            # (前者は在庫や寸法を疑う。後者はこれが唯一の答え)
+            if self.tiling.axis >= 0:
+                name = tiling.AXIS_NAMES[self.tiling.axis]
+                ulog.log(f"[候補変更] ほかの軸は候補{name} と同じ内容でした",
+                         emphasis=True)
+                return BoardOpResult(
+                    False, f"ほかに別の候補はありません。"
+                           f"A/B/C とも候補{name} と同じ内容になりました。",
+                    REFUSE_NOT_FOUND)
             ulog.log("[候補変更] 別候補が見つかりませんでした", emphasis=True)
             return BoardOpResult(False, "別候補が見つかりませんでした。",
                                  REFUSE_NOT_FOUND)
 
         self.tiling.axis = axis
-        return self._apply_tiling(axis)
+        return self._apply_tiling(axis, skipped)
 
     def _build_tiling(self, available: list, key: tuple) -> TilingState:
         """3つの軸を作る(VBA `BuildTileCandidates`)。"""
@@ -789,15 +863,37 @@ class SelectionSession:
         # 上下共用は「上用=下用と同サイズ」。別々に解くと、たまたま同点の
         # 別候補が選ばれて上下がずれることがあるので下用をそのまま使う
         upper = lower if share else solve(True)
-        for i, name in enumerate(tiling.AXIS_NAMES):
-            ulog.log(f"  候補{name}: "
-                     + " / ".join(
-                         f"{label}{_tiling_note(cands[i])}"
-                         for label, cands in (("下用", lower), ("上用", upper))))
-        return TilingState(key=key, lower=lower, upper=upper)
+        state = TilingState(key=key, lower=lower, upper=upper)
 
-    def _apply_tiling(self, axis: int) -> BoardOpResult:
-        """選んだ軸を選定リストと配置に反映する。"""
+        # **同じ内容になった軸をここで名指ししておく。** 押す前から
+        # 「A と B は同じ」と分かっていれば、押しても変わらないことに
+        # 驚かずに済む(全件検証では3軸すべて同じが上用15.3%/下用42.4%)
+        seen: dict[tuple, int] = {}
+        for i, name in enumerate(tiling.AXIS_NAMES):
+            note = " / ".join(f"{label}{_tiling_note(cands[i])}"
+                              for label, cands in (("下用", lower), ("上用", upper)))
+            if lower[i] is None and upper[i] is None:
+                ulog.log(f"  候補{name}: なし")
+                continue
+            sig = self._axis_signature(state, i)
+            same = seen.get(sig)
+            if same is None:
+                seen[sig] = i
+                ulog.log(f"  候補{name}: {note}")
+            else:
+                ulog.log(f"  候補{name}: {note}"
+                         f" ※候補{tiling.AXIS_NAMES[same]} と同じ内容")
+        return state
+
+    def _apply_tiling(self, axis: int,
+                      skipped: list[str]) -> BoardOpResult:
+        """選んだ軸を選定リストと配置に反映する。
+
+        `skipped` は「いま出ているものと同じ内容だったので飛ばした軸」。
+        画面にも出す ── A と B が同じ候補になるのはよくあることで
+        (全件検証で3軸すべて同じが上用15.3%/下用42.4%)、黙って飛ばすと
+        「A の次が C なのはなぜか」が読めません。
+        """
         assert self.tiling is not None
         ulog = self.presenter.user_log
         share = self.presenter.is_shared_board_mode
@@ -833,10 +929,13 @@ class SelectionSession:
         log.info("候補変更: 軸=%s 上用%s種 下用%s種 配置%s枚",
                  name, len(self.selected.upper), len(self.selected.lower),
                  len(ctx.placed))
+        notes = ([f"候補{'・'.join(skipped)} は同じ内容だったので飛ばしました。"]
+                 if skipped else [])
         return BoardOpResult(
             True, f"候補{name} に切り替えました。"
                   f"上用 {len(self.selected.upper)}種類 / "
-                  f"下用 {len(self.selected.lower)}種類")
+                  f"下用 {len(self.selected.lower)}種類",
+            notes=notes)
 
     def map_items(self) -> list[dict]:
         """棚検索へ渡す資材(旧版 `btnMap`)。
