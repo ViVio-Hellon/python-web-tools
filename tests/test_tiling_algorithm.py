@@ -338,6 +338,28 @@ class 配置(unittest.TestCase):
         for p in ctx.placed:
             self.assertEqual((p.width, p.length), (400, 500))
 
+    def test_丈補填の行の細ボードは行の幅で長辺を選ぶ(self) -> None:
+        """**選定リストと実際の配置がずれてはいけない。**
+
+        丈補填の行は寝かせて幅を覆うので、100mm厚の 2000/2500 を
+        選び分ける基準は行高ではなく**行の幅**。行高で選ぶと、
+        一覧には 100×2000 と出るのに図には 100×2500 が置かれる。
+        """
+        comp = T.TileRowComp(height=1200, dims=[1000], qty=[1], width=2400,
+                             boards=1)
+        cand = T.TileCand(h1=1200, n1=1, c1=comp, thin_rows=[100])
+        # 行高は1200だが、覆うのは行の幅2400。2000では足りない
+        listed = T.cand_to_selected(cand)[-1]
+        self.assertEqual((listed.width, listed.length), (100, 2500))
+
+        ctx = place.PlacementContext(
+            palette=Palette(width=2500, length=1400),
+            product=ProductSize(width=2400, length=1300))
+        T.place_tiling_boards(ctx, cand, place.CATEGORY_LOWER)
+        drawn = ctx.placed[-1]
+        self.assertEqual((drawn.original_width, drawn.original_length),
+                         (2500, 100), "図に置かれるのも 100×2500(寝かせた向き)")
+
     def test_丈補填の行は幅いっぱいに寝る(self) -> None:
         """VBAはここで縦横が逆で、丈方向に行幅ぶん伸びていた。"""
         comp = T.TileRowComp(height=2500, dims=[1250], qty=[1], width=1250,

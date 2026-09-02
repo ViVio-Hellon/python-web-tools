@@ -759,11 +759,15 @@ class SelectionSession:
         出た候補が合わない理由に気づけません。
         """
         ulog = self.presenter.user_log
-        current = (self._axis_signature(state, state.axis)
-                   if state.axis >= 0 else None)
-        start = state.axis + 1 if state.axis >= 0 else 0
+        first = state.axis < 0
+        current = None if first else self._axis_signature(state, state.axis)
+        start = 0 if first else state.axis + 1
         skipped: list[str] = []
-        for i in range(3):
+        # **見に行くのは残りの2つだけ。** まだ何も出していないとき
+        # (初回)は3つとも見る。出したあとで3周ぶん回すと、3周目は
+        # いま出している軸そのものに戻ってきて、「候補Aは候補Aと同じ
+        # 内容のため飛ばしました」という読めないログが1行出る
+        for i in range(3 if first else 2):
             axis = (start + i) % 3
             if state.lower[axis] is None and state.upper[axis] is None:
                 log.debug("候補変更: 軸%s は空なので飛ばします",

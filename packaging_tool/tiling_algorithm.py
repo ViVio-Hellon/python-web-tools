@@ -72,14 +72,19 @@ VBA からの移植で**変えたところ**(いずれも意図的)
    Python版は候補が行構成を**そのまま参照**するので、退避も復元も
    要りません。
 
-2. **丈補填の行の縦横が逆でした。** VBA の `PlaceTilingBoards` は
-   丈補填の行を `PlaceOneBoard(厚み, 行幅, ...)` と呼んでおり、
-   引数の意味(dY=幅方向, dX=丈方向)からすると**幅方向に厚みぶん・
-   丈方向に行幅ぶん**を占める板になっていました。丈の端数を埋める行は
-   幅いっぱいに寝かせるものなので、逆です(`xPos` の進め方が厚みぶな
-   のに対し、置かれる板は丈方向に行幅ぶん伸びるという食い違いもあり、
-   図にすると分かります)。こちらでは幅方向=行幅・丈方向=厚み で
-   置いています。**VBA側も直す必要があります。**
+2. **丈補填の行は専用の置き方をします**(`_place_thin_row`)。
+   行の中に並べる1枚(`_place_one_board`)とは縦横が違い、長辺を選ぶ
+   基準も違う ── 寝かせて幅を覆うので、幅方向=行幅・丈方向=厚みで、
+   長辺は行高ではなく**行の幅**で選びます。まとめていたころは
+   幅方向に厚みぶんしか置かれず、丈方向に行幅ぶん伸びていました
+   (VBA も同じ誤りで、`PlaceThinRow` を新設して直しています)。
+
+【VBAだけの不具合で、こちらには無いもの】
+
+VBA の `TryThinRows` は固定長ローカル配列 `ths(1 To 4)` を使い回して
+おり、`tn` は毎回0に戻るのに中身が残るため、実在しない丈補填行が
+候補に混入していました(`Erase ths` で修正)。Python版は毎回
+`[t1]*a + [t2]*b + [t3]*c` と作り直すので、この形の間違いは起きません。
 """
 from __future__ import annotations
 
@@ -740,13 +745,40 @@ def place_tiling_boards(ctx: place.PlacementContext, cand: TileCand,
             _place_one_row(ctx, cand.c2, cand.h2, x_pos, category, seq)
             x_pos += cand.h2
 
-    # 丈補填の行。**幅いっぱいに寝かせ、丈方向は厚みぶんだけ取る**
-    # (VBA はここで縦横が逆になっていた。冒頭の移植メモを参照)
+    # 丈補填の行は**行の中の1枚ではない**ので、専用の置き方をする
     row_w = cand.c1.width if cand.c1 is not None else 0
     for thickness in cand.thin_rows:
-        _place_one_board(ctx, row_w, thickness, x_pos, 0, row_w,
-                         category, seq, thin=(thickness, row_w))
+        _place_thin_row(ctx, thickness, row_w, x_pos, category, seq)
         x_pos += thickness
+
+
+def _place_thin_row(ctx: place.PlacementContext, thickness: int, row_w: int,
+                    x_pos: int, category: str, seq: _Seq) -> None:
+    """丈補填の1行を置く(VBA `PlaceThinRow`)。
+
+        幅方向(Y) = 行の幅ぶん。細ボードの長辺が余れば切る
+        丈方向(X) = 板厚
+
+    **行の中に並べる1枚とは置き方が違う**ので、`_place_one_row` が使う
+    `_place_one_board` とは分けてあります。まとめていたころは
+    「幅方向に厚みぶん・丈方向に行幅ぶん」という**逆**の板になって
+    いました(VBA も同じ誤りで、専用の `PlaceThinRow` を新設して
+    直しています)。
+
+    覆う辺の長さで細ボードの長辺を選ぶのも、この行では**行高ではなく
+    行の幅**です ── 寝かせて幅を覆うので、行高では 100×2500 と
+    100×2000 が選定リストと実際の配置で食い違います。
+    """
+    sku_w, sku_l = thin_pair(thickness, row_w)
+    number = seq.next()
+    board = BoardModel(id=number, width=sku_w, length=sku_l, count=1,
+                       board_category=category,
+                       instance_id=f"{category}_T{number}")
+    # 長辺を幅方向へ寝かせるので rotate=True。境界の判定は通さない
+    # (収まることは探索の段階で決まっている)
+    place.place_board_at(ctx, x_pos, 0, board, rotate=True,
+                         bypass_check=True, custom_width=row_w,
+                         custom_length=thickness, is_fill=True)
 
 
 def _place_one_row(ctx: place.PlacementContext, comp: TileRowComp, height: int,
@@ -773,7 +805,7 @@ def _place_one_row(ctx: place.PlacementContext, comp: TileRowComp, height: int,
                 break
             _place_one_board(ctx, comp.thin_th[i], height, x_pos, y_pos,
                              limit_w, category, seq,
-                             thin=(comp.thin_th[i], height))
+                             thin=True)
             y_pos += comp.thin_th[i]
             placed_upper += 1
         if placed_upper >= wf_upper:
@@ -795,20 +827,23 @@ def _place_one_row(ctx: place.PlacementContext, comp: TileRowComp, height: int,
                 continue
             _place_one_board(ctx, comp.thin_th[i], height, x_pos, y_pos,
                              limit_w, category, seq,
-                             thin=(comp.thin_th[i], height))
+                             thin=True)
             y_pos += comp.thin_th[i]
 
 
 def _place_one_board(ctx: place.PlacementContext, d_y: int, d_x: int,
                      x: int, y: int, limit_w: int, category: str, seq: _Seq,
-                     *, thin: Optional[tuple[int, int]] = None) -> None:
-    """1枚置く。`d_y` が幅方向、`d_x` が丈方向に占める寸法。
+                     *, thin: bool = False) -> None:
+    """**行の中に並べる1枚**を置く。`d_y` が幅方向、`d_x` が丈方向。
 
-    `thin` は `(厚み, 覆う辺の長さ)`。指定すると細ボードとして扱い、
-    在庫の実寸を表から引きます。
+    `thin` なら細ボード(幅補填)として扱い、在庫の実寸を表から引きます。
+    覆うのは行の丈方向なので、長辺を選ぶ基準は行高(`d_x`)です。
+
+    丈補填の**行**はここを通しません(`_place_thin_row`)── 寝かせて
+    幅を覆うので、縦横も長辺の選び方も違います。
     """
-    if thin is not None:
-        sku_w, sku_l = thin_pair(thin[0], thin[1])
+    if thin:
+        sku_w, sku_l = thin_pair(d_y, d_x)
     else:
         sku_w, sku_l = sku_pair(d_y, d_x)
 
@@ -826,4 +861,4 @@ def _place_one_board(ctx: place.PlacementContext, d_y: int, d_x: int,
     # いて、ここは決まった座標へ落とすだけです(VBA も bypassCheck=True)
     place.place_board_at(ctx, x, y, board, rotate=sku_w != d_y,
                          bypass_check=True, custom_width=use_y,
-                         custom_length=d_x, is_fill=thin is not None)
+                         custom_length=d_x, is_fill=thin)

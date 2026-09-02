@@ -1087,6 +1087,36 @@ class ChangeCandidateTests(SelectionWebTestCase):
                          for e in self.session().presenter.user_log.entries)
         self.assertIn("同じ内容のため飛ばしました", text)
 
+    def test_いま出している軸を自分と見比べない(self) -> None:
+        """見に行くのは**残りの2つだけ**。
+
+        3周ぶん回すと、3周目はいま出している軸そのものに戻ってきて
+        「候補Aは候補Aと同じ内容のため飛ばしました」という読めない
+        1行が出る。
+        """
+        self.conn.execute("DELETE FROM BoardMaster")
+        self.conn.execute("DELETE FROM PalletMaster")
+        insert_pallet(self.conn, width=1100, length=2000)
+        for width, length in ((1000, 1000), (500, 1000), (100, 2000)):
+            insert_board(self.conn, width=width, length=length)
+        self.conn.commit()
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+
+        self.change()                              # A
+        # 選定ログはプロセスに1本(`user_log._shared`)で、同じ試験の中でも
+        # 前の試験の行が残る。**この押下で増えた分だけ**を数える
+        before = len(self.session().presenter.user_log.entries)
+        self.change(expect=422)                    # 3軸とも同じ
+        skips = [e.text
+                 for e in self.session().presenter.user_log.entries[before:]
+                 if "飛ばしました" in e.text]
+        self.assertEqual(len(skips), 2, skips)     # B と C だけ
+        for text in skips:
+            self.assertNotIn("候補A(枚数最小) は候補A(枚数最小)", text)
+
     def test_作った時点で同じ軸に印を付ける(self) -> None:
         """押す前から「AとBは同じ」と分かっていれば、驚かずに済む。"""
         self.sizes()
