@@ -256,6 +256,10 @@ class ProtecCutSizeTests(unittest.TestCase):
     そのまま表示するだけで、ここでは幅カット・丈カットの判定を
     やり直さない(全面書き換え。以前は `placedBoards` から寸法を
     逆算し、`GetBestOrientation` で独自に再判定していた)。
+
+    **枚数だけは2倍になる**(`reports.PROTEC_SETS`)。プロテックは
+    上用=下用と同サイズを強制コピーする仕様で、確定値が持っているのは
+    1セット分だから ── 現物は上下2セット切り出すことになる。
     """
 
     def test_width_cut_uses_the_1p1216_tolerance(self):
@@ -264,7 +268,7 @@ class ProtecCutSizeTests(unittest.TestCase):
         out = reports.protec_cut_size_info(pr)
         # 有効幅1250 > 製品幅1100 → 幅カット。1100 - 10 = 1090
         self.assertTrue(out.size_width_only.startswith("1090x"))
-        self.assertEqual(out.count_width_only, 2)
+        self.assertEqual(out.count_width_only, 4, "上下2セット分")
 
     def test_other_protec_uses_80mm(self):
         pr = alg.decide_protec_orientation(1250, 1250, 1100, is_1p1216=False)
@@ -305,7 +309,7 @@ class ProtecCutSizeTests(unittest.TestCase):
             length_cut_eff=910, count=3)
         out = reports.protec_cut_size_info(pr)
         self.assertEqual(out.size_both, "1090x910")
-        self.assertEqual(out.count_both, 1)
+        self.assertEqual(out.count_both, 2, "上下2セット分")
         # 幅カットは不要なので、残り2枚は「幅カットのみ」欄には出さない
         self.assertEqual(out.size_width_only, "")
 
@@ -317,9 +321,9 @@ class ProtecCutSizeTests(unittest.TestCase):
             length_cut_eff=910, count=3)
         out = reports.protec_cut_size_info(pr)
         self.assertEqual(out.size_both, "1020x910")
-        self.assertEqual(out.count_both, 1)
+        self.assertEqual(out.count_both, 2, "上下2セット分")
         self.assertEqual(out.size_width_only, "1020x1000")
-        self.assertEqual(out.count_width_only, 2)
+        self.assertEqual(out.count_width_only, 4, "上下2セット分")
 
     def test_invalid_result_yields_empty_info(self):
         """`valid=False`(適合する在庫が無い)なら何も出さない。"""
@@ -337,7 +341,7 @@ class ProtecCutSizeTests(unittest.TestCase):
         self.assertEqual(out.size_both, "")
         self.assertEqual(out.count_both, 0)
         self.assertEqual(out.size_width_only, "1020x1000")
-        self.assertEqual(out.count_width_only, 3)
+        self.assertEqual(out.count_width_only, 6, "3枚 × 上下2セット")
 
     def test_use_len_cut_false_without_width_cut_needs_no_request(self):
         # 幅カットも無ければ丈カットをしない以上、カット自体が不要
@@ -357,9 +361,55 @@ class ProtecCutSizeTests(unittest.TestCase):
             length_cut_eff=910, count=3)
         out = reports.protec_cut_size_info(pr, use_len_cut=True)
         self.assertEqual(out.size_both, "1020x910")
-        self.assertEqual(out.count_both, 1)
+        self.assertEqual(out.count_both, 2, "上下2セット分")
         self.assertEqual(out.size_width_only, "1020x1000")
-        self.assertEqual(out.count_width_only, 2)
+        self.assertEqual(out.count_width_only, 4, "上下2セット分")
+
+    # --- 任意カット(製品丈超・パレット内) -------------------------
+    def _optional(self) -> alg.ProtecCutResult:
+        """製品丈は超えるが、パレット丈には収まる状態。
+
+        通常2枚(=切らない姿)。切るなら 通常1枚 + 800mmへ切る1枚。
+        """
+        return alg.ProtecCutResult(
+            valid=True, orig_width=1250, orig_length=1000, cut_eff_width=1020,
+            eff_length=1000, need_cut=True, need_length_cut=False, count=2,
+            len_normal_cnt=2, len_cut_cnt=0,
+            len_cut_optional=True, len_opt_normal_cnt=1, len_opt_cut_cnt=1,
+            len_opt_cut_eff=800)
+
+    def test_optional_cut_yes_uses_the_optional_breakdown(self):
+        """「切る」を選んだら、依頼書だけがカットありの内訳になる。
+
+        確定値(`need_length_cut=False`)はそのままなので、**配置図は
+        切らない姿のまま**。切るかどうかは現場が選ぶことで、図の
+        前提ではない。
+        """
+        out = reports.protec_cut_size_info(self._optional(), use_len_cut=True)
+        self.assertEqual(out.size_both, "1020x800")
+        self.assertEqual(out.count_both, 2, "1枚 × 上下2セット")
+        self.assertEqual(out.size_width_only, "1020x1000")
+        self.assertEqual(out.count_width_only, 2, "1枚 × 上下2セット")
+
+    def test_optional_cut_no_keeps_the_full_length(self):
+        """「切らない」を選んだら、全枚数が幅カットのみの欄に出る。"""
+        out = reports.protec_cut_size_info(self._optional(), use_len_cut=False)
+        self.assertEqual(out.size_both, "")
+        self.assertEqual(out.count_both, 0)
+        self.assertEqual(out.size_width_only, "1020x1000")
+        self.assertEqual(out.count_width_only, 4, "2枚 × 上下2セット")
+
+    def test_breakdown_falls_back_to_the_count(self):
+        """内訳を持たない確定値でも枚数が0にならない。
+
+        依頼書の枚数が黙って0になるのは、**カットが要らないのと
+        見分けが付かない**いちばん危ない壊れ方(`reports._len_split`)。
+        """
+        pr = alg.ProtecCutResult(
+            valid=True, orig_width=1250, orig_length=1000, cut_eff_width=1020,
+            eff_length=1000, need_cut=True, need_length_cut=False, count=3)
+        out = reports.protec_cut_size_info(pr)
+        self.assertEqual(out.count_width_only, 6, "3枚 × 上下2セット")
 
 
 def _cut(**kw) -> reports.CutRequestData:

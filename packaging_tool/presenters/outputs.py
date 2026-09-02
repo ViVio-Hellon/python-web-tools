@@ -71,6 +71,64 @@ def cut_request_refusal(session: Any) -> Optional[Refusal]:
     return None
 
 
+# 「丈カットを行いますか」の文面。**出す場所は1か所**にする ──
+# 画面に書き写すと、条件を直した日に文面だけが古いまま残る
+LEN_CUT_QUESTION = ("丈カットを行いますか？\n\n"
+                    "丈方向の合計はパレット内に収まっています。\n\n"
+                    "[OK]  幅カットと幅＋丈カットを分けて出力\n"
+                    "[キャンセル]  丈カット分を幅カットにまとめて出力")
+
+
+def len_cut_question(session: Any) -> str:
+    """切断依頼の前に訊く文面。**訊かなくてよいときは空。**
+
+    訊く意味があるのは「切るか切らないかを現場が選べる」ときだけです。
+
+        パレット丈を超える … **選択肢が無い**(はみ出したままにはできない)
+                             ので訊かずに切る
+        製品丈は超えるが
+        パレット丈には収まる … 切る余地はあるが必須ではない → 訊く
+        製品丈以内           … 丈カットそのものが無い → 訊かない
+
+    この判定ができるのはプロテックだけです。確定値
+    (`ProtecCutResult`)が「必須/任意/不要」を持っているためで、通常
+    モードは選定明細を走査しないと分からないので従来どおり必ず訊きます
+    (VBA `CreateCuttingRequestForm` 冒頭と同じ)。
+    """
+    presenter = session.presenter
+    if not presenter.protec.is_protec:
+        return LEN_CUT_QUESTION
+
+    protec_result = _protec_result(session)
+    if protec_result is None or not protec_result.valid:
+        # 確定値が無い。訊いても答えを使う先が無いので訊かない
+        return ""
+    if protec_result.need_length_cut:
+        log.debug("丈カット判定: パレット丈超のため強制的に丈カットあり(確認なし)")
+        return ""
+    if protec_result.len_cut_optional:
+        log.debug("丈カット判定: 製品丈超・パレット内のため任意 → 確認する")
+        return LEN_CUT_QUESTION
+    log.debug("丈カット判定: 製品丈以内のため丈カット不要")
+    return ""
+
+
+def _protec_result(session: Any):
+    """プロテック確定値。`build_cut_request` と同じ手順で用意する。
+
+    自動選定の結果があればそこから、手で増減したあとは後付け適用から
+    ── **2か所で別々に作らない**(片方だけ古くなる)。
+    """
+    from .. import board_selection_algorithm as alg
+
+    result = session.select_result
+    if result is not None:
+        return result.lower_result.protec_result
+    return alg.apply_protec_rules_to_lower_list(
+        session.selected.lower, session.product, session.palette,
+        is_1p1216=session.presenter.protec.is_1p1216)
+
+
 def plan_refusal(session: Any) -> Optional[Refusal]:
     """配置図印刷が出せない理由。
 
@@ -360,12 +418,7 @@ def build_cut_request(session: Any, *, use_len_cut: bool = True) -> tuple[
         # プロテックは上下を分けず、選定(または手動追加後の後付け)が
         # 確定させた `ProtecCutResult` をそのまま表示するだけ
         # (`reports.protec_cut_size_info` のdocstring参照)。
-        if result is not None:
-            protec_result = result.lower_result.protec_result
-        else:
-            protec_result = alg.apply_protec_rules_to_lower_list(
-                session.selected.lower, session.product, session.palette.length,
-                is_1p1216=presenter.protec.is_1p1216)
+        protec_result = _protec_result(session)
         upper = reports.protec_cut_size_info(protec_result, use_len_cut=use_len_cut)
         lower = reports.CutSizeInfo()
     else:

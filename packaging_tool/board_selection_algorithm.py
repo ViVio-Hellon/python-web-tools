@@ -1263,10 +1263,95 @@ def decide_length_count_with_cut(
 
 
 # ------------------------------------------------------------------
+# プロテック専用の丈カット判定 (VBA `ComputeProtecLengthCut`)
+# ------------------------------------------------------------------
+@dataclass
+class ProtecLengthCut:
+    """プロテックの丈方向をどう作るか。`ProtecCutResult` に写して使う。"""
+
+    count: int = 1
+    need_cut: bool = False
+    normal_cnt: int = 0
+    cut_cnt: int = 0
+    cut_eff: int = 0
+    # 「切らなくてもパレットには収まるが、製品丈は超えている」
+    optional: bool = False
+    opt_normal_cnt: int = 0
+    opt_cut_cnt: int = 0
+    opt_cut_eff: int = 0
+
+
+def compute_protec_length_cut(
+    eff_length: int, product_length: int, palette_max_length: int,
+) -> ProtecLengthCut:
+    """VBA `ComputeProtecLengthCut` の移植。**基準は製品丈。**
+
+    フルサイズで覆える枚数を製品丈から出し、残りが100mmを超えるなら
+    最後の1枚をカットして足す ── ここまでは従来どおり。
+
+    【追加: カットが「必須」か「任意」か】
+    もう1枚をフルサイズのまま足しても**パレット丈に収まる**なら、
+    カットは必須ではありません。製品丈は超えますが、はみ出しては
+    いないからです。この場合は
+
+        `need_cut=False` … 配置図にはカット線を出さない(切らない姿を描く)
+        `optional=True`  … 切断依頼書だけが「もし切るなら」の内訳を出す
+
+    と分けます。**はみ出すなら訊かずに切る、はみ出さないなら訊く** ──
+    現場が選べるのは後者だけで、前者は選択肢がありません。
+
+    `palette_max_length` は `Palette.max_length`(はみ出し許容後)。
+    未設定(0以下)なら判定できないので、従来どおり必須カットにします。
+    """
+    if eff_length <= 0:
+        return ProtecLengthCut(count=1)
+
+    full_count = max(0, product_length // eff_length)
+    remain = product_length - eff_length * full_count
+
+    if remain > LENGTH_CUT_REMAIN_THRESHOLD:
+        if palette_max_length > 0 and eff_length * (full_count + 1) <= palette_max_length:
+            log.debug("ComputeProtecLengthCut: 残%smm、%sx%s=%s ≦ パレット%s "
+                      "のため丈カットは任意",
+                      remain, eff_length, full_count + 1,
+                      eff_length * (full_count + 1), palette_max_length)
+            return ProtecLengthCut(
+                count=max(1, full_count + 1), need_cut=False,
+                normal_cnt=full_count + 1, cut_cnt=0, cut_eff=0,
+                optional=True, opt_normal_cnt=full_count, opt_cut_cnt=1,
+                opt_cut_eff=remain)
+        return ProtecLengthCut(
+            count=max(1, full_count + 1), need_cut=True,
+            normal_cnt=full_count, cut_cnt=1, cut_eff=remain)
+
+    return ProtecLengthCut(
+        count=max(1, full_count), need_cut=False,
+        normal_cnt=full_count, cut_cnt=0, cut_eff=0)
+
+
+def _apply_length_cut(result: ProtecCutResult, cut: ProtecLengthCut) -> None:
+    """`ProtecLengthCut` を確定値へ写す。**写す場所を1か所にする。**"""
+    result.count = cut.count
+    result.need_length_cut = cut.need_cut
+    result.length_cut_eff = cut.cut_eff if cut.need_cut else result.eff_length
+    result.len_normal_cnt = cut.normal_cnt
+    result.len_cut_cnt = cut.cut_cnt
+    result.len_cut_optional = cut.optional
+    result.len_opt_normal_cnt = cut.opt_normal_cnt
+    result.len_opt_cut_cnt = cut.opt_cut_cnt
+    result.len_opt_cut_eff = cut.opt_cut_eff
+
+
+def _palette_max_length(palette: Palette) -> int:
+    """VBA `PaletteMaxLength`。未設定ならパレット丈そのもの。"""
+    return int(palette.max_length) if palette.max_length > 0 else int(palette.length)
+
+
+# ------------------------------------------------------------------
 # プロテック専用の下用選定 (VBA `SelectProtecLowerBoards`)
 # ------------------------------------------------------------------
 def select_protec_lower_boards(
-    available: list[BoardModel], product: ProductSize, palette_length: int,
+    available: list[BoardModel], product: ProductSize, palette: Palette,
     *, is_1p1216: bool,
 ) -> tuple[list[SelectedBoard], ProtecCutResult]:
     """VBA `SelectProtecLowerBoards` の移植。
@@ -1284,35 +1369,60 @@ def select_protec_lower_boards(
     `ProtecCutResult` を返す(呼び出し側は通常のPASS1-3にフォールバック
     する)。
     """
+    pal_max = _palette_max_length(palette)
     best: Optional[ProtecCutResult] = None
+    best_fits_pallet = False
     for board in available:
         candidate = decide_protec_orientation(
             board.width, board.length, product.width, is_1p1216=is_1p1216)
         if not candidate.valid:
             continue
+        # 丈が0の候補は枚数が決まらない。**先に落とす** ── そのまま
+        # 進めると、丈方向に何も覆えない板が「最有力」になりうる
+        if candidate.eff_length <= 0:
+            log.debug("    候補 %sx%s effL=0のため除外", board.width, board.length)
+            continue
+
+        # **パレット丈に収まるか(=丈カットが要らないか)が第1の評価軸。**
+        # カットの向きは1つに減らしたい ── 幅カットだけで済む候補が
+        # あるのに、幅も丈も切る候補を選ぶ理由は無い(現場の指示)
+        cut = compute_protec_length_cut(
+            candidate.eff_length, product.length, pal_max)
+        fits_pallet = pal_max <= 0 or candidate.eff_length * cut.count <= pal_max
+        log.debug("    候補 %sx%s effL=%s x%s枚=%s パレット内=%s",
+                  board.width, board.length, candidate.eff_length, cut.count,
+                  candidate.eff_length * cut.count, fits_pallet)
+
+        if best is None:
+            best, best_fits_pallet = candidate, fits_pallet
+            continue
+        if fits_pallet != best_fits_pallet:
+            if fits_pallet:
+                best, best_fits_pallet = candidate, fits_pallet
+            continue
+        # 以降は同点(どちらもパレット内、またはどちらも超える)のときだけ。
         # 製品幅に最も近い(超過・不足とも小さいほど良い)ものを採用。
         # **カット前の実効幅で比べる** ── `cut_eff_width`(カット後の
         # 仕上がりサイズ)は、カットが必要な候補同士だと常に同じ値
         # (製品幅-許容)に揃ってしまい、「どちらが無駄が少ないか」を
         # 比較する基準として使えない。同点なら丈が長い方
         # (枚数が減り、継ぎ目が少ない方)を優先する
-        if best is None:
-            best = candidate
-            continue
         cur_gap = abs(candidate.eff_width_before_cut - product.width)
         best_gap = abs(best.eff_width_before_cut - product.width)
         if cur_gap < best_gap or (cur_gap == best_gap and candidate.eff_length > best.eff_length):
-            best = candidate
+            best, best_fits_pallet = candidate, fits_pallet
 
     if best is None:
         log.debug("SelectProtecLowerBoards: 条件を満たす在庫がありません")
         return [], ProtecCutResult(valid=False)
 
-    count, need_length_cut, length_cut_eff = decide_length_count_with_cut(
-        best.eff_length, palette_length)
-    best.count = count
-    best.need_length_cut = need_length_cut
-    best.length_cut_eff = length_cut_eff
+    cut = compute_protec_length_cut(best.eff_length, product.length, pal_max)
+    _apply_length_cut(best, cut)
+    count, need_length_cut = cut.count, cut.need_cut
+    length_cut_eff = best.length_cut_eff
+    if cut.optional:
+        log.debug("SelectProtecLowerBoards: 丈カットは任意 (通常%s枚+カット%s枚→%smm)",
+                  cut.opt_normal_cnt, cut.opt_cut_cnt, cut.opt_cut_eff)
 
     # 幅カットが要るときは「カット前提」タグにする。プロテックは在庫の
     # 種類が少なく組み合わせの余地がほとんど無いため、通常品のように
@@ -1338,7 +1448,7 @@ def select_protec_lower_boards(
 
 
 def apply_protec_rules_to_lower_list(
-    lower: list[SelectedBoard], product: ProductSize, palette_length: int,
+    lower: list[SelectedBoard], product: ProductSize, palette: Palette,
     *, is_1p1216: bool,
 ) -> ProtecCutResult:
     """VBA `ApplyProtecRulesToLowerList` の移植。
@@ -1376,11 +1486,10 @@ def apply_protec_rules_to_lower_list(
     result = decide_protec_orientation(
         target.width, target.length, product.width, is_1p1216=is_1p1216)
     if result.valid:
-        count, need_length_cut, length_cut_eff = decide_length_count_with_cut(
-            result.eff_length, palette_length)
-        result.count = count
-        result.need_length_cut = need_length_cut
-        result.length_cut_eff = length_cut_eff
+        cut = compute_protec_length_cut(
+            result.eff_length, product.length, _palette_max_length(palette))
+        _apply_length_cut(result, cut)
+        count, need_length_cut = cut.count, cut.need_cut
         # 後続処理(配置・カット依頼書)は `ProtecCutResult.count` を
         # 見るので、行自体の枚数もここで合わせておく(手動で入れた
         # 枚数のままだと、確定値と表示上の枚数が食い違う)
@@ -1509,7 +1618,7 @@ def select_lower_boards(
     """
     if is_protec_mode:
         protec_boards, protec_result = select_protec_lower_boards(
-            available, product, palette.length, is_1p1216=is_protec_1p1216)
+            available, product, palette, is_1p1216=is_protec_1p1216)
         if protec_result.valid:
             state = PassState(remaining_len=0, pass1_done=True)
             return LowerSelectionResult(
@@ -1750,6 +1859,19 @@ class ProtecCutResult:
     need_length_cut: bool = False   # 丈カットが必要か(最後の1枚だけ)
     length_cut_eff: int = 0         # 丈カット後の、最後の1枚の丈
     count: int = 1          # 枚数(丈カットする最後の1枚も含む)
+    len_normal_cnt: int = 0  # 丈カットしない枚数
+    len_cut_cnt: int = 0     # 丈カットする枚数(0か1)
+
+    # 「パレット丈には収まるが製品丈は超えている」状態。
+    # **カットは必須ではないが、切る余地はある。** 切断依頼書で
+    # 押した人に訊く(`reports.protec_cut_size_info`)。
+    # `need_length_cut=False` のままここが立つので、配置図にカット線は
+    # 出ない ── 図は「切らない」姿を描き、依頼書だけが「もし切るなら」の
+    # 内訳を出す
+    len_cut_optional: bool = False
+    len_opt_normal_cnt: int = 0  # 切る場合の通常枚数
+    len_opt_cut_cnt: int = 0     # 切る場合の丈カット枚数
+    len_opt_cut_eff: int = 0     # 切る場合の丈カット後サイズ
 
 
 def decide_protec_orientation(
@@ -2768,18 +2890,21 @@ def recalc_length_cut_info(
     has_protec = ((lower_protec_result is not None and lower_protec_result.valid)
                   or (upper_protec_result is not None and upper_protec_result.valid))
     if has_protec:
-        for b, prefix, pr in (
-            (lower[0] if lower else None, "L_", lower_protec_result),
-            (upper[0] if upper else None, "U_", upper_protec_result),
-        ):
-            if b is None or pr is None or not pr.valid:
-                continue
-            if pr.need_length_cut:
-                key = f"{prefix}{b.width}x{b.length}"
-                length_cut_info[key] = pr.cut_eff_width
-                length_cut_count[key] = 1
-                log.debug("丈カット記録[プロテック確定値 %s]: %s lengthCutEff=%s needLengthCut=True",
-                         prefix, key, pr.length_cut_eff)
+        # **下用の確定値だけを使う。上用は判定しない。**
+        # プロテックは上下共用・同サイズが確定ルールなので、上用を製品丈
+        # 基準で独自に判定すると、下用(パレット丈基準の確定値)と食い違う。
+        # 画面でも上用は下用と同じ図の重ね描きになり、上用のラベルだけが
+        # 下用の図に残る(現場の声:「上用ラベルが重なる」)
+        b = lower[0] if lower else None
+        pr = lower_protec_result
+        if b is not None and pr is not None and pr.valid and pr.need_length_cut:
+            key = f"L_{b.width}x{b.length}"
+            length_cut_info[key] = pr.cut_eff_width
+            length_cut_count[key] = max(1, pr.len_cut_cnt)
+            log.debug("丈カット記録[下用/プロテック確定値]: %s 通常%s枚+丈カット%s枚(→%smm)",
+                      key, pr.len_normal_cnt, pr.len_cut_cnt, pr.length_cut_eff)
+        else:
+            log.debug("RecalcLengthCutInfo[プロテック]: 丈カットなし")
         return length_cut_info, length_cut_count
 
     for b in lower:

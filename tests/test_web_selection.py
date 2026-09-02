@@ -2071,6 +2071,64 @@ class SendTests(SelectionWebTestCase):
         self.assertIn("カットが必要なボードはありません",
                       res.get_data(as_text=True))
 
+    def _ask(self) -> str:
+        """切断依頼を押す前に訊く文面。空なら訊かない。"""
+        report = next(r for r in self.get()["outputs"]["reports"]
+                      if r["key"] == "cut-request")
+        return report["ask"]
+
+    def test_通常モードは必ず訊く(self) -> None:
+        """選定明細を走査しないと分からないので、従来どおり訊く。"""
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1100, length=2000)
+        insert_board(self.conn, width=550, length=1000)
+        self.post("/api/selection/boards/auto-select")
+        self.assertIn("丈カットを行いますか", self._ask())
+
+    def test_プロテックで切る余地が無ければ訊かない(self) -> None:
+        """**訊く意味があるのは、切るか切らないかを選べるときだけ。**
+
+        丈カットそのものが無いのに訊くと、答えを使う先が無い問いを
+        毎回押させることになる。
+        """
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1000, length=900,
+                     board_type="プロテックボード")
+        self.post("/api/selection/board-type",
+                  {"board_type": "プロテックボード"})
+        self.session().presenter.protec.is_protec = True
+        self.post("/api/selection/boards/auto-select")
+
+        result = self.session().select_result.lower_result.protec_result
+        self.assertTrue(result.valid)
+        self.assertFalse(result.need_length_cut)
+        self.assertFalse(result.len_cut_optional)
+        self.assertEqual(self._ask(), "")
+
+    def test_プロテックで切る余地があれば訊く(self) -> None:
+        """製品丈は超えるがパレット丈には収まる ── 現場が選べる。"""
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1000, length=1000,
+                     board_type="プロテックボード")
+        self.post("/api/selection/board-type",
+                  {"board_type": "プロテックボード"})
+        self.session().presenter.protec.is_protec = True
+        self.post("/api/selection/boards/auto-select")
+
+        result = self.session().select_result.lower_result.protec_result
+        self.assertTrue(result.len_cut_optional)
+        self.assertFalse(result.need_length_cut, "図にカット線は出さない")
+        self.assertIn("丈カットを行いますか", self._ask())
+
     def test_配置していなければ配置図印刷は出せない(self) -> None:
         """候補を選んだだけでは足りない。配置してあることが前提。"""
         self.post("/api/selection/pallet/apply",

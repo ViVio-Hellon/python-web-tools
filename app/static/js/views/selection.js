@@ -331,6 +331,9 @@ function renderOutputs(outputs) {
     const button = document.getElementById(`report-${report.key}`);
     if (!button) continue;
     button.disabled = !report.can;
+    // 押す前に確かめること。**訊くかどうかも文面もサーバが決める**
+    // (切断依頼の「丈カットを行いますか」。空なら訊かない)
+    button.dataset.ask = report.ask || "";
     if (report.why) reasons.push(`${report.label}: ${report.why}`);
   }
   el.sendWarehouse.disabled = !outputs.can_send;
@@ -956,17 +959,16 @@ export function start(initial) {
     // 帳票はサーバがHTMLをそのまま返す。別窓で開いて印刷する
     button.addEventListener("click", () => {
       let url = tokenUrl(button.dataset.url);
-      // 切断依頼だけ「丈カットを行うか」を確認する(VBA `CreateCuttingRequestForm`
-      // 冒頭のMsgBox)。OK=丈カットを行う(既定) / キャンセル=丈カット分を
-      // 幅カットへまとめて出す。ブラウザの確認ダイアログは2択なので、
-      // VBAの3択(はい/いいえ/キャンセル=中止)のうち「中止」は割り切って
+      // 押す前に確かめることがあれば訊く(切断依頼の「丈カットを行いますか」)。
+      // **訊くかどうかも文面もサーバが決める**(`outputs.len_cut_question`)。
+      // 切るか切らないかを選べるときだけ訊く ── パレットをはみ出すなら
+      // 選択肢が無いので訊かずに切り、丈カットが無ければ訊く意味が無い。
+      // ブラウザの確認は2択なので、VBAの3択のうち「中止」は割り切って
       // 対象外にしている(押した後にやめたければ開いた窓を閉じればよい)
-      if (button.dataset.report === "cut-request") {
-        const wantsLenCut = confirm(
-          "丈カットを行いますか？\n\n" +
-          "[OK]  幅カットと幅＋丈カットを分けて出力\n" +
-          "[キャンセル]  丈カット分を幅カットにまとめて出力");
-        url += (url.includes("?") ? "&" : "?") + `use_len_cut=${wantsLenCut ? "1" : "0"}`;
+      const ask = button.dataset.ask;
+      if (ask) {
+        url += (url.includes("?") ? "&" : "?")
+             + `use_len_cut=${confirm(ask) ? "1" : "0"}`;
       }
       const win = window.open(url, "_blank");
       if (!win) toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");

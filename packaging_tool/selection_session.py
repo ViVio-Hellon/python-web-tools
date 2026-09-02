@@ -667,7 +667,7 @@ class SelectionSession:
             # 配置段階が独自に製品幅厳守を判定し直して静かに配置漏れを
             # 起こす
             protec_result = alg.apply_protec_rules_to_lower_list(
-                self.selected.lower, self.product, self.palette.length,
+                self.selected.lower, self.product, self.palette,
                 is_1p1216=self.presenter.protec.is_1p1216)
             ulog.log("  ※手で増減したため、狭幅パレットの前提は引き継ぎません")
         else:

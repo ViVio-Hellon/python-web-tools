@@ -812,6 +812,10 @@ class ReportLink:
     url: str = ""
     can: bool = False
     why: str = ""
+    # 押す前に確かめること(切断依頼の「丈カットを行いますか」)。
+    # **訊くかどうかも文面もサーバが決める** ── 画面が条件を組み立て
+    # 直すと、条件を直した日に文面だけが古いまま残る。空なら訊かない
+    ask: str = ""
 
 
 @dataclass
@@ -1236,7 +1240,9 @@ def build_outputs(session: Any) -> OutputsViewModel:
     ):
         view.reports.append(ReportLink(
             key=key, label=label, url=f"/report/{key}",
-            can=refusal is None, why="" if refusal is None else refusal.message))
+            can=refusal is None, why="" if refusal is None else refusal.message,
+            ask=out.len_cut_question(session)
+            if key == out.REPORT_CUT and refusal is None else ""))
 
     send = out.send_refusal(session)
     view.can_send = send is None
@@ -1843,7 +1849,8 @@ def admin_to_dict(view: AdminViewModel) -> dict[str, Any]:
 def outputs_to_dict(view: OutputsViewModel) -> dict[str, Any]:
     return {
         "reports": [{"key": r.key, "label": r.label, "url": r.url,
-                     "can": r.can, "why": r.why} for r in view.reports],
+                     "can": r.can, "why": r.why, "ask": r.ask}
+                    for r in view.reports],
         "can_send": view.can_send,
         "send_why": view.send_why,
     }

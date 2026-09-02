@@ -470,6 +470,29 @@ def get_cut_size_info(
     return out
 
 
+# プロテックは**上用=下用と同サイズを強制コピー**する仕様なので、
+# 現物は上下2セット切り出すことになる。`ProtecCutResult` が持っている
+# のは1セット分の枚数なので、依頼書に出す枚数はここで2倍する。
+# **依頼書だけの話**で、選定・配置の枚数(1セット分)は変えない
+PROTEC_SETS = 2
+
+
+def _len_split(pr: ProtecCutResult) -> tuple[int, int]:
+    """(丈カットしない枚数, 丈カットする枚数)。
+
+    確定値が内訳(`len_normal_cnt`/`len_cut_cnt`)を持っていればそれを
+    使い、**持っていなければ枚数から割り出す。** 内訳を入れるのは
+    `compute_protec_length_cut` を通った確定値だけなので、そこを
+    通らずに組み立てられた確定値(上用のコピーなど)でも枚数が0に
+    ならないようにしておく ── 依頼書の枚数が黙って0になるのは、
+    **カットが要らないのと見分けが付かない**いちばん危ない壊れ方
+    """
+    if pr.len_normal_cnt or pr.len_cut_cnt:
+        return pr.len_normal_cnt, pr.len_cut_cnt
+    cut_cnt = 1 if pr.need_length_cut else 0
+    return max(0, pr.count - cut_cnt), cut_cnt
+
+
 def protec_cut_size_info(
     protec_result: ProtecCutResult, *, use_len_cut: bool = True,
 ) -> CutSizeInfo:
@@ -503,9 +526,22 @@ def protec_cut_size_info(
         return out
 
     pr = protec_result
-    need_length_cut = pr.need_length_cut
-    cnt_both = 1 if need_length_cut else 0
-    cnt_width_only = max(0, pr.count - cnt_both)
+    if pr.len_cut_optional and use_len_cut:
+        # 「切る」を選んだ。**確定値のほうは切らないまま**にしておく ──
+        # 配置図は切らない姿で描かれており、依頼書だけをカットありに
+        # 切り替える(切るかどうかは現場が選ぶことで、図の前提ではない)
+        need_length_cut = True
+        cnt_width_only = pr.len_opt_normal_cnt * PROTEC_SETS
+        cnt_both = pr.len_opt_cut_cnt * PROTEC_SETS
+        cut_after = pr.len_opt_cut_eff
+        log.debug("protec_cut_size_info[任意カット採用]: 通常%s枚+カット%s枚→%smm",
+                  cnt_width_only, cnt_both, cut_after)
+    else:
+        need_length_cut = pr.need_length_cut
+        normal_cnt, cut_cnt = _len_split(pr)
+        cnt_width_only = normal_cnt * PROTEC_SETS
+        cnt_both = cut_cnt * PROTEC_SETS
+        cut_after = pr.length_cut_eff
 
     # 丈カットなし指定なら丈カット分を通常カットへ合算する
     if not use_len_cut and need_length_cut:
@@ -515,7 +551,7 @@ def protec_cut_size_info(
         log.debug("protec_cut_size_info[丈カットなし] 合算後 countWidthOnly=%s", cnt_width_only)
 
     if need_length_cut:
-        out.size_both = f"{pr.cut_eff_width}x{pr.length_cut_eff}"
+        out.size_both = f"{pr.cut_eff_width}x{cut_after}"
         out.count_both = cnt_both
         out.orig_both = f"{pr.orig_width}×{pr.orig_length}"
 
@@ -525,9 +561,9 @@ def protec_cut_size_info(
         out.orig_width_only = f"{pr.orig_width}×{pr.orig_length}"
 
     log.debug("protec_cut_size_info: cutEffW=%s effL=%s needCut=%s "
-             "needLengthCut=%s lengthCutEff=%s count=%s",
+             "needLengthCut=%s lengthCutEff=%s count=%s optional=%s",
              pr.cut_eff_width, pr.eff_length, pr.need_cut,
-             pr.need_length_cut, pr.length_cut_eff, pr.count)
+             pr.need_length_cut, pr.length_cut_eff, pr.count, pr.len_cut_optional)
     return out
 
 

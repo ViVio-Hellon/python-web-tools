@@ -994,11 +994,15 @@ def place_boards_from_list(
             effective_tag = get_effective_tag(boards, i, category, ctx)
 
             if effective_tag == TAG_CUT_PREMISE:
-                # 【VBAからの意図的な変更】VBA版のカット前提ブロックには
-                # pNum の判定が無く、しかも bypassCheck=True で重なり判定も
-                # 効かないため、同じボードが pNum=1 と pNum=2 で
-                # まったく同じ座標に二重配置されていた(描画上は重なって
-                # 見えないが枚数が倍になる)。pNum=1 のみに限定して修正する。
+                # カット前提は主ボード扱い(幅補填ではない)なので pNum=1
+                # でだけ置く。この分岐は直後の pNum フィルタを飛び越すため、
+                # 限定しないと pNum=1 と pNum=2 の**まったく同じ座標**へ
+                # 二重に置かれる ── bypassCheck=True で重なり判定も効かない
+                # ので、図では重なって見えないまま枚数と使用率だけが倍に
+                # なる(現場で見つかった「使用率185.8%」がこれ)。
+                # **プロテック限定の話ではない。** 通常モードでカット前提
+                # ボードを含むロットも同じように二重配置されていた。
+                # (VBA側もこの限定を入れた。以前はこちらだけの修正だった)
                 if pass_num == 1:
                     _place_cut_premise(ctx, b, i, category)
                 continue
