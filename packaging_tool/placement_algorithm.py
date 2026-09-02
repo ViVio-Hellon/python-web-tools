@@ -1104,6 +1104,80 @@ def place_boards_from_list(
 
 
 # ------------------------------------------------------------------
+# 幅方向のセンタリング
+# ------------------------------------------------------------------
+def _x_groups(boards: list[PlacedBoardModel]) -> list[list[PlacedBoardModel]]:
+    """丈方向(X)で重なるボードをひとまとまりにする。
+
+    **一緒に動かさなければならない単位**を作るためのもの。同じ丈の
+    位置にあるボード(Y方向に積んだ2枚など)を別々にずらすと、寄せた
+    結果として重なってしまう。
+    """
+    groups: list[list[PlacedBoardModel]] = []
+    current: list[PlacedBoardModel] = []
+    reach = 0
+    for pb in sorted(boards, key=lambda p: (p.x, p.length)):
+        if current and pb.x < reach:
+            current.append(pb)
+            reach = max(reach, pb.x + pb.length)
+            continue
+        if current:
+            groups.append(current)
+        current = [pb]
+        reach = pb.x + pb.length
+    if current:
+        groups.append(current)
+    return groups
+
+
+def center_boards_in_width(ctx: PlacementContext, category: str) -> None:
+    """幅が足りないボードを、基準の幅の**中央**へ寄せる。
+
+    現場の声:「幅不足のボードも上詰めで配置される。これでは
+    マイナス幅を等分にすることが直感的に分からない」。
+
+    上詰めのままだと、足りない分がすべて片側に寄って出ます。図を見た
+    人は「この板は下にずらして置くのか」と読んでしまいますが、実際は
+    **上下に等分**して置くものです。図がそのまま作業の指示になるので、
+    座標のほうを直します(描画側で寄せると、印刷とデータで食い違う)。
+
+    寄せる単位は**丈方向に重なるボードのまとまり**です(`_x_groups`)。
+    1枚ずつ寄せると、Y方向に積んだ2枚が重なります。
+
+    【幅補填があるときは触らない】
+    幅補填の上下振り分け(1本なら下、2本なら上下1本ずつ…)は、
+    **どこに置くかを既に決めている**配置です。そのうえで中央へ
+    寄せ直すと、せっかく振り分けた意味が消えます(現場の指示:
+    「上下に振り分けているケースはそのままで良い」)。丈補填も
+    主ボードとの位置関係で置いているので、同じく触りません。
+    """
+    boards = [pb for pb in ctx.placed if pb.board_category == category]
+    if not boards:
+        return
+    if any(pb.is_fill_board for pb in boards):
+        log.debug("センタリング(%s): 補填ボードがあるので触りません", category)
+        return
+
+    limit_w = ctx.limit_width(category)
+    for group in _x_groups(boards):
+        min_y = min(pb.y for pb in group)
+        max_y = max(pb.y + pb.width for pb in group)
+        gap = limit_w - (max_y - min_y)
+        # はみ出している(gap<0)なら寄せる先が無い。ちょうど(gap=0)も
+        # 動かす必要が無い
+        if gap <= 0:
+            continue
+        shift = gap // 2 - min_y
+        if shift == 0:
+            continue
+        for pb in group:
+            pb.y += shift
+        log.debug("センタリング(%s): x=%s の %s枚を %s だけ寄せました "
+                  "(幅%s / 基準%s)",
+                  category, group[0].x, len(group), shift, max_y - min_y, limit_w)
+
+
+# ------------------------------------------------------------------
 # 狭幅パレット専用配置
 # ------------------------------------------------------------------
 def place_narrow_palette_boards(
@@ -1183,17 +1257,21 @@ def auto_place_boards(
         protec_result=protec_result or ProtecCutResult(),
         is_protec_mode=is_protec_mode, is_1p1216=is_1p1216)
 
+    # 狭幅パレットは `place_narrow_palette_boards` が積み上げる時点で
+    # 中央から始めているので、あとから寄せ直さない(二重に寄る)
     if narrow_lower:
         place_narrow_palette_boards(ctx, lower, CATEGORY_LOWER)
         ctx.lower_order = list(lower)
     else:
         ctx.lower_order = place_boards_from_list(ctx, lower, CATEGORY_LOWER)
+        center_boards_in_width(ctx, CATEGORY_LOWER)
 
     if narrow_upper:
         place_narrow_palette_boards(ctx, upper, CATEGORY_UPPER)
         ctx.upper_order = list(upper)
     else:
         ctx.upper_order = place_boards_from_list(ctx, upper, CATEGORY_UPPER)
+        center_boards_in_width(ctx, CATEGORY_UPPER)
 
     log.debug("=== AutoPlaceBoards 完了: %s個配置 ===", len(ctx.placed))
     return ctx

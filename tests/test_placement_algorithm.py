@@ -850,5 +850,118 @@ class AutoPlaceBoardsTests(unittest.TestCase):
         self.assertEqual(ctx.placed, [])
 
 
+class CenterBoardsInWidthTests(unittest.TestCase):
+    """幅が足りないボードは**中央**へ寄せる。
+
+    現場の声:「幅不足のボードも上詰めで配置される。これでは
+    マイナス幅を等分にすることが直感的に分からない」。図がそのまま
+    作業の指示になるので、上詰めのままだと「下にずらして置く板」に
+    読めてしまう。
+    """
+
+    def ys(self, ctx, category=LOWER) -> list[tuple[int, int, int]]:
+        """(丈の位置, 幅の位置, 幅) の一覧。"""
+        return [(p.x, p.y, p.width) for p in ctx.placed
+                if p.board_category == category]
+
+    def test_幅不足のボードだけが中央へ寄る(self):
+        """現場が出した図と同じ構成(660×1050 が2枚 + 600×600 が1枚)。
+
+        パレット幅660に対し 600 の板は60mm足りない。上下に30mmずつ
+        分ける。
+        """
+        lower = [SelectedBoard(660, 1050, 2, "主"), SelectedBoard(600, 600, 1, "主")]
+        ctx = pl.auto_place_boards(lower, [], make_palette(660, 2700),
+                                   ProductSize(width=660, length=2700))
+        self.assertEqual(self.ys(ctx),
+                         [(0, 0, 660), (1050, 0, 660), (2100, 30, 600)])
+
+    def test_ちょうどの幅は動かさない(self):
+        lower = [SelectedBoard(660, 1050, 2, "主")]
+        ctx = pl.auto_place_boards(lower, [], make_palette(660, 2700),
+                                   ProductSize(width=660, length=2700))
+        self.assertEqual({y for _x, y, _w in self.ys(ctx)}, {0})
+
+    def test_上用は製品幅が基準(self):
+        """下用はパレット幅、上用は製品幅。寄せる先を取り違えない。"""
+        upper = [SelectedBoard(1000, 2400, 1, "主")]
+        ctx = pl.auto_place_boards([], upper, make_palette(1150, 2650),
+                                   ProductSize(width=1100, length=2500))
+        # 製品幅1100 - 板1000 = 100 → 上下50ずつ
+        self.assertEqual(self.ys(ctx, UPPER), [(0, 50, 1000)])
+
+    def test_丈方向に重なる2枚はまとめて寄せる(self):
+        """1枚ずつ寄せると、Y方向に積んだ2枚が重なってしまう。"""
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.extend([placed(0, 0, 500, 2000), placed(0, 500, 500, 2000)])
+        pl.center_boards_in_width(ctx, LOWER)
+        # 合計1000、パレット幅1150 → 上下75ずつ。**間隔は保つ**
+        self.assertEqual(self.ys(ctx), [(0, 75, 500), (0, 575, 500)])
+
+    def test_はみ出しているときは寄せない(self):
+        ctx = make_ctx(pal_w=1000, pal_l=2650)
+        ctx.placed.append(placed(0, 0, 1100, 2000))
+        pl.center_boards_in_width(ctx, LOWER)
+        self.assertEqual(self.ys(ctx), [(0, 0, 1100)])
+
+    def test_幅補填があるときは触らない(self):
+        """上下振り分け(1本なら下、2本なら上下1本ずつ…)は**既に
+
+        どこに置くかを決めている**配置。そのうえで中央へ寄せ直すと、
+        振り分けた意味が消える(現場の指示)。
+        """
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        before = [placed(0, 0, 50, 2000, is_fill=True),
+                  placed(0, 50, 1000, 2000),
+                  placed(0, 1050, 50, 2000, is_fill=True)]
+        ctx.placed.extend(before)
+        pl.center_boards_in_width(ctx, LOWER)
+        self.assertEqual(self.ys(ctx),
+                         [(0, 0, 50), (0, 50, 1000), (0, 1050, 50)])
+
+    def test_上下振り分けが実際に残ることを通しで確かめる(self):
+        """`auto_place_boards` を通しても、振り分けたYは動かない。"""
+        # 幅補填は**本数**で振り分けるので、2本は2行として渡す
+        # (1行 count=2 は丈方向の継ぎ足しで、1本ぶん)
+        lower = [SelectedBoard(1000, 2400, 1, "主"),
+                 SelectedBoard(50, 2400, 1, "幅補填"),
+                 SelectedBoard(50, 2400, 1, "幅補填")]
+        ctx = pl.auto_place_boards(lower, [], make_palette(1150, 2650),
+                                   ProductSize(width=1122, length=2502))
+        fills = [p.y for p in ctx.placed if p.is_fill_board]
+        main = [p.y for p in ctx.placed if not p.is_fill_board]
+        self.assertEqual(len(fills), 2)
+        # 上に1本・下に1本。主ボードはそのあいだ
+        self.assertLess(min(fills), min(main))
+        self.assertGreater(max(fills), min(main))
+        # **中央へ寄せ直していない。** 寄せていれば主ボードは
+        # (1150-1100)//2 + 50 のような別の位置になる
+        self.assertEqual(sorted(fills), [0, 1050])
+        self.assertEqual(main, [50])
+
+    def test_狭幅パレットは二重に寄せない(self):
+        """`place_narrow_palette_boards` が積み上げる時点で中央から
+
+        始めている。あとから寄せ直すと二重に寄る。
+        """
+        lower = [SelectedBoard(80, 1800, 1, "主")]
+        ctx = pl.auto_place_boards(lower, [], make_palette(280, 1900),
+                                   ProductSize(width=280, length=1900),
+                                   narrow_lower=True)
+        self.assertEqual(ctx.placed[0].y, 100)
+
+    def test_重ならない(self):
+        """寄せた結果として板が重なってはいけない。"""
+        lower = [SelectedBoard(660, 1050, 2, "主"), SelectedBoard(600, 600, 1, "主")]
+        ctx = pl.auto_place_boards(lower, [], make_palette(660, 2700),
+                                   ProductSize(width=660, length=2700))
+        for i, a in enumerate(ctx.placed):
+            for b in ctx.placed[i + 1:]:
+                with self.subTest(a=a.instance_id, b=b.instance_id):
+                    self.assertFalse(
+                        a.x < b.x + b.length and a.x + a.length > b.x
+                        and a.y < b.y + b.width and a.y + a.width > b.y)
+
+
 if __name__ == "__main__":
     unittest.main()
