@@ -507,6 +507,51 @@ class PageTests(WarehouseWebTestCase):
         html = self.clients["field"].get("/warehouse").get_data(as_text=True)
         self.assertIn('aria-label="必須"', html)
 
+    def test_長い値の欄は横に広げる(self) -> None:
+        """現場の声:「品名が見切れて見えない」。
+
+        品名(「5×10 1550x3100」)と納入先(「ﾊｸﾄﾞｳ(ｶ)ｶﾅｶﾞﾜｼﾞｷﾞｮｳ」)は
+        他の欄の倍近く長い。入力欄は打った内容を**確かめる**ための
+        ものなので、後ろが切れて読めないのは入っていないのと同じ。
+        """
+        html = self.clients["field"].get("/warehouse").get_data(as_text=True)
+        for key in ("hinmei", "nounyusaki"):
+            with self.subTest(key=key):
+                cell = html[html.rindex('<div class="f', 0, html.index(f'id="f-{key}"')):]
+                self.assertTrue(cell.startswith('<div class="f f--wide"'), cell[:60])
+        # 短い欄は広げない。全部広げたら1行1項目になって縦に伸びる
+        cell = html[html.rindex('<div class="f', 0, html.index('id="f-tani"')):]
+        self.assertTrue(cell.startswith('<div class="f"'), cell[:60])
+
+    def test_広げる欄も見出しと組で置く(self) -> None:
+        """見出しと入力が別のマスだと、広げた欄だけ行をまたいで離れる。"""
+        html = self.clients["field"].get("/warehouse").get_data(as_text=True)
+        cell = html[html.index('<div class="f f--wide"'):]
+        cell = cell[:cell.index("</div>")]
+        self.assertIn('data-for="hinmei"', cell)
+        self.assertIn('id="f-hinmei"', cell)
+
+    def test_絞り込みはクエリで効く(self) -> None:
+        """現場の声:「送った発注の文字列絞り込みが機能していない」。
+
+        サーバ側は効いていた ── 画面が**Enterを押すまで送っていなかった**
+        のが原因(`warehouse.js` で打つそばから送るようにした)。
+        送りさえすれば効くことを、ここで固定しておく。
+        """
+        self.send(lot_no="H3416J0", hinmei="5×10 1550x3100")
+        self.send(lot_no="H9999Z9", hinmei="4×8 1250x2500")
+        client = self.clients["field"]
+
+        def hit(q: str) -> int:
+            body = client.get(f"/api/warehouse/orders?q={q}",
+                              headers=self.auth()).get_json()
+            return len(body["rows"])
+
+        self.assertEqual(hit(""), 2)
+        self.assertEqual(hit("H3416"), 1, "LotNoで引ける")
+        self.assertEqual(hit("5×10"), 1, "品名で引ける")
+        self.assertEqual(hit("ない"), 0)
+
     def test_未確認の件数がレールに出る(self) -> None:
         """行く前に「やることがある」と分かる(情報の匂い)。"""
         self.send()

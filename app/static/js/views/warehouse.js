@@ -277,8 +277,22 @@ export function start(state, material) {
   load();
 
   el.refresh.addEventListener("click", load);
+  // **打つそばから絞る。** Enterを押すまで何も起きない作りだったので、
+  // 現場からは「絞り込みが効かない」に見えていた ── 打った本人には
+  // 押し忘れたのか効かないのか区別できない。連打で毎回サーバへ
+  // 聞きにいかないよう少しだけ間を置く(資材選択の一覧と同じ)
+  let typing = 0;
+  el.q.addEventListener("input", () => {
+    window.clearTimeout(typing);
+    typing = window.setTimeout(load, 250);
+  });
   el.q.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") { event.preventDefault(); load(); }
+    // 待たずにいま出す
+    if (event.key === "Enter") {
+      event.preventDefault();
+      window.clearTimeout(typing);
+      load();
+    }
   });
   toggles.attach(el.periodGroup, "period", load);
   if (el.cancelled) el.cancelled.addEventListener("change", load);

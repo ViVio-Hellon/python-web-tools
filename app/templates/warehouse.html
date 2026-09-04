@@ -22,16 +22,22 @@
       <span class="eyebrow">倉庫へ送ります</span>
     </header>
     <div class="pad">
+      {# 1マス=1項目(見出し+入力)。**入れ子にする**のは、長い値の欄
+         (品名・納入先)だけを確実に2マス分に広げるため ── 見出しと
+         入力を別々のマスに置くと、広げた欄が行をまたいで見出しと
+         離れることがある #}
       <div class="form">
-        {% for label, key, required, numeric in fields %}
-        {# 印には欄の名前を持たせる。EX受注のときは「必須」の印を消す ──
-           空で送るのが正しい欄に * が付いたままだと、押せないのに
-           入れろと言っていることになる(JS `applyExLock`) #}
-        <label for="f-{{ key }}" data-for="{{ key }}">
-          {{ label }}{% if required %}<span class="req" aria-label="必須">*</span>{% endif %}
-        </label>
-        <input class="input {{ 'num' if numeric else '' }}" id="f-{{ key }}"
-               {% if numeric %}inputmode="numeric"{% endif %} autocomplete="off">
+        {% for label, key, required, numeric, wide in fields %}
+        <div class="f{% if wide %} f--wide{% endif %}">
+          {# 印には欄の名前を持たせる。EX受注のときは「必須」の印を消す ──
+             空で送るのが正しい欄に * が付いたままだと、押せないのに
+             入れろと言っていることになる(JS `applyExLock`) #}
+          <label for="f-{{ key }}" data-for="{{ key }}">
+            {{ label }}{% if required %}<span class="req" aria-label="必須">*</span>{% endif %}
+          </label>
+          <input class="input {{ 'num' if numeric else '' }}" id="f-{{ key }}"
+                 {% if numeric %}inputmode="numeric"{% endif %} autocomplete="off">
+        </div>
         {% endfor %}
       </div>
       {# 資材選択の「倉庫送信」から来た下書き。**まだ登録していない**。
@@ -145,11 +151,17 @@
   /* 既定は2対。**列の幅で決める**(画面幅ではない) ── 一覧が16列あって
      結果側を広く取っているので、画面が1920でもこの列は 660px しかない。
      4対に詰めると入力欄が 70px になり、LotNo が読めなくなる */
-  .form { display:grid; grid-template-columns:repeat(2, 6em minmax(0,1fr));
+  .form { display:grid; grid-template-columns:repeat(2, minmax(0,1fr));
           gap:8px 10px; align-items:center; }
   @container controls (min-width: 880px) {
-    .form { grid-template-columns:repeat(4, 6em minmax(0,1fr)); }
+    .form { grid-template-columns:repeat(4, minmax(0,1fr)); }
   }
+  /* 1項目=1マス。中で見出しと入力に割る */
+  .f { display:grid; grid-template-columns:6em minmax(0,1fr);
+       gap:0 10px; align-items:center; }
+  /* 長い値の欄は2マス分。**2列でも4列でも必ず収まる**幅なので、
+     行をまたいで見出しと入力が離れることがない */
+  .f--wide { grid-column: span 2; }
   .form label { color:var(--muted); font-size: var(--fs-sm); text-align:right; }
   .req { color:var(--state-error); font-weight:700; margin-left:2px; }
   .req[hidden] { display:none; }

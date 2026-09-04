@@ -903,6 +903,23 @@ class SelectionSession:
         share = self.presenter.is_shared_board_mode
         lower_cand = self.tiling.lower[axis]
         upper_cand = self.tiling.upper[axis]
+        name = tiling.AXIS_NAMES[axis]
+
+        # **先に置いてみてから差し替える。** いまの選定を消したあとで
+        # 「1枚も置けませんでした」になると、押しただけで選定が消えた
+        # ように見える(現場の声:「候補変更で何も配置されないことがある」)
+        ctx = place.PlacementContext(palette=self.palette, product=self.product)
+        if lower_cand is not None:
+            tiling.place_tiling_boards(ctx, lower_cand, place.CATEGORY_LOWER)
+        if upper_cand is not None and not share:
+            tiling.place_tiling_boards(ctx, upper_cand, place.CATEGORY_UPPER)
+        if not ctx.placed:
+            ulog.log(f"[候補変更] 候補{name} は1枚も置けませんでした", emphasis=True)
+            log.info("候補変更: 軸=%s で配置0枚。選定は変えません", name)
+            return BoardOpResult(
+                False, f"候補{name} は配置できませんでした。"
+                       "いまの選定はそのままにしています。",
+                REFUSE_NOT_FOUND)
 
         self.selected.lower = (tiling.cand_to_selected(lower_cand)
                                if lower_cand is not None else [])
@@ -912,15 +929,8 @@ class SelectionSession:
         # False に戻す)。敷き詰めは狭幅の専用経路を行構成の数え上げに
         # 吸収しているので、当時の前提を引き継ぐ意味が無い
         self.select_result = None
-
-        ctx = place.PlacementContext(palette=self.palette, product=self.product)
-        if lower_cand is not None:
-            tiling.place_tiling_boards(ctx, lower_cand, place.CATEGORY_LOWER)
-        if upper_cand is not None and not share:
-            tiling.place_tiling_boards(ctx, upper_cand, place.CATEGORY_UPPER)
         self.placement = ctx
 
-        name = tiling.AXIS_NAMES[axis]
         ulog.log(f"[候補変更] 候補{name} に切り替えました", emphasis=True)
         for label, boards in (("上用", self.selected.upper),
                               ("下用", self.selected.lower)):
@@ -933,8 +943,21 @@ class SelectionSession:
         log.info("候補変更: 軸=%s 上用%s種 下用%s種 配置%s枚",
                  name, len(self.selected.upper), len(self.selected.lower),
                  len(ctx.placed))
+
         notes = ([f"候補{'・'.join(skipped)} は同じ内容だったので飛ばしました。"]
                  if skipped else [])
+        # **片側だけ空になったら必ず言う。** 敷き詰めで解が出るかは
+        # 上用(製品幅ちょうど-1まで)と下用(パレット幅+50まで)で
+        # 別々に決まるので、片方だけ0件になることがある。黙って
+        # 空にすると「押したら消えた」ようにしか見えない
+        missing = [label for label, cand, shown in
+                   (("下用", lower_cand, True), ("上用", upper_cand, not share))
+                   if shown and cand is None]
+        if missing:
+            text = (f"{'・'.join(missing)}は敷き詰めで置ける組み合わせが"
+                    "見つかりませんでした(その分は空になります)。")
+            notes.append(text)
+            ulog.log(f"  ※{text}")
         return BoardOpResult(
             True, f"候補{name} に切り替えました。"
                   f"上用 {len(self.selected.upper)}種類 / "

@@ -236,9 +236,43 @@ class BuildRenderPlanTests(unittest.TestCase):
         self.assertIn(render.COLOR_CUT_ZONE, fills)
 
     def test_uncut_fill_board_has_no_cut_marks(self):
-        boards = [placed(0, 0, 1150, 2000), placed(2000, 0, 50, 1150, is_fill=True)]
+        # 枠(1150×2650)にちょうど収まる。切る場所がどこにも無い
+        boards = [placed(0, 0, 1150, 2000), placed(2000, 0, 50, 650, is_fill=True)]
         plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
         self.assertEqual(plan.cut_marks, [])
+
+    def test_overhanging_board_gets_cut_marks(self):
+        """**枠からはみ出した分**にもカット表示を出す。
+
+        在庫の実寸のまま置いて枠を超えているボードは、実寸と一致する
+        ので `detect_board_cut` では見つからない。現物ではその分を
+        切るので図にも出す(現場の声:「選定→配置ではカットがあっても
+        描写なし。候補変更では出る」)。
+        """
+        boards = [placed(0, 0, 1150, 3000)]        # 丈3000 > パレット丈2650
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        fills = [r.fill for r in plan.cut_marks]
+        self.assertIn(render.COLOR_CUT_ZONE, fills)
+        self.assertIn(render.COLOR_CUT_LINE, fills)
+
+    def test_overhang_marks_cover_both_directions(self):
+        boards = [placed(0, 0, 1300, 3000)]        # 幅も丈も超える
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        captions = {r.caption for r in plan.cut_marks if r.caption}
+        self.assertEqual(captions, {"|||", "==="})
+
+    def test_overhang_line_spans_only_the_overhanging_boards(self):
+        """切る線は**はみ出している板のぶんだけ**。枠の端いっぱいに
+
+        引くと、はみ出していない板まで切るように見える。
+        """
+        boards = [placed(0, 0, 500, 2000),          # 収まっている
+                  placed(0, 500, 400, 3000)]        # 丈がはみ出す
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        line = next(r for r in plan.cut_marks if r.fill == render.COLOR_CUT_LINE)
+        scale = plan.scale
+        self.assertAlmostEqual(line.y, plan.offset_y + 500 * scale, places=3)
+        self.assertAlmostEqual(line.height, 400 * scale, places=3)
 
     def test_cut_fill_board_tooltip_mentions_cut(self):
         boards = [placed(0, 0, 1150, 2000, is_fill=True, orig_w=1150, orig_l=2500)]

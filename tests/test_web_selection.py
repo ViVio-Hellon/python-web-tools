@@ -1288,6 +1288,56 @@ class ChangeCandidateTests(SelectionWebTestCase):
         self.assertEqual(body["boards"]["lower"], first["boards"]["lower"])
         self.assertEqual(body["boards"]["change_axis"][0], "A")
 
+    def test_片側だけ空になったら必ず言う(self) -> None:
+        """現場の声:「候補変更で何も配置されないことがある」。
+
+        敷き詰めで解が出るかは上用(製品幅-1まで)と下用(パレット幅+50
+        まで)で別々に決まるので、片方だけ0件になることがある。黙って
+        空にすると「押したら消えた」ようにしか見えない。
+        """
+        self.conn.execute("DELETE FROM BoardMaster")
+        self.conn.execute("DELETE FROM PalletMaster")
+        insert_pallet(self.conn, width=1100, length=2000)
+        for width, length in ((1000, 1000), (500, 1000), (100, 2000)):
+            insert_board(self.conn, width=width, length=length)
+        self.conn.commit()
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+
+        body = self.change()
+        # この在庫では上用(許容幅920〜999)に着地する組み合わせが無い
+        self.assertTrue(body["boards"]["lower"])
+        self.assertFalse(body["boards"]["upper"])
+        self.assertTrue(any("上用" in note and "見つかりません" in note
+                            for note in body.get("notes", [])),
+                        body.get("notes"))
+
+    def test_1枚も置けないなら選定を消さない(self) -> None:
+        """押しただけで選定が消えたように見えるのがいちばん困る。"""
+        self.sizes()
+        self.post("/api/selection/boards/auto-select")
+        session = self.session()
+        session.change_candidate()                 # 候補を作らせる
+        before = [(b.width, b.length) for b in session.selected.lower]
+        self.assertTrue(before)
+
+        # 置けない候補にすり替える(幅0の行構成 → 1枚も置けない)
+        from packaging_tool import tiling_algorithm as tiling
+        broken = tiling.TileCand(
+            h1=1000, n1=1,
+            c1=tiling.TileRowComp(height=1000, dims=[500], qty=[1], width=0))
+        session.tiling.lower = (broken, None, None)
+        session.tiling.upper = (None, None, None)
+        session.tiling.axis = -1
+        result = session.change_candidate()
+
+        self.assertFalse(result.ok)
+        self.assertIn("配置できませんでした", result.message)
+        self.assertEqual([(b.width, b.length) for b in session.selected.lower],
+                         before, "選定はそのまま残す")
+
     def test_選定ログに決め手が残る(self) -> None:
         """どの軸のどこで決まったのかを後から追えるようにする。"""
         self.sizes()

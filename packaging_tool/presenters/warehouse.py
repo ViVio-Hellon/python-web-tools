@@ -93,23 +93,29 @@ ORDER_VIEW: tuple[ViewColumn, ...] = (
 ORDER_ACTION_WIDTH = "17%"
 
 # 新規発注フォームの項目。VBA の入力欄の並びに合わせる。
-#   (見出し, キー, 必須か, 数値か)
-ORDER_FIELDS: tuple[tuple[str, str, bool, bool], ...] = (
-    ("LotNo", "lot_no", True, False),
-    ("品名", "hinmei", True, False),
-    ("発注コード", "hatchu_code", True, False),
-    ("単位", "tani", False, False),
-    ("材質", "zaisitu", False, False),
-    ("調質", "choshitu", False, False),
-    ("厚", "atu", False, True),
-    ("幅", "haba", False, True),
-    ("丈", "take", False, True),
-    ("用途コード", "yoto_code", False, False),
-    ("納入先", "nounyusaki", False, False),
-    ("発注数", "hatchu_suu", True, True),
+#   (見出し, キー, 必須か, 数値か, 横に広げるか)
+#
+# **広げる欄がある。** 品名(「5×10 1550x3100」)と納入先
+# (「ﾊｸﾄﾞｳ(ｶ)ｶﾅｶﾞﾜｼﾞｷﾞｮｳ」)は他より倍近く長く、他の欄と同じ幅だと
+# 入れた値の後ろが切れて読めない(現場の声:「品名が見切れて見えない」)。
+# 入力欄は打った内容を**確かめる**ためのものなので、読めないのは
+# 入っていないのと同じ
+ORDER_FIELDS: tuple[tuple[str, str, bool, bool, bool], ...] = (
+    ("LotNo", "lot_no", True, False, False),
+    ("品名", "hinmei", True, False, True),
+    ("発注コード", "hatchu_code", True, False, False),
+    ("単位", "tani", False, False, False),
+    ("材質", "zaisitu", False, False, False),
+    ("調質", "choshitu", False, False, False),
+    ("厚", "atu", False, True, False),
+    ("幅", "haba", False, True, False),
+    ("丈", "take", False, True, False),
+    ("用途コード", "yoto_code", False, False, False),
+    ("納入先", "nounyusaki", False, False, True),
+    ("発注数", "hatchu_suu", True, True, False),
 )
-REQUIRED_KEYS = tuple(key for _, key, required, _ in ORDER_FIELDS if required)
-NUMERIC_KEYS = tuple(key for _, key, _, numeric in ORDER_FIELDS if numeric)
+REQUIRED_KEYS = tuple(key for _, key, required, _, _ in ORDER_FIELDS if required)
+NUMERIC_KEYS = tuple(key for _, key, _, numeric, _ in ORDER_FIELDS if numeric)
 
 # 絞り込み。VBA `frmWarehouseOrder` の期間ボタンに対応する
 DATE_FILTERS: tuple[tuple[str, str], ...] = (
@@ -245,16 +251,16 @@ def validate(body: dict) -> tuple[dict[str, Any], Optional[tuple[str, str]]]:
     早く知らせるためのもの。
     """
     values = {key: str(body.get(key, "")).strip()
-              for _, key, _, _ in ORDER_FIELDS}
+              for _, key, _, _, _ in ORDER_FIELDS}
     ex = is_ex_order(body)
 
-    for label, key, required, _ in ORDER_FIELDS:
+    for label, key, required, _, _ in ORDER_FIELDS:
         if ex and key in EX_BLANK_KEYS:
             continue                    # EXは空が正しい。必須にしない
         if required and not values[key]:
             return values, (key, f"{label}を入れてください")
 
-    for label, key, required, numeric in ORDER_FIELDS:
+    for label, key, required, numeric, _ in ORDER_FIELDS:
         if not numeric or not values[key]:
             continue
         try:

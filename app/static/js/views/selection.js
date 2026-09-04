@@ -893,8 +893,17 @@ export function start(initial) {
     send("/api/selection/boards/auto-select"));
   el.clearBoards.addEventListener("click", () =>
     send("/api/selection/boards/clear"));
-  el.place.addEventListener("click", () =>
-    send("/api/selection/boards/place"));
+  el.place.addEventListener("click", () => {
+    // **置いたあともボードの段を開いたままにする。** 配置が済むと
+    // この段は「決まった」扱いで畳まれ、次の段(アングル)へ進む。
+    // だが置いた図を見てから「候補変更」で別案に替えるのが実際の
+    // 使い方なので、畳まれるとその手が届かない(現場の声:
+    // 「選定→配置で強制的にアングルに移行してしまう。それだと
+    //  候補変更する余裕がない」)。段の進み方はそのままで、
+    // **開いておくだけ**にする ── 見終わったら見出しを押せば畳める
+    el.boardCard.classList.add("is-open");
+    send("/api/selection/boards/place");
+  });
   // 敷き詰め方式の別解。選定と配置まで一度に入れ替わるので、
   // 「選定」「配置」とは別のエンドポイント
   el.changeCandidate.addEventListener("click", () => {

@@ -621,5 +621,59 @@ def build_render_plan(
                     x=px, y=py + screen_h, width=screen_w, height=zone_h,
                     fill=COLOR_CUT_ZONE, caption="==="))
 
+    _add_overhang_cut_marks(plan, placed, category, base_w, base_l,
+                            scale, offset_x, offset_y)
     plan.legend = sorted(legend_seen.items())
     return plan
+
+
+def _add_overhang_cut_marks(
+    plan: RenderPlan, placed: list[PlacedBoardModel], category: str,
+    base_w: int, base_l: int, scale: float, offset_x: float, offset_y: float,
+) -> None:
+    """**枠からはみ出した分**のカット表示(VBA `DrawCutLinesOnCanvas`)。
+
+    ボードそのものが切られている場合(在庫の実寸より小さく置いてある)は
+    `detect_board_cut` が見つけますが、**フルサイズのまま置いて枠から
+    はみ出している**ボードは実寸と一致するので、そちらでは見つかりません。
+    現物ではその分を切るので、図にも出す必要があります。
+
+    現場の声:「選定→配置ではカットがあっても描写なし。候補変更では出る」。
+    敷き詰め方式(候補変更)は必ず寸法を指定して置くため実寸と食い違い、
+    たまたま `detect_board_cut` で拾えていました ── **同じカットが
+    経路によって出たり出なかったりする**状態だったので、はみ出しを
+    見る側をここに足します。
+
+    はみ出し量そのものは図の下の行(`cut_summary_text`)にも出ます。
+    """
+    boards = [pb for pb in placed if pb.board_category == category]
+    right = [pb for pb in boards if pb.x + pb.length > base_l]
+    bottom = [pb for pb in boards if pb.y + pb.width > base_w]
+
+    for pb in right:
+        over = (pb.x + pb.length) - base_l
+        plan.cut_marks.append(Rect(
+            x=offset_x + base_l * scale, y=offset_y + pb.y * scale,
+            width=over * scale, height=pb.width * scale,
+            fill=COLOR_CUT_ZONE, caption="|||"))
+    for pb in bottom:
+        over = (pb.y + pb.width) - base_w
+        plan.cut_marks.append(Rect(
+            x=offset_x + pb.x * scale, y=offset_y + base_w * scale,
+            width=pb.length * scale, height=over * scale,
+            fill=COLOR_CUT_ZONE, caption="==="))
+
+    # 切る線は**はみ出しているボードのぶんだけ**引く。枠の端いっぱいに
+    # 引くと、はみ出していないボードまで切るように見える
+    if right:
+        min_y = min(pb.y for pb in right)
+        max_y = max(pb.y + pb.width for pb in right)
+        plan.cut_marks.append(Rect(
+            x=offset_x + base_l * scale - 1, y=offset_y + min_y * scale,
+            width=3, height=(max_y - min_y) * scale, fill=COLOR_CUT_LINE))
+    if bottom:
+        min_x = min(pb.x for pb in bottom)
+        max_x = max(pb.x + pb.length for pb in bottom)
+        plan.cut_marks.append(Rect(
+            x=offset_x + min_x * scale, y=offset_y + base_w * scale - 1,
+            width=(max_x - min_x) * scale, height=3, fill=COLOR_CUT_LINE))
