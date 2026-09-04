@@ -2111,6 +2111,77 @@ class SendTests(SelectionWebTestCase):
         self.assertIn("カットが必要なボードはありません",
                       res.get_data(as_text=True))
 
+    # --- 紙面で直す(VBAはシートを直してから印刷できた) -----------
+    def _cut_sheet(self) -> str:
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1100, length=2000)
+        insert_board(self.conn, width=550, length=1000)
+        self.post("/api/selection/boards/auto-select")
+        res = self.client.get("/report/cut-request", headers=self.auth())
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True)[:200])
+        return res.get_data(as_text=True)
+
+    def test_帳票は紙面で直せる(self) -> None:
+        """VBA版は帳票がExcelシートで出ていたので、気に入らなければ
+
+        シートを直してから印刷できた。台数が決まらない・寸法を微調整
+        したい・拠点名を頭に入れたい・期日を書きたい ── どれも紙に
+        出す前に人が決めることで、選定の計算とは別物(現場の声)。
+        """
+        html = self._cut_sheet()
+        for key in ("title_prefix", "tantou", "total_packages",
+                    "due_date", "cut0_w_size", "cut0_w_count"):
+            with self.subTest(key=key):
+                self.assertIn(f'data-edit="{key}"', html)
+        self.assertIn("/api/selection/report/cut-request/edits", html)
+
+    def test_見出しに拠点名を付けない(self) -> None:
+        """現場の指示で拠点名の自動付与をやめた。要るときだけ人が入れる。"""
+        html = self._cut_sheet()
+        self.assertIn("ハードボード切断依頼書", html)
+        self.assertNotIn("L-1 ハードボード切断依頼書", html)
+
+    def test_直した内容は次に開いても残る(self) -> None:
+        self._cut_sheet()
+        self.post("/api/selection/report/cut-request/edits",
+                  {"edits": {"title_prefix": "L-1", "tantou": "山田",
+                             "total_packages": "3"}})
+        html = self.client.get("/report/cut-request",
+                               headers=self.auth()).get_data(as_text=True)
+        self.assertIn('data-edit="title_prefix" data-placeholder="拠点">L-1</span>', html)
+        self.assertIn('data-edit="tantou" data-placeholder="—">山田</span>', html)
+        self.assertIn('data-edit="total_packages">3</span>', html)
+
+    def test_別のロットを引いたら消える(self) -> None:
+        """**別のロットの帳票に前のロットの書き込みが残るのが困る。**"""
+        self._cut_sheet()
+        self.post("/api/selection/report/cut-request/edits",
+                  {"edits": {"tantou": "山田"}})
+        self.assertEqual(self.session().edits_for("cut-request"),
+                         {"tantou": "山田"})
+        self.session().clear_for_new_lot()
+        self.assertEqual(self.session().edits_for("cut-request"), {})
+
+    def test_知らない帳票の保存は404(self) -> None:
+        self.post("/api/selection/report/whatever/edits",
+                  {"edits": {"a": "b"}}, expect=404)
+
+    def test_直した内容が読めなければ400(self) -> None:
+        self.post("/api/selection/report/cut-request/edits",
+                  {"edits": "こわれている"}, expect=400)
+
+    def test_Lot貼付用も紙面で直せる(self) -> None:
+        res = self.client.get("/report/label", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        html = res.get_data(as_text=True)
+        for key in ("pkg", "deliv", "factory", "unit", "code"):
+            with self.subTest(key=key):
+                self.assertIn(f'data-edit="{key}"', html)
+        self.assertIn("/api/selection/report/label/edits", html)
+
     def test_カットがあれば切断依頼が出る(self) -> None:
         """成功経路。断り側しか見ていないと、出せなくなっても気づけない。
 
@@ -2153,8 +2224,8 @@ class SendTests(SelectionWebTestCase):
         self.assertIn("カットが必要なボードはありません",
                       res.get_data(as_text=True))
 
-    def _ask(self) -> str:
-        """切断依頼を押す前に訊く文面。空なら訊かない。"""
+    def _ask(self) -> dict:
+        """切断依頼を押す前に訊くこと。空なら訊かない。"""
         report = next(r for r in self.get()["outputs"]["reports"]
                       if r["key"] == "cut-request")
         return report["ask"]
@@ -2168,7 +2239,31 @@ class SendTests(SelectionWebTestCase):
         insert_board(self.conn, width=1100, length=2000)
         insert_board(self.conn, width=550, length=1000)
         self.post("/api/selection/boards/auto-select")
-        self.assertIn("丈カットを行いますか", self._ask())
+        self.assertIn("丈カットを行いますか", self._ask()["title"])
+
+    def test_訊くときは選択肢を3つ出す(self) -> None:
+        """現場の声:「キャンセルを選ぶと普通にキャンセルになる。
+
+        そもそも本当にキャンセルしたい時どうするんだという話になる」。
+        OK/キャンセルの2択だと「キャンセル=丈カットなし」に割り当てる
+        しかなく、**やめるための行き先が無い**。3つに分ける。
+        """
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1100, length=2000)
+        insert_board(self.conn, width=550, length=1000)
+        self.post("/api/selection/boards/auto-select")
+
+        ask = self._ask()
+        self.assertEqual([c["key"] for c in ask["choices"]],
+                         ["yes", "no", "cancel"])
+        self.assertEqual([c["label"] for c in ask["choices"]],
+                         ["丈カットあり", "丈カットなし", "キャンセル"])
+        # どれを選ぶと何が起きるかを、選ぶ前に読める
+        for choice in ask["choices"]:
+            self.assertTrue(choice["note"], choice)
 
     def test_プロテックで切る余地が無ければ訊かない(self) -> None:
         """**訊く意味があるのは、切るか切らないかを選べるときだけ。**
@@ -2191,7 +2286,7 @@ class SendTests(SelectionWebTestCase):
         self.assertTrue(result.valid)
         self.assertFalse(result.need_length_cut)
         self.assertFalse(result.len_cut_optional)
-        self.assertEqual(self._ask(), "")
+        self.assertEqual(self._ask(), {})
 
     def test_プロテックで切る余地があれば訊く(self) -> None:
         """製品丈は超えるがパレット丈には収まる ── 現場が選べる。"""
@@ -2209,7 +2304,7 @@ class SendTests(SelectionWebTestCase):
         result = self.session().select_result.lower_result.protec_result
         self.assertTrue(result.len_cut_optional)
         self.assertFalse(result.need_length_cut, "図にカット線は出さない")
-        self.assertIn("丈カットを行いますか", self._ask())
+        self.assertIn("丈カットを行いますか", self._ask()["title"])
 
     def test_配置していなければ配置図印刷は出せない(self) -> None:
         """候補を選んだだけでは足りない。配置してあることが前提。"""

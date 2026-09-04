@@ -71,16 +71,27 @@ def cut_request_refusal(session: Any) -> Optional[Refusal]:
     return None
 
 
-# 「丈カットを行いますか」の文面。**出す場所は1か所**にする ──
-# 画面に書き写すと、条件を直した日に文面だけが古いまま残る
-LEN_CUT_QUESTION = ("丈カットを行いますか？\n\n"
-                    "丈方向の合計はパレット内に収まっています。\n\n"
-                    "[OK]  幅カットと幅＋丈カットを分けて出力\n"
-                    "[キャンセル]  丈カット分を幅カットにまとめて出力")
+# 「丈カットを行いますか」の訊き方。**出す場所は1か所**にする ──
+# 画面に書き写すと、条件を直した日に文面だけが古いまま残る。
+#
+# **3つに分ける。** 以前はブラウザの確認(OK/キャンセル)で訊いて
+# いたが、それだと「キャンセル=丈カットなし」になり、**本当にやめたい
+# ときの行き先が無かった**(現場の声:「キャンセルを選ぶと普通に
+# キャンセルになる。本当にキャンセルしたい時どうするんだ」)。
+# やめるのは3つ目の選択肢に分ける
+LEN_CUT_TITLE = "丈カットを行いますか？"
+LEN_CUT_BODY = "丈方向の合計はパレット内に収まっています。"
+LEN_CUT_CHOICES: tuple[dict[str, str], ...] = (
+    {"key": "yes", "label": "丈カットあり",
+     "note": "幅カットと幅＋丈カットを分けて出力"},
+    {"key": "no", "label": "丈カットなし",
+     "note": "丈カット分を幅カットにまとめて出力"},
+    {"key": "cancel", "label": "キャンセル", "note": "出力しない"},
+)
 
 
-def len_cut_question(session: Any) -> str:
-    """切断依頼の前に訊く文面。**訊かなくてよいときは空。**
+def len_cut_question(session: Any) -> dict:
+    """切断依頼の前に訊くこと。**訊かなくてよいときは空の dict。**
 
     訊く意味があるのは「切るか切らないかを現場が選べる」ときだけです。
 
@@ -97,20 +108,25 @@ def len_cut_question(session: Any) -> str:
     """
     presenter = session.presenter
     if not presenter.protec.is_protec:
-        return LEN_CUT_QUESTION
+        return _len_cut_ask()
 
     protec_result = _protec_result(session)
     if protec_result is None or not protec_result.valid:
         # 確定値が無い。訊いても答えを使う先が無いので訊かない
-        return ""
+        return {}
     if protec_result.need_length_cut:
         log.debug("丈カット判定: パレット丈超のため強制的に丈カットあり(確認なし)")
-        return ""
+        return {}
     if protec_result.len_cut_optional:
         log.debug("丈カット判定: 製品丈超・パレット内のため任意 → 確認する")
-        return LEN_CUT_QUESTION
+        return _len_cut_ask()
     log.debug("丈カット判定: 製品丈以内のため丈カット不要")
-    return ""
+    return {}
+
+
+def _len_cut_ask() -> dict:
+    return {"title": LEN_CUT_TITLE, "body": LEN_CUT_BODY,
+            "choices": [dict(c) for c in LEN_CUT_CHOICES]}
 
 
 def _protec_result(session: Any):
@@ -355,6 +371,8 @@ def build_label(session: Any) -> printing.Report:
     qty = session.qty_1p0113
 
     data = reports.LabelData(
+        # 紙面で直した内容(別のロットを検索するまで残る)
+        edits=session.edits_for(REPORT_LABEL),
         lot_no=lot.lot_no,
         vc_front=odr.vc_front, vc_back=odr.vc_back,
         thickness=lot.thickness, width=lot.width, length=lot.length,
@@ -439,6 +457,8 @@ def build_cut_request(session: Any, *, use_len_cut: bool = True) -> tuple[
             NOT_FOUND)
 
     data = reports.CutRequestData(
+        # 紙面で直した内容(別のロットを検索するまで残る)
+        edits=session.edits_for(REPORT_CUT),
         lot_no=lot.lot_no,
         position=user_settings.get_position(),
         board_type=session.board_type,

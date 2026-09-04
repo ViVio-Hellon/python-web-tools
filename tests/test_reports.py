@@ -28,11 +28,11 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(reports.format_position("HVC"), "HVC")
 
     def test_cut_request_title(self):
-        self.assertEqual(reports.cut_request_title("L1", "プロテックボード"),
-                         "L-1 プロテックボード切断依頼書")
+        self.assertEqual(reports.cut_request_title("プロテックボード"),
+                         "プロテックボード切断依頼書")
 
     def test_cut_request_title_falls_back_to_board(self):
-        self.assertEqual(reports.cut_request_title("L1", ""), "L-1 ボード切断依頼書")
+        self.assertEqual(reports.cut_request_title(""), "ボード切断依頼書")
 
     def test_hiki_header_depends_on_the_row_type(self):
         self.assertEqual(reports.hiki_header_for("adj"), "引当調整NO")
@@ -100,11 +100,19 @@ class LabelSheetTests(unittest.TestCase):
 
     def test_package_count_uses_the_pallet_unit(self):
         html = reports.build_label_sheet(_label(total_packages=4, pallet_unit="組"))
-        self.assertIn("4組", html)
+        self.assertIn(">4</span>組", html)
 
-    def test_zero_packages_is_not_printed(self):
-        self.assertNotIn('class="pkg"',
-                         reports.build_label_sheet(_label(total_packages=0)))
+    def test_zero_packages_leaves_a_blank_to_write_in(self):
+        """**台数が確定できないことがある。**
+
+        以前は0なら欄ごと出していなかったが、それだと現場が手で
+        書き足す場所も無い(現場の声:「台数が確定できないとき」に
+        直せるようにしてほしい)。空の欄と単位だけ出す。
+        """
+        html = reports.build_label_sheet(_label(total_packages=0))
+        self.assertIn('class="pkg"', html)
+        self.assertIn('data-edit="pkg"', html)
+        self.assertIn('data-edit="pkg" data-placeholder="—"></span>台', html)
 
     def test_1p0113_replaces_the_pallet_line_and_hides_the_count(self):
         html = reports.build_label_sheet(_label(
@@ -449,13 +457,13 @@ class CutRequestSheetTests(unittest.TestCase):
         html = reports.build_cut_request_sheet(_cut(
             upper=reports.CutSizeInfo(size_width_only="1221x2500", count_width_only=2)))
         self.assertIn("1梱2枚", html)
-        self.assertIn(">8</div>", html)   # 2枚 × 4梱包
+        self.assertIn(">8</span>", html)   # 2枚 × 4梱包(直せる欄の中)
 
     def test_total_falls_back_to_the_count_without_packages(self):
         html = reports.build_cut_request_sheet(_cut(
             total_packages=0,
             upper=reports.CutSizeInfo(size_width_only="1221x2500", count_width_only=2)))
-        self.assertIn(">2</div>", html)
+        self.assertIn(">2</span>", html)
 
     def test_original_size_is_shown_only_in_normal_mode(self):
         info = reports.CutSizeInfo(size_width_only="1221x2500", count_width_only=2,

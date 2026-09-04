@@ -813,9 +813,10 @@ class ReportLink:
     can: bool = False
     why: str = ""
     # 押す前に確かめること(切断依頼の「丈カットを行いますか」)。
-    # **訊くかどうかも文面もサーバが決める** ── 画面が条件を組み立て
-    # 直すと、条件を直した日に文面だけが古いまま残る。空なら訊かない
-    ask: str = ""
+    # **訊くかどうかも、文面も、選択肢もサーバが決める** ── 画面が
+    # 組み立て直すと、条件を直した日に文面だけが古いまま残る。
+    # 空なら訊かない。中身は `{title, body, choices:[{key,label,note}]}`
+    ask: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -1242,7 +1243,7 @@ def build_outputs(session: Any) -> OutputsViewModel:
             key=key, label=label, url=f"/report/{key}",
             can=refusal is None, why="" if refusal is None else refusal.message,
             ask=out.len_cut_question(session)
-            if key == out.REPORT_CUT and refusal is None else ""))
+            if key == out.REPORT_CUT and refusal is None else {}))
 
     send = out.send_refusal(session)
     view.can_send = send is None

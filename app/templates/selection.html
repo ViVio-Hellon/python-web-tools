@@ -613,11 +613,38 @@
   {% endif %}
   </div>
 </div>
+
+{# 帳票を出す前に訊くこと(切断依頼の「丈カットを行いますか」)。
+   **選択肢は3つ**。ブラウザの確認(OK/キャンセル)で訊いていたころは
+   「キャンセル=丈カットなし」になっていて、本当にやめたいときの
+   行き先が無かった(現場の声)。文面も選択肢もサーバが決める #}
+<dialog class="ask" id="askDialog" aria-labelledby="askTitle">
+  <h2 id="askTitle"></h2>
+  <p class="why" id="askBody"></p>
+  <div class="ask__choices" id="askChoices"></div>
+</dialog>
 {% endblock %}
 
 
 {% block head %}
 <style>
+  /* 出す前に訊く小さな窓。**選ぶだけ**なので入力欄は置かない */
+  .ask { border: 0; border-radius: var(--radius); padding: 0;
+         background: var(--surface); color: var(--ink);
+         box-shadow: var(--shadow-lg, 0 8px 30px rgb(0 0 0 / 25%));
+         max-width: min(30em, 92vw); }
+  .ask::backdrop { background: var(--scrim); }
+  .ask h2 { font-size: var(--fs-lg); margin: 0; padding: 14px 16px 0; }
+  .ask .why { padding: 0 16px; margin: 6px 0 0; }
+  /* **縦に並べる。** 横に3つ並べると語の長さで幅が不揃いになり、
+     どれが既定なのかも読めない。上から順に「する/しない/やめる」 */
+  .ask__choices { display: flex; flex-direction: column; gap: 8px;
+                  padding: 14px 16px 16px; }
+  .ask__choices .btn { justify-content: flex-start; text-align: left;
+                       padding: 9px 12px; }
+  .ask__choices .note { color: var(--muted); font-size: var(--fs-xs);
+                        margin-left: .6em; }
+  .ask__choices .btn--on .note { color: inherit; opacity: .85; }
   /* ================================================================
      作業の段 — いま押すべきものを1つに見せる
 

@@ -38,6 +38,7 @@ tkinter版のころは一時ファイルへ書いてOSの印刷動詞に渡し�
 from __future__ import annotations
 
 import html
+import json
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -114,15 +115,108 @@ def escape(value: object) -> str:
     return html.escape("" if value is None else str(value))
 
 
-def render_html(report: Report) -> str:
-    """帳票をHTML文字列にする。"""
+def editable(key: str, value: object, *, placeholder: str = "") -> str:
+    """**その場で直せる値**にする。
+
+    VBA版は帳票をシートに出していたので、気に入らなければシートを
+    直してから印刷できました。台数が決まらない・寸法を微調整したい・
+    拠点名を頭に入れたい・期日を書きたい ── どれも紙に出す前に人が
+    決めることで、選定の計算とは別物です(現場の声)。
+
+    直した内容は `data-edit` の名前で送り返し、**別のロットを検索する
+    まで**そのまま残します。名前は帳票の中で一意にしてください。
+
+    印刷には何も足しません(点線も背景も画面のときだけ)。
+    """
+    ph = f' data-placeholder="{escape(placeholder)}"' if placeholder else ""
+    return (f'<span class="edit" contenteditable="true" spellcheck="false"'
+            f' data-edit="{escape(key)}"{ph}>{escape(value)}</span>')
+
+
+# 直せる欄の見た目と、直した内容を送り返す仕掛け。
+# **画面のときだけ**([@media screen])── 紙には点線も案内も出さない
+_EDIT_CSS = """
+@media screen {
+  .edit { outline: none; border-bottom: 1px dashed #9aa3ad;
+          min-width: 2em; display: inline-block; cursor: text; }
+  .edit:hover { background: #eef4ff; }
+  .edit:focus { background: #fff7d6; border-bottom-color: #1d4ed8; }
+  .edit:empty::before { content: attr(data-placeholder); color: #9aa3ad; }
+  .editbar { margin: 0 auto 12px; max-width: 900px; font-size: 12px;
+             color: #374151; }
+  .editbar b { color: #1d4ed8; }
+  .editbar .saved { color: #15803d; margin-left: .5em; }
+}
+@media print { .edit { border: 0; } .editbar { display: none; } }
+"""
+
+_EDIT_HINT = (
+    '<p class="editbar">点線の欄は<b>その場で直せます</b>'
+    "(台数・寸法・担当者・期限日・見出しの頭など)。"
+    "直した内容は<b>別のロットを検索するまで</b>残ります。"
+    '<span class="saved" id="editSaved"></span></p>'
+)
+
+# 直した内容をサーバへ送り返す。**帳票は独立したページ**(別窓で開く)
+# なので、アプリ本体のJSは読み込まれていない。ここだけで完結させる
+_EDIT_SCRIPT = """
+<script>
+(function () {
+  var url = %(url)s, note = document.getElementById("editSaved"), timer = 0;
+  if (!url) return;
+  function collect() {
+    var out = {};
+    document.querySelectorAll("[data-edit]").forEach(function (n) {
+      out[n.dataset.edit] = n.textContent.trim();
+    });
+    return out;
+  }
+  function save() {
+    fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                 body: JSON.stringify({ edits: collect() }) })
+      .then(function (r) {
+        note.textContent = r.ok ? "保存しました" : "保存できませんでした";
+        window.setTimeout(function () { note.textContent = ""; }, 2000);
+      })
+      .catch(function () { note.textContent = "保存できませんでした"; });
+  }
+  document.addEventListener("input", function (e) {
+    if (!e.target.closest("[data-edit]")) return;
+    window.clearTimeout(timer);
+    timer = window.setTimeout(save, 600);
+  });
+  // 打ち終わってすぐ印刷しても取りこぼさない
+  document.addEventListener("blur", function (e) {
+    if (e.target.closest("[data-edit]")) { window.clearTimeout(timer); save(); }
+  }, true);
+  // 改行は入れさせない(1行の欄なので、入ると印刷でずれる)
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && e.target.closest("[data-edit]")) {
+      e.preventDefault(); e.target.blur();
+    }
+  });
+}());
+</script>
+"""
+
+
+def render_html(report: Report, *, edit_url: str = "") -> str:
+    """帳票をHTML文字列にする。
+
+    `edit_url` を渡すと、`editable()` で作った欄がその場で直せるように
+    なる(直した内容はそのURLへ送り返す)。渡さなければ読むだけ。
+    """
     sheets = "\n".join(f'<div class="sheet">{s}</div>' for s in report.sheets)
+    extra_css = _EDIT_CSS if edit_url else ""
+    hint = _EDIT_HINT if edit_url else ""
+    script = (_EDIT_SCRIPT % {"url": json.dumps(edit_url)}) if edit_url else ""
     return (
         "<!DOCTYPE html>\n"
         '<html lang="ja"><head><meta charset="utf-8">'
         f"<title>{escape(report.title)}</title>"
-        f"<style>{report.setup.to_css()}\n{BASE_CSS}\n{report.setup.extra_css}</style>"
-        f"</head><body>{_PRINT_HINT}{sheets}</body></html>"
+        f"<style>{report.setup.to_css()}\n{BASE_CSS}\n{extra_css}\n"
+        f"{report.setup.extra_css}</style>"
+        f"</head><body>{_PRINT_HINT}{hint}{sheets}{script}</body></html>"
     )
 
 

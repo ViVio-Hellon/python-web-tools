@@ -178,6 +178,14 @@ class SelectionSession:
     # ボードと画面の図が食い違ったまま発注へ進める
     placement: Optional[place.PlacementContext] = None
 
+    # --- 帳票を紙面で直した内容 (VBA はシートを直せた) ---
+    # 帳票の名前 → {欄の名前: 文字}。**別のロットを検索するまで**残す
+    # (`clear_for_new_lot`)。VBA版は帳票がExcelシートで出ていたので、
+    # 気に入らなければシートを直してから印刷できた。台数が決まらない・
+    # 寸法を微調整したい・拠点名を頭に入れたい・期日を書きたい ──
+    # どれも紙に出す前に人が決めることで、選定の計算とは別物
+    report_edits: dict[str, dict[str, str]] = field(default_factory=dict)
+
     # --- アングル (VBA `lstSelectedAngles`) ---
     selected_angles: list[int] = field(default_factory=list)
     angle_need_cut: bool = False
@@ -992,6 +1000,22 @@ class SelectionSession:
                   f"下用 {len(self.selected.lower)}種類",
             notes=notes)
 
+    def edits_for(self, report: str) -> dict[str, str]:
+        """その帳票で直した内容。無ければ空。"""
+        return dict(self.report_edits.get(report, {}))
+
+    def set_report_edits(self, report: str, edits: dict) -> BoardOpResult:
+        """紙面で直した内容を覚える(別のロットを検索するまで)。
+
+        **文字だけを覚える。** HTMLをそのまま持つと、次に出すときに
+        何が書かれるか分からなくなる(帳票は印刷して現場に配るもの)。
+        """
+        clean = {str(k): str(v) for k, v in (edits or {}).items()
+                 if isinstance(k, str) and k}
+        self.report_edits[report] = clean
+        log.info("帳票を直しました: %s %s件", report, len(clean))
+        return BoardOpResult(True, "保存しました")
+
     def map_items(self) -> list[dict]:
         """棚検索へ渡す資材(旧版 `btnMap`)。
 
@@ -1321,6 +1345,9 @@ class SelectionSession:
         self.selected = svc.SelectedBoards()
         self.select_result = None
         self.tiling = None
+        # 紙面で直した内容も捨てる。**別のロットの帳票に前のロットの
+        # 書き込みが残るのがいちばん困る**(担当者名・期日・台数)
+        self.report_edits = {}
         self.selected_angles = []
         self.angle_drawn = False
         self.angle_need_cut = False

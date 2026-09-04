@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import quote
 
 from flask import Blueprint, Response, jsonify, render_template, request
 
@@ -546,7 +547,33 @@ def report(name: str):
 
     session.presenter.user_log.log(
         f"{built.title} を出力しました", emphasis=True)
-    return Response(printing.render_html(built), mimetype="text/html")
+    # **紙面をそのまま直せるようにする。** VBA版は帳票がExcelシートで
+    # 出ていたので、気に入らなければシートを直してから印刷できた。
+    # 直した内容の送り先を渡す(トークンはこの窓が持っているものを使う)
+    token = request.args.get("t", "")
+    edit_url = f"/api/selection/report/{name}/edits"
+    if token:
+        edit_url += f"?t={quote(token)}"
+    return Response(printing.render_html(built, edit_url=edit_url),
+                    mimetype="text/html")
+
+
+@bp.post("/api/selection/report/<name>/edits")
+def save_report_edits(name: str):
+    """紙面で直した内容を覚える(別のロットを検索するまで)。
+
+    帳票は別窓の独立したページなので、アプリ本体のJSは動いていない。
+    `printing.render_html` が埋め込む小さなスクリプトがここへ送る。
+    """
+    if name not in (outputs.REPORT_LABEL, outputs.REPORT_CUT):
+        return jsonify(_error("not_found", f"知らない帳票です: {name}")), 404
+    body = request.get_json(silent=True) or {}
+    edits = body.get("edits")
+    if not isinstance(edits, dict):
+        return jsonify(_error("bad_edits", "直した内容が読めませんでした。")), 400
+    session = _session()
+    result = session.set_report_edits(name, edits)
+    return jsonify({"ok": result.ok, "message": result.message})
 
 
 def _report_plan(session):

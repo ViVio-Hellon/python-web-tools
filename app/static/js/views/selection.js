@@ -33,6 +33,51 @@ let state = null;
 let pickedPalletRow = null;   // { width, length, symbol, key }
 
 /**
+ * 帳票を出す前に訊くこと(帳票の名前 → `{title, body, choices}`)。
+ *
+ * **訊くかどうかも、文面も、選択肢もサーバが決める**
+ * (`outputs.len_cut_question`)。画面で組み立て直すと、条件を直した日に
+ * 文面だけが古いまま残る。
+ */
+const asks = {};
+
+/**
+ * 選択肢を出して、選ばれた `key` を返す(選ばずに閉じたら何もしない)。
+ *
+ * **`window.open` は選んだその場で呼ぶ。** ここで待ってから開くと
+ * 「人が押した流れ」から外れて、ブラウザに別窓を止められる。
+ */
+function showAsk(ask, onPick) {
+  el.askTitle.textContent = ask.title || "";
+  why(el.askBody, ask.body || "");
+  el.askChoices.replaceChildren(...(ask.choices || []).map((choice, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    // 先頭が既定の答え。**やめるだけは見た目を分ける**
+    button.className = "btn " + (choice.key === "cancel" ? "btn--danger"
+                                 : index === 0 ? "btn--run" : "");
+    button.textContent = choice.label;
+    if (choice.note) {
+      const note = document.createElement("span");
+      note.className = "note";
+      note.textContent = choice.note;
+      button.appendChild(note);
+    }
+    button.addEventListener("click", () => {
+      el.askDialog.close();
+      onPick(choice.key);
+    });
+    return button;
+  }));
+  el.askDialog.showModal();
+}
+
+function openReport(url) {
+  const win = window.open(url, "_blank");
+  if (!win) toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
+}
+
+/**
  * 押しっぱなしのモードのON/OFF。
  *
  * `variant` を渡すとONの色を変えられる。疲労度優先だけ別の色にするのは、
@@ -331,9 +376,9 @@ function renderOutputs(outputs) {
     const button = document.getElementById(`report-${report.key}`);
     if (!button) continue;
     button.disabled = !report.can;
-    // 押す前に確かめること。**訊くかどうかも文面もサーバが決める**
-    // (切断依頼の「丈カットを行いますか」。空なら訊かない)
-    button.dataset.ask = report.ask || "";
+    // 押す前に確かめること。**訊くかどうかも文面も選択肢もサーバが
+    // 決める**(切断依頼の「丈カットを行いますか」。空なら訊かない)
+    asks[report.key] = report.ask && report.ask.choices ? report.ask : null;
     if (report.why) reasons.push(`${report.label}: ${report.why}`);
   }
   el.sendWarehouse.disabled = !outputs.can_send;
@@ -735,6 +780,8 @@ export function start(initial) {
                     "stockAware", "upperCard", "upperTitle", "upperRows",
                     "lowerTitle", "lowerRows", "selectedSummary", "placeWhy",
                     "showOnMap",
+                    // 出す前に訊く窓
+                    "askDialog", "askTitle", "askBody", "askChoices",
                     // ボードの選定済み(候補の隣、右の余白)
                     "boardPickedUpper", "boardPickedUpperTitle", "boardPickedUpperRows",
                     "boardPickedLowerTitle", "boardPickedLowerRows",
@@ -967,20 +1014,19 @@ export function start(initial) {
   for (const button of document.querySelectorAll("[data-report]")) {
     // 帳票はサーバがHTMLをそのまま返す。別窓で開いて印刷する
     button.addEventListener("click", () => {
-      let url = tokenUrl(button.dataset.url);
+      const url = tokenUrl(button.dataset.url);
       // 押す前に確かめることがあれば訊く(切断依頼の「丈カットを行いますか」)。
-      // **訊くかどうかも文面もサーバが決める**(`outputs.len_cut_question`)。
-      // 切るか切らないかを選べるときだけ訊く ── パレットをはみ出すなら
-      // 選択肢が無いので訊かずに切り、丈カットが無ければ訊く意味が無い。
-      // ブラウザの確認は2択なので、VBAの3択のうち「中止」は割り切って
-      // 対象外にしている(押した後にやめたければ開いた窓を閉じればよい)
-      const ask = button.dataset.ask;
-      if (ask) {
-        url += (url.includes("?") ? "&" : "?")
-             + `use_len_cut=${confirm(ask) ? "1" : "0"}`;
-      }
-      const win = window.open(url, "_blank");
-      if (!win) toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
+      // **訊くかどうかも文面も選択肢もサーバが決める**
+      // (`outputs.len_cut_question`)。切るか切らないかを選べるときだけ
+      // 訊く ── パレットをはみ出すなら選択肢が無いので訊かずに切り、
+      // 丈カットが無ければ訊く意味が無い
+      const ask = asks[button.dataset.report];
+      if (!ask) { openReport(url); return; }
+      showAsk(ask, (key) => {
+        if (key === "cancel") return;               // 本当にやめる
+        openReport(url + (url.includes("?") ? "&" : "?")
+                       + `use_len_cut=${key === "yes" ? "1" : "0"}`);
+      });
     });
   }
   el.sendWarehouse.addEventListener("click", async () => {

@@ -152,6 +152,9 @@ class LabelData:
     matsuita_size: str = ""           # lbl1P_MatsutaDB
     kakuzai_cell: str = ""            # P1P0113KakCellText
     matsuita_cell: str = ""           # P1P0113MatCellText
+    # 紙面で直した内容(`data-edit` の名前 → 文字)。別のロットを
+    # 検索するまで残る(`selection_session.report_edits`)
+    edits: dict[str, str] = field(default_factory=dict)
 
 
 def hiki_header_for(type_flag: str) -> str:
@@ -212,16 +215,31 @@ def _label_left_cells(data: LabelData) -> list[str]:
             size = f"{data.pallet_width} × {data.pallet_length}"
             body = _lines(prefix, f"  {size}") if prefix else printing.escape(size)
             cells[4] = f'<div class="pal">{body}</div>'
-        if data.total_packages:
-            cells[5] = (f'<span class="pkg">{data.total_packages}'
-                        f'{printing.escape(data.pallet_unit)}</span>')
+        # **梱包数は直せる。** 台数が確定できないまま貼ることがある
+        cells[5] = (
+            f'<span class="pkg">'
+            f'{printing.editable("pkg", data.edits.get("pkg", str(data.total_packages or "")), placeholder="—")}'
+            f'{printing.escape(data.pallet_unit)}</span>')
 
     cells[6] = f'<span class="lot">{printing.escape(data.lot_no)}</span>'
     return cells
 
 
 def build_label_sheet(data: LabelData) -> str:
-    """Lot貼付用の紙面1枚分のHTML。"""
+    """Lot貼付用の紙面1枚分のHTML。
+
+    右半分の値と梱包数は**紙面で直せる**(現場の声:「Lot貼付け用も
+    同様に」)。直した内容は別のロットを検索するまで残る。
+    """
+    def ed(key: str, value: object, *, placeholder: str = "") -> str:
+        return printing.editable(key, data.edits.get(key, str(value)),
+                                 placeholder=placeholder)
+
+    def ed_lines(key: str, *parts: object) -> str:
+        """複数行の値。1行ずつ別の欄にする(まとめると改行が壊れる)。"""
+        return "<br>".join(ed(f"{key}{i}", part)
+                           for i, part in enumerate(parts))
+
     left = _label_left_cells(data)
     h = [f"{pt * PT_MM:.1f}mm" for pt in LABEL_ROW_HEIGHTS_PT]
     # VC無しのときは丸印が2〜3行にまたがるので左セルを縦結合する
@@ -243,7 +261,7 @@ def build_label_sheet(data: LabelData) -> str:
         + left_td(0)
         + '<td class="gap" rowspan="7"></td>'
         + f'<td class="cap">{_lines("用途ｺｰﾄ:ﾞ", "用途:")}</td>'
-        + f'<td class="val" colspan="3">{_lines(data.yoto_code, data.yoto_name)}</td>'
+        + f'<td class="val" colspan="3">{ed_lines("yoto", data.yoto_code, data.yoto_name)}</td>'
         + f'<td class="cap" rowspan="3">{printing.escape("引当等:")}</td>'
         + '<td class="val hiki" colspan="5" rowspan="3"'
         f' style="font-size:{hiki_size}pt">'
@@ -252,13 +270,13 @@ def build_label_sheet(data: LabelData) -> str:
     rows.append(
         "<tr>" + left_td(1, ' rowspan="2"' if circle else "")
         + f'<td class="cap">{_lines("材質:", "調質:")}</td>'
-        + f'<td class="val" colspan="3">{_lines(data.zaishitsu, data.choshitsu)}</td>'
+        + f'<td class="val" colspan="3">{ed_lines("zai", data.zaishitsu, data.choshitsu)}</td>'
         + "</tr>")
     rows.append(
         "<tr>" + ("" if circle else left_td(2))
         + f'<td class="cap">{printing.escape("ｵｰﾀﾞｰｻｲｽﾞ:")}</td>'
         + '<td class="val" colspan="3">'
-        + _lines(data.order_thickness, data.order_width, data.order_length)
+        + ed_lines("odr", data.order_thickness, data.order_width, data.order_length)
         + "</td></tr>")
 
     # --- 4行目: 宛先情報(右側全幅) ---
@@ -266,9 +284,9 @@ def build_label_sheet(data: LabelData) -> str:
         "<tr>" + left_td(3)
         + f'<td class="cap">{printing.escape("宛先情報:")}</td>'
         + '<td class="val addr" colspan="9">'
-        + _lines(f"納入：{data.delivery_name}",
-                 f"取引：{data.customer_name}",
-                 f"送り：{data.ship_to_name}")
+        + ed_lines("addr", f"納入：{data.delivery_name}",
+                   f"取引：{data.customer_name}",
+                   f"送り：{data.ship_to_name}")
         + "</td></tr>")
 
     # --- 5行目: 通常は単位/コード、1P0113は角材・松板の明細を半々に ---
@@ -283,10 +301,10 @@ def build_label_sheet(data: LabelData) -> str:
     else:
         right5 = (f'<td class="cap">{printing.escape("単位:")}</td>'
                   f'<td class="val unit" colspan="3">'
-                  f'{printing.escape(data.pallet_unit)}</td>'
+                  f'{ed("unit", data.pallet_unit)}</td>'
                   f'<td class="cap">{printing.escape("ｺｰﾄﾞ:")}</td>'
                   f'<td class="val code" colspan="5">'
-                  f'{printing.escape(data.pallet_code)}</td>')
+                  f'{ed("code", data.pallet_code)}</td>')
     rows.append("<tr>" + left_td(4) + right5 + "</tr>")
 
     # --- 6・7行目: 納送コメント(赤) / 工場コメント(青) ---
@@ -294,12 +312,12 @@ def build_label_sheet(data: LabelData) -> str:
         "<tr>" + left_td(5)
         + f'<td class="cap">{printing.escape("納送ｺﾒﾝﾄ:")}</td>'
         + f'<td class="val deliv" colspan="9">'
-        f'{printing.escape(data.delivery_comment)}</td></tr>')
+        f'{ed("deliv", data.delivery_comment)}</td></tr>')
     rows.append(
         "<tr>" + left_td(6)
         + f'<td class="cap">{printing.escape("工場ｺﾒﾝﾄ:")}</td>'
         + f'<td class="val factory" colspan="9">'
-        f'{printing.escape(data.factory_comment)}</td></tr>')
+        f'{ed("factory", data.factory_comment)}</td></tr>')
 
     widths = ([f"{LABEL_W_LEFT}%", f"{LABEL_W_GAP}%",
                f"{LABEL_W_CAP1}%"] + [f"{LABEL_W_VAL1 / 3:.2f}%"] * 3
@@ -584,6 +602,12 @@ class CutRequestData:
     upper: CutSizeInfo = field(default_factory=CutSizeInfo)
     lower: CutSizeInfo = field(default_factory=CutSizeInfo)
     request_date: Optional[date] = None
+    # 見出しの頭に足す拠点名。**既定は空**(現場の指示で拠点名を
+    # 付けるのをやめた)。要るときだけ紙面で入れる
+    title_prefix: str = ""
+    # 紙面で直した内容(`data-edit` の名前 → 文字)。別のロットを
+    # 検索するまで残る(`selection_session.report_edits`)
+    edits: dict[str, str] = field(default_factory=dict)
 
 
 def format_position(position: str) -> str:
@@ -591,9 +615,14 @@ def format_position(position: str) -> str:
     return "L-1" if position == "L1" else position
 
 
-def cut_request_title(position: str, board_type: str) -> str:
-    """「L-1 プロテックボード切断依頼書」。種別が取れなければ「ボード」。"""
-    return f"{format_position(position)} {board_type or 'ボード'}切断依頼書".strip()
+def cut_request_title(board_type: str) -> str:
+    """「プロテックボード切断依頼書」。種別が取れなければ「ボード」。
+
+    **拠点名は付けない。** 以前は先頭に付けていたが、出す拠点は決まって
+    いないことがあり、要るときだけ人が頭に足すほうが正しい(現場の指示)。
+    見出しの手前には直せる欄を置いてあるので、そこへ入れる。
+    """
+    return f"{board_type or 'ボード'}切断依頼書"
 
 
 def _total_text(count: int, total_packages: int) -> str:
@@ -603,26 +632,41 @@ def _total_text(count: int, total_packages: int) -> str:
     return str(count * total_packages if total_packages > 0 else count)
 
 
-def _cut_block(info: CutSizeInfo, total_packages: int, *, show_orig: bool) -> tuple[str, str]:
-    """切断サイズ欄(B:C)と総枚数欄(D)の2段組みを作る。"""
-    def line(size: str, orig: str, count: int) -> str:
-        if not size:
+def _cut_block(info: CutSizeInfo, total_packages: int, *, show_orig: bool,
+               ed=None, prefix: str = "") -> tuple[str, str]:
+    """切断サイズ欄(B:C)と総枚数欄(D)の2段組みを作る。
+
+    `ed` を渡すと、寸法と枚数を**紙面で直せる**ようにする(現場の声:
+    「サイズを微調整したい」)。空の行にも欄だけ出しておく ── 計算に
+    出てこなかった切り出しを手で足せるようにするため。
+    """
+    def line(size: str, orig: str, count: int, name: str) -> str:
+        cell = (printing.escape(size) if ed is None
+                else ed(f"{prefix}{name}_size", size, placeholder="幅x丈"))
+        if ed is None and not size:
             return "<div></div>"
         orig_html = (f'<span class="orig">（元: {printing.escape(orig)}）</span>'
                      if show_orig and orig else "")
         per = (f'<span class="per">1梱{count}枚</span>' if count > 0 else "")
         return (f'<div><span class="cutline">'
-                f'<span class="cutsize">{printing.escape(size)}</span>'
+                f'<span class="cutsize">{cell}</span>'
                 f"{orig_html}{per}</span></div>")
 
+    def total(count: int, name: str) -> str:
+        text = _total_text(count, total_packages)
+        cell = (printing.escape(text) if ed is None
+                else ed(f"{prefix}{name}_count", text))
+        return f'<div class="total">{cell}</div>'
+
     sizes = ('<div class="block">'
-             + line(info.size_width_only, info.orig_width_only, info.count_width_only)
-             + line(info.size_both, info.orig_both, info.count_both)
+             + line(info.size_width_only, info.orig_width_only,
+                    info.count_width_only, "w")
+             + line(info.size_both, info.orig_both, info.count_both, "b")
              + "</div>")
     totals = ('<div class="block">'
-              f'<div class="total">{_total_text(info.count_width_only, total_packages)}</div>'
-              f'<div class="total">{_total_text(info.count_both, total_packages)}</div>'
-              "</div>")
+              + total(info.count_width_only, "w")
+              + total(info.count_both, "b")
+              + "</div>")
     return sizes, totals
 
 
@@ -637,25 +681,32 @@ def build_cut_request_sheet(data: CutRequestData) -> str:
     esc = printing.escape
     rows: list[str] = []
 
+    def ed(key: str, value: object, *, placeholder: str = "") -> str:
+        """紙面で直せる欄。**直した内容があればそちらを出す。**"""
+        return printing.editable(key, data.edits.get(key, str(value)),
+                                 placeholder=placeholder)
+
     rows.append(f'<tr><td class="title" colspan="4" style="height:21.2mm">'
-                f'{esc(cut_request_title(data.position, data.board_type))}</td></tr>')
+                f'{ed("title_prefix", data.title_prefix, placeholder="拠点")} '
+                f'{esc(cut_request_title(data.board_type))}</td></tr>')
     rows.append('<tr><td class="head" colspan="3">ロットNO</td>'
                 '<td class="head center">担当者</td></tr>')
     rows.append(f'<tr><td colspan="3" style="height:21.2mm">'
-                f'<span class="value28">{esc(data.lot_no)}</span></td><td></td></tr>')
+                f'<span class="value28">{esc(data.lot_no)}</span></td>'
+                f'<td class="center">{ed("tantou", "", placeholder="—")}</td></tr>')
     rows.append('<tr><td class="head" colspan="4">製品サイズ</td></tr>')
     rows.append(f'<tr><td class="center" colspan="4" style="height:21.2mm">'
                 f'<span class="value28">'
-                f'{esc(product_size_text(data.thickness, data.width, data.length))}'
+                f'{ed("product_size", product_size_text(data.thickness, data.width, data.length))}'
                 f"</span></td></tr>")
     rows.append('<tr><td class="head" colspan="3">パレットサイズ</td>'
                 '<td class="head center">台</td></tr>')
     pallet = (f"{data.pallet_width} × {data.pallet_length}"
               if data.pallet_width else "")
     rows.append(f'<tr><td class="center" colspan="3" style="height:21.2mm">'
-                f'<span class="value28">{esc(pallet)}</span></td>'
+                f'<span class="value28">{ed("pallet_size", pallet)}</span></td>'
                 f'<td class="center"><span class="value28">'
-                f"{data.total_packages}</span></td></tr>")
+                f'{ed("total_packages", data.total_packages)}</span></td></tr>')
     rows.append('<tr><td class="diag"></td>'
                 '<td class="head" colspan="2">切断サイズ</td>'
                 '<td class="head center">枚数</td></tr>')
@@ -667,8 +718,9 @@ def build_cut_request_sheet(data: CutRequestData) -> str:
     else:
         sections = [("上", data.upper), ("下", data.lower)]
         show_orig = True
-    for side, info in sections:
-        sizes, totals = _cut_block(info, data.total_packages, show_orig=show_orig)
+    for index, (side, info) in enumerate(sections):
+        sizes, totals = _cut_block(info, data.total_packages, show_orig=show_orig,
+                                   ed=ed, prefix=f"cut{index}_")
         rows.append(f'<tr><td class="side" style="height:31.8mm">{esc(side)}</td>'
                     f'<td class="pack" colspan="2">{sizes}</td>'
                     f'<td class="pack">{totals}</td></tr>')
@@ -676,7 +728,9 @@ def build_cut_request_sheet(data: CutRequestData) -> str:
     rows.append('<tr><td class="head" colspan="2">依頼日</td>'
                 '<td class="head" colspan="2">期限日</td></tr>')
     rows.append(f'<tr><td class="center" colspan="2" style="height:21.2mm">'
-                f'{d:%Y/%m/%d}</td><td colspan="2"></td></tr>')
+                f'{ed("request_date", f"{d:%Y/%m/%d}")}</td>'
+                f'<td class="center" colspan="2">'
+                f'{ed("due_date", "", placeholder="年/月/日")}</td></tr>')
 
     return f'<table class="cut">{colgroup}{"".join(rows)}</table>'
 
