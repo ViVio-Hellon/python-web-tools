@@ -1695,6 +1695,9 @@ def list_rows(session: Any) -> list[Any]:
             conn, product_width=context.product_width,
             product_length=context.product_length,
             two_stack=session.two_stack,
+            # **単位の絞り込みに要る。** 渡していなかったので、製品
+            # サイズを入れたあとの一覧だけ単位で絞られていなかった
+            last_hosozai=session.presenter.last_hosozai,
             manufactured_thickness=session.presenter.manufactured_thickness,
             user_log=session.presenter.user_log,
             **flags)

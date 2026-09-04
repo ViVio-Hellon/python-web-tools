@@ -55,9 +55,13 @@ function caption(rect, color) {
   if (!lines.length) return null;
 
   const size = rect.font_size || 7;
-  const cx = rect.x + rect.width / 2;
+  // 文字を寄せる先はサーバが決める(`caption_cx` / `caption_cy`)。
+  // 枠からはみ出したボードは切り落としの帯が重なるので、**切ったあとに
+  // 残る側**へ寄せないと寸法が帯の下に隠れる。指定が無ければ矩形の中心
+  const cx = rect.caption_cx ?? rect.x + rect.width / 2;
+  const cy = rect.caption_cy ?? rect.y + rect.height / 2;
   // 行の塊を縦中央に置く。1行目の基準線を半分ぶん上へ寄せる
-  const top = rect.y + rect.height / 2 - (lines.length - 1) * size * 0.6;
+  const top = cy - (lines.length - 1) * size * 0.6;
 
   const text = el("text", {
     x: cx, y: top, "font-size": size, fill: paint(color),

@@ -140,6 +140,15 @@ class Rect:
     # はみ出したボードの輪郭を太くして警告色と合わせて目立たせる
     # (`outline` を `COLOR_OVERHANG_LINE` にするのとセットで使う)
     outline_width: float = 1.0
+    # 文字を置く中心。`None` なら矩形の中心(ふつうはこちら)。
+    #
+    # **枠からはみ出したボードで要る。** はみ出した分には切り落としの
+    # 帯が重なるので、矩形の中心に置くと寸法が帯の下に隠れる
+    # (現場の声:「カット描写まではよくなったがボードサイズが
+    # 見えなくなってしまった」)。**切ったあとに残る側**へ寄せる ──
+    # 現物として残るのはそちらで、寸法はその板の呼び名だから
+    caption_cx: Optional[float] = None
+    caption_cy: Optional[float] = None
 
 
 @dataclass
@@ -590,10 +599,16 @@ def build_render_plan(
         else:
             outline, outline_width = COLOR_BOARD_OUTLINE, 1.0
 
+        # 枠からはみ出した分には切り落としの帯が重なる。寸法が帯の下に
+        # 隠れないよう、**切ったあとに残る側**の真ん中へ寄せる
+        keep_right = min(px + screen_w, offset_x + base_l * scale)
+        keep_bottom = min(py + screen_h, offset_y + base_w * scale)
         plan.boards.append(Rect(
             x=px, y=py, width=screen_w, height=screen_h,
             fill=fill, outline=outline, outline_width=outline_width,
             caption=caption, font_size=font_size, tooltip=tooltip,
+            caption_cx=(px + keep_right) / 2 if keep_right < px + screen_w else None,
+            caption_cy=(py + keep_bottom) / 2 if keep_bottom < py + screen_h else None,
         ))
 
         if thin_side * scale < LEGEND_THIN_LIMIT and thin_side not in legend_seen:

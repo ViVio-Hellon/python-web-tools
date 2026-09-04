@@ -404,6 +404,52 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].width, 1150)
 
+    def test_単位で絞る(self):
+        """現場の声:「単位"台"での絞り込みのはずが、サイズでヒットする
+
+        ものすべて表示している」。**この関数だけ単位の規則が抜けて
+        いた** ── 全件一覧と直接検索には入っていたのに、製品サイズを
+        入れたあとの一覧(いちばんよく使う経路)には無かった。
+        """
+        for unit in ("台", "枚", "組", "本"):
+            insert_pallet(self.conn, width=1150, length=2650,
+                          w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                          unit=unit, code=unit)
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500)
+        self.assertEqual([r.unit for r in rows], ["台"])
+
+    def test_保護材が決まっていれば枚と組も出す(self):
+        """上蓋は台で数えないものがある。既定のままだと現物が出ない。"""
+        for unit in ("台", "枚", "組", "本"):
+            insert_pallet(self.conn, width=1150, length=2650,
+                          w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                          unit=unit, code=unit)
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500,
+            last_hosozai="上蓋")
+        self.assertEqual(sorted(r.unit for r in rows), ["台", "枚", "組"])
+
+    def test_アングルなら台だけに戻る(self):
+        """保護材がアングル=別に用意するもの。パレットの単位は緩めない。"""
+        for unit in ("台", "枚"):
+            insert_pallet(self.conn, width=1150, length=2650,
+                          w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                          unit=unit, code=unit)
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500,
+            last_hosozai="アングル")
+        self.assertEqual([r.unit for r in rows], ["台"])
+
+    def test_全件表示なら単位で絞らない(self):
+        for unit in ("台", "本"):
+            insert_pallet(self.conn, width=1150, length=2650,
+                          w_min=900, w_max=1200, l_min=2400, l_max=2700,
+                          unit=unit, code=unit)
+        rows = svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2500, show_all=True)
+        self.assertEqual(len(rows), 2)
+
     def test_excludes_pallets_outside_the_fit_range(self):
         insert_pallet(self.conn, width=1150, length=2650,
                       w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")

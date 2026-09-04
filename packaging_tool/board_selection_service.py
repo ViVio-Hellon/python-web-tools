@@ -226,6 +226,30 @@ def find_pallet_row(conn: sqlite3.Connection, width: int, length: int, symbol: s
     return None
 
 
+# パレット一覧に出す単位。**判断はここ1か所**(VBA `FilterPalletList`)。
+#
+# 既定は「台」だけ ── パレットとして数えるものがそれだから。
+# **保護材が確定しているとき**(上蓋など、アングル以外に決まっている)は
+# 「枚」「組」も出す。上蓋は台で数えないものがあり、既定のままだと
+# 現物が一覧に出てこない(現場の指示)。
+#
+# 3つの一覧(全件・直接検索・製品サイズ適合)が同じ規則を使う。
+# **書き写していたせいで、製品サイズを入れた後の一覧だけこの規則が
+# 抜け落ちていた** ── サイズで当たる行が単位に関わらず全部出ていた
+# (現場の声)。関数に切り出して、次に増えても抜けないようにする
+UNITS_DEFAULT = ("台",)
+UNITS_WITH_HOSOZAI = ("台", "枚", "組")
+
+
+def unit_allowed(unit: str, last_hosozai: str) -> bool:
+    """この単位の行を一覧に出してよいか。"""
+    allowed = (UNITS_WITH_HOSOZAI
+               if last_hosozai and last_hosozai not in (
+                   material_service.HOSOZAI_ANGLE, "一致なし")
+               else UNITS_DEFAULT)
+    return (unit or "").strip() in allowed
+
+
 def list_pallet_sizes(
     conn: sqlite3.Connection,
     *,
@@ -242,9 +266,8 @@ def list_pallet_sizes(
         - EXオンリーモード(is_ex_order かつ ex_only)は 記号にEXを含む行のみ
         - show_all=Trueなら(EXオンリーでない限り)フィルタ無しで全件
         - それ以外は「単位フィルタ」と「EX除外」を両方適用:
-            単位フィルタ: last_hosozaiが設定されていて、かつ
-              アングル/一致なし のいずれでもなければ 単位∈{台,組}、
-              それ以外は 単位=台 のみ許可
+            単位フィルタ: `unit_allowed`(保護材が確定していれば
+              台/枚/組、それ以外は台のみ)
             EX除外: 記号に"EX"を含む行(大文字小文字問わず)は除外
         - is_1p1185_mode=Trueなら業界=タイト・幅=1300・丈=1300以外を除外
         - 幅|丈が同じで実コードを持つ行がある「単価表のマトリックス」行は除外
@@ -269,12 +292,7 @@ def list_pallet_sizes(
             if not is_ex:
                 continue
         elif not show_all:
-            unit = (row["単位"] or "").strip()
-            if last_hosozai and last_hosozai not in (material_service.HOSOZAI_ANGLE, "一致なし"):
-                unit_ok = unit in ("台", "組")
-            else:
-                unit_ok = unit == "台"
-            if not unit_ok or is_ex:
+            if not unit_allowed(row["単位"], last_hosozai) or is_ex:
                 continue
 
         result.append(_row_to_pallet_size_row(row))
@@ -623,12 +641,7 @@ def search_pallet_direct(
         symbol = (row["記号"] or "").strip()
         is_ex = "EX" in symbol.upper()
         if not show_all:
-            unit = (row["単位"] or "").strip()
-            if last_hosozai and last_hosozai not in (material_service.HOSOZAI_ANGLE, "一致なし"):
-                unit_ok = unit in ("台", "組")
-            else:
-                unit_ok = unit == "台"
-            if not unit_ok or is_ex:
+            if not unit_allowed(row["単位"], last_hosozai) or is_ex:
                 continue
 
         result.append(_row_to_pallet_size_row(row))
@@ -645,6 +658,7 @@ def list_pallets_for_product(
     ex_only: bool = False,
     is_ex_order: bool = False,
     two_stack: bool = False,
+    last_hosozai: str = "",
     manufactured_thickness: Optional[float] = None,
     user_log: Optional[UserLog] = None,
     is_1p1185_mode: bool = False,
@@ -773,6 +787,15 @@ def list_pallets_for_product(
             rejects.log(f"  ×除外: {label} EX({symbol})なので既定では出しません")
             continue
 
+        # **単位で絞る(`unit_allowed`)。** ここだけこの規則が抜けており、
+        # 製品サイズを入れたあとの一覧は、サイズで当たる行が単位に
+        # 関わらず全部出ていた(現場の声:「単位"台"での絞り込みのはずが
+        # サイズでヒットするものすべて表示している」)
+        if not show_all and not unit_allowed(row["単位"], last_hosozai):
+            rejects.log(f"  ×除外: {label} 単位が{row['単位'] or '(なし)'}です"
+                        f"(出すのは{'/'.join(UNITS_WITH_HOSOZAI if last_hosozai and last_hosozai not in (material_service.HOSOZAI_ANGLE, '一致なし') else UNITS_DEFAULT)})")
+            continue
+
         if industry == "5×10":
             ok, _needs_warning = _thickness_5x10_ok(symbol, manufactured_thickness)
             if not ok:
@@ -827,7 +850,7 @@ def list_pallets_by_product_dims(
             conn, product_width=int(float(product_width_text)),
             product_length=int(float(product_length_text)),
             show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order,
-            two_stack=two_stack,
+            two_stack=two_stack, last_hosozai=last_hosozai,
             manufactured_thickness=manufactured_thickness, user_log=user_log,
             is_1p1185_mode=is_1p1185_mode)
     if has_width or has_length:

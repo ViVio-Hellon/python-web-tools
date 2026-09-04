@@ -91,6 +91,22 @@ class PresenterTests(unittest.TestCase):
             shown.extend(column.sub)
         self.assertEqual(len(shown), len(set(shown)))
 
+    def test_関係の無いものを畳まない(self) -> None:
+        """現場の声:「発注コード / 用途は違和感。用途は製品の用途で
+
+        あってコードとは何ら関係がない」。上下に組むと「このコードの
+        用途」と読めてしまう。畳んでよいのは**同じものの言い換えか
+        単位**だけ。
+        """
+        pairs = {c.primary: c.sub for c in presenter.ORDER_VIEW}
+        self.assertEqual(pairs["発注コード"], (), "コードに用途を添えない")
+        self.assertEqual(pairs["用途コード"], (), "用途は単独の列")
+        # 同じものの言い換え・単位は畳んだままでよい(現場の確認済み)
+        self.assertEqual(pairs["LotNo"], ("品名",))
+        self.assertEqual(pairs["発注数"], ("単位",))
+        self.assertEqual(pairs["材質"], ("調質",))
+        self.assertEqual(pairs["厚"], ("幅", "丈"))
+
     def test_幅の合計は操作の列を残す(self) -> None:
         """ボタンは畳めない。**先に確保してから**残りを読み物に配る。"""
         total = sum(int(c.width.rstrip("%")) for c in presenter.ORDER_VIEW)

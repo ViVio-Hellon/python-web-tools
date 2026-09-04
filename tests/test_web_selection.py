@@ -1288,6 +1288,38 @@ class ChangeCandidateTests(SelectionWebTestCase):
         self.assertEqual(body["boards"]["lower"], first["boards"]["lower"])
         self.assertEqual(body["boards"]["change_axis"][0], "A")
 
+    def test_上下そろう軸を先に出す(self) -> None:
+        """現場のログと同じ形。**片側だけの答えは使えない。**
+
+        上用は要カット0では作れないが、カット1枚まで許せば作れる ──
+        このとき A(要カット0)を出すと下用だけ入れ替わって上用が空に
+        なる。両方そろう軸(この在庫ではC)を先に選ぶ。
+        """
+        self.conn.execute("DELETE FROM BoardMaster")
+        self.conn.execute("DELETE FROM PalletMaster")
+        insert_pallet(self.conn, width=600, length=600)
+        for width, length in ((600, 600), (30, 2500), (50, 1600),
+                              (100, 2000), (100, 2500)):
+            insert_board(self.conn, width=width, length=length)
+        self.conn.commit()
+        self.post("/api/selection/pallet/apply",
+                  {"width": "600", "length": "600"})
+        self.post("/api/selection/product/apply",
+                  {"width": "552", "length": "572"})
+
+        session = self.session()
+        session.change_candidate()
+        state = session.tiling
+        # 前提: A/B に上用は無く、C にだけある
+        self.assertIsNone(state.upper[0])
+        self.assertIsNone(state.upper[1])
+        self.assertIsNotNone(state.upper[2])
+        self.assertIsNotNone(state.lower[0])
+
+        self.assertEqual(state.axis, 2, "上下そろうCを選ぶ")
+        self.assertTrue(session.selected.lower)
+        self.assertTrue(session.selected.upper, "上用が空にならない")
+
     def test_片側だけ空になったら必ず言う(self) -> None:
         """現場の声:「候補変更で何も配置されないことがある」。
 
@@ -1310,7 +1342,7 @@ class ChangeCandidateTests(SelectionWebTestCase):
         # この在庫では上用(許容幅920〜999)に着地する組み合わせが無い
         self.assertTrue(body["boards"]["lower"])
         self.assertFalse(body["boards"]["upper"])
-        self.assertTrue(any("上用" in note and "見つかりません" in note
+        self.assertTrue(any("上用" in note and "ありませんでした" in note
                             for note in body.get("notes", [])),
                         body.get("notes"))
 

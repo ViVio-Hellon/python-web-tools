@@ -754,6 +754,15 @@ class SelectionSession:
         初回も**中身のある軸から**始めます。VBA は初回を必ず A に
         していたため、Aが空の品では押してもリストが空になっていました。
 
+        【上下そろう軸を先に出す】
+        敷き詰めで解が出るかは上用(製品幅-1まで)と下用(パレット幅+50
+        まで)で別々に決まります。「上用は要カット0では作れないが、
+        カット1枚まで許せば作れる」ということが実際にあり、そのとき
+        A(要カット0・枚数最小)を出すと**下用だけ入れ替わって上用が空**に
+        なります(現場のログ: 下用198件/上用69件、A・Bは上用なし、
+        Cだけ上用あり)。片側だけの答えは使えないので、**両方そろう軸を
+        先に選び**、どれもそろわないときだけ片側だけの軸を出します。
+
         戻りは `(次の軸, 飛ばした軸の名前)`。飛ばしたことは**画面にも
         出します** ── 選定ログを開かないと分からないのでは、押した回数と
         出た候補が合わない理由に気づけません。
@@ -763,6 +772,8 @@ class SelectionSession:
         current = None if first else self._axis_signature(state, state.axis)
         start = 0 if first else state.axis + 1
         skipped: list[str] = []
+        complete: list[int] = []
+        partial: list[int] = []
         # **見に行くのは残りの2つだけ。** まだ何も出していないとき
         # (初回)は3つとも見る。出したあとで3周ぶん回すと、3周目は
         # いま出している軸そのものに戻ってきて、「候補Aは候補Aと同じ
@@ -783,8 +794,27 @@ class SelectionSession:
                 log.info("候補変更: 軸%s は軸%s と同じ内容なので飛ばしました",
                          name, tiling.AXIS_NAMES[state.axis])
                 continue
+            (complete if not self._missing_sides(state, axis) else partial).append(axis)
+
+        for axis in complete:
+            return axis, skipped
+        for axis in partial:
+            log.info("候補変更: 軸%s は片側だけですが、両方そろう軸が"
+                     "ありません", tiling.AXIS_NAMES[axis])
             return axis, skipped
         return -1, skipped
+
+    def _missing_sides(self, state: TilingState, axis: int) -> list[str]:
+        """その軸で**空になる側**。画面に出さない側は数えない。
+
+        上下共用のときは上用の欄そのものが無いので、上用が空でも
+        「片側だけ」にはなりません。
+        """
+        share = self.presenter.is_shared_board_mode
+        return [label for label, cand, shown in
+                (("下用", state.lower[axis], True),
+                 ("上用", state.upper[axis], not share))
+                if shown and cand is None]
 
     @user_log_mod.tag_area("ボード")
     def change_candidate(self) -> BoardOpResult:
@@ -946,16 +976,14 @@ class SelectionSession:
 
         notes = ([f"候補{'・'.join(skipped)} は同じ内容だったので飛ばしました。"]
                  if skipped else [])
-        # **片側だけ空になったら必ず言う。** 敷き詰めで解が出るかは
-        # 上用(製品幅ちょうど-1まで)と下用(パレット幅+50まで)で
-        # 別々に決まるので、片方だけ0件になることがある。黙って
-        # 空にすると「押したら消えた」ようにしか見えない
-        missing = [label for label, cand, shown in
-                   (("下用", lower_cand, True), ("上用", upper_cand, not share))
-                   if shown and cand is None]
+        # **片側だけ空になったら必ず言う。** 両方そろう軸を先に選ぶので
+        # (`_next_tiling_axis`)ここに来るのは「どの軸でもそろわない」
+        # ときだけ。それでも黙って空にすると「押したら消えた」ように
+        # しか見えないので、理由を出す
+        missing = self._missing_sides(self.tiling, axis)
         if missing:
             text = (f"{'・'.join(missing)}は敷き詰めで置ける組み合わせが"
-                    "見つかりませんでした(その分は空になります)。")
+                    "どの候補にもありませんでした(その分は空になります)。")
             notes.append(text)
             ulog.log(f"  ※{text}")
         return BoardOpResult(

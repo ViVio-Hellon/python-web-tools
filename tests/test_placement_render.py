@@ -255,6 +255,39 @@ class BuildRenderPlanTests(unittest.TestCase):
         self.assertIn(render.COLOR_CUT_ZONE, fills)
         self.assertIn(render.COLOR_CUT_LINE, fills)
 
+    def test_はみ出したボードの寸法は残る側に寄せる(self):
+        """現場の声:「カット描写まではよくなったが**ボードサイズが
+
+        見えなくなってしまった**」。はみ出した分には切り落としの帯が
+        重なるので、矩形の中心に置くと寸法が帯の下に隠れる。
+        **切ったあとに残る側**へ寄せる ── 現物として残るのはそちらで、
+        寸法はその板の呼び名だから。
+        """
+        boards = [placed(0, 0, 1150, 3000)]        # 丈3000 > パレット丈2650
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        rect = plan.boards[0]
+        self.assertIsNotNone(rect.caption)
+        frame_right = plan.offset_x + 2650 * plan.scale
+        self.assertIsNotNone(rect.caption_cx)
+        self.assertLess(rect.caption_cx, frame_right, "帯の下に入っていない")
+        self.assertAlmostEqual(rect.caption_cx, (rect.x + frame_right) / 2,
+                               places=3)
+        self.assertIsNone(rect.caption_cy, "幅方向は はみ出していない")
+
+    def test_はみ出していなければ寄せない(self):
+        boards = [placed(0, 0, 1150, 2000)]
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        self.assertIsNone(plan.boards[0].caption_cx)
+        self.assertIsNone(plan.boards[0].caption_cy)
+
+    def test_幅がはみ出したら縦にも寄せる(self):
+        boards = [placed(0, 0, 1400, 2000)]        # 幅1400 > パレット幅1150
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        rect = plan.boards[0]
+        frame_bottom = plan.offset_y + 1150 * plan.scale
+        self.assertIsNotNone(rect.caption_cy)
+        self.assertLess(rect.caption_cy, frame_bottom)
+
     def test_overhang_marks_cover_both_directions(self):
         boards = [placed(0, 0, 1300, 3000)]        # 幅も丈も超える
         plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)

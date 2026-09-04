@@ -59,13 +59,20 @@ def rect_to_dict(rect: Optional[placement_render.Rect]) -> Optional[dict[str, An
     """
     if rect is None:
         return None
-    return {
+    out = {
         "x": round_px(rect.x), "y": round_px(rect.y),
         "width": round_px(rect.width), "height": round_px(rect.height),
         "fill": rect.fill, "outline": rect.outline,
         "caption": rect.caption, "font_size": rect.font_size,
         "outline_width": round_px(rect.outline_width),
     }
+    # 文字を寄せる先。**寄せないときは鍵ごと出さない** ── ほとんどの
+    # 矩形は矩形の中心でよく、毎回 null を並べると計画が読みにくくなる
+    if rect.caption_cx is not None:
+        out["caption_cx"] = round_px(rect.caption_cx)
+    if rect.caption_cy is not None:
+        out["caption_cy"] = round_px(rect.caption_cy)
+    return out
 
 
 def render_plan_to_dict(plan: placement_render.RenderPlan) -> dict[str, Any]:
