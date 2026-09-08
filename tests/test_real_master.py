@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -102,7 +103,13 @@ class RecomputeAgainstRealMasterTests(RealMasterTestCase):
             except (TypeError, ValueError):
                 return None
 
-        from packaging_tool import pallet_service as ps
+        from packaging_tool import db, pallet_service as ps, pallet_threshold
+
+        # 閾値はマスタの表から読む。ここでは初期値(=社内基準表)のまま
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        th = pallet_threshold.load(conn)
 
         # 管理番号はSQLite側で振り直されるので突き合わせに使えない。
         # 行ごとに「その寸法なら我々は何を書くか」を出してAccessの値と比べる
@@ -113,7 +120,7 @@ class RecomputeAgainstRealMasterTests(RealMasterTestCase):
             if not width or not length or w_max is None or l_max is None:
                 continue
             total += 1
-            band = (ps.calc_haba_max(width), ps.calc_dake_max(length))
+            band = (th.haba_max(width), th.dake_max(length))
             capped = (ps.cap_to_pallet(band[0], width),
                       ps.cap_to_pallet(band[1], length))
             if capped == (w_max, l_max):

@@ -82,6 +82,23 @@ MANAGED: tuple[Managed, ...] = (
             "品名・厚・幅・丈の範囲と発注コード"),
     Managed("アクセス権限", "アクセス権限", "権",
             "誰がどのモードを使えるか"),
+    # パレット適合閾値(タイトパレット選定基準表)。以前はプログラムに
+    # 直接書かれていた数値で、基準が変わっても現場では直せなかった。
+    # 触る頻度は低いので末尾に置く
+    Managed("PalletDakeThreshold", "パレット閾値(丈)", "丈",
+            "丈の帯ごとの、載せられる製品丈の範囲"),
+    Managed("PalletHabaThreshold", "パレット閾値(幅)", "幅",
+            "幅の帯ごとの、載せられる製品幅の範囲"),
+    Managed("PalletAshiThreshold", "パレット閾値(脚数)", "脚",
+            "丈の帯ごとの脚の本数"),
+    Managed("PalletKetaThreshold", "パレット閾値(桁数)", "桁",
+            "幅の帯ごとの桁(松板)の本数"),
+    Managed("PalletSymbolMaster", "パレット記号", "記",
+            "記号(C1/P1…)ごとの固定適合と桁数・脚数"),
+    Managed("PalletIndustryMaster", "パレット業界", "業",
+            "業界(1×2/4×8…)ごとの固定適合"),
+    Managed("PalletComboMaster", "パレット業界×記号", "組",
+            "業界と記号の組合せごとの固定適合(記号・業界より優先)"),
 )
 BY_TABLE: dict[str, Managed] = {m.table: m for m in MANAGED}
 
@@ -191,11 +208,17 @@ def _ddl_for(conn: sqlite3.Connection, table: str) -> str:
 
 def create_table(conn: sqlite3.Connection, table: str, *,
                  path: Optional[Path] = None) -> Result:
-    """取り込み元にその表を作る。**中身は空のまま。**
+    """取り込み元にその表を作る。**中身は空のまま** ── 閾値の表を除く。
 
     行は普段どおり「1行足す」で入れます。作ることと入れることを分けて
     あるのは、最初の1行をここで決め打ちすると、その1行が何を意味するか
     (誰にどの権限を与えたか)が画面に現れないためです。
+
+    **パレット適合閾値の7表だけは中身も入れます。** ここは「誰かが
+    決める1行」ではなく社内の選定基準表そのもので、しかも空だと
+    適合範囲の再計算がまるごと止まります(帯が0〜999999を覆えない)。
+    空の表を作って渡すと、押した人には作れたように見えて、次に再計算を
+    押したときに初めて止まります。作るなら使える状態で作ります。
     """
     allowed, why = can_edit(conn, table)
     if not allowed:
@@ -227,12 +250,37 @@ def create_table(conn: sqlite3.Connection, table: str, *,
                               "一覧を出し直してください。",
                               REFUSE_ALREADY)
             src.execute(ddl)
+            seeded = _seed_source(src, table)
     except source_db.SourceError as exc:
         return _write_failed(table, exc)
 
-    log.info("取り込み元に表を作りました: %s (%s)", table, found)
-    return Result(True, f"{_label(table)}を取り込み元に作りました"
-                        f"{_follow(conn, found, table)}")
+    log.info("取り込み元に表を作りました: %s (%s, 初期値%s件)",
+             table, found, seeded)
+    made = f"{_label(table)}を取り込み元に作りました"
+    if seeded:
+        made += f"(基準表の初期値{seeded}件を入れてあります)"
+    return Result(True, made + _follow(conn, found, table))
+
+
+def _seed_source(src: source_db.SourceConnection, table: str) -> int:
+    """作ったばかりの表に初期値を入れる。**入れる表だけ入れる。**
+
+    対象は `pallet_threshold.SEED` を持つ表(パレット適合閾値の7表)
+    だけです。アクセス権限のように「最初の1行が決めごと」の表は、
+    ここでは何もしません ── 理由は `create_table` の説明にあります。
+    """
+    from . import pallet_threshold
+    seed_rows = pallet_threshold.SEED.get(table)
+    if not seed_rows:
+        return 0
+    columns = list(seed_rows[0])
+    col_list = ", ".join(source_db.quote_identifier(c) for c in columns)
+    marks = ", ".join("?" for _ in columns)
+    sql = (f"INSERT INTO {source_db.quote_identifier(table)} "
+           f"({col_list}) VALUES ({marks})")
+    for row in seed_rows:
+        src.execute(sql, [row[c] for c in columns])
+    return len(seed_rows)
 
 
 def can_rebuild(conn: sqlite3.Connection, table: str,
@@ -898,6 +946,15 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
         return "。ただし手元に取り込めませんでした: " + " / ".join(result.errors)
 
     notes = [f"手元も{result.imported[table]}件に更新しました"]
+    if table in import_specs.THRESHOLD_TABLES:
+        # **閾値を直しただけでは、パレットの適合範囲は変わりません。**
+        # 適合範囲はマスタの列に書いてあり、閾値から計算し直して初めて
+        # 入ります。ここを飛ばすと「基準表は直したのに、選定の結果が
+        # 変わらない」になる(PalletMaster を直したときと同じ理由)
+        from . import pallet_service
+        summary = pallet_service.recompute_fit_ranges(conn)
+        notes.append("適合範囲も計算し直しました" if summary.ok
+                     else f"ただし適合範囲の再計算に失敗しました({summary.error})")
     if table == config.TBL_PALLET_MASTER:
         # 寸法を直したら適合範囲も変わる。取り込みと同じ後始末をする
         # (`data_sync.import_master` と同じ理由)

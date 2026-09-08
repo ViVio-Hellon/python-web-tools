@@ -224,6 +224,78 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
     ],
 }
 
+# ------------------------------------------------------------------
+# パレット適合閾値マスタ(7表)
+#
+# 表名・列名は移植元(VBA `PalletThresholdMaster.accdb`)の写し。
+# 末尾4列(有効・並び順・備考・更新日時)は7表とも共通なので、
+# 表ごとの列だけ書いて後ろに足す ── **同じ4行を7回書かない**。
+#
+# `ID` を入れていないのは、他のマスタと同じ理由です(取り込み元の
+# 採番をそのまま持たず、手元でAUTOINCREMENTに振り直す)。マスタ管理
+# 画面が打ち込める列もここから決まるので、ID が画面に出ることもない。
+# ------------------------------------------------------------------
+_THRESHOLD_TAIL: list[ColumnSpec] = [
+    ("有効", "有効", to_flag),
+    ("並び順", "並び順", lambda v: to_int(v) or 0),
+    ("備考", "備考", to_text),
+    ("更新日時", "更新日時", lambda v: to_datetime_text(v) or ""),
+]
+
+_THRESHOLD_HEAD: dict[str, list[ColumnSpec]] = {
+    "PalletDakeThreshold": [
+        ("入力最小値", "入力最小値", lambda v: to_int(v) or 0),
+        ("入力最大値", "入力最大値", lambda v: to_int(v) or 0),
+        ("適合最小値", "適合最小値", lambda v: to_int(v) or 0),
+        ("適合最大値", "適合最大値", lambda v: to_int(v) or 0),
+    ],
+    "PalletHabaThreshold": [
+        ("入力最小値", "入力最小値", lambda v: to_int(v) or 0),
+        ("入力最大値", "入力最大値", lambda v: to_int(v) or 0),
+        ("適合最小値", "適合最小値", lambda v: to_int(v) or 0),
+        ("適合最大値", "適合最大値", lambda v: to_int(v) or 0),
+    ],
+    "PalletAshiThreshold": [
+        ("入力最小値", "入力最小値", lambda v: to_int(v) or 0),
+        ("入力最大値", "入力最大値", lambda v: to_int(v) or 0),
+        ("脚数", "脚数", lambda v: to_int(v) or 0),
+    ],
+    "PalletKetaThreshold": [
+        ("入力最小値", "入力最小値", lambda v: to_int(v) or 0),
+        ("入力最大値", "入力最大値", lambda v: to_int(v) or 0),
+        ("桁数", "桁数", lambda v: to_int(v) or 0),
+    ],
+    "PalletSymbolMaster": [
+        ("記号", "記号", to_text),
+        ("巾適合最小値", "巾適合最小値", lambda v: to_int(v) or 0),
+        ("巾適合最大値", "巾適合最大値", lambda v: to_int(v) or 0),
+        ("丈適合最小値", "丈適合最小値", lambda v: to_int(v) or 0),
+        ("丈適合最大値", "丈適合最大値", lambda v: to_int(v) or 0),
+        ("桁数", "桁数", lambda v: to_int(v) or 0),
+        ("脚数", "脚数", lambda v: to_int(v) or 0),
+    ],
+    "PalletIndustryMaster": [
+        ("業界", "業界", to_text),
+        ("巾適合最小値", "巾適合最小値", lambda v: to_int(v) or 0),
+        ("巾適合最大値", "巾適合最大値", lambda v: to_int(v) or 0),
+        ("丈適合最小値", "丈適合最小値", lambda v: to_int(v) or 0),
+        ("丈適合最大値", "丈適合最大値", lambda v: to_int(v) or 0),
+    ],
+    "PalletComboMaster": [
+        ("業界", "業界", to_text),
+        ("記号", "記号", to_text),
+        ("巾適合最小値", "巾適合最小値", lambda v: to_int(v) or 0),
+        ("巾適合最大値", "巾適合最大値", lambda v: to_int(v) or 0),
+        ("丈適合最小値", "丈適合最小値", lambda v: to_int(v) or 0),
+        ("丈適合最大値", "丈適合最大値", lambda v: to_int(v) or 0),
+    ],
+}
+
+THRESHOLD_TABLES: tuple[str, ...] = tuple(_THRESHOLD_HEAD)
+
+for _threshold_table, _head in _THRESHOLD_HEAD.items():
+    IMPORT_SPECS[_threshold_table] = _head + _THRESHOLD_TAIL
+
 for _kanban_table in config.BOARD_KANBAN_TABLES + ("看板_LS",):
     IMPORT_SPECS[_kanban_table] = [
         ("資材", "資材", to_text),
@@ -260,7 +332,13 @@ BLANK_IS_MISSING: dict[str, tuple[str, ...]] = {
 # 無いことを失敗として数えると、取り込みが毎回「失敗」と出て、本当に
 # 直すべき問題が埋もれる。無いときは現場モードだけで動く仕様なので、
 # 案内として1行出すに留める。
-OPTIONAL_TABLES: frozenset[str] = frozenset({"アクセス権限"})
+#
+# パレット適合閾値の7表も同じ立場。移植元(VBA)は別ファイル
+# (PalletThresholdMaster.accdb)に持っていたので、現場の梱包資材マスタ
+# にはまだ入っていません。無いあいだは手元に入れた基準表の初期値
+# (`pallet_threshold.SEED`)で動き、マスタ管理画面から取り込み元に
+# 作れます。
+OPTIONAL_TABLES: frozenset[str] = frozenset({"アクセス権限"}) | frozenset(THRESHOLD_TABLES)
 
 # 梱包資材マスタ.sqlite3 ではなく、**看板マスタ.sqlite3(別ファイル)** から
 # 読むテーブル。以前はこの8つも `IMPORT_SPECS` の他の表と同じく梱包資材

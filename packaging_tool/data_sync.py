@@ -177,6 +177,10 @@ class ImportResult:
     # 失敗ではないが伝えたいこと(任意テーブルが元に無い、など)。
     # `errors` に混ぜると取り込みが「失敗」と出て、直すべき問題が埋もれる
     notes: list[str] = field(default_factory=list)
+    # 取り込み元に無かった任意テーブル。**1行にまとめて言う**ため
+    # `notes` とは別に持つ。閾値マスタを足して8表になり、1表1行だと
+    # 案内だけで8行になって、本当に直すべき問題が埋もれた
+    missing_optional: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -191,6 +195,7 @@ class ImportResult:
         self.skipped.update(other.skipped)
         self.errors.extend(other.errors)
         self.notes.extend(other.notes)
+        self.missing_optional.extend(other.missing_optional)
         return self
 
     def summary(self) -> str:
@@ -204,6 +209,11 @@ class ImportResult:
             lines.append("")
             lines.append("次のテーブルは取り込めませんでした:")
             lines.extend(f"  {e}" for e in self.errors)
+        if self.missing_optional:
+            lines.append("")
+            lines.append(f"  取り込み元に無かった表({len(self.missing_optional)}件、"
+                         f"無くても動きます): "
+                         + ", ".join(self.missing_optional))
         if self.notes:
             lines.append("")
             lines.extend(f"  {n}" for n in self.notes)
@@ -256,7 +266,7 @@ def import_tables(
                 # 無くてよい表。失敗として数えると、毎回「失敗」と出て
                 # 本当に直すべき問題が埋もれる
                 log.info("%s: 取り込み元にありません(任意)", table)
-                result.notes.append(f"{table}: 取り込み元にありません")
+                result.missing_optional.append(table)
                 continue
             log.warning("%s: 読み取り失敗 %s", table, exc)
             result.errors.append(f"{table}: {exc}")

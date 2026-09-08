@@ -469,3 +469,130 @@ CREATE TABLE IF NOT EXISTS 仕掛受注 (
     梱包単位_重量    REAL NOT NULL DEFAULT 0,
     梱包単位_枚数    REAL NOT NULL DEFAULT 0
 );
+
+
+-- ==================================================================
+-- パレット適合閾値マスタ(7表)
+--
+-- 【何を持つ表か】
+-- 「幅◯◯〜◯◯のパレットは、幅◯◯〜◯◯の製品に使える」という
+-- タイトパレット選定基準表そのもの。以前はこの数値が
+-- `pallet_service.py` に直接書かれていて、基準が変わるたびに
+-- **プログラムを直さないと反映できません**でした。表に出したので、
+-- 資材課がマスタ管理画面から直せます。
+--
+-- 【列の形はVBA(PalletThresholdMaster.accdb)の写し】
+-- 移植元と同じ表名・列名にしてあります。名前を変えると、あちらの
+-- 生成ツールが作ったファイルをそのまま取り込めなくなります。
+--   Access の AUTOINCREMENT/BOOLEAN/DATE は、SQLite では
+--   INTEGER PRIMARY KEY AUTOINCREMENT / INTEGER(0,1) / TEXT に対応。
+--
+-- 【帯(band)の約束】
+-- 入力最小値〜入力最大値は 0 から 999999 まで**隙間なく**続けること。
+-- 途中が抜けるとその寸法だけ判定できなくなるので、読み込み時に
+-- `pallet_threshold.load()` が連続性を確かめ、崩れていれば再計算を
+-- 中断します(黙って一部だけ計算しない)。
+-- 有効=0 の行は読み飛ばすので、**行を消さずに外せます**。ただし
+-- 外した分だけ帯に穴が開くことは上の検査が言います。
+-- ==================================================================
+
+-- 丈(長手)の帯 → その帯に載せられる製品丈の範囲
+CREATE TABLE IF NOT EXISTS PalletDakeThreshold (
+    ID          INTEGER PRIMARY KEY AUTOINCREMENT,
+    入力最小値   INTEGER NOT NULL DEFAULT 0,
+    入力最大値   INTEGER NOT NULL DEFAULT 0,
+    適合最小値   INTEGER NOT NULL DEFAULT 0,
+    適合最大値   INTEGER NOT NULL DEFAULT 0,
+    有効        INTEGER NOT NULL DEFAULT 1,
+    並び順       INTEGER NOT NULL DEFAULT 0,
+    備考        TEXT NOT NULL DEFAULT '',
+    更新日時     TEXT NOT NULL DEFAULT ''
+);
+
+-- 幅(短手)の帯 → その帯に載せられる製品幅の範囲
+CREATE TABLE IF NOT EXISTS PalletHabaThreshold (
+    ID          INTEGER PRIMARY KEY AUTOINCREMENT,
+    入力最小値   INTEGER NOT NULL DEFAULT 0,
+    入力最大値   INTEGER NOT NULL DEFAULT 0,
+    適合最小値   INTEGER NOT NULL DEFAULT 0,
+    適合最大値   INTEGER NOT NULL DEFAULT 0,
+    有効        INTEGER NOT NULL DEFAULT 1,
+    並び順       INTEGER NOT NULL DEFAULT 0,
+    備考        TEXT NOT NULL DEFAULT '',
+    更新日時     TEXT NOT NULL DEFAULT ''
+);
+
+-- 丈の帯 → 脚の本数
+CREATE TABLE IF NOT EXISTS PalletAshiThreshold (
+    ID          INTEGER PRIMARY KEY AUTOINCREMENT,
+    入力最小値   INTEGER NOT NULL DEFAULT 0,
+    入力最大値   INTEGER NOT NULL DEFAULT 0,
+    脚数        INTEGER NOT NULL DEFAULT 0,
+    有効        INTEGER NOT NULL DEFAULT 1,
+    並び順       INTEGER NOT NULL DEFAULT 0,
+    備考        TEXT NOT NULL DEFAULT '',
+    更新日時     TEXT NOT NULL DEFAULT ''
+);
+
+-- 幅の帯 → 桁(松板)の本数
+CREATE TABLE IF NOT EXISTS PalletKetaThreshold (
+    ID          INTEGER PRIMARY KEY AUTOINCREMENT,
+    入力最小値   INTEGER NOT NULL DEFAULT 0,
+    入力最大値   INTEGER NOT NULL DEFAULT 0,
+    桁数        INTEGER NOT NULL DEFAULT 0,
+    有効        INTEGER NOT NULL DEFAULT 1,
+    並び順       INTEGER NOT NULL DEFAULT 0,
+    備考        TEXT NOT NULL DEFAULT '',
+    更新日時     TEXT NOT NULL DEFAULT ''
+);
+
+-- 記号(C1/P1…)ごとの固定適合。帯の計算より優先する
+CREATE TABLE IF NOT EXISTS PalletSymbolMaster (
+    ID          INTEGER PRIMARY KEY AUTOINCREMENT,
+    記号        TEXT NOT NULL DEFAULT '',
+    巾適合最小値 INTEGER NOT NULL DEFAULT 0,
+    巾適合最大値 INTEGER NOT NULL DEFAULT 0,
+    丈適合最小値 INTEGER NOT NULL DEFAULT 0,
+    丈適合最大値 INTEGER NOT NULL DEFAULT 0,
+    桁数        INTEGER NOT NULL DEFAULT 0,
+    脚数        INTEGER NOT NULL DEFAULT 0,
+    有効        INTEGER NOT NULL DEFAULT 1,
+    並び順       INTEGER NOT NULL DEFAULT 0,
+    備考        TEXT NOT NULL DEFAULT '',
+    更新日時     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS UX_記号 ON PalletSymbolMaster(記号);
+
+-- 業界(1×2/4×8…)ごとの固定適合。記号が当たらないときに使う
+CREATE TABLE IF NOT EXISTS PalletIndustryMaster (
+    ID          INTEGER PRIMARY KEY AUTOINCREMENT,
+    業界        TEXT NOT NULL DEFAULT '',
+    巾適合最小値 INTEGER NOT NULL DEFAULT 0,
+    巾適合最大値 INTEGER NOT NULL DEFAULT 0,
+    丈適合最小値 INTEGER NOT NULL DEFAULT 0,
+    丈適合最大値 INTEGER NOT NULL DEFAULT 0,
+    有効        INTEGER NOT NULL DEFAULT 1,
+    並び順       INTEGER NOT NULL DEFAULT 0,
+    備考        TEXT NOT NULL DEFAULT '',
+    更新日時     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS UX_業界 ON PalletIndustryMaster(業界);
+
+-- 業界と記号の組合せ。3つの中で最優先(同じ業界でも記号で値が変わる)
+CREATE TABLE IF NOT EXISTS PalletComboMaster (
+    ID          INTEGER PRIMARY KEY AUTOINCREMENT,
+    業界        TEXT NOT NULL DEFAULT '',
+    記号        TEXT NOT NULL DEFAULT '',
+    巾適合最小値 INTEGER NOT NULL DEFAULT 0,
+    巾適合最大値 INTEGER NOT NULL DEFAULT 0,
+    丈適合最小値 INTEGER NOT NULL DEFAULT 0,
+    丈適合最大値 INTEGER NOT NULL DEFAULT 0,
+    有効        INTEGER NOT NULL DEFAULT 1,
+    並び順       INTEGER NOT NULL DEFAULT 0,
+    備考        TEXT NOT NULL DEFAULT '',
+    更新日時     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS UX_業界記号 ON PalletComboMaster(業界, 記号);

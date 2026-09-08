@@ -8,10 +8,10 @@ VBA `UFMAP` ユーザーフォーム + `PalletHistoryModule_v2`内 `InventoryMan
     ------------------------------------------------------------
     NormalizeKey                       -> normalize_key
     IsEmpty2                            -> is_blank
-    CalcDakeMin / CalcDakeMax            -> calc_dake_min / calc_dake_max
-    CalcHabaMin / CalcHabaMax             -> calc_haba_min / calc_haba_max
-    CalcAshi / CalcKeta                    -> calc_ashi / calc_keta
-    BuildFixedRangeTable / AddRange         -> build_pallet_range_table
+    PT_DakeMin / PT_DakeMax              -> pallet_threshold.Thresholds
+    PT_HabaMin / PT_HabaMax               -> pallet_threshold.Thresholds
+    PT_Ashi / PT_Keta                      -> pallet_threshold.Thresholds
+    BuildPalletRangeTable                   -> build_pallet_range_table
     UpdatePalletAll / UpdateAll              -> recompute_fit_ranges
     (完了メッセージの内訳)                     -> RecomputeSummary.counts()
     SearchAndHighlight                          -> search_pallets
@@ -44,7 +44,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from . import config, db
+from . import config, db, pallet_threshold
 from .logging_utils import get_logger
 
 log = get_logger("pallet_service")
@@ -142,51 +142,22 @@ def normalize_key(s: str) -> str:
 
 
 # ------------------------------------------------------------------
-# 段階判定表(タイトパレット選定基準表)の移植
-# 数値は変更しないこと(社内基準表準拠の固定値)
+# 段階判定表(タイトパレット選定基準表)
+#
+# 【数値はもうここにありません】
+# 以前はこのすぐ下に `calc_dake_min` などの固定表が並んでいて、
+# 基準が変わるたびにプログラムを直す必要がありました。いまは
+# `PalletDakeThreshold` 以下の7表に出してあり、資材課がマスタ管理画面
+# から直せます。読み方は `pallet_threshold` を参照。
+#
+#     calc_dake_min / calc_dake_max  ->  Thresholds.dake_min / dake_max
+#     calc_haba_min / calc_haba_max  ->  Thresholds.haba_min / haba_max
+#     calc_ashi / calc_keta          ->  Thresholds.ashi / keta
+#
+# 表に出したときに値は1つも変えていません(0〜12000の全寸法で
+# 旧固定表と同じ値を返すことを `tests/test_pallet_threshold.py` が
+# 確かめています)。
 # ------------------------------------------------------------------
-def calc_dake_min(dake: int) -> int:
-    """丈適合min: PDF「タイトパレット選定基準表：丈方向」準拠。
-
-    `calc_dake_max` と必ず対で使うこと(min <= max が保証される)。
-    """
-    table = (
-        (200, 110), (300, 191), (400, 291), (500, 391), (600, 491),
-        (700, 591), (800, 691), (900, 791), (1000, 891),
-        (1100, 991), (1200, 1091), (1300, 1191), (1450, 1291), (1550, 1441),
-        (1800, 1541), (2100, 1791), (2350, 2091), (2650, 2341), (3150, 2641),
-        (3650, 3141), (4150, 3641), (4600, 4141), (5100, 4591), (5600, 5091),
-        # 6100超は操業基準表に無い範囲。現物に合わせて基準表と同じ
-        # 500mm刻みで2段(6600 / 7100)まで延長してある
-        (6100, 5591), (6600, 6091), (7100, 6591),
-    )
-    for threshold, value in table:
-        if dake <= threshold:
-            return value
-    return 6591  # 7100超
-
-
-def calc_dake_max(dake: int) -> int:
-    """丈適合max: `calc_dake_min` と対になる上限表。
-
-    以前は「丈 - 10」で算出していたが、丈が小さい行(実データに幅2.5mmの
-    ような異常値があった)では min を下回り、適合範囲が逆転して
-    何を検索してもヒットしない行が生まれていた。
-    min と同じ段階表から引くことで min <= max を常に満たす。
-    """
-    table = (
-        (200, 190), (300, 290), (400, 390), (500, 490), (600, 590),
-        (700, 690), (800, 790), (900, 890), (1000, 990),
-        (1100, 1090), (1200, 1190), (1300, 1290), (1450, 1440), (1550, 1540),
-        (1800, 1790), (2100, 2090), (2350, 2340), (2650, 2640), (3150, 3140),
-        (3650, 3640), (4150, 4140), (4600, 4590), (5100, 5090), (5600, 5590),
-        (6100, 6090), (6600, 6590), (7100, 7090),
-    )
-    for threshold, value in table:
-        if dake <= threshold:
-            return value
-    return 99999  # 7100超は上限なし
-
 
 # 製品とパレットの現物サイズの間に必ず取る余裕(mm)。
 #
@@ -223,100 +194,6 @@ def cap_to_pallet(band_max: int, pallet_size: int) -> int:
     return min(band_max, pallet_size - PALLET_CLEARANCE)
 
 
-def calc_ashi(dake: int) -> int:
-    """脚数: PDF「タイトパレット選定基準表：丈方向」準拠。"""
-    if dake <= 1550:
-        return 2
-    if dake <= 2650:
-        return 3
-    if dake <= 3150:
-        return 4
-    if dake <= 4150:
-        return 5
-    if dake <= 4600:
-        return 6
-    return 7
-
-
-def calc_keta(haba: int) -> int:
-    """桁数: PDF「タイトパレット選定基準表：幅方向」パレット幅→松板使用数。
-
-    1801以上は**基準表に無い範囲**ですが、現物の1900幅パレットの桁が
-    7本だったことから 7 を返します(移植元 `CalcKeta` の注記どおり)。
-    以前は6で止めていたので、1801以上のパレットは桁数が1本少なく
-    入っていました。
-    """
-    if haba <= 350:
-        return 2
-    if haba <= 700:
-        return 3
-    if haba <= 1280:
-        return 4
-    if haba <= 1400:
-        return 5
-    if haba <= 1800:
-        return 6
-    return 7
-
-
-def calc_haba_min(haba: int) -> int:
-    """巾適合min: PDF「タイトパレット選定基準表：幅方向」準拠。
-
-    `calc_haba_max` と必ず対で使うこと(min <= max が保証される)。
-    301〜400の帯が300始まりなのは2山計算対応(305等の半端値を吸収するため)。
-
-    【1050超を50mm刻みへそろえた】
-    1050より上だけが100mm刻みのまま(1150 / 1250 / 1450 …)で、帯が
-    倍の幅を持っていた。たとえば幅1100のパレットは「1051〜1150」の帯に
-    入って下限1041をもらうが、これは1050幅のパレットの下限でもある。
-    帯が広い分だけ**そのパレットには載らない小さい製品まで適合**に
-    なっていた。1100/1200/1400/1500/1600/1700/1800/1900/2000 を補って
-    全域を50mm刻み(値 = 帯の下限 - 10)に統一してある。
-    """
-    table = (
-        (150, 50), (200, 141), (250, 191), (300, 241),
-        (400, 300), (450, 391), (500, 441), (550, 491), (600, 541),
-        (650, 591), (700, 641), (750, 691), (800, 741), (850, 791),
-        (900, 841), (950, 891), (1000, 941), (1050, 991), (1100, 1041),
-        (1150, 1091), (1200, 1141), (1250, 1191), (1300, 1241), (1350, 1291),
-        (1400, 1341), (1450, 1391), (1500, 1441), (1550, 1491), (1600, 1541),
-        (1650, 1591), (1700, 1641), (1750, 1691), (1800, 1741),
-        # 1850超は操業基準表に無い範囲。現物に合わせて同じ刻みで延長
-        (1850, 1791), (1900, 1841), (1950, 1891), (2000, 1941), (2050, 1991),
-    )
-    for threshold, value in table:
-        if haba <= threshold:
-            return value
-    return 1991  # 2050超
-
-
-def calc_haba_max(haba: int) -> int:
-    """巾適合max: `calc_haba_min` と対になる上限表。
-
-    以前は「幅 - 10」で算出していたため、幅が10mm未満の行では負の値になり
-    min を下回っていた(実データのPalletMasterに70件存在し、この行は
-    どんな製品サイズで検索しても絶対にヒットしなかった)。
-
-    `calc_haba_min` と同じく1050超を50mm刻みへそろえてある(理由は
-    そちらの説明を参照)。
-    """
-    table = (
-        (150, 140), (200, 190), (250, 240), (300, 290),
-        (400, 390), (450, 440), (500, 490), (550, 540), (600, 590),
-        (650, 640), (700, 690), (750, 740), (800, 790), (850, 840),
-        (900, 890), (950, 940), (1000, 990), (1050, 1040), (1100, 1090),
-        (1150, 1140), (1200, 1190), (1250, 1240), (1300, 1290), (1350, 1340),
-        (1400, 1390), (1450, 1440), (1500, 1490), (1550, 1540), (1600, 1590),
-        (1650, 1640), (1700, 1690), (1750, 1740), (1800, 1790),
-        # 1850超は操業基準表に無い範囲。現物に合わせて同じ刻みで延長
-        (1850, 1840), (1900, 1890), (1950, 1940), (2000, 1990), (2050, 2040),
-    )
-    for threshold, value in table:
-        if haba <= threshold:
-            return value
-    return 99999  # 2050超は上限なし
-
-
 @dataclass
 class PalletRangeTable:
     """`BuildPalletRangeTable` の移植。記号/業界キーごとの固定適合範囲。"""
@@ -330,57 +207,46 @@ class PalletRangeTable:
     ashi: dict[str, int] = field(default_factory=dict)
 
 
-def build_pallet_range_table() -> PalletRangeTable:
+def build_pallet_range_table(conn: sqlite3.Connection) -> PalletRangeTable:
+    """VBA `BuildPalletRangeTable` の移植。3つのマスタ表から組み立てる。
+
+    **積む順序に意味があります**(移植元と同じ)。
+
+        1. 業界を入れる
+        2. 記号を**あとから**入れる ── 同じ鍵になったら記号が勝つ
+        3. 複合(業界|記号)は別の辞書に持つ ── 使うときに最優先で引く
+
+    鍵は `normalize_key` でそろえます。マスタの「5x10」「５×１０」を
+    同じ1つの鍵として扱うためです。
+    """
     t = PalletRangeTable()
 
-    # 記号別 桁数・脚数固定値
-    keta_ashi = {
-        "C1": (3, 3), "C2": (4, 3), "C3": (3, 3), "C4": (4, 3),
-        "C5": (4, 2), "C6": (4, 3), "C7": (4, 2), "C8": (4, 2),
-        "P1": (4, 2), "P2": (4, 2), "P3": (4, 2), "P4": (4, 2),
-        "P5": (5, 2), "P6": (4, 3), "P7": (4, 3),
-    }
-    for sym, (keta, ashi) in keta_ashi.items():
-        t.keta[sym] = keta
-        t.ashi[sym] = ashi
+    # --- 1. 業界単独 -------------------------------------------------
+    for row in pallet_threshold.rows(conn, "PalletIndustryMaster"):
+        key = normalize_key(str(row["業界"] or ""))
+        t.w_min[key] = int(row["巾適合最小値"] or 0)
+        t.w_max[key] = int(row["巾適合最大値"] or 0)
+        t.l_min[key] = int(row["丈適合最小値"] or 0)
+        t.l_max[key] = int(row["丈適合最大値"] or 0)
 
-    def add_range(key: str, w_min: int, w_max: int, l_min: int, l_max: int) -> None:
-        nkey = normalize_key(key)
-        t.w_min[nkey] = w_min
-        t.w_max[nkey] = w_max
-        t.l_min[nkey] = l_min
-        t.l_max[nkey] = l_max
+    # --- 2. 記号(同じ鍵なら上書き勝ち) -------------------------------
+    for row in pallet_threshold.rows(conn, "PalletSymbolMaster"):
+        key = normalize_key(str(row["記号"] or ""))
+        t.w_min[key] = int(row["巾適合最小値"] or 0)
+        t.w_max[key] = int(row["巾適合最大値"] or 0)
+        t.l_min[key] = int(row["丈適合最小値"] or 0)
+        t.l_max[key] = int(row["丈適合最大値"] or 0)
+        t.keta[key] = int(row["桁数"] or 0)
+        t.ashi[key] = int(row["脚数"] or 0)
 
-    # 業界単独
-    add_range("1×2", 935, 1005, 1700, 2005)
-    add_range("4×8", 1185, 1255, 1800, 2505)
-    add_range("5×10", 1470, 1540, 2700, 3090)
-    add_range("4×10", 1215, 1260, 2700, 3130)
-    add_range("3×6", 900, 945, 1700, 2030)
-    add_range("5×8", 1485, 1530, 2000, 2530)
-
-    # Cシリーズ
-    add_range("C1", 410, 490, 600, 750)
-    add_range("C2", 450, 530, 680, 1110)
-    add_range("C3", 480, 560, 680, 860)
-    add_range("C4", 560, 640, 820, 1030)
-    add_range("C5", 560, 640, 780, 1290)
-    add_range("C6", 650, 730, 830, 1110)
-    add_range("C7", 740, 820, 560, 850)
-    add_range("C8", 920, 1000, 640, 1080)
-
-    # Pシリーズ
-    add_range("P1", 500, 580, 440, 580)
-    add_range("P2", 550, 630, 480, 630)
-    add_range("P3", 650, 730, 480, 730)
-    add_range("P4", 850, 930, 560, 930)
-    add_range("P5", 1015, 1095, 680, 1095)
-    add_range("P6", 1150, 1230, 830, 1230)
-    add_range("P7", 1250, 1330, 860, 1330)
-
-    # 複合キー(業界|記号)
-    combo_key = f"{normalize_key('5×10')}|{normalize_key('強度UP')}"
-    t.combo[combo_key] = (1485, 1540, 2700, 3090)
+    # --- 3. 複合キー(業界|記号) --------------------------------------
+    for row in pallet_threshold.rows(conn, "PalletComboMaster"):
+        key = (f"{normalize_key(str(row['業界'] or ''))}"
+               f"|{normalize_key(str(row['記号'] or ''))}")
+        t.combo[key] = (int(row["巾適合最小値"] or 0),
+                        int(row["巾適合最大値"] or 0),
+                        int(row["丈適合最小値"] or 0),
+                        int(row["丈適合最大値"] or 0))
 
     return t
 
@@ -448,6 +314,9 @@ class RecomputeSummary:
     keta: int = 0
     # 書き方をそろえて初めて当たった行。**拾ったことを黙っていない**
     loose: list[LooseMatch] = field(default_factory=list)
+    # どの帯にも当たらなかった行(VBA の「帯ヒットなし」)。
+    # 帯は0〜999999を覆っているので、寸法がその外にあるときだけ起きる
+    band_miss: list[str] = field(default_factory=list)
 
     def counts(self) -> list[tuple[str, int]]:
         """内訳を(名前, 件数)で。画面もログもこれを読む。"""
@@ -467,6 +336,17 @@ class RecomputeSummary:
             return f"適合範囲を再計算できませんでした。\n{self.error or ''}"
         lines = [f"{self.total}行を見直しました。"]
         lines += [f"  {name}: {count}件" for name, count in self.counts()]
+        if self.band_miss:
+            # **触らなかったことを黙っていない。** 数だけ出すと
+            # 「直ったつもりの行」が残る
+            lines.append("")
+            lines.append(f"閾値の帯に当たらなかった行: {len(self.band_miss)}件")
+            lines.append("  (寸法が基準表の範囲外です。この行の適合範囲は"
+                         "そのままにしてあります)")
+            lines += [f"  {m}" for m in self.band_miss[:LOOSE_LIST_LIMIT]]
+            if len(self.band_miss) > LOOSE_LIST_LIMIT:
+                lines.append(f"  ほか {len(self.band_miss) - LOOSE_LIST_LIMIT}件"
+                             f"(全部は app.log に出ています)")
         if self.loose:
             # **拾えたことと、ゆれが残っていることは別。** 両方言う
             lines.append("")
@@ -486,7 +366,13 @@ def loose_key_rows(conn: sqlite3.Connection) -> list[LooseMatch]:
     「マスタに表記ゆれがある」と分かるようにするためで、
     **書き込みは一切しません**。
     """
-    table = build_pallet_range_table()
+    try:
+        table = build_pallet_range_table(conn)
+    except pallet_threshold.ThresholdError as exc:
+        # ここは「いまの状態」を出すだけの場所。閾値が読めないことは
+        # 再計算のほうが本文で言うので、ここでは数えないだけにする
+        log.warning("固定適合表を読めないので表記ゆれを数えません: %s", exc)
+        return []
     rows = db.fetch_all(
         conn, "SELECT 管理番号, 記号, 業界 FROM PalletMaster",
         caller_name="loose_key_rows")
@@ -529,8 +415,19 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
 
     元のVBAにあった「書き込みテスト」「別接続での永続化確認」は
     診断目的のみで業務ロジックに影響しないため、Python版では省略する。
+
+    【閾値が読めなければ1行も直さない(移植元 案X)】
+    帯に穴があると、その寸法の行だけ「該当なし」になります。通った行
+    だけ直してしまうと、**正しい行と間違った行が混ざったマスタ**が
+    できて、どれが信用できるのか分からなくなります。読めないと分かった
+    時点で、何も書かずに理由を返します。
     """
-    table = build_pallet_range_table()
+    try:
+        thresholds = pallet_threshold.load(conn)
+        table = build_pallet_range_table(conn)
+    except pallet_threshold.ThresholdError as exc:
+        log.warning("閾値が読めないため再計算しません: %s", exc)
+        return RecomputeSummary(ok=False, error=str(exc))
     rows = db.fetch_all(
         conn,
         "SELECT 管理番号, 幅, 丈, 記号, 業界, 脚数, 桁数 FROM PalletMaster",
@@ -564,6 +461,29 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
                     got.loose.append(LooseMatch(
                         number=row["管理番号"], column=column,
                         raw=text, matched=key))
+
+            def note_miss(side: str, size: int, *values: int) -> bool:
+                """帯に当たったか。当たっていなければ控えて False を返す。
+
+                帯は0〜999999を覆っていることを読み込み時に確かめて
+                あるので、ここへ来るのは寸法がその外(999999超)のとき
+                だけです。**まず起きません。**
+
+                【移植元との違い ── 当たらなかった値は書きません】
+                VBA `RunUpdatePalletAll` は `PT_Lookup` が返した
+                `-999999` をそのままマスタへ書き、ログに1行出します。
+                しかし適合minに -999999 が入った行は「幅マイナス99万まで
+                載る」という意味になり、以後どんな検索にも当たり続けます
+                ── **壊れていることが検索結果の形で現れません**。
+                Python版はその列を触らずに残し、件数と管理番号を
+                まとめに出します(同じ「気づける」を、実害なしで満たす)。
+                """
+                if pallet_threshold.NO_HIT not in values:
+                    return True
+                got.band_miss.append(
+                    f"管理番号 {row['管理番号']}  {side}={size}"
+                    f"(帯の範囲外なのでこの列は触っていません)")
+                return False
 
             # --- 固定適合の上書き(最優先) -------------------------
             #     ① 複合キー(業界|記号) → ② 記号単独 → ③ 業界単独
@@ -604,26 +524,36 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
                 # 既存の誤った値も正しい範囲に矯正する)。
                 # 上限は現物サイズでクランプする(下の cap_to_pallet を参照)
                 if dake > 0:
-                    updates["丈適合min"] = calc_dake_min(dake)
-                    updates["丈適合max"] = cap_to_pallet(calc_dake_max(dake), dake)
-                    got.dake_min += 1
-                    got.dake_max += 1
+                    lo = thresholds.dake_min(dake)
+                    hi = thresholds.dake_max(dake)
+                    if note_miss("丈", dake, lo, hi):
+                        updates["丈適合min"] = lo
+                        updates["丈適合max"] = cap_to_pallet(hi, dake)
+                        got.dake_min += 1
+                        got.dake_max += 1
                 if haba > 0:
-                    updates["巾適合min"] = calc_haba_min(haba)
-                    updates["巾適合max"] = cap_to_pallet(calc_haba_max(haba), haba)
-                    got.haba_min += 1
-                    got.haba_max += 1
+                    lo = thresholds.haba_min(haba)
+                    hi = thresholds.haba_max(haba)
+                    if note_miss("幅", haba, lo, hi):
+                        updates["巾適合min"] = lo
+                        updates["巾適合max"] = cap_to_pallet(hi, haba)
+                        got.haba_min += 1
+                        got.haba_max += 1
                 got.calculated += 1
 
             # --- 後始末:脚数・桁数の補完 ---------------------------
             # **どの道を通った行もここを通る**(移植元の `SkipCalc:`)。
             # 埋めるのは**空のときだけ** ── 現場が手で入れた本数を潰さない
             if dake > 0 and "脚数" not in updates and is_blank(row["脚数"]):
-                updates["脚数"] = calc_ashi(dake)
-                got.ashi += 1
+                ashi = thresholds.ashi(dake)
+                if note_miss("丈", dake, ashi, ashi):
+                    updates["脚数"] = ashi
+                    got.ashi += 1
             if haba > 0 and "桁数" not in updates and is_blank(row["桁数"]):
-                updates["桁数"] = calc_keta(haba)
-                got.keta += 1
+                keta = thresholds.keta(haba)
+                if note_miss("幅", haba, keta, keta):
+                    updates["桁数"] = keta
+                    got.keta += 1
 
             if updates:
                 set_sql = ", ".join(f"[{c}] = ?" for c in updates)
@@ -639,6 +569,9 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
         # 何十件あってもマスタを直しきれるようにするため
         log.info("書き方をそろえて拾った行 %s件:\n  %s", len(got.loose),
                  "\n  ".join(m.line() for m in got.loose))
+    if got.band_miss:
+        log.warning("帯に当たらなかった行 %s件:\n  %s", len(got.band_miss),
+                    "\n  ".join(got.band_miss))
     return got
 
 

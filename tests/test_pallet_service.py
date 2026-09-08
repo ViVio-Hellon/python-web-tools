@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from packaging_tool import db, pallet_service as svc
+from packaging_tool import db, pallet_service as svc, pallet_threshold
 
 
 def insert_pallet(conn, *, width, length, industry="一般", symbol="", position="A-01",
@@ -41,6 +41,8 @@ class PalletServiceTestCase(unittest.TestCase):
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
         db.apply_schema(self.conn)
+        # 閾値はマスタの表から読む(初期値=社内基準表が入った状態)
+        self.th = pallet_threshold.load(self.conn)
 
     def tearDown(self) -> None:
         self.conn.close()
@@ -50,33 +52,52 @@ class PalletServiceTestCase(unittest.TestCase):
 # 段階判定表 (数値は社内基準表準拠、変更してはいけない)
 # ------------------------------------------------------------------
 class CalcTableTests(unittest.TestCase):
+    """基準表の数値そのもの。**いまはマスタの表から読む。**
+
+    以前はこの数値が `pallet_service` にPythonの表として書かれていて、
+    ここではその関数を直に呼んでいた。数値をDB(`PalletDakeThreshold`
+    ほか)へ出したので、テストも**出したあとの表を読んで**確かめる
+    ── 表に出したことで値が変わっていないことは、ここが担保する。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.conn = sqlite3.connect(":memory:")
+        cls.conn.row_factory = sqlite3.Row
+        db.apply_schema(cls.conn)          # 初期値もここで入る
+        cls.th = pallet_threshold.load(cls.conn)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.conn.close()
+
     def test_calc_dake_min_boundaries(self):
-        self.assertEqual(svc.calc_dake_min(600), 491)
-        self.assertEqual(svc.calc_dake_min(601), 591)
+        self.assertEqual(self.th.dake_min(600), 491)
+        self.assertEqual(self.th.dake_min(601), 591)
         # 200以下まで刻む(旧版は600以下が一括で410だった)
-        self.assertEqual(svc.calc_dake_min(200), 110)
-        self.assertEqual(svc.calc_dake_min(300), 191)
-        self.assertEqual(svc.calc_dake_min(700), 591)
-        self.assertEqual(svc.calc_dake_min(6100), 5591)
+        self.assertEqual(self.th.dake_min(200), 110)
+        self.assertEqual(self.th.dake_min(300), 191)
+        self.assertEqual(self.th.dake_min(700), 591)
+        self.assertEqual(self.th.dake_min(6100), 5591)
         # 基準表に無い6100超も現物に合わせて2段延長してある
-        self.assertEqual(svc.calc_dake_min(6600), 6091)
-        self.assertEqual(svc.calc_dake_min(7100), 6591)
-        self.assertEqual(svc.calc_dake_min(9999), 6591)  # 7100超は頭打ち
+        self.assertEqual(self.th.dake_min(6600), 6091)
+        self.assertEqual(self.th.dake_min(7100), 6591)
+        self.assertEqual(self.th.dake_min(9999), 6591)  # 7100超は頭打ち
 
     def test_calc_dake_max_pairs_with_min(self):
-        self.assertEqual(svc.calc_dake_max(600), 590)
-        self.assertEqual(svc.calc_dake_max(601), 690)
-        self.assertEqual(svc.calc_dake_max(6100), 6090)
-        self.assertEqual(svc.calc_dake_max(6600), 6590)
-        self.assertEqual(svc.calc_dake_max(7100), 7090)
-        self.assertEqual(svc.calc_dake_max(9999), 99999)  # 7100超は上限なし
+        self.assertEqual(self.th.dake_max(600), 590)
+        self.assertEqual(self.th.dake_max(601), 690)
+        self.assertEqual(self.th.dake_max(6100), 6090)
+        self.assertEqual(self.th.dake_max(6600), 6590)
+        self.assertEqual(self.th.dake_max(7100), 7090)
+        self.assertEqual(self.th.dake_max(9999), 99999)  # 7100超は上限なし
 
     def test_calc_haba_max_pairs_with_min(self):
-        self.assertEqual(svc.calc_haba_max(150), 140)
-        self.assertEqual(svc.calc_haba_max(400), 390)
-        self.assertEqual(svc.calc_haba_max(1850), 1840)
-        self.assertEqual(svc.calc_haba_max(2050), 2040)
-        self.assertEqual(svc.calc_haba_max(9999), 99999)  # 2050超は上限なし
+        self.assertEqual(self.th.haba_max(150), 140)
+        self.assertEqual(self.th.haba_max(400), 390)
+        self.assertEqual(self.th.haba_max(1850), 1840)
+        self.assertEqual(self.th.haba_max(2050), 2040)
+        self.assertEqual(self.th.haba_max(9999), 99999)  # 2050超は上限なし
 
     def test_fit_range_can_never_invert(self):
         """適合範囲の min > max は「何を検索してもヒットしない行」を生む。
@@ -87,28 +108,28 @@ class CalcTableTests(unittest.TestCase):
         """
         for value in range(0, 7000):
             self.assertLessEqual(
-                svc.calc_dake_min(value), svc.calc_dake_max(value),
+                self.th.dake_min(value), self.th.dake_max(value),
                 f"丈={value} で適合範囲が逆転した")
             self.assertLessEqual(
-                svc.calc_haba_min(value), svc.calc_haba_max(value),
+                self.th.haba_min(value), self.th.haba_max(value),
                 f"幅={value} で適合範囲が逆転した")
 
     def test_tiny_width_no_longer_produces_negative_max(self):
         # 実データにあった 幅2.5mm の行。旧実装では 300〜-8 になっていた
-        self.assertEqual((svc.calc_haba_min(2), svc.calc_haba_max(2)), (50, 140))
+        self.assertEqual((self.th.haba_min(2), self.th.haba_max(2)), (50, 140))
 
     def test_calc_haba_min_boundaries(self):
-        self.assertEqual(svc.calc_haba_min(400), 300)
-        self.assertEqual(svc.calc_haba_min(401), 391)
+        self.assertEqual(self.th.haba_min(400), 300)
+        self.assertEqual(self.th.haba_min(401), 391)
         # 400以下も刻む(旧版は400以下が一括で300だった)
-        self.assertEqual(svc.calc_haba_min(150), 50)
-        self.assertEqual(svc.calc_haba_min(300), 241)
+        self.assertEqual(self.th.haba_min(150), 50)
+        self.assertEqual(self.th.haba_min(300), 241)
         # 1050超も50mm刻み。1100は「1051〜1100」の帯で1041
-        self.assertEqual(svc.calc_haba_min(1100), 1041)
-        self.assertEqual(svc.calc_haba_min(1101), 1091)
-        self.assertEqual(svc.calc_haba_min(1850), 1791)
-        self.assertEqual(svc.calc_haba_min(2050), 1991)
-        self.assertEqual(svc.calc_haba_min(5000), 1991)  # 2050超は頭打ち
+        self.assertEqual(self.th.haba_min(1100), 1041)
+        self.assertEqual(self.th.haba_min(1101), 1091)
+        self.assertEqual(self.th.haba_min(1850), 1791)
+        self.assertEqual(self.th.haba_min(2050), 1991)
+        self.assertEqual(self.th.haba_min(5000), 1991)  # 2050超は頭打ち
 
     def test_haba_bands_are_50mm_all_the_way_up(self):
         """1050超だけ100mm刻みで、帯が倍の幅を持っていた。
@@ -118,23 +139,23 @@ class CalcTableTests(unittest.TestCase):
         全域が50mm刻み = 帯の下限-10 であることを固定する。
         """
         for upper in range(1100, 2051, 50):
-            self.assertEqual(svc.calc_haba_min(upper), upper - 50 - 9,
+            self.assertEqual(self.th.haba_min(upper), upper - 50 - 9,
                              f"幅{upper}の帯の下限がずれている")
-            self.assertEqual(svc.calc_haba_max(upper), upper - 10,
+            self.assertEqual(self.th.haba_max(upper), upper - 10,
                              f"幅{upper}の帯の上限がずれている")
 
     def test_calc_ashi_boundaries(self):
-        self.assertEqual(svc.calc_ashi(1550), 2)
-        self.assertEqual(svc.calc_ashi(1551), 3)
-        self.assertEqual(svc.calc_ashi(4600), 6)
-        self.assertEqual(svc.calc_ashi(4601), 7)
+        self.assertEqual(self.th.ashi(1550), 2)
+        self.assertEqual(self.th.ashi(1551), 3)
+        self.assertEqual(self.th.ashi(4600), 6)
+        self.assertEqual(self.th.ashi(4601), 7)
 
     def test_calc_keta_boundaries(self):
-        self.assertEqual(svc.calc_keta(350), 2)
-        self.assertEqual(svc.calc_keta(351), 3)
-        self.assertEqual(svc.calc_keta(1280), 4)
-        self.assertEqual(svc.calc_keta(1281), 5)
-        self.assertEqual(svc.calc_keta(1800), 6)
+        self.assertEqual(self.th.keta(350), 2)
+        self.assertEqual(self.th.keta(351), 3)
+        self.assertEqual(self.th.keta(1280), 4)
+        self.assertEqual(self.th.keta(1281), 5)
+        self.assertEqual(self.th.keta(1800), 6)
 
     def test_桁数は1801以上で7本(self):
         """基準表に無い範囲だが、現物の1900幅パレットの桁が7本だった。
@@ -142,9 +163,9 @@ class CalcTableTests(unittest.TestCase):
         以前は6で止めていたので、1801以上のパレットの桁数が1本
         少なく入っていた(移植元 `CalcKeta` の注記どおりに直した)。
         """
-        self.assertEqual(svc.calc_keta(1801), 7)
-        self.assertEqual(svc.calc_keta(1900), 7)
-        self.assertEqual(svc.calc_keta(9999), 7)
+        self.assertEqual(self.th.keta(1801), 7)
+        self.assertEqual(self.th.keta(1900), 7)
+        self.assertEqual(self.th.keta(9999), 7)
 
     def test_normalize_key_fullwidth_and_multiply_sign(self):
         self.assertEqual(svc.normalize_key("ｃ１"), "C1")     # 全角英数字→半角+大文字化
@@ -232,27 +253,27 @@ class RecomputeFitRangesTests(PalletServiceTestCase):
             (row["巾適合min"], row["巾適合max"], row["丈適合min"], row["丈適合max"]),
             (1185, 1255, 1800, 2505),
         )
-        self.assertEqual(row["脚数"], svc.calc_ashi(1800))
-        self.assertEqual(row["桁数"], svc.calc_keta(1185))
+        self.assertEqual(row["脚数"], self.th.ashi(1800))
+        self.assertEqual(row["桁数"], self.th.keta(1185))
 
     def test_複合キーで当たった行にも脚数と桁数を補う(self):
         insert_pallet(self.conn, width=1470, length=2700,
                       industry="5×10", symbol="強度UP")
         svc.recompute_fit_ranges(self.conn)
         row = self.conn.execute("SELECT * FROM PalletMaster").fetchone()
-        self.assertEqual(row["脚数"], svc.calc_ashi(2700))
-        self.assertEqual(row["桁数"], svc.calc_keta(1470))
+        self.assertEqual(row["脚数"], self.th.ashi(2700))
+        self.assertEqual(row["桁数"], self.th.keta(1470))
 
     def test_calculated_fallback(self):
         insert_pallet(self.conn, width=999, length=999, industry="", symbol="")
         svc.recompute_fit_ranges(self.conn)
         row = self.conn.execute("SELECT * FROM PalletMaster").fetchone()
-        self.assertEqual(row["丈適合min"], svc.calc_dake_min(999))
-        self.assertEqual(row["丈適合max"], svc.cap_to_pallet(svc.calc_dake_max(999), 999))
-        self.assertEqual(row["巾適合min"], svc.calc_haba_min(999))
-        self.assertEqual(row["巾適合max"], svc.cap_to_pallet(svc.calc_haba_max(999), 999))
-        self.assertEqual(row["脚数"], svc.calc_ashi(999))
-        self.assertEqual(row["桁数"], svc.calc_keta(999))
+        self.assertEqual(row["丈適合min"], self.th.dake_min(999))
+        self.assertEqual(row["丈適合max"], svc.cap_to_pallet(self.th.dake_max(999), 999))
+        self.assertEqual(row["巾適合min"], self.th.haba_min(999))
+        self.assertEqual(row["巾適合max"], svc.cap_to_pallet(self.th.haba_max(999), 999))
+        self.assertEqual(row["脚数"], self.th.ashi(999))
+        self.assertEqual(row["桁数"], self.th.keta(999))
 
 
 class KetaAshiFillTests(PalletServiceTestCase):
@@ -276,8 +297,8 @@ class KetaAshiFillTests(PalletServiceTestCase):
 
     def test_空なら埋める(self):
         row = self.fill(keta=0, ashi=0)
-        self.assertEqual(row["桁数"], svc.calc_keta(999))
-        self.assertEqual(row["脚数"], svc.calc_ashi(999))
+        self.assertEqual(row["桁数"], self.th.keta(999))
+        self.assertEqual(row["脚数"], self.th.ashi(999))
 
     def test_0もNULLも空とみなす(self):
         """取り込み元の欄は0で埋まっていることがある。空欄と意味は同じ。"""
@@ -335,7 +356,7 @@ class RecomputeCountsTests(PalletServiceTestCase):
         self.assertIn("読めませんでした", got.summary())
 
 
-class CapToPalletTests(unittest.TestCase):
+class CapToPalletTests(PalletServiceTestCase):
     """段階表の上限を現物サイズで頭打ちにする。
 
     基準表は「製品サイズの帯 → その帯の**標準**パレット」の表なので、
@@ -346,8 +367,8 @@ class CapToPalletTests(unittest.TestCase):
 
     def test_a_standard_size_keeps_the_table_value(self):
         # 幅1550は「1451〜1550」の帯の標準サイズ。表の上限1540がそのまま残る
-        self.assertEqual(svc.cap_to_pallet(svc.calc_haba_max(1550), 1550), 1540)
-        self.assertEqual(svc.cap_to_pallet(svc.calc_dake_max(3150), 3150), 3140)
+        self.assertEqual(svc.cap_to_pallet(self.th.haba_max(1550), 1550), 1540)
+        self.assertEqual(svc.cap_to_pallet(self.th.dake_max(3150), 3150), 3140)
 
     def test_an_odd_size_is_capped_to_itself(self):
         """帯の上限を名乗らせないこと。
@@ -356,16 +377,16 @@ class CapToPalletTests(unittest.TestCase):
         縮んだが、無くなってはいない(1455のパレットは「1451〜1500」の
         帯なので上限1490をもらう)。丈は帯が広いままなので差も大きい。
         """
-        self.assertEqual(svc.calc_haba_max(1455), 1490)          # 表の値
+        self.assertEqual(self.th.haba_max(1455), 1490)          # 表の値
         self.assertEqual(svc.cap_to_pallet(1490, 1455), 1445)    # 頭打ち後
-        self.assertEqual(svc.cap_to_pallet(svc.calc_dake_max(2970), 2970), 2960)
+        self.assertEqual(svc.cap_to_pallet(self.th.dake_max(2970), 2970), 2960)
 
     def test_the_cap_never_exceeds_the_pallet(self):
         for size in range(100, 6200, 37):
             self.assertLessEqual(
-                svc.cap_to_pallet(svc.calc_haba_max(size), size), size)
+                svc.cap_to_pallet(self.th.haba_max(size), size), size)
             self.assertLessEqual(
-                svc.cap_to_pallet(svc.calc_dake_max(size), size), size)
+                svc.cap_to_pallet(self.th.dake_max(size), size), size)
 
     def test_the_clearance_matches_the_master(self):
         """実マスタは 適合max = 現物 - 10 で入っている。"""

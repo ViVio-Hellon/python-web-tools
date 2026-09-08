@@ -93,6 +93,21 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     _migrate_before_schema(conn)
     schema_path = Path(__file__).resolve().parent / "schema.sql"
     conn.executescript(schema_path.read_text(encoding="utf-8"))
+    _seed_thresholds(conn)
+
+
+def _seed_thresholds(conn: sqlite3.Connection) -> None:
+    """パレット適合閾値の表が空なら基準表を入れる。
+
+    **他のマスタと違って、空のままでは動きません。** 閾値の帯は
+    0〜999999を隙間なく覆っている必要があり、0件だと適合範囲の再計算が
+    まるごと止まります。表を作った直後に必ず使える状態にしておきます。
+
+    入れるのは空のときだけなので、資材課がマスタ管理画面で直した値を
+    起動のたびに書き戻すことはありません(`pallet_threshold.seed`)。
+    """
+    from . import pallet_threshold
+    pallet_threshold.seed(conn)
 
 
 def _migrate_before_schema(conn: sqlite3.Connection) -> None:
