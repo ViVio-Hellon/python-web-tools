@@ -119,7 +119,10 @@ class CalcTableTests(unittest.TestCase):
         self.assertEqual((self.th.haba_min(2), self.th.haba_max(2)), (50, 140))
 
     def test_calc_haba_min_boundaries(self):
-        self.assertEqual(self.th.haba_min(400), 300)
+        # 301〜400 は50mm刻みの2本(VER2.52.1で割った。それまでは
+        # 1本で、適合最小値だけが入力最小値を下回っていた)
+        self.assertEqual(self.th.haba_min(350), 291)
+        self.assertEqual(self.th.haba_min(400), 341)
         self.assertEqual(self.th.haba_min(401), 391)
         # 400以下も刻む(旧版は400以下が一括で300だった)
         self.assertEqual(self.th.haba_min(150), 50)

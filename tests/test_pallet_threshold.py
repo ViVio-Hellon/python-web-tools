@@ -31,6 +31,12 @@ from packaging_tool import (db, import_specs, master_admin,  # noqa: E402
 # ==================================================================
 # **ここは触らないこと。** DB化で値が動いていないことを言うための
 # 独立した写しで、実装から引いてくると突き合わせの意味が無くなる。
+#
+# 【意図して変えた帯は、ここではなく下の一覧に書く】
+# 基準表が変われば値も変わります。そのときこの写しを書き換えてしまうと、
+# **意図した変更と、うっかり壊したのとが見分けられなくなります。**
+# 写しは移植前のまま置いて、変えた帯だけを `_変えた帯` に挙げます。
+# 全寸法の突き合わせはそこを避け、代わりに新しい値を名指しで確かめます。
 _旧_DAKE_MIN = (
     (200, 110), (300, 191), (400, 291), (500, 391), (600, 491),
     (700, 591), (800, 691), (900, 791), (1000, 891),
@@ -67,6 +73,16 @@ _旧_HABA_MAX = (
     (1650, 1640), (1700, 1690), (1750, 1740), (1800, 1790),
     (1850, 1840), (1900, 1890), (1950, 1940), (2000, 1990), (2050, 2040),
 )
+
+
+# 移植後に基準表そのものが変わった帯。**避ける理由と版を必ず書くこと。**
+_変えた帯: tuple[tuple[int, int, str], ...] = (
+    (301, 400, "VER2.52.1: 幅301〜400を50mm刻みの2本に割った"),
+)
+
+
+def _変えた帯か(value: int) -> bool:
+    return any(lo <= value <= hi for lo, hi, _why in _変えた帯)
 
 
 def _旧引き(table, value: int, over: int) -> int:
@@ -114,6 +130,8 @@ class SameAsBeforeTests(ThresholdTestCase):
         """
         th = pallet_threshold.load(self.conn)
         for value in range(0, 12001):
+            if _変えた帯か(value):
+                continue                     # 下の専用の試験が見ている
             with self.subTest(value=value):
                 self.assertEqual(th.dake_min(value),
                                  _旧引き(_旧_DAKE_MIN, value, 6591))
@@ -125,6 +143,52 @@ class SameAsBeforeTests(ThresholdTestCase):
                                  _旧引き(_旧_HABA_MAX, value, 99999))
                 self.assertEqual(th.ashi(value), _旧_脚数(value))
                 self.assertEqual(th.keta(value), _旧_桁数(value))
+
+    def test_幅301から400は50mm刻みの2本に割れた(self):
+        """VER2.52.1 で基準表そのものが変わった帯。
+
+        以前は「301〜400 → 適合300〜390」の1本で、**適合最小値だけが
+        入力最小値を下回って**いた(2山計算で305等の半端値を吸収するため)。
+        50mm刻みの2本に割り、他の帯と同じ「帯の下限 - 10」に揃った。
+
+        この帯だけは上の突き合わせを避けているので、**ここが唯一の
+        見張り番**になる。境界の4点を名指しで押さえる。
+        """
+        th = pallet_threshold.load(self.conn)
+        # 301〜350 の帯
+        self.assertEqual((th.haba_min(301), th.haba_max(301)), (291, 340))
+        self.assertEqual((th.haba_min(350), th.haba_max(350)), (291, 340))
+        # 351〜400 の帯
+        self.assertEqual((th.haba_min(351), th.haba_max(351)), (341, 390))
+        self.assertEqual((th.haba_min(400), th.haba_max(400)), (341, 390))
+        # 隣の帯は動いていない(割ったときに巻き込んでいないこと)
+        self.assertEqual((th.haba_min(300), th.haba_max(300)), (241, 290))
+        self.assertEqual((th.haba_min(401), th.haba_max(401)), (391, 440))
+
+    def test_幅の帯は端を除いて下限マイナス10で揃っている(self):
+        """**割った目的そのもの。**
+
+        301〜400 の1本だけが「帯の下限 - 10」の規則から外れていた。
+        外れた帯があると、そのパレットには載らない小さい製品まで適合に
+        なる(帯が広い分だけ下限が甘くなるため)。
+
+        両端の2本は昔から別扱いで、ここでも見ない。
+
+            最初(0〜150)   … 下限が -10 になってしまうので 50 で止める
+            最後(2051〜)    … 範囲外を捕まえるための帯。上限は 99999 固定
+        """
+        rows = pallet_threshold.rows(self.conn, "PalletHabaThreshold")
+        for row in rows[1:-1]:
+            with self.subTest(帯=f"{row['入力最小値']}〜{row['入力最大値']}"):
+                self.assertEqual(row["適合最小値"], row["入力最小値"] - 10)
+                self.assertEqual(row["適合最大値"], row["入力最大値"] - 10)
+        # 端の2本は決め打ちで押さえる(見ない理由と、いまの値を残す)
+        self.assertEqual((rows[0]["入力最小値"], rows[0]["入力最大値"],
+                          rows[0]["適合最小値"], rows[0]["適合最大値"]),
+                         (0, 150, 50, 140))
+        self.assertEqual((rows[-1]["入力最小値"], rows[-1]["入力最大値"],
+                          rows[-1]["適合最小値"], rows[-1]["適合最大値"]),
+                         (2051, 999999, 1991, 99999))
 
     def test_固定適合表も移植前と同じ(self):
         """記号・業界・複合の値。移植前は `add_range` の並びだった。"""
@@ -148,7 +212,7 @@ class SeedTests(ThresholdTestCase):
             f"SELECT COUNT(*) FROM [{t}]").fetchone()[0]
             for t in pallet_threshold.TABLES}
         self.assertEqual(counts, {
-            "PalletDakeThreshold": 28, "PalletHabaThreshold": 39,
+            "PalletDakeThreshold": 28, "PalletHabaThreshold": 40,
             "PalletAshiThreshold": 6, "PalletKetaThreshold": 6,
             "PalletSymbolMaster": 15, "PalletIndustryMaster": 6,
             "PalletComboMaster": 1,
