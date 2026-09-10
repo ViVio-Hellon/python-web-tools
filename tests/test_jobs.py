@@ -77,7 +77,7 @@ class RunTests(JobTestCase):
         release = threading.Event()
 
         def work(progress):
-            progress(20, "SIKALOTNOWを読んでいます")
+            progress(20, "SIKALOTを読んでいます")
             progress(40, "")
             started.set()
             release.wait(3)
@@ -87,7 +87,7 @@ class RunTests(JobTestCase):
         self.assertTrue(started.wait(3))
         running = self.registry.running()
         self.assertEqual(running.pct, 40)
-        self.assertEqual(running.message, "SIKALOTNOWを読んでいます")
+        self.assertEqual(running.message, "SIKALOTを読んでいます")
         release.set()
         self.wait_idle()
 

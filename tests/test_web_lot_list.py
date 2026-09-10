@@ -90,7 +90,7 @@ class StateTests(ListWebTestCase):
         self.assertEqual(body["count_note"], "3 件")
 
     def test_引当有無が一覧に出る(self) -> None:
-        """同じロット番号が仕掛引当(SIKAHIKINOW)にあれば1、無ければ0。"""
+        """同じロット番号が仕掛引当(SIKAHIKI)にあれば1、無ければ0。"""
         self.conn.execute(
             "INSERT INTO 仕掛引当 (ロット番号, 引当番号) VALUES ('2222222','60000001')")
         self.conn.commit()

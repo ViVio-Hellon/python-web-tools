@@ -247,7 +247,7 @@ class BuildTests(unittest.TestCase):
         区切り記号だけ標識に置き換える。"""
         insert_lot(self.conn, 設計_設備コース="GSS", BOX実績_枚本数=7)
         view = self.view()
-        self.assertEqual(view.lot_title, "ロット情報 (SIKALOTNOW)")
+        self.assertEqual(view.lot_title, "ロット情報 (SIKALOT)")
         texts = [b.text for b in view.lot_badges]
         self.assertIn("BOX実績寸法", texts)
         self.assertIn("前工程実績数 7枚", texts)
@@ -645,8 +645,8 @@ class OdrSwitchApiTests(LotWebTestCase):
     現場の声:「ロット情報画面の引当情報をクリックしても受注内容が
     切り替わっているように見えない、できていないのではないか」→
     「引当情報クリックでオーダー情報切り替えですよ」。データの流れ:
-    SIKALOTNOW から LOTNO で1行 → SIKAHIKINOW で同じLOTNOの行の中
-    から**引当NO**で1行 → SIKAODRNOW で同じオーダーNOの行を展開。
+    SIKALOT から LOTNO で1行 → SIKAHIKI で同じLOTNOの行の中
+    から**引当NO**で1行 → SIKAODR で同じオーダーNOの行を展開。
     """
 
     def setUp(self) -> None:

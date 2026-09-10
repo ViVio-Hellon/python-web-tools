@@ -218,7 +218,7 @@ class SuggestTests(unittest.TestCase):
 
 
 class HikiFlagTests(unittest.TestCase):
-    """引当有無(SIKAHIKINOW に同じロット番号があるか)の 1/0 フラグ。
+    """引当有無(SIKAHIKI に同じロット番号があるか)の 1/0 フラグ。
 
     仕掛ロットには実体が無い**計算列**なので、表示だけでなく
     絞り込み・並べ替え・横断検索まで実列と同じに効くことを確かめる。

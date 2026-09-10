@@ -99,9 +99,9 @@ LOT_DB_DIR = Path(os.environ.get(
 # 仕掛台帳の3ファイル(手元のテーブル名 → 取り込み元のファイル名)。
 # 拡張子違い(.db)も `source_db.find` が拾う
 LOT_DB_FILES = {
-    "仕掛ロット": "SIKALOTNOW.sqlite3",
-    "仕掛引当": "SIKAHIKINOW.sqlite3",
-    "仕掛受注": "SIKAODRNOW.sqlite3",
+    "仕掛ロット": "SIKALOT.sqlite3",
+    "仕掛引当": "SIKAHIKI.sqlite3",
+    "仕掛受注": "SIKAODR.sqlite3",
 }
 
 

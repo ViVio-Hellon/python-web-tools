@@ -360,7 +360,7 @@ KANBAN_TABLES: frozenset[str] = frozenset(
 # 仕掛台帳(ロット検索ページ用)の取り込み定義
 #
 # VBA版は社内共有 \\nlmsrvngy03\Read\【New】仕掛\台帳\ にある
-# SIKALOTNOW / SIKAHIKINOW / SIKAODRNOW の3ファイル(いずれもテーブル名は
+# SIKALOT / SIKAHIKI / SIKAODR の3ファイル(いずれもテーブル名は
 # 「仕掛」)を直接読んでいた。梱包資材マスタとは別ファイルなので、
 # --lot-db / --hiki-db / --odr-db で個別に指定して取り込む。
 # 列は元のSELECT文が読んでいたものだけに絞っている。

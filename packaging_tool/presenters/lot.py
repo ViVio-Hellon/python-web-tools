@@ -127,8 +127,8 @@ class LotViewModel:
     message: str = ""
     lot_no: str = ""
     # 見出しは題と標識に分ける。VBA は caption 1本に詰め込んでいた
-    lot_title: str = "ロット情報 (SIKALOTNOW)"
-    odr_title: str = "受注情報 (SIKAODRNOW)"
+    lot_title: str = "ロット情報 (SIKALOT)"
+    odr_title: str = "受注情報 (SIKAODR)"
     lot_badges: list[Badge] = field(default_factory=list)
     odr_badges: list[Badge] = field(default_factory=list)
     # 寸法が差し替わっている理由。黙って値だけ変えない。
@@ -191,8 +191,8 @@ def build(result: lot_service.LotSearchResult) -> LotViewModel:
         found=True,
         message=result.message,
         lot_no=lot.lot_no,
-        lot_title="ロット情報 (SIKALOTNOW)",
-        odr_title="受注情報 (SIKAODRNOW)",
+        lot_title="ロット情報 (SIKALOT)",
+        odr_title="受注情報 (SIKAODR)",
         lot_badges=_lot_badges(lot),
         odr_badges=_odr_badges(lot, odr),
         dimension_note=_dimension_note(lot),

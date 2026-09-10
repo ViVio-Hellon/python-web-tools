@@ -389,7 +389,7 @@ CREATE INDEX IF NOT EXISTS idx_アクセス権限_PC名 ON アクセス権限(PC
 --
 -- ロット一覧は、社内ネットワーク共有
 --     \\nlmsrvngy03\Read\【New】仕掛\台帳\
--- 上にある3ファイル(SIKALOTNOW / SIKAHIKINOW / SIKAODRNOW、いずれも
+-- 上にある3ファイル(SIKALOT / SIKAHIKI / SIKAODR、いずれも
 -- テーブル名は「仕掛」)を出どころにする。梱包資材マスタとは別のDBで、
 -- ホスト系から定期的に出力される参照専用データ。
 --
@@ -399,7 +399,7 @@ CREATE INDEX IF NOT EXISTS idx_アクセス権限_PC名 ON アクセス権限(PC
 -- ==================================================================
 
 -- ------------------------------------------------------------------
--- 仕掛ロット (SIKALOTNOW.仕掛): ロット番号で1件引く
+-- 仕掛ロット (SIKALOT.仕掛): ロット番号で1件引く
 --
 -- ロット番号は**一意ではない**。実データ2046行のうち527ロットが重複して
 -- おり、BOX工程(BOX設計_設備名・BOX番号)ごとに行が分かれている。
@@ -435,7 +435,7 @@ CREATE TABLE IF NOT EXISTS 仕掛ロット (
 CREATE INDEX IF NOT EXISTS idx_sikakari_lot_no ON 仕掛ロット(ロット番号);
 
 -- ------------------------------------------------------------------
--- 仕掛引当 (SIKAHIKINOW.仕掛): ロット番号で複数件引き、引当番号順に並べる
+-- 仕掛引当 (SIKAHIKI.仕掛): ロット番号で複数件引き、引当番号順に並べる
 -- ------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS 仕掛引当 (
     管理番号     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -452,7 +452,7 @@ CREATE TABLE IF NOT EXISTS 仕掛引当 (
 CREATE INDEX IF NOT EXISTS idx_sikakari_hiki_lot ON 仕掛引当(ロット番号);
 
 -- ------------------------------------------------------------------
--- 仕掛受注 (SIKAODRNOW.仕掛): 引当で得た受注番号で引く
+-- 仕掛受注 (SIKAODR.仕掛): 引当で得た受注番号で引く
 -- ------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS 仕掛受注 (
     受注番号        TEXT PRIMARY KEY,

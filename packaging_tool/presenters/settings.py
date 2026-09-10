@@ -82,7 +82,7 @@ STATUS_TAB = "status"
 TARGETS: tuple[tuple[str, str, str], ...] = (
     ("all", "まとめて取り込み", "梱包資材マスタと仕掛台帳の両方を読み直します"),
     ("master", "マスタだけ", "梱包資材マスタ(パレット・ボード・アングル等)"),
-    ("lot", "仕掛台帳だけ", "SIKALOTNOW / SIKAHIKINOW / SIKAODRNOW の3ファイル"),
+    ("lot", "仕掛台帳だけ", "SIKALOT / SIKAHIKI / SIKAODR の3ファイル"),
 )
 TARGET_KEYS = frozenset(key for key, _, _ in TARGETS)
 

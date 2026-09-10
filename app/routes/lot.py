@@ -264,9 +264,9 @@ def odr_for_hiki_row(lot_no: str, hiki_no: str):
     切り替わっているように見えない、できていないのではないか」→
     「引当情報クリックでオーダー情報切り替えですよ」。
 
-    データの流れ: SIKALOTNOW から LOTNO で1行 → SIKAHIKINOW で同じ
+    データの流れ: SIKALOT から LOTNO で1行 → SIKAHIKI で同じ
     LOTNO の行の中から**引当NO**で1行(=引当NOとオーダーNOが決まる)
-    → SIKAODRNOW で同じオーダーNOの行を展開。URLも引当NOで引く
+    → SIKAODR で同じオーダーNOの行を展開。URLも引当NOで引く
     (受注番号ではない) ── 主語は押された「引当行」そのもの。
 
     1ロットに複数の受注番号がまたがることがあり、受注情報欄は

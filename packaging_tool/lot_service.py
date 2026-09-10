@@ -12,7 +12,7 @@
 【データの出どころ】
 社内ネットワーク共有
     \\\\nlmsrvngy03\\Read\\【New】仕掛\\台帳\\
-にある3ファイル(`SIKALOTNOW` / `SIKAHIKINOW` / `SIKAODRNOW`、いずれも
+にある3ファイル(`SIKALOT` / `SIKAHIKI` / `SIKAODR`、いずれも
 テーブル名は「仕掛」)。梱包資材マスタとは別のDBで、ホスト系から出力される
 参照専用データ。共有フォルダを直接読まず、マスタ類と同じく事前に手元の
 SQLiteへ取り込む(設定画面、または `scripts/import_source.py --lot-only`)。
@@ -229,7 +229,7 @@ class LotSearchResult:
     @property
     def lot_header(self) -> str:
         """ロット情報フレームの見出し(VBA `fraLotInfo.caption`)。"""
-        base = "ロット情報 (SIKALOTNOW)"
+        base = "ロット情報 (SIKALOT)"
         if self.lot.is_box:
             base += "---【BOX実績寸法】---"
         else:
@@ -239,7 +239,7 @@ class LotSearchResult:
     @property
     def odr_header(self) -> str:
         """受注情報フレームの見出し(VBA `fraOdrInfo.caption`)。"""
-        base = "受注情報 (SIKAODRNOW)"
+        base = "受注情報 (SIKAODR)"
         suffix = f" {self.lot.box_course}" if self.lot.box_course else ""
         if self.odr.is_ex:
             return f"{base}-----------EX{suffix}"
@@ -434,9 +434,9 @@ def load_odr_for_hiki_row(
 ) -> Optional[tuple[OdrInfo, list[HikiRow], LotInfo]]:
     """引当行を1件クリックしたときの、その行の受注情報(VBA `Page1_OnLstHikiClick`)。
 
-    データの流れ: SIKALOTNOW から LOTNO で1行 → SIKAHIKINOW で同じ
+    データの流れ: SIKALOT から LOTNO で1行 → SIKAHIKI で同じ
     LOTNO の行の中から**引当NO**で1行(=引当NOとオーダーNOが決まる)
-    → SIKAODRNOW で同じオーダーNOの行を展開。
+    → SIKAODR で同じオーダーNOの行を展開。
 
     **主語は「引当行」であって「受注番号」ではない。** 受注番号
     だけで照合すると、1ロット内で受注番号が重複する状況が万一あった

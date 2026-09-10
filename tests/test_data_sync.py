@@ -61,6 +61,19 @@ class FindFilesTests(unittest.TestCase):
             (self._tmp / name).write_text("")
         self.assertIsNone(data_sync.find_material_db(self._tmp))
 
+    def test_古い名前で残った仕掛台帳も梱包資材マスタにしない(self):
+        """上流がファイル名を変えたとき、**古いほうが残る。**
+
+        仕掛台帳は SIKALOTNOW → SIKALOT と改名された。いまの3つの名前と
+        ぴったり一致するものだけを外していると、共有に残った古い
+        `SIKALOTNOW.sqlite3` が梱包資材マスタとして拾われてしまう。
+        仕掛台帳はどれも SIKA で始まるので、頭で外す。
+        """
+        for name in ("SIKALOTNOW.sqlite3", "SIKAHIKINOW.sqlite3",
+                     "SIKAODRNOW.sqlite3", "SIKAODR_2025.sqlite3"):
+            (self._tmp / name).write_text("")
+        self.assertIsNone(data_sync.find_material_db(self._tmp))
+
     def test_missing_master(self):
         self.assertIsNone(data_sync.find_material_db(self._tmp))
 
@@ -93,7 +106,7 @@ class FindFilesTests(unittest.TestCase):
         self.assertEqual(set(found), set(config.LOT_DB_FILES))
 
     def test_partial_lot_files(self):
-        (self._tmp / "SIKALOTNOW.sqlite3").write_text("")
+        (self._tmp / "SIKALOT.sqlite3").write_text("")
         found = data_sync.find_lot_dbs(self._tmp)
         self.assertEqual(set(found), {"仕掛ロット"})
 

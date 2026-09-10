@@ -1,4 +1,4 @@
-# 梱包資材総合ツール (Python / SQLite版) — VER2.52.1
+# 梱包資材総合ツール (Python / SQLite版) — VER2.52.2
 
 Excel VBA + Access で作られていた梱包資材管理ツールの Python 移植版です。
 画面は **Flask + HTML/CSS/JS**、業務ロジックは Python、データは SQLite。
@@ -762,7 +762,7 @@ PalletMaster・BoardMaster・CornerboardMaster・PalletPatterns・梱包保護�
 看板_*(6テーブル)です。
 
 **仕掛台帳**(ロット一覧用)は**マスタとは別の3ファイル**を見ます。
-`SIKALOTNOW.sqlite3` / `SIKAHIKINOW.sqlite3` / `SIKAODRNOW.sqlite3`
+`SIKALOT.sqlite3` / `SIKAHIKI.sqlite3` / `SIKAODR.sqlite3`
 (いずれもテーブル名は「仕掛」)で、ホスト系から出力される参照専用データです。
 VBA版が社内ネットワーク共有 `\\nlmsrvngy03\Read\【New】仕掛\台帳\` の
 `.accdb` を ACE OLEDB で直接読んでいたのに対し、Python版は**同じ3ファイルの

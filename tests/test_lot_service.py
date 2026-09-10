@@ -328,9 +328,9 @@ class OdrSwitchTests(unittest.TestCase):
     切り替わっているように見えない、できていないのではないか」→
     「引当情報クリックでオーダー情報切り替えですよ」。
 
-    データの流れ: SIKALOTNOW から LOTNO で1行 → SIKAHIKINOW で同じ
+    データの流れ: SIKALOT から LOTNO で1行 → SIKAHIKI で同じ
     LOTNO の行の中から**引当NO**で1行(=引当NOとオーダーNOが決まる)
-    → SIKAODRNOW で同じオーダーNOの行を展開。**主語は引当行
+    → SIKAODR で同じオーダーNOの行を展開。**主語は引当行
     (引当NO)であって受注番号ではない**ので、ここも引当NOで引く。
     """
 

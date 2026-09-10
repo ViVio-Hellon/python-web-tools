@@ -122,9 +122,13 @@ def find_material_db(directory: Optional[Path] = None) -> Optional[Path]:
     named = source_db.find(directory, config.MATERIAL_DB_NAME)
     if named is not None:
         return named
-    lot_stems = {Path(n).stem.upper() for n in config.LOT_DB_FILES.values()}
+    # **名前ではなく頭で外す。** 以前はこの3ファイルの名前とぴったり
+    # 一致するものだけを外していたが、上流がファイル名を変えたときに
+    # (SIKALOTNOW → SIKALOT)、**古い名前で残っているファイルが
+    # 梱包資材マスタとして拾われる**。仕掛台帳はどれも SIKA で始まるので、
+    # 上の説明どおり頭で見る
     for path in source_db.list_source_files(directory):
-        if path.stem.upper() in lot_stems:
+        if path.stem.upper().startswith("SIKA"):
             continue
         log.info("梱包資材マスタとして %s を使います", path.name)
         return path
@@ -497,7 +501,7 @@ def _unsent_writeback_tables(conn: sqlite3.Connection) -> dict[str, int]:
 def import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = None,
                       *, progress: Optional[Progress] = None,
                       progress_range: tuple[int, int] = (0, 100)) -> ImportResult:
-    """仕掛台帳(SIKALOTNOW/SIKAHIKINOW/SIKAODRNOW)を取り込む。
+    """仕掛台帳(SIKALOT/SIKAHIKI/SIKAODR)を取り込む。
 
     3ファイルともテーブル名は「仕掛」なので、1ファイルずつ対応する
     SQLiteテーブルへ入れる。見つからないファイルは飛ばす

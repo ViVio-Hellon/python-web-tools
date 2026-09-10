@@ -90,7 +90,7 @@ class Column:
         return OPS_NUMBER if self.kind == TYPE_NUMBER else OPS_TEXT
 
 
-# 同じロット番号が仕掛引当(SIKAHIKINOW)にあるか。有=1 / 無=0。
+# 同じロット番号が仕掛引当(SIKAHIKI)にあるか。有=1 / 無=0。
 # `EXISTS` は SQLite ではそのまま 1/0 を返すので CASE は要らない。
 # 仕掛引当(ロット番号)には索引があるので、行ごとに引いても速い
 HIKI_EXISTS = (f'(EXISTS (SELECT 1 FROM {TABLE_HIKI} h '
@@ -108,7 +108,7 @@ HIKI_EXISTS = (f'(EXISTS (SELECT 1 FROM {TABLE_HIKI} h '
 COLUMNS: tuple[Column, ...] = (
     Column("lot_no", "ロット番号", "ロット番号"),
     # 引当があるか(有=1 / 無=0)。仕掛ロットには無い**計算列**で、
-    # 同じロット番号が仕掛引当(SIKAHIKINOW)にあるかどうかだけを見る。
+    # 同じロット番号が仕掛引当(SIKAHIKI)にあるかどうかだけを見る。
     # ロット番号のすぐ隣に置く ── 何番のロットの話かと切り離すと読めない
     # (この列だけ見ても意味を成さない)。絞り込み・並べ替えにも効くので、
     # 「引当のあるロットだけ」を一覧で作れる

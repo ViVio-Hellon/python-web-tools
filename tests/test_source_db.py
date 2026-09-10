@@ -32,7 +32,7 @@ from packaging_tool import source_db
     r"\【■】_参照用ファイル\梱包資材マスタ.sqlite3")
 開発 = PureWindowsPath(
     r"\\nlmsrvngy03\工場内共有\検査データ\ファイル共有\梱包資材マスタ.sqlite3")
-仕掛 = PureWindowsPath(r"\\nlmsrvngy03\工場内共有\台帳\SIKALOTNOW.sqlite3")
+仕掛 = PureWindowsPath(r"\\nlmsrvngy03\工場内共有\台帳\SIKALOT.sqlite3")
 
 
 class UncUriTests(unittest.TestCase):
