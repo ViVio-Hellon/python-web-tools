@@ -44,6 +44,19 @@ function field(item) {
     link.target = "_blank";
     link.rel = "noopener";
     link.textContent = item.value;
+    // 包装仕様NOの閲覧システムは固定URLで開くだけで、NOそのものは
+    // 渡らない(先方で検索し直す)。**開く前にコピーしておく。**
+    //
+    // 開ける場所は2か所ある ── 図面カードの「閲覧システム」と、ここ
+    // (受注情報の欄)。コピーしていたのは前者だけで、こちらは開く
+    // だけだった(現場の指摘:「2か所あるが片方しかコピーできていない」)。
+    // **同じ見た目の操作は同じことをしなければならない**ので、
+    // どちらから開いても貼れる状態にする
+    if (item.key === "packaging_spec") {
+      link.title = "押すと包装仕様NOをコピーして閲覧システムを開きます";
+      link.addEventListener("click", () => copyText(
+        item.value, `包装仕様書NO「${item.value}」をコピーしました`));
+    }
     dd.appendChild(link);
   } else {
     dd.textContent = item.value;
@@ -298,16 +311,22 @@ function specZoom(full) {
   }
 }
 
+/** 文字をクリップボードへ。**コピーできたかどうかを必ず言う** ──
+ * 黙って失敗すると、貼り付け先で「何も入らない」としか分からない。 */
+async function copyText(text, okMessage) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(okMessage, "ok");
+  } catch {
+    toast("コピーできませんでした。文字を選択してコピーしてください", "error");
+  }
+}
+
 /** 包装仕様書NOをクリップボードへコピーする。外部の閲覧システムは
  * NOを渡さず固定URLで開くだけなので、開いた先で貼れるようにする。 */
 async function copySpecNo() {
-  if (!specNo) return;
-  try {
-    await navigator.clipboard.writeText(specNo);
-    toast(`包装仕様書NO「${specNo}」をコピーしました`, "ok");
-  } catch {
-    toast("コピーできませんでした。NOを選択してコピーしてください", "error");
-  }
+  await copyText(specNo, `包装仕様書NO「${specNo}」をコピーしました`);
 }
 
 /* ================================================================

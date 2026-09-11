@@ -384,6 +384,13 @@ function renderOutputs(outputs) {
   el.sendWarehouse.disabled = !outputs.can_send;
   if (outputs.send_why) reasons.push(`倉庫送信: ${outputs.send_why}`);
 
+  // 「使用する」。押したあとは**押せないまま札を替える** ── 消すと
+  // 「押したのか、そもそも無いのか」が分からない。理由はボタンの
+  // 真横に出す(押せない理由を離すと、どのボタンの話か読めない)
+  el.useBoards.disabled = !outputs.can_use;
+  el.useLabel.textContent = outputs.use_done ? "使用済み" : "使用する";
+  el.useWhy.textContent = outputs.use_why || "";
+
   // 押せない理由をボタンの真下にまとめる。同じ文が続いても
   // どのボタンの話か分かるよう、名前を頭に付ける
   el.outputWhy.replaceChildren(...[...new Set(reasons)].map((text) => {
@@ -797,7 +804,7 @@ export function start(initial) {
                     // 1P0113 / 出す / 管理者
                     "sizeCard", "p1Card", "p1Materials", "p1Tip", "p1Qty",
                     "p1Why", "force1p",
-                    "sendWarehouse", "outputWhy",
+                    "sendWarehouse", "outputWhy", "useBoards", "useWhy", "useLabel",
                     "adminState", "authWhere", "savePattern",
                     "saveWhy", "patternsNote", "patternRows", "usageRows",
                     // 作業の段と、結果の面
@@ -1029,6 +1036,8 @@ export function start(initial) {
       });
     });
   }
+  el.useBoards.addEventListener("click", () =>
+    send("/api/selection/boards/use"));
   el.sendWarehouse.addEventListener("click", async () => {
     const next = await send("/api/selection/send");
     // 送るのは倉庫連携の画面。組み立てただけでは登録されていない。

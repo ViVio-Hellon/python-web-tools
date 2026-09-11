@@ -326,6 +326,11 @@ select.input { cursor: pointer; }
 .table tbody tr[aria-selected="true"] { background: var(--accent-soft); }
 .table .n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
+/* 一度も使われていない行。**消さずに薄くする** ── 並んでいること自体が
+   「一覧にはあるが使っていない」という事実で、消すと「無い」のか
+   「0回」なのか区別できなくなる(ボード使用率) */
+.table tbody tr.off td { color: var(--faint); }
+
 /* 図と一覧の相互ハイライト(ゲシュタルトの共通運命) */
 .table tbody tr.is-linked {
   background: var(--accent-soft);

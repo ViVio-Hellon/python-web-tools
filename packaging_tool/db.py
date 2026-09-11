@@ -93,6 +93,7 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     _migrate_before_schema(conn)
     schema_path = Path(__file__).resolve().parent / "schema.sql"
     conn.executescript(schema_path.read_text(encoding="utf-8"))
+    _migrate_after_schema(conn)
     _seed_thresholds(conn)
 
 
@@ -134,6 +135,66 @@ def _migrate_before_schema(conn: sqlite3.Connection) -> None:
     _drop_if_old_shape(conn, "仕掛引当",
                        ("引当番号     REAL", "引当番号 REAL"),
                        "引当番号を文字列に")
+    _park_old_board_usage(conn)
+
+
+# 移行のあいだだけ置いておく古いボード使用実績の名前。
+# `_park_old_board_usage` が退避し、`_migrate_after_schema` が中身を
+# 新しい表へ移して消す
+_BOARD_USAGE_PARKED = "ボード使用実績_移行中"
+
+
+def _park_old_board_usage(conn: sqlite3.Connection) -> None:
+    """古い形のボード使用実績を脇へ退ける。**捨てない。**
+
+    以前は 幅×丈×タイプ ごとの集計1行(`使用回数` / `最終使用日時`)
+    でした。製品とパレットの寸法も一緒に残すことになったので、
+    **1行 = 1回の使用**の記録に作り変えます。
+
+    ここでは名前を変えるだけで、中身を移すのは `schema.sql` が新しい
+    表を作ったあと(`_migrate_after_schema`)です。**DDLを2か所に
+    書かない**ため ── ここで新しい表を作ってしまうと、`schema.sql` を
+    直したときに片方だけ古くなります。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        ("ボード使用実績",)).fetchone()
+    if row is None:
+        return
+    ddl = (row[0] if not isinstance(row, sqlite3.Row) else row["sql"]) or ""
+    if "最終使用日時" not in ddl:
+        return                                    # もう新しい形
+    conn.execute(f"DROP TABLE IF EXISTS [{_BOARD_USAGE_PARKED}]")
+    conn.execute(f"ALTER TABLE [ボード使用実績] RENAME TO [{_BOARD_USAGE_PARKED}]")
+    log.info("ボード使用実績を新しい形に作り変えます(古い集計は引き継ぎます)")
+
+
+def _migrate_after_schema(conn: sqlite3.Connection) -> None:
+    """`schema.sql` を当てたあとに片付けること。"""
+    _move_old_board_usage(conn)
+
+
+def _move_old_board_usage(conn: sqlite3.Connection) -> None:
+    """退けておいた古い集計を、新しい記録の表へ移す。
+
+    古い行は「累計で何枚」しか持っていないので、**1行にまとめて**
+    移します。製品・パレットの寸法は当時記録していないので0のまま
+    ── 0は「分からない」の意味で、後から見たときに
+    「このぶんは古い形で積まれた」と読み取れます。
+    """
+    found = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (_BOARD_USAGE_PARKED,)).fetchone()
+    if found is None:
+        return
+    moved = conn.execute(
+        "INSERT INTO [ボード使用実績] "
+        "(ボード幅, ボード丈, ボードタイプ, 枚数, 使用日時) "
+        "SELECT ボード幅, ボード丈, ボードタイプ, 使用回数, 最終使用日時 "
+        f"FROM [{_BOARD_USAGE_PARKED}] WHERE 使用回数 > 0").rowcount
+    conn.execute(f"DROP TABLE [{_BOARD_USAGE_PARKED}]")
+    conn.commit()
+    log.info("古いボード使用実績を%s件引き継ぎました", moved)
 
 
 def _drop_if_old_shape(conn: sqlite3.Connection, table: str,

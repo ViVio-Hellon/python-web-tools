@@ -520,10 +520,26 @@
                 {% if not view.outputs.can_send %}disabled{% endif %}>
           <span class="gl">▸</span>倉庫送信</button>
       </div>
+      {# ボードを「使った」と記録する。**配置しただけでは積まない** ──
+         配置は何度でも試せる操作なので、置いてみた下書きまで数えると
+         「よく使うサイズ」が実態からずれる。以前は配置図の印刷を合図に
+         していたが、確かめるために印刷しても積まれ、印刷せずに使えば
+         積まれないので、押した人の意図と一致しなかった(現場の指摘)。
+         帳票や倉庫送信とは行を分ける ── 出す操作ではなく、使ったことを
+         残す操作なので #}
+      <div class="btn-row">
+        <button class="btn btn--commit" type="button" id="useBoards"
+                {% if not view.outputs.can_use %}disabled{% endif %}>
+          <span class="gl">✔</span><span id="useLabel">{{
+            "使用済み" if view.outputs.use_done else "使用する" }}</span></button>
+        <span class="why" id="useWhy">{{ view.outputs.use_why }}</span>
+      </div>
       <div id="outputWhy"></div>
       <p class="why">
         帳票は別窓で開きます(<b>Ctrl+P</b> で印刷)。倉庫送信は
         <b>ここでは登録しません</b> ── 倉庫連携の画面で確かめてから送ります。
+        「使用する」を押すと、配置したボードの枚数を製品・パレットの寸法と
+        一緒に残します(設定画面の「ボード使用率」で見られます)。
       </p>
     </div>
   </section>

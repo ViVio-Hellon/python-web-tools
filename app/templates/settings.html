@@ -503,6 +503,98 @@
     </div>
   </section>
       </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-boards" role="tabpanel" aria-labelledby="tab-boards" hidden>
+  <!-- 6. ボード使用率 -->
+  {#
+    **分母はボード一覧ぜんぶ。** 使っていない寸法も0%で並べる ──
+    一覧に載っているのに一度も使っていないサイズを見つけるのが、この表の
+    目的だから。隠すと「無い」のか「0回」なのか区別できなくなる。
+
+    積むのは資材選択の「使用する」を押したときだけ(配置しただけでは
+    積まない)。以前は配置図の印刷を合図にしていたが、確かめるために
+    印刷しても積まれ、印刷せずに使えば積まれなかった。
+  #}
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">率</i>
+      <h3>ボード使用率</h3>
+      <span class="eyebrow" id="usageSummary">{% if view.board_usage.rows %}{{
+        view.board_usage.listed }}件中 {{ view.board_usage.used }}件を使用({{
+        view.board_usage.coverage }}%) / 累計 {{ view.board_usage.total_sheets
+        }}枚{% else %}0 件{% endif %}</span>
+    </header>
+    <div class="pad">
+      <p class="why">
+        ボード一覧に載っている寸法ぜんぶを、使った枚数の多い順に並べます。
+        <b>使っていない寸法も0%で出します</b> ── 持たなくてよいサイズを
+        見つけるための表なので、隠すと意味がなくなります。
+        積まれるのは資材選択で<b>「使用する」</b>を押したときだけです。
+      </p>
+      <div class="tablewrap">
+        <table class="table">
+          <thead><tr>
+            <th>種別</th><th class="n">幅</th><th class="n">丈</th>
+            <th class="n">枚数</th><th class="n">回数</th>
+            <th class="n">割合</th><th>最終使用</th>
+          </tr></thead>
+          <tbody id="usageRateRows">
+            {# **初回はサーバが描く。** JS に任せると、開いた瞬間だけ空に
+               見える(よく使う条件の一覧と同じ理由)。状態の読み直しが
+               走ったあとは `renderBoardUsage` が同じものを描き直す #}
+            {% for r in view.board_usage.rows %}
+            <tr {% if not r.used %}class="off"{% endif %}>
+              <td>{{ r.board_type }}</td>
+              <td class="n">{{ r.width }}</td>
+              <td class="n">{{ r.length }}</td>
+              <td class="n">{{ r.sheets }}</td>
+              <td class="n">{{ r.times }}</td>
+              <td class="n">{{ r.share }}%</td>
+              <td>{{ r.last_used_at or "—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="why" id="usageRateEmpty"
+         {% if view.board_usage.rows %}hidden{% endif %}>
+        ボードマスタがまだ取り込まれていません。
+      </p>
+
+      {# 一覧に無いのに使われた寸法。マスタに足し忘れているか、寸法を
+         打ち間違えているかのどちらかで、**どちらも直すべき事実**。
+         黙って落とすと気づけない #}
+      <div class="card--sub" id="usageUnlistedCard"
+           {% if not view.board_usage.unlisted %}hidden{% endif %}>
+        <header><h4>ボード一覧に無い寸法</h4></header>
+        <div class="pad">
+          <p class="why">
+            使われたのに一覧に載っていない寸法です。マスタに足し忘れて
+            いるか、寸法の打ち間違いのどちらかです。
+          </p>
+          <div class="tablewrap">
+            <table class="table">
+              <thead><tr>
+                <th>種別</th><th class="n">幅</th><th class="n">丈</th>
+                <th class="n">枚数</th><th>最終使用</th>
+              </tr></thead>
+              <tbody id="usageUnlistedRows">
+                {% for r in view.board_usage.unlisted %}
+                <tr>
+                  <td>{{ r.board_type }}</td>
+                  <td class="n">{{ r.width }}</td>
+                  <td class="n">{{ r.length }}</td>
+                  <td class="n">{{ r.sheets }}</td>
+                  <td>{{ r.last_used_at or "—" }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+      </section>
       <section class="tabpanel tabpanel--scroll" id="panel-history" role="tabpanel" aria-labelledby="tab-history" hidden>
   <!-- 6. 最近の結果 -->
   <section class="card">

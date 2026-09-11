@@ -2338,28 +2338,37 @@ class SendTests(SelectionWebTestCase):
         self.assertIn("svgplan.js", body)
         self.assertIn("下用", body)
 
+    def _placed(self) -> None:
+        """パレット・製品を決めてボードを1枚置くところまで。"""
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1800"})
+        insert_board(self.conn, width=1100, length=2000)
+        self.post("/api/selection/boards/auto-select")
+        self.post("/api/selection/boards/place")
+
     def test_配置しただけでは使用実績は積まれない(self) -> None:
         """置いてみただけの試しまで数えると、実際の使用実態とずれる。"""
-        self.post("/api/selection/pallet/apply",
-                  {"width": "1100", "length": "2000"})
-        self.post("/api/selection/product/apply",
-                  {"width": "1000", "length": "1800"})
-        insert_board(self.conn, width=1100, length=2000)
-        self.post("/api/selection/boards/auto-select")
-        self.post("/api/selection/boards/place")
-
+        self._placed()
         self.assertEqual(self.get()["admin"]["usage"], [])
 
-    def test_配置図を印刷すると使用実績が積まれる(self) -> None:
-        self.post("/api/selection/pallet/apply",
-                  {"width": "1100", "length": "2000"})
-        self.post("/api/selection/product/apply",
-                  {"width": "1000", "length": "1800"})
-        insert_board(self.conn, width=1100, length=2000)
-        self.post("/api/selection/boards/auto-select")
-        self.post("/api/selection/boards/place")
+    def test_配置図の印刷では使用実績は積まれない(self) -> None:
+        """**印刷は「使った」の合図ではない。**
 
+        確かめるために出すこともあれば、出さずに使うこともある。
+        以前はここで積んでいたが、押した人の意図と一致しなかった
+        (現場の指摘:「何をもって使用なのか決めていない」)。
+        """
+        self._placed()
         self.client.get("/report/plan", headers=self.auth())
+        self.assertEqual(self.get()["admin"]["usage"], [])
+
+    def test_使用するを押すと積まれる(self) -> None:
+        self._placed()
+        self.assertTrue(self.get()["outputs"]["can_use"])
+
+        self.post("/api/selection/boards/use")
 
         usage = self.get()["admin"]["usage"]
         self.assertEqual(len(usage), 1)
@@ -2367,10 +2376,89 @@ class SendTests(SelectionWebTestCase):
         self.assertEqual(usage[0]["length"], 2000)
         self.assertEqual(usage[0]["usage_count"], 1)
 
-        # 2回目の印刷は積み増す(上書きではない)
-        self.client.get("/report/plan", headers=self.auth())
+    def test_同じ配置を二度押しても増えない(self) -> None:
+        """**押した手応えが無いと人はもう一度押す。**
+
+        そのたびに増えると、実績が実態より多くなる。増やさないことと、
+        増やさなかったと言うことの両方をする。
+        """
+        self._placed()
+        self.post("/api/selection/boards/use")
+        self.post("/api/selection/boards/use")
+
         usage = self.get()["admin"]["usage"]
-        self.assertEqual(usage[0]["usage_count"], 2)
+        self.assertEqual(usage[0]["usage_count"], 1)
+        outputs = self.get()["outputs"]
+        self.assertFalse(outputs["can_use"])
+        self.assertTrue(outputs["use_done"])
+        self.assertIn("もう記録して", outputs["use_why"])
+
+    def test_置き直せばまた押せる(self) -> None:
+        """候補を替えて置き直したら、使ったのは**置き直したあと**のほう。
+
+        ロットとパレットだけで見分けると「もう積んである」と断って
+        しまい、実際に使ったものが記録されない。
+        """
+        self._placed()
+        self.post("/api/selection/boards/use")
+        self.assertFalse(self.get()["outputs"]["can_use"])
+
+        insert_board(self.conn, width=550, length=2000)
+        self.post("/api/selection/boards/clear")
+        self.post("/api/selection/boards/auto-select")
+        self.post("/api/selection/boards/place")
+
+        self.assertTrue(self.get()["outputs"]["can_use"])
+
+    def test_配置していなければ押せない(self) -> None:
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        outputs = self.get()["outputs"]
+        self.assertFalse(outputs["can_use"])
+        self.assertIn("配置", outputs["use_why"])
+
+        # 断りは業務としての断り(422)。**押せてしまわないこと**と
+        # **理由が返ること**の両方を見る
+        body = self.post("/api/selection/boards/use", expect=422)
+        self.assertIn("配置", body["message"])
+
+    def test_カットして使っても棚から取った1枚として積む(self) -> None:
+        """**消費したのはカット前の1枚。**
+
+        カット後の寸法で積むと、ボード一覧に載っていない寸法ばかりが
+        並び、何を何枚持っておけばよいのかが読めなくなる。カット後の
+        寸法は別の列に添える。
+        """
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "2000"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "1900"})
+        insert_board(self.conn, width=1100, length=2000)
+        self.post("/api/selection/boards/auto-select")
+        self.post("/api/selection/boards/place")
+        self.post("/api/selection/boards/use")
+
+        rows = self.conn.execute(
+            "SELECT * FROM ボード使用実績").fetchall()
+        self.assertTrue(rows)
+        for row in rows:
+            with self.subTest(row=dict(row)):
+                # 積むのはボード一覧にある寸法。カット後は別の列
+                self.assertEqual((row["ボード幅"], row["ボード丈"]), (1100, 2000))
+                if row["切断後幅"]:
+                    self.assertNotEqual(
+                        (row["切断後幅"], row["切断後丈"]), (1100, 2000))
+
+    def test_製品とパレットの寸法も一緒に残る(self) -> None:
+        """ボードの寸法だけでは、なぜそのサイズが多いのか説明できない。"""
+        self._placed()
+        self.post("/api/selection/boards/use")
+
+        row = self.conn.execute(
+            "SELECT * FROM ボード使用実績").fetchone()
+        self.assertEqual((row["製品幅"], row["製品丈"]), (1000, 1800))
+        self.assertEqual((row["パレット幅"], row["パレット丈"]), (1100, 2000))
+        self.assertTrue(row["使用日時"])
 
     def test_1P0113の倉庫送信は角材と松板の2行になる(self) -> None:
         """パレットを使わない裸梱包。行数と品名が通常モードと違う。

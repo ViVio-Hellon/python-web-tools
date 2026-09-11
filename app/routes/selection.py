@@ -33,7 +33,7 @@ from urllib.parse import quote
 from flask import Blueprint, Response, jsonify, render_template, request
 
 from packaging_tool import board_selection_service as svc
-from packaging_tool import board_usage, printing, selection_session, work_context
+from packaging_tool import printing, selection_session, work_context
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import outputs
 from packaging_tool.presenters import selection as presenter
@@ -419,6 +419,19 @@ def place_boards():
     return _apply(session, session.place_boards())
 
 
+@bp.post("/api/selection/boards/use")
+def use_boards():
+    """「使用する」── 配置したボードを使用実績に積む(VBAには無い機能)。
+
+    **数える入口はここだけ。** 以前は配置図の印刷を合図にしていたが、
+    確かめるために印刷しても積まれ、印刷せずに使えば積まれないので、
+    押した人の意図と一致しなかった(現場の指摘:「何をもって使用なのか
+    決めていない」)。押せる条件は配置済みであることだけ。
+    """
+    session = _session()
+    return _apply(session, session.record_usage())
+
+
 @bp.post("/api/selection/boards/candidate")
 def change_candidate():
     """「候補変更」(VBA `TileChangeCandidate`)。
@@ -581,9 +594,11 @@ def _report_plan(session):
 
     `printing.Report`(文字列だけの帳票)ではなく、配置図タブと同じ
     描画計画・同じ描画コード(`svgplan.js`)を使うHTMLページを返す。
-    **この関数を通ったときだけ**使用実績を積む(`board_usage`) ──
-    配置は何度でも試せる操作なので、置いてみただけの下書きまで数えると
-    「よく使われるサイズ」が実態とずれる(現場の指示: 印刷=実施に使用した)。
+
+    **ここでは使用実績を積まない。** 以前は印刷を「使った」の合図に
+    していたが、確かめるために印刷しても積まれ、印刷せずに使えば
+    積まれないので、押した人の意図と一致しなかった(現場の指摘)。
+    数える入口は「使用する」ボタン1つだけ(`selection_session.record_usage`)。
     """
     refusal = outputs.plan_refusal(session)
     if refusal is not None:
@@ -596,7 +611,6 @@ def _report_plan(session):
         "view_box": view.plans.view_box, "angle_view_box": view.plans.angle_view_box,
     }
 
-    board_usage.record_usage(get_db(), session.placement.placed, session.board_type)
     session.presenter.user_log.log("配置図を出力しました", emphasis=True)
     return render_template(
         "plan_report.html", view=view, plan=plan,

@@ -143,12 +143,30 @@ CREATE TABLE IF NOT EXISTS PalletPatterns (
 );
 
 -- ------------------------------------------------------------------
--- ボード使用実績: 選定したボードの使用回数(`packaging_tool/board_usage.py`)。
+-- ボード使用実績: 実際に使ったボードの記録(`packaging_tool/board_usage.py`)。
 --
--- **配置しただけでは積まない。** 配置は何度でも試せる操作なので、置いて
--- みただけの下書きまで数えると「よく使われるサイズ」が実態からずれる
--- (現場の指示: 印刷=実施に使用した)。配置図を印刷したときだけ、その
--- 時点の配置(何枚使ったか)を積む。
+-- **1行 = 「使用する」を1回押した、そのときの1寸法。**
+-- 集計(どのサイズを何枚使ったか)はこの表を数えて出します ── 同じ
+-- 事実を「明細」と「集計」の2か所に持つと、片方だけ直ったときに
+-- どちらが本当か分からなくなるためです。
+--
+-- 【何をもって「使用」とするか】
+-- 配置してあり、かつ**「使用する」を押したとき**だけ積みます。配置は
+-- 何度でも試せる操作なので、置いてみただけの下書きまで数えると
+-- 「よく使うサイズ」が実態からずれます。以前は配置図の印刷で積んで
+-- いましたが、確認のために印刷しても積まれ、印刷せずに使えば積まれ
+-- ないため、押した人の意図と一致しませんでした(現場の指摘)。
+--
+-- 【製品とパレットの寸法も一緒に残す】
+-- 「この製品・このパレットのときに、どのボードを使ったか」が後から
+-- 辿れます。ボードの寸法だけでは、なぜそのサイズが多いのかを説明
+-- できません。分からないときは0(未入力のまま押せる場面がある)。
+--
+-- 【記録するのは「棚から取った板」の寸法】
+-- カットして使った場合でも、消費したのは**カット前の1枚**です。
+-- カット後の寸法で積むと、ボード一覧に載っていない寸法ばかりが並び、
+-- 何を何枚持っておけばよいのかが読めなくなります。カット後の寸法は
+-- 別の列に添えます(カットしていなければ0)。
 --
 -- 集計単位は 幅×丈×ボードタイプ。上用/下用は物理的には同じ板なので
 -- 分けない(現場の指示)。
@@ -158,12 +176,21 @@ CREATE TABLE IF NOT EXISTS ボード使用実績 (
     ボード幅     INTEGER NOT NULL,
     ボード丈     INTEGER NOT NULL,
     ボードタイプ  TEXT NOT NULL DEFAULT '',
-    使用回数     INTEGER NOT NULL DEFAULT 0,
-    最終使用日時  TEXT NOT NULL DEFAULT ''
+    枚数        INTEGER NOT NULL DEFAULT 0,
+    切断後幅     INTEGER NOT NULL DEFAULT 0,
+    切断後丈     INTEGER NOT NULL DEFAULT 0,
+    製品幅       INTEGER NOT NULL DEFAULT 0,
+    製品丈       INTEGER NOT NULL DEFAULT 0,
+    パレット幅    INTEGER NOT NULL DEFAULT 0,
+    パレット丈    INTEGER NOT NULL DEFAULT 0,
+    ロット番号    TEXT NOT NULL DEFAULT '',
+    使用日時     TEXT NOT NULL DEFAULT ''
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ボード使用実績_key
+CREATE INDEX IF NOT EXISTS idx_ボード使用実績_寸法
     ON ボード使用実績(ボード幅, ボード丈, ボードタイプ);
+CREATE INDEX IF NOT EXISTS idx_ボード使用実績_日時
+    ON ボード使用実績(使用日時);
 
 CREATE INDEX IF NOT EXISTS idx_pallet_patterns_wl ON PalletPatterns(パレット幅, パレット丈);
 

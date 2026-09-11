@@ -178,6 +178,13 @@ class SelectionSession:
     # ボードと画面の図が食い違ったまま発注へ進める
     placement: Optional[place.PlacementContext] = None
 
+    # --- ボード使用実績 (VBAには無い機能) ---
+    # 「使用する」で記録した配置の見分け。**同じ配置を二度積まない**
+    # ためだけに持つ ── 押した手応えが無いと人はもう一度押すもので、
+    # そのたびに数が増えると実績が実態より多くなる。配置や寸法が
+    # 変われば見分けも変わるので、次の配置はまた記録できる
+    usage_recorded_key: str = ""
+
     # --- 帳票を紙面で直した内容 (VBA はシートを直せた) ---
     # 帳票の名前 → {欄の名前: 文字}。**別のロットを検索するまで**残す
     # (`clear_for_new_lot`)。VBA版は帳票がExcelシートで出ていたので、
@@ -1238,6 +1245,72 @@ class SelectionSession:
 
         log.info("実績パターンを保存しました: No.%s", pattern_id)
         return BoardOpResult(True, f"実績パターンを保存しました(No.{pattern_id})")
+
+    # ------------------------------------------------------------------
+    # ボード使用実績
+    # ------------------------------------------------------------------
+    def _usage_key(self) -> str:
+        """いまの配置の見分け。同じものを二度積まないためだけに使う。
+
+        **寸法の並びまで含める。** ロットとパレットだけで見分けると、
+        同じロットで候補を替えて置き直したときに「もう積んである」と
+        断ってしまう ── 実際に使ったのは置き直したあとのほうです。
+        """
+        if self.placement is None or not self.placement.placed:
+            return ""
+        boards = sorted((b.width, b.length) for b in self.placement.placed)
+        return "|".join([
+            self.presenter.lot_no or "",
+            self.board_type,
+            f"{self.palette.width}x{self.palette.length}",
+            f"{self.product.width}x{self.product.length}",
+            ";".join(f"{w}x{l}" for w, l in boards),
+        ])
+
+    def usage_refusal(self) -> str:
+        """「使用する」が押せない理由。押せるなら空。
+
+        条件は**配置してあること**だけです(現場の指示:
+        配置済み かつ ボタン押し)。ロットや製品寸法が無くても、
+        置いたものを使ったという事実は記録できます ── 分からない値は
+        0で残るので、後から「このぶんは寸法が分からない」と読めます。
+        """
+        if self.placement is None or not self.placement.placed:
+            return "先にボードを配置してください。"
+        return ""
+
+    @property
+    def usage_done(self) -> bool:
+        """いまの配置をもう記録してあるか。"""
+        key = self._usage_key()
+        return bool(key) and key == self.usage_recorded_key
+
+    def record_usage(self) -> BoardOpResult:
+        """配置したボードを「使った」として記録する。
+
+        数える入口は**ここだけ**です。以前は配置図を印刷したときに
+        積んでいましたが、確かめるために印刷しても積まれ、印刷せずに
+        使えば積まれないので、押した人の意図と一致しませんでした。
+        """
+        why = self.usage_refusal()
+        if why:
+            return BoardOpResult(False, why, REFUSE_NO_CANDIDATES)
+        if self.usage_done:
+            # **断るが、失敗ではない。** すでに望んだ状態になっている
+            return BoardOpResult(
+                True, "この配置はもう記録してあります(二重には積みません)。")
+
+        from . import board_usage
+        sheets = board_usage.record_usage(
+            self.presenter.conn, self.placement.placed, self.board_type,
+            product=(self.product.width, self.product.length),
+            palette=(self.palette.width, self.palette.length),
+            lot=self.presenter.lot_no or "")
+        self.usage_recorded_key = self._usage_key()
+        self.presenter.user_log.log(
+            f"[使用実績] {self.board_type} {sheets}枚を記録しました",
+            emphasis=True)
+        return BoardOpResult(True, f"使用実績に{sheets}枚を記録しました。")
 
     def patterns(self) -> list[Any]:
         """いまのパレット寸法で登録されている実績(VBA `btnLoadPattern_Click`)。"""

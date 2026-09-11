@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -68,6 +69,9 @@ TABS: tuple[tuple[str, str], ...] = (
     # 並べて置くと「動作の設定を保存」で一緒に変わるように見える
     ("password", "パスワード"),
     ("filters", "よく使う条件"),
+    # 使ったものを見る面。設定を**変える**面ではないが、ボードマスタに
+    # 何を載せておくかを決める材料なので、マスタ管理の隣に置く
+    ("boards", "ボード使用率"),
     ("history", "最近の結果"),
 )
 TAB_KEYS = frozenset(key for key, _ in TABS)
@@ -175,6 +179,11 @@ class SettingsViewModel:
     # --- よく使う条件(ロット一覧) ---
     lot_filters: list[dict[str, Any]] = field(default_factory=list)
 
+    # --- ボード使用率 ---
+    # **ボード一覧を軸にした**割合。使っていない寸法も0%で並ぶ
+    # (一覧に載っているのに使っていないものを見つけるのが目的)
+    board_usage: dict[str, Any] = field(default_factory=dict)
+
     # 取り込みができない状態なら、ボタンを押させる前に理由を出す
     can_import: bool = True
     import_reason: str = ""
@@ -223,6 +232,7 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
         admin_min_length=admin_password.MIN_LENGTH,
         admin_authenticated=_admin_authenticated(conn),
         lot_filters=_lot_filters(),
+        board_usage=_board_usage(conn),
     )
     view.sections = [
         _material_section(material, conn),
@@ -252,6 +262,38 @@ def _typed(key: str, fallback: Path, *legacy: str) -> str:
         if isinstance(configured, str) and configured.strip():
             return configured.strip()
     return str(fallback)
+
+
+def _board_usage(conn: Optional[sqlite3.Connection]) -> dict[str, Any]:
+    """ボード一覧を軸にした使用率。
+
+    **使っていない寸法も並べます。** 一覧に載っているのに一度も
+    使っていないサイズを見つけるのがこの表の目的なので、そこを隠すと
+    意味がなくなります(出さなければ「無い」のか「0回」なのか
+    区別できません)。
+
+    一覧に無いのに使われた寸法は別に添えます ── マスタに足し忘れて
+    いるか、寸法を打ち間違えているかのどちらかで、どちらも直すべき
+    事実です。
+    """
+    if conn is None:
+        return {"rows": [], "unlisted": [], "listed": 0, "used": 0,
+                "coverage": 0.0, "total_sheets": 0}
+    from .. import board_usage as usage
+
+    def line(row: usage.RateRow) -> dict[str, Any]:
+        return {"width": row.width, "length": row.length,
+                "board_type": row.board_type, "sheets": row.sheets,
+                "times": row.times, "share": row.share,
+                "last_used_at": row.last_used_at, "used": row.used}
+
+    got = usage.usage_rates(conn)
+    return {
+        "rows": [line(r) for r in got.rows],
+        "unlisted": [line(r) for r in got.unlisted],
+        "listed": got.listed, "used": got.used,
+        "coverage": got.coverage, "total_sheets": got.total_sheets,
+    }
 
 
 def _lot_filters() -> list[dict[str, Any]]:
@@ -899,6 +941,7 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         "admin_min_length": view.admin_min_length,
         "admin_authenticated": view.admin_authenticated,
         "lot_filters": view.lot_filters,
+        "board_usage": view.board_usage,
         "can_import": view.can_import,
         "import_reason": view.import_reason,
     }

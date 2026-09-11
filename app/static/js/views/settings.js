@@ -76,6 +76,50 @@ function renderFilters(items) {
   }));
 }
 
+/**
+ * ボード使用率。**分母はボード一覧ぜんぶ。**
+ *
+ * 使っていない寸法も0%で並べる ── 一覧に載っているのに一度も
+ * 使っていないサイズを見つけるのがこの表の目的で、隠すと「無い」のか
+ * 「0回」なのか区別できなくなる。
+ */
+function renderBoardUsage(usage) {
+  const rows = usage.rows || [];
+  const unlisted = usage.unlisted || [];
+
+  el.usageRateEmpty.hidden = rows.length > 0;
+  el.usageSummary.textContent = rows.length
+    ? `${usage.listed}件中 ${usage.used}件を使用(${usage.coverage}%) `
+      + `/ 累計 ${usage.total_sheets}枚`
+    : "0 件";
+
+  const cells = (values, right) => values.map((value, index) => {
+    const td = document.createElement("td");
+    if (right.includes(index)) td.className = "n";
+    td.textContent = value;
+    return td;
+  });
+
+  el.usageRateRows.replaceChildren(...rows.map((r) => {
+    const tr = document.createElement("tr");
+    // 使っていない行は薄く。**消さずに薄くする** ── 並んでいること
+    // 自体が「一覧にはあるが使っていない」という事実だから
+    if (!r.used) tr.classList.add("off");
+    tr.append(...cells([r.board_type, r.width, r.length, r.sheets, r.times,
+                        `${r.share}%`, r.last_used_at || "—"],
+                       [1, 2, 3, 4, 5]));
+    return tr;
+  }));
+
+  el.usageUnlistedCard.hidden = unlisted.length === 0;
+  el.usageUnlistedRows.replaceChildren(...unlisted.map((r) => {
+    const tr = document.createElement("tr");
+    tr.append(...cells([r.board_type, r.width, r.length, r.sheets,
+                        r.last_used_at || "—"], [1, 2, 3]));
+    return tr;
+  }));
+}
+
 // ------------------------------------------------------------------
 // 状態
 // ------------------------------------------------------------------
@@ -178,6 +222,7 @@ function renderStatus(state) {
     btn.dataset.lockedOff = state.can_import ? "" : "1";
   }
   renderFilters(state.lot_filters || []);
+  renderBoardUsage(state.board_usage || {});
   // **開いていない面の問題を隠さない。** 面で分けたせいで
   // 「足りません」に気づけなくなるなら、スクロールのほうがまだまし
   if (el.settingsTabs) tabs.setBadges(el.settingsTabs, state.tab_badges);
@@ -347,6 +392,8 @@ export function start(state, jobState, masterFrame) {
                     "masterDirReal", "lotDirReal", "kanbanDirReal", "autoImport",
                     "position", "specUrl", "specUrlProblem",
                     "filterRows", "filterEmpty", "saveBehavior",
+                    "usageRateRows", "usageRateEmpty", "usageSummary",
+                    "usageUnlistedCard", "usageUnlistedRows",
                     "admNow", "admNew", "admConfirm", "admSave", "admReset",
                     "admWhy", "adminState",
                     "masterAuthPass", "masterAuthBtn", "masterAuthWhy", "masterAuthState",

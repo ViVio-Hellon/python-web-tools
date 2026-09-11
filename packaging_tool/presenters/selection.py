@@ -826,6 +826,10 @@ class OutputsViewModel:
     reports: list[ReportLink] = field(default_factory=list)
     can_send: bool = False
     send_why: str = ""
+    # 「使用する」── 配置したボードを使用実績に積む(VBAには無い機能)
+    can_use: bool = False
+    use_why: str = ""
+    use_done: bool = False       # いまの配置をもう積んである
 
 
 @dataclass
@@ -1248,6 +1252,14 @@ def build_outputs(session: Any) -> OutputsViewModel:
     send = out.send_refusal(session)
     view.can_send = send is None
     view.send_why = "" if send is None else send.message
+
+    # 「使用する」。**押したあとも押せるままにはしない** ── 同じ配置を
+    # 二度積むと実績が実態より多くなる。押せない理由は必ず出す
+    why = session.usage_refusal()
+    view.use_done = session.usage_done
+    view.can_use = not why and not view.use_done
+    view.use_why = why or ("この配置はもう記録してあります。"
+                           if view.use_done else "")
     return view
 
 
@@ -1857,6 +1869,9 @@ def outputs_to_dict(view: OutputsViewModel) -> dict[str, Any]:
                     for r in view.reports],
         "can_send": view.can_send,
         "send_why": view.send_why,
+        "can_use": view.can_use,
+        "use_why": view.use_why,
+        "use_done": view.use_done,
     }
 
 
