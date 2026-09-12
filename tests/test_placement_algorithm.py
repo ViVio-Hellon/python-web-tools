@@ -919,6 +919,35 @@ class CenterBoardsInWidthTests(unittest.TestCase):
         self.assertEqual(self.ys(ctx),
                          [(0, 0, 50), (0, 50, 1000), (0, 1050, 50)])
 
+    def test_離れた補填は他のボードを巻き込まない(self):
+        """**補填が1枚あるだけで、面ぜんぶが上詰めになっていた。**
+
+        守りたいのは幅補填の上下振り分けだけ。幅補填は主ボードの下端に
+        敷くので同じまとまりに入り、これまでどおり触らない。ところが
+        丈補填のように**離れたところに1枚ある**だけで、関係のない主
+        ボードまで寄らなくなっていた(現場の指摘:「ボードを幅方向の
+        センター配置をしていない」)。
+        """
+        ctx = make_ctx(pal_w=812, pal_l=2650)
+        ctx.placed.extend([
+            placed(0, 0, 750, 1130),                    # 主。62mm 余る
+            placed(1130, 0, 750, 1130),                 # 主。62mm 余る
+            placed(2260, 0, 812, 50, is_fill=True),     # 離れた丈補填
+        ])
+        pl.center_boards_in_width(ctx, LOWER)
+        self.assertEqual(self.ys(ctx),
+                         [(0, 31, 750), (1130, 31, 750), (2260, 0, 812)])
+
+    def test_補填と同じまとまりのボードは動かさない(self):
+        """幅補填は主ボードの下端に敷く。**そのまとまりは触らない。**"""
+        ctx = make_ctx(pal_w=1150, pal_l=2650)
+        ctx.placed.extend([
+            placed(0, 0, 1000, 2000),                   # 主
+            placed(0, 1000, 50, 2000, is_fill=True),    # その下の幅補填
+        ])
+        pl.center_boards_in_width(ctx, LOWER)
+        self.assertEqual(self.ys(ctx), [(0, 0, 1000), (0, 1000, 50)])
+
     def test_上下振り分けが実際に残ることを通しで確かめる(self):
         """`auto_place_boards` を通しても、振り分けたYは動かない。"""
         # 幅補填は**本数**で振り分けるので、2本は2行として渡す

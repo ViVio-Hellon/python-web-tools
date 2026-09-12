@@ -1154,12 +1154,23 @@ def center_boards_in_width(ctx: PlacementContext, category: str) -> None:
     boards = [pb for pb in ctx.placed if pb.board_category == category]
     if not boards:
         return
-    if any(pb.is_fill_board for pb in boards):
-        log.debug("センタリング(%s): 補填ボードがあるので触りません", category)
-        return
 
     limit_w = ctx.limit_width(category)
     for group in _x_groups(boards):
+        # **補填が居るまとまりだけを避ける。**
+        #
+        # 以前は補填が1枚でもあると、その面のボードを**全部**そのままに
+        # していた。守りたいのは幅補填の上下振り分け(どこに置くかを既に
+        # 決めている配置)だけなのに、離れたところに居る主ボードまで
+        # 上詰めのまま残っていた ── 丈補填が1枚あるだけで、面ぜんぶの
+        # センタリングが効かなくなる(現場の指摘:「ボードを幅方向の
+        # センター配置をしていない」)。
+        # 幅補填は主ボードの下端に敷くので同じまとまりに入り、これまで
+        # どおり触らない
+        if any(pb.is_fill_board for pb in group):
+            log.debug("センタリング(%s): x=%s は補填があるので触りません",
+                      category, group[0].x)
+            continue
         min_y = min(pb.y for pb in group)
         max_y = max(pb.y + pb.width for pb in group)
         gap = limit_w - (max_y - min_y)
