@@ -66,6 +66,12 @@ THIN_LABEL_LIMIT = 30
 # 凡例に載せる「細すぎるボード」の閾値(px)。THIN_LABEL_LIMIT と同じ理由で2倍
 LEGEND_THIN_LIMIT = 30
 
+# 文字1つが要る横幅(フォントサイズに対する比)。寸法の文字列は
+# 「幅」「丈」の全角と数字の半角が混ざるので、**分けて数える** ──
+# ひとまとめに全角で見ると、入るはずのボードまで文字をやめてしまう
+CAPTION_WIDE_EM = 1.0      # 全角(幅・丈・カット など)
+CAPTION_NARROW_EM = 0.6    # 半角(数字・記号)
+
 # 色(VBAのRGB値をそのまま16進に変換)
 COLOR_LOWER = "#c8ffc8"        # RGB(200,255,200)
 COLOR_UPPER = "#ffc8c8"        # RGB(255,200,200)
@@ -532,6 +538,31 @@ def build_caption(board: PlacedBoardModel, cut: CutInfo, screen_h: float) -> tup
     return cap_w, 22
 
 
+def caption_fits(caption: str, font_size: int, screen_w: float) -> bool:
+    """その文字が、そのボードの横幅に収まるか。
+
+    **高さだけ見ていると、細長い補填で読めない文字が出る。**
+    `build_caption` は縦(screen_h)を見て行数を決めるが、横がどれだけ
+    あるかは見ていない。丈補填のような縦長の帯は縦に余裕がある一方、
+    横は板厚ぶんしかない ── 厚み100mmの帯は画面で38px、そこへ24ptで
+    「幅812」と書こうとしていた。
+
+    現場の指摘:「50補填は50mmと左下に出て分かったが100は出ていなかった」
+    ── 50は細いので凡例に回り、100は凡例に載らず、文字は入らない。
+    どちらでもない状態になっていた。
+    """
+    if not caption:
+        return True
+    widest = max(caption_line_em(line) for line in caption.split("\n"))
+    return widest * font_size <= screen_w
+
+
+def caption_line_em(line: str) -> float:
+    """1行の横幅(フォントサイズの何倍か)。"""
+    return sum(CAPTION_NARROW_EM if ch.isascii() else CAPTION_WIDE_EM
+               for ch in line)
+
+
 def _is_overhanging(board: PlacedBoardModel, base_w: int, base_l: int) -> bool:
     """ボードが基準枠(パレット/製品)を超えて配置されているか。
 
@@ -609,6 +640,10 @@ def build_render_plan(
             caption, font_size = "", 14
         else:
             caption, font_size = build_caption(board, cut, screen_h)
+            # **書けない文字は書かない。** 入らない文字を書くと、読めない
+            # うえに隣のボードへかぶる。文字をやめたぶんは凡例が引き受ける
+            if not caption_fits(caption, font_size, screen_w):
+                caption, font_size, thin = "", 14, True
 
         if board.is_fill_board:
             fill = fill_board_color(thin_side)
@@ -640,8 +675,14 @@ def build_render_plan(
             caption_cy=(py + keep_bottom) / 2 if keep_bottom < py + screen_h else None,
         ))
 
-        if thin_side * scale < LEGEND_THIN_LIMIT and thin_side not in legend_seen:
-            legend_seen[thin_side] = thin_board_color(thin_side, screen_h)
+        # **文字を出さなかったものは、必ず凡例に出す。**
+        # 以前は凡例の条件(細さ)だけで決めていたので、「文字は入らない
+        # が凡例には載らない」中途半端な太さのボードが、何も名乗らずに
+        # 図に出ていた
+        if thin and thin_side not in legend_seen:
+            legend_seen[thin_side] = (fill_board_color(thin_side)
+                                      if board.is_fill_board
+                                      else thin_board_color(thin_side, screen_h))
 
         # 補填ボードはカットが無ければカット表示を出さない(VBA踏襲)
         if board.is_fill_board and not cut.cut_length and not cut.cut_width:

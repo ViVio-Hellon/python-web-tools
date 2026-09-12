@@ -552,3 +552,56 @@ class CutStatusColorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 入らない文字は凡例に回す(unittest.TestCase):
+    """**文字も凡例も出ないボードを作らない。**
+
+    現場の指摘:「50補填は50mmと左下に出て分かったが100は出ていなかった」。
+
+    丈補填は縦長の帯で、縦は製品幅いっぱいあるが横は板厚ぶんしかない。
+    文字を出すかどうかは縦横どちらかが30px未満かで決めていたので、
+    厚み100mm(画面で38px)は「文字を出す」側になり、そこへ24ptで
+    「幅812」と書こうとしていた ── 入るはずがない。しかも凡例の条件
+    (細さ)からは外れるので、**何も名乗らないボード**になっていた。
+    """
+
+    def fill(self, thickness: int, base_w: int = 812, base_l: int = 2302):
+        board = PlacedBoardModel(
+            width=base_w, length=thickness, x=2000, y=0,
+            board_category="上用", original_width=base_w,
+            original_length=thickness, is_fill_board=True)
+        return render.build_render_plan([board], "上用", base_w, base_l, 980, 460)
+
+    def test_厚み100は凡例に出る(self) -> None:
+        plan = self.fill(100)
+        self.assertEqual(plan.boards[0].caption, "")
+        self.assertEqual([t for t, _c in plan.legend], [100])
+
+    def test_厚み50はこれまでどおり凡例(self) -> None:
+        plan = self.fill(50)
+        self.assertEqual([t for t, _c in plan.legend], [50])
+
+    def test_太ければ文字を出す(self) -> None:
+        """全部を凡例に回すのは行き過ぎ。入るなら板の上に書く。"""
+        plan = self.fill(300)
+        self.assertIn("丈300", plan.boards[0].caption)
+        self.assertEqual(plan.legend, [])
+
+    def test_凡例の色は板の色と同じ(self) -> None:
+        """凡例は色で引く。板と違う色を出したら引けない。"""
+        plan = self.fill(100)
+        self.assertEqual(plan.legend[0][1], plan.boards[0].fill)
+
+    # -- 入るかどうかの見積もり --------------------------------------
+    def test_全角と半角を分けて数える(self) -> None:
+        """ひとまとめに全角で見ると、入るはずの板まで文字をやめる。"""
+        # 「幅812」= 全角1 + 半角3 = 1.0 + 1.8 = 2.8em
+        self.assertAlmostEqual(render.caption_line_em("幅812"), 2.8)
+
+    def test_一番長い行で決める(self) -> None:
+        self.assertFalse(render.caption_fits("幅812\n丈1200", 24, 70))
+        self.assertTrue(render.caption_fits("幅812\n丈1200", 24, 100))
+
+    def test_文字が無ければ収まる扱い(self) -> None:
+        self.assertTrue(render.caption_fits("", 24, 1))
