@@ -375,19 +375,156 @@ def ensure_op_id_column(source: "source_db.SourceConnection",
     if column_ok is None:
         return False
 
-    index_name = f"IX_{spec.access_table}_{spec.op_id_column}"
-    index_ok = _try_ddl(
-        source,
-        f"CREATE UNIQUE INDEX IF NOT EXISTS {source_db.quote_identifier(index_name)}"
-        f" ON {source_db.quote_identifier(spec.access_table)}"
-        f" ({source_db.quote_identifier(spec.op_id_column)})",
-        f"{spec.access_table} への一意インデックスの作成")
+    index_ok = _create_op_id_index(source, spec)
     if index_ok is None:
         return False
 
     ready = column_ok and index_ok
     _op_id_column_cache[cache_key] = ready
     return ready
+
+
+def index_name_for(spec: WriteBackSpec) -> str:
+    """送信IDの一意インデックスの名前。状態の確認からも使う。"""
+    return f"IX_{spec.access_table}_{spec.op_id_column}"
+
+
+def _create_op_id_index(source: "source_db.SourceConnection",
+                        spec: WriteBackSpec) -> Optional[bool]:
+    """送信IDの一意インデックスを作る。作れなければ**1度だけ直して**試す。
+
+    【空文字が混ざると、二度と作れなくなる】
+    一意インデックスは NULL どうしを別物として扱うので、送信IDが未採番
+    (NULL)の古い行がいくつあっても作れます。ところが**空文字は別物では
+    ありません** ── 2行以上が `''` だと作成が一意制約で落ち、しかも
+    データを直さないかぎり毎回落ち続けます。
+
+    そうなると重複防止は**黙って切れたまま**になります(`_try_ddl` は
+    警告を1行出すだけで、以後は諦めて素通りする)。送信IDが空のまま
+    増え続け、次に同じ行を送り直したときに二重登録が起きます。
+
+    空文字は送信IDとして意味を持ちません(採番するのは uuid4 の16進)。
+    **未採番と同じ NULL に寄せて**から、もう一度だけ作ります ── これで
+    古い行の意味は変わらず、インデックスだけが通ります。
+    """
+    sql = (f"CREATE UNIQUE INDEX IF NOT EXISTS "
+           f"{source_db.quote_identifier(index_name_for(spec))}"
+           f" ON {source_db.quote_identifier(spec.access_table)}"
+           f" ({source_db.quote_identifier(spec.op_id_column)})")
+    label = f"{spec.access_table} への一意インデックスの作成"
+
+    try:
+        source.execute(sql)
+        log.info("%s: 完了しました", label)
+        return True
+    except source_db.SourceError as exc:
+        message = str(exc)
+        if source_db.is_lock_error(message):
+            log.debug("%s: ロック競合のため今回は見送ります(次回再試行)", label)
+            return None
+        if source_db.is_already_exists_error(message):
+            log.debug("%s: 既にあります", label)
+            return True
+        if not source_db.is_duplicate_error(message):
+            log.warning("%s: できませんでした"
+                        "(送信IDによる重複防止なしで送信を続けます): %s",
+                        label, exc)
+            return False
+
+    # 一意制約で落ちた。空文字が混ざっているなら、そこを未採番(NULL)に
+    # 寄せてから**1度だけ**やり直す
+    blanks = _blank_op_ids_to_null(source, spec)
+    if not blanks:
+        log.warning("%s: 送信IDに重複した値があるため作れません"
+                    "(送信IDによる重複防止なしで送信を続けます)", label)
+        return False
+
+    log.info("%s: 送信IDが空の行を%s件だけ未採番に直しました", label, blanks)
+    return _try_ddl(source, sql, label + "(空欄を直したあと)")
+
+
+def _blank_op_ids_to_null(source: "source_db.SourceConnection",
+                          spec: WriteBackSpec) -> int:
+    """送信IDが空文字の行を NULL に寄せる。戻り値は直した件数。
+
+    **触るのはこのツールが足した列の、空欄だけ**です。業務の値は
+    1つも動かしません。
+    """
+    column = source_db.quote_identifier(spec.op_id_column)
+    table = source_db.quote_identifier(spec.access_table)
+    try:
+        return source.execute(
+            f"UPDATE {table} SET {column} = NULL WHERE {column} = ''")
+    except source_db.SourceError as exc:
+        log.warning("%s の送信IDの空欄を直せませんでした: %s",
+                    spec.access_table, exc)
+        return 0
+
+
+@dataclass
+class GuardState:
+    """重複送信ガードがいま効いているか。**読むだけ**(DDLは走らせない)。
+
+    効いていないことは、いまはログの1行にしか出ません。ガードが切れた
+    まま気づかないと、再送のたびに二重登録が起きます。画面から読める
+    ようにするためだけの型です。
+    """
+
+    table: str
+    has_column: bool = False
+    has_index: bool = False
+    blanks: int = 0              # 送信IDが空文字の行(これが2つ以上だと作れない)
+    error: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.has_column and self.has_index and not self.error
+
+    def why(self) -> str:
+        """効いていない理由と、次にできること。効いていれば空。"""
+        if self.error:
+            return f"確かめられませんでした({self.error})"
+        if not self.has_column:
+            return (f"{self.table} に送信ID列がありません。"
+                    "次の「取り込み元へ反映」で足します。")
+        if not self.has_index:
+            if self.blanks > 1:
+                return (f"{self.table} の送信IDが空の行が{self.blanks}件あり、"
+                        "一意インデックスを作れません。次の"
+                        "「取り込み元へ反映」で空欄を未採番に直して作ります。")
+            return (f"{self.table} に送信IDの一意インデックスがありません。"
+                    "次の「取り込み元へ反映」で作ります。")
+        return ""
+
+
+def guard_state(source: "source_db.SourceConnection",
+                spec: WriteBackSpec) -> GuardState:
+    """重複送信ガードの状態を**読むだけ**で調べる。
+
+    `ensure_op_id_column` と違い、列も索引も作りません ── 状態を見に
+    行っただけで取り込み元の形が変わるのは、見る側の期待と違います。
+    """
+    state = GuardState(table=spec.access_table)
+    if not spec.use_op_id_guard:
+        state.has_column = state.has_index = True   # 使わない約束なので問わない
+        return state
+    table = source_db.quote_identifier(spec.access_table)
+    column = source_db.quote_identifier(spec.op_id_column)
+    try:
+        state.has_column = any(
+            row.get("name") == spec.op_id_column
+            for row in source.query(f"PRAGMA table_info({table})"))
+        if state.has_column:
+            want = index_name_for(spec)
+            state.has_index = any(
+                row.get("name") == want
+                for row in source.query(f"PRAGMA index_list({table})"))
+            found = source.query(
+                f"SELECT COUNT(*) AS 件数 FROM {table} WHERE {column} = ''")
+            state.blanks = int(found[0]["件数"]) if found else 0
+    except source_db.SourceError as exc:
+        state.error = str(exc)
+    return state
 
 
 # ------------------------------------------------------------------

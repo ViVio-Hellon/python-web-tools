@@ -448,7 +448,41 @@ def _material_section(material: Optional[Path], conn=None) -> Section:
         section.checks.append(Check(
             "任意のテーブル", f"{len(optional_missing)}件が未作成", INFO,
             "無くても動きます: " + ", ".join(optional_missing)))
+    _guard_check(section, material)
     return section
+
+
+def _guard_check(section: Section, material: Path) -> None:
+    """二重登録の防止が効いているか。
+
+    書き戻しは送信IDを取り込み元の一意インデックスに賭けています。
+    ところがインデックスを作れないことがあり(送信IDが空の行が2つ以上
+    あるなど)、そのときは**黙って防止なしで送り続けます** ── ログに
+    1行出るだけで、現場からは何も変わって見えません。効いていないまま
+    再送が起きると二重登録になります。
+
+    **効いているときは黙っています。** 全部の項目に印が付くと、印が
+    意味を持たなくなるためです。
+    """
+    from .. import data_sync, outbox_sync
+
+    broken: list[str] = []
+    try:
+        with source_db.connect(material) as src:
+            for spec in data_sync.WRITEBACK_SPECS:
+                if spec.access_table not in src.table_names():
+                    continue          # まだ送ったことがない表。まだ問えない
+                state = outbox_sync.guard_state(src, spec)
+                if not state.ok:
+                    broken.append(state.why())
+    except source_db.SourceError as exc:       # pragma: no cover - 上で弾く
+        log.debug("重複防止の状態を確かめられません: %s", exc)
+        return
+
+    if broken:
+        section.checks.append(Check(
+            "二重登録の防止", f"効いていません({len(broken)}件)", WARN,
+            "  ".join(broken)))
 
 
 def _kanban_section(kanban: Optional[Path]) -> Section:

@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import tempfile
 import threading
@@ -584,6 +585,113 @@ class EnvironmentTests(unittest.TestCase):
         self.assertIn("読み取り方式", text)
         self.assertIn(str(config.master_db_dir()), text)
         self.assertIn("書き戻し", text)
+
+
+
+class OpIdGuardTests(unittest.TestCase):
+    """**二重登録の防止が、黙って切れないこと。**
+
+    書き戻しは送信IDを取り込み元の一意インデックスに賭けている。
+    インデックスを作れないと防止なしで送り続けるが、以前はログに1行
+    出るだけで、現場からは何も変わって見えなかった。
+    """
+
+    def setUp(self) -> None:
+        from packaging_tool import outbox_sync, source_db
+        self.outbox_sync = outbox_sync
+        self.source_db = source_db
+        self.dir = Path(tempfile.mkdtemp(prefix="guard_"))
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.path = self.dir / "src.sqlite3"
+        self.spec = outbox_sync.WriteBackSpec(
+            sqlite_table="注文", access_table="注文", key_column="管理番号")
+        outbox_sync._op_id_column_cache.clear()
+        self.addCleanup(outbox_sync._op_id_column_cache.clear)
+
+    def make(self, *, op_id_column: bool, blanks: int = 0) -> None:
+        conn = sqlite3.connect(self.path)
+        extra = ", 送信ID TEXT" if op_id_column else ""
+        conn.execute(f"CREATE TABLE 注文 "
+                     f"(管理番号 INTEGER PRIMARY KEY, LotNo TEXT{extra})")
+        for i in range(blanks):
+            conn.execute("INSERT INTO 注文 (LotNo, 送信ID) VALUES (?, '')",
+                         (f"LOT{i}",))
+        conn.commit()
+        conn.close()
+
+    def ensure(self) -> bool:
+        with self.source_db.connect(self.path) as src:
+            return self.outbox_sync.ensure_op_id_column(src, self.spec)
+
+    def state(self):
+        with self.source_db.connect(self.path) as src:
+            return self.outbox_sync.guard_state(src, self.spec)
+
+    def test_列も索引も無ければ作る(self) -> None:
+        self.make(op_id_column=False)
+        self.assertTrue(self.ensure())
+        self.assertTrue(self.state().ok)
+
+    def test_二度目も効いたまま(self) -> None:
+        """列がもうある状態で「もうある」を失敗と読むと、以後ずっと切れる。"""
+        self.make(op_id_column=False)
+        self.ensure()
+        self.outbox_sync._op_id_column_cache.clear()   # 起動し直した想定
+        self.assertTrue(self.ensure())
+
+    def test_未採番のNULLが並んでいても作れる(self) -> None:
+        """NULLどうしは別物なので、古い行が何件あっても邪魔しない。"""
+        self.make(op_id_column=True)
+        conn = sqlite3.connect(self.path)
+        for i in range(3):
+            conn.execute("INSERT INTO 注文 (LotNo) VALUES (?)", (f"L{i}",))
+        conn.commit(); conn.close()
+        self.assertTrue(self.ensure())
+        self.assertTrue(self.state().ok)
+
+    def test_空文字が2件以上あると作れないので直してから作る(self) -> None:
+        """**ここが黙って切れていた。**
+
+        空文字どうしは同じ値なので一意制約に当たり、しかもデータを
+        直さないかぎり毎回当たり続ける。空文字は送信IDとして意味を
+        持たない(採番するのは uuid4 の16進)ので、未採番と同じ NULL に
+        寄せてから作り直す。
+        """
+        self.make(op_id_column=True, blanks=3)
+        self.assertFalse(self.state().ok)         # 直す前は効いていない
+        self.assertEqual(self.state().blanks, 3)
+
+        self.assertTrue(self.ensure())            # 直して作る
+
+        after = self.state()
+        self.assertTrue(after.ok)
+        self.assertEqual(after.blanks, 0)
+        conn = sqlite3.connect(self.path)
+        rows = [r[0] for r in conn.execute("SELECT 送信ID FROM 注文")]
+        conn.close()
+        self.assertEqual(rows, [None, None, None])   # 空欄は未採番に寄せた
+
+    def test_効いていない理由を言う(self) -> None:
+        """「効いていません」だけでは、次に何をすればよいか分からない。"""
+        self.make(op_id_column=True, blanks=3)
+        why = self.state().why()
+        self.assertIn("3件", why)
+        self.assertIn("取り込み元へ反映", why)
+
+    def test_効いているときは黙っている(self) -> None:
+        """全部の項目に印が付くと、印が意味を持たなくなる。"""
+        self.make(op_id_column=False)
+        self.ensure()
+        self.assertEqual(self.state().why(), "")
+
+    def test_状態を見るだけでは形を変えない(self) -> None:
+        """見に行っただけで取り込み元が変わるのは、見る側の期待と違う。"""
+        self.make(op_id_column=False)
+        self.state()
+        conn = sqlite3.connect(self.path)
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(注文)")]
+        conn.close()
+        self.assertNotIn("送信ID", columns)
 
 
 if __name__ == "__main__":
