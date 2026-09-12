@@ -12,10 +12,44 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from pathlib import Path
 
 from . import config
 
 _configured = False
+
+
+def log_path_for(day: date) -> "Path":
+    """その日のログファイル。**名前の作り方はここ1か所**。"""
+    return config.LOG_DIR / f"packaging_tool_{day:%Y%m%d}.log"
+
+
+class DailyFileHandler(logging.FileHandler):
+    """日付が変わったら、その日のファイルへ書き換える。
+
+    **開いたままの端末のため。** 書き出し先を起動時に1度だけ決めると、
+    夜勤をまたいだ端末は翌日ぶんを前日のファイルに書き続ける ── 13日の
+    不具合を追うときに、13日のログが12日のファイルに入っている。
+
+    `TimedRotatingFileHandler` を使わないのは、あちらが「いまのファイルを
+    日付付きの名前へ退ける」作りで、こちらの名前の付け方
+    (`packaging_tool_YYYYMMDD.log` にそのまま書く)と噛み合わないため。
+    日付を見て開き直すだけで足りる。
+    """
+
+    def __init__(self, day: date, **kwargs) -> None:
+        self._day = day
+        super().__init__(log_path_for(day), **kwargs)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        # **書く直前に見る。** 日付が変わったことは、次の1行で気づく
+        today = date.today()
+        if today != self._day:
+            self._day = today
+            self.close()
+            self.baseFilename = str(log_path_for(today))
+            self.stream = None                    # 次の emit で開き直す
+        super().emit(record)
 
 
 def configure_logging() -> None:
@@ -25,7 +59,6 @@ def configure_logging() -> None:
         return
 
     config.ensure_dirs()
-    log_file = config.LOG_DIR / f"packaging_tool_{date.today():%Y%m%d}.log"
 
     root = logging.getLogger("packaging_tool")
     root.setLevel(logging.DEBUG)
@@ -33,7 +66,7 @@ def configure_logging() -> None:
     formatter = logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s",
                                    datefmt="%Y/%m/%d %H:%M:%S")
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler = DailyFileHandler(date.today(), encoding="utf-8")
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
 

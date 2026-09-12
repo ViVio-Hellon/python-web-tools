@@ -25,6 +25,7 @@ Web版は要求ごとに独立しているので、**同じものをプロセス
 from __future__ import annotations
 
 import threading
+from datetime import date
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -49,6 +50,12 @@ class WorkContext:
     # 製造板幅・板丈(資材展開で製品サイズへ渡す元の値)
     lot_width: float = 0.0
     lot_length: float = 0.0
+    # そのロットを開いた日。**日付をまたいだかを言うためだけに持つ。**
+    # ツールを開いたままにすると、昨日開いたロットが翌朝も帯に出たままで、
+    # 「いまそれを作業中」と読めてしまう。
+    # **消しはしない** ── 夜勤は日付をまたいで同じ作業を続けるので、
+    # 0時に作業中の製品サイズを取り上げるほうが害が大きい
+    lot_day: Optional[Any] = None
 
     # --- 資材選択から ---
     product_width: int = 0
@@ -113,6 +120,7 @@ class WorkContext:
         self.packaging_spec = result.odr.packaging_spec
         self.lot_width = result.lot.width
         self.lot_length = result.lot.length
+        self.lot_day = date.today()
         log.info("作業中のロット: %s (EX=%s)", self.lot_no, self.is_ex)
 
     # --- 資材選択 → 倉庫連携 -----------------------------------------
@@ -188,6 +196,11 @@ class WorkContext:
         効果の見える場所に置いてある(同じものを2か所に出さない)。
         """
         chips = []
+        # 日付をまたいだロットは、そう分かるようにする。消さないかわりに
+        # 「いつのものか」を出す(開いたままの端末のため)
+        if self.lot_no and self.lot_day and self.lot_day != date.today():
+            chips.append({"text": f"{self.lot_day.month}/{self.lot_day.day}から",
+                          "kind": "info"})
         if self.is_ex:
             chips.append({"text": "EX", "kind": "ex"})
         if self.fatigue:

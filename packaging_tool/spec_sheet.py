@@ -74,6 +74,17 @@ MAX_BYTES = 20 * 1024 * 1024
 # 変わったときに古いままだと困るので1日で見直す
 CACHE_TTL_SEC = 24 * 60 * 60
 
+# 「取れなかった」を覚えておく長さ(秒)。
+#
+# **覚えておく理由** … 届かないサーバを、ロットを引くたびに叩き続けない
+# **忘れる理由**     … 期限が無いと、閲覧システムが一瞬落ちただけで、
+#                      そのNOはツールを閉じるまでずっと図面が出ない。
+#                      「再取得」を押せば直るが、現場からは「出ない」と
+#                      しか見えない(開いたままの端末ほど長く尾を引く)
+#
+# 3分は「連打では叩きに行かないが、席を立って戻ってくれば直っている」長さ
+FAILED_TTL_SEC = 3 * 60
+
 # 図として出せる形。HTMLが返ってきたら「取れた」ではなく設定の誤り
 IMAGE_TYPES = ("image/", "application/pdf")
 
@@ -269,7 +280,8 @@ class Fetcher:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._running: set[str] = set()
-        self._failed: dict[str, Status] = {}
+        # NO → (いつ失敗したか, そのときの状態)
+        self._failed: dict[str, tuple[float, Status]] = {}
 
     # -- 問い合わせ --------------------------------------------------
     def status(self, no: str) -> Status:
@@ -291,8 +303,10 @@ class Fetcher:
                 return Status(no=no, state=STATE_LOADING,
                               message="図面を取得しています")
             failed = self._failed.get(no)
+        # 期限が切れていても**理由は出したまま**にする。次に開いた時点で
+        # 取り直しは始まるので、状態は `prefetch` の側で変わる
         if failed is not None:
-            return failed
+            return failed[1]
         return Status(no=no, state=STATE_LOADING, message="図面を取得しています")
 
     # -- 指示 --------------------------------------------------------
@@ -312,8 +326,12 @@ class Fetcher:
             return False
 
         with self._lock:
-            if no in self._running or no in self._failed:
+            if no in self._running:
                 return False
+            failed = self._failed.get(no)
+            if failed is not None and time.time() - failed[0] < FAILED_TTL_SEC:
+                return False
+            self._failed.pop(no, None)            # 期限切れ。もう一度試す
             self._running.add(no)
 
         threading.Thread(target=self._run, args=(no, template),
@@ -335,7 +353,7 @@ class Fetcher:
                 self._running.discard(no)
         if result.state == STATE_ERROR:
             with self._lock:
-                self._failed[no] = result
+                self._failed[no] = (time.time(), result)
 
     # -- 試験用 ------------------------------------------------------
     def reset(self) -> None:

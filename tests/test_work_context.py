@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import sys
 import unittest
+from unittest import mock
+from datetime import date
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -125,3 +127,49 @@ class SingletonTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaleLotIsLabelledTests(unittest.TestCase):
+    """**昨日のロットが、今日のもののように見えないこと。**
+
+    ツールを開いたままにすると、帯の「作業中のロット」は自分では消えない。
+    翌朝出社して、昨日のロット番号が帯に出ているのを「いまそれを作業中」と
+    読めてしまう。
+
+    **消すのではなく、いつのものかを出す。** 夜勤は日付をまたいで同じ
+    作業を続けるので、0時に作業中の製品サイズを取り上げるほうが害が大きい。
+    """
+
+    def context(self, day):
+        ctx = work_context.WorkContext()
+        ctx.lot_no = "1234567"
+        ctx.lot_day = day
+        return ctx
+
+    def test_今日のロットには何も付けない(self) -> None:
+        ctx = self.context(date.today())
+        self.assertEqual(ctx.modes(), [])
+
+    def test_日をまたいだらいつのものかを出す(self) -> None:
+        ctx = self.context(date(2026, 9, 12))
+        with mock.patch.object(work_context, "date") as fake:
+            fake.today.return_value = date(2026, 9, 13)
+            chips = ctx.modes()
+        self.assertEqual(chips, [{"text": "9/12から", "kind": "info"}])
+
+    def test_持っているものは取り上げない(self) -> None:
+        """印を付けるだけ。作業そのものは触らない。"""
+        ctx = self.context(date(2026, 9, 12))
+        ctx.product_width, ctx.product_length = 1000, 2000
+        with mock.patch.object(work_context, "date") as fake:
+            fake.today.return_value = date(2026, 9, 13)
+            ribbon = ctx.ribbon()
+        self.assertEqual(ribbon["lot"], "1234567")
+        self.assertEqual(ribbon["product"], "1000×2000")
+
+    def test_ロットが無ければ何も出さない(self) -> None:
+        ctx = work_context.WorkContext()
+        ctx.lot_day = date(2026, 9, 12)
+        with mock.patch.object(work_context, "date") as fake:
+            fake.today.return_value = date(2026, 9, 13)
+            self.assertEqual(ctx.modes(), [])

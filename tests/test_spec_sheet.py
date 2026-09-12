@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -423,3 +424,48 @@ class LotHandoffTests(unittest.TestCase):
 
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
+
+
+class FailedMemoryExpiresTests(unittest.TestCase):
+    """**取れなかったことを、いつまでも覚えていない。**
+
+    一度失敗したNOは覚えておく ── 届かないサーバをロットを引くたびに
+    叩き続けないため。ただし期限が無いと、閲覧システムが一瞬落ちただけで
+    そのNOはツールを閉じるまで図面が出ない。「再取得」を押せば直るが、
+    現場からは「出ない」としか見えない(開いたままの端末ほど長く尾を引く)。
+    """
+
+    def setUp(self) -> None:
+        self.fetcher = spec_sheet.Fetcher()
+        self.failed = spec_sheet.Status(
+            no="1P0001", state=spec_sheet.STATE_ERROR,
+            message="つながりません")
+
+    def remember(self, ago: float) -> None:
+        self.fetcher._failed["1P0001"] = (time.time() - ago, self.failed)
+
+    def test_失敗した直後は叩きに行かない(self) -> None:
+        self.remember(0)
+        with mock.patch.object(spec_sheet, "url_template", return_value="u/{no}"):
+            self.assertFalse(self.fetcher.prefetch("1P0001"))
+
+    def test_しばらく経てばもう一度試す(self) -> None:
+        """**ここが本題。** 席を立って戻ってくれば直っている。"""
+        self.remember(spec_sheet.FAILED_TTL_SEC + 1)
+        with mock.patch.object(spec_sheet, "url_template", return_value="u/{no}"), \
+             mock.patch.object(spec_sheet.threading, "Thread") as thread:
+            self.assertTrue(self.fetcher.prefetch("1P0001"))
+            self.assertTrue(thread.called)
+
+    def test_期限切れでも理由は出したまま(self) -> None:
+        """状態を訊かれたら、最後に分かっていることを答える。"""
+        self.remember(spec_sheet.FAILED_TTL_SEC + 1)
+        with mock.patch.object(spec_sheet, "url_template", return_value="u/{no}"), \
+             mock.patch.object(spec_sheet, "_read_meta", return_value=None):
+            got = self.fetcher.status("1P0001")
+        self.assertEqual(got.state, spec_sheet.STATE_ERROR)
+
+    def test_走っている最中は二重に始めない(self) -> None:
+        self.fetcher._running.add("1P0001")
+        with mock.patch.object(spec_sheet, "url_template", return_value="u/{no}"):
+            self.assertFalse(self.fetcher.prefetch("1P0001"))
