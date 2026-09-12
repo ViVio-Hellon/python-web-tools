@@ -238,7 +238,11 @@ def _select(conn, lot_no: str) -> dict:
     # 資材選択の状態機械にも通す(VBA `SearchAndDisplay` 末尾)。
     # EX受注・1P0113・プロテックはここで決まる ── 資材選択の画面を
     # 開いたときに引き直すのでは、**開くまでモードが分からない**
-    if result.found:
+    #
+    # **現場モードのときだけ。** 資材モードは届いた発注を確かめるだけで、
+    # 資材選択へ移る道がない(資材展開は現場の操作)。行き先の無い準備を
+    # しておく理由がないので、帯に出すところ(`apply_lot`)で止める
+    if result.found and current_mode() == modes.FIELD:
         session = selection_session.get_session(conn)
         # セッション側を通すのは、プロテック判定の結果として
         # **ボード種別を実際に切り替える**ため(種別の一覧を持つのは

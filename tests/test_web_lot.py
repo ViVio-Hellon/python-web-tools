@@ -838,6 +838,40 @@ class ExpandIsFieldOnlyTests(unittest.TestCase):
         self.assertIn("expandAbsentWhy", html)
         self.assertIn("現場モードの操作です", html)
 
+    def test_資材では資材選択のセッションを作らない(self) -> None:
+        """確かめるだけの場所で、行き先の無い準備をしない。
+
+        ロットを1件引くと、現場では続く資材選択のために状態機械へも
+        通している(EX受注・プロテックはそこで決まる)。資材モードは
+        資材展開を通さない以上そこへ移る道が無いので、**帯に出すところ
+        で止める**。DBは元から読むだけで、ここで止めるのはプロセスの
+        中の記憶のほう。
+        """
+        from packaging_tool import selection_session
+        insert_lot(self.conn)
+        self.addCleanup(selection_session.reset_session)
+
+        selection_session.reset_session()
+        res = self.clients["material"].get("/api/lot/1234567",
+                                           headers=_web.auth())
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.get_json()["found"])          # 見るほうは通る
+        self.assertIsNone(selection_session._session)     # 準備はしない
+
+        # 現場では今までどおり用意する(止めたのは資材モードだけ)
+        selection_session.reset_session()
+        res = self.clients["field"].get("/api/lot/1234567",
+                                        headers=_web.auth())
+        self.assertEqual(res.status_code, 200)
+        self.assertIsNotNone(selection_session._session)
+
+    def test_資材でも帯にはロットが出る(self) -> None:
+        """準備をやめても、何を見ているかは帯に出したまま。"""
+        insert_lot(self.conn)
+        res = self.clients["material"].get("/api/lot/1234567",
+                                           headers=_web.auth())
+        self.assertEqual(res.get_json()["ribbon"]["lot"], "1234567")
+
     def test_資材からの資材展開は通さない(self) -> None:
         """画面に出していないだけでなく、要求そのものも断る。
 
