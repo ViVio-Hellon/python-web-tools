@@ -175,8 +175,13 @@
      線を引いて、色を知覚できなくても分かるようにする */
   .st--off { text-decoration:line-through; }
 
-  .rowacts { display:flex; gap:6px; align-items:center; white-space:nowrap; }
+  /* **折り返す。** ボタンが3つ(Lotを開く・確認・取り消し)並ぶことが
+     あり、折り返さないと列幅を分け合って互いに重なる(実機で重なった)。
+     行が高くなるほうがまだまし ── 重なると、どちらを押したのか
+     押した本人にも分からない */
+  .rowacts { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
   .rowacts .btn { min-height:32px; min-width:32px; padding:5px 10px;
+                  white-space:nowrap;
                   font-size: var(--fs-sm); }
   /* 押せない理由は**折り返してよい**。ボタンと違って切れても押せなく
      なるものではないし、折り返さないと列からはみ出して表が横に動く */

@@ -98,6 +98,25 @@ function actionsCell(row) {
   const box = document.createElement("div");
   box.className = "rowacts";
 
+  // **どのLotの発注かを辿れるようにする。**
+  //
+  // 現場は ロット情報 → 資材選択 → 送信 の順に進む。受け取る側から
+  // その逆(発注に付いているLotを開いて同じように展開する)ができないと、
+  // 何のための発注なのかを確かめる手立てが、番号を目で読んで別の端末で
+  // 引き直すしかない(現場の指摘:「倉庫モードの時に送られてきた
+  // データに添付しているLOT情報を現場モードのように展開できる必要が
+  // あります」)。7桁を打ち直させない ── 打ち間違えても開けてしまう
+  if (row.lot_url) {
+    const link = document.createElement("a");
+    link.className = "btn btn--find";
+    link.href = row.lot_url;
+    // 番号は同じ行のLotNo欄に出ているので繰り返さない。
+    // 繰り返すと操作の列だけが広がり、他の列が読めなくなる
+    link.textContent = "Lotを開く";
+    link.title = "ロット検索でこのLotを開きます(そこから資材展開できます)";
+    box.appendChild(link);
+  }
+
   // できることはサーバが返す。ここで条件を組み立て直さない
   if (row.can_confirm) {
     box.appendChild(button("確認済みにする", "btn--commit",
@@ -107,7 +126,8 @@ function actionsCell(row) {
     box.appendChild(button("取り消し", "btn--danger",
                            () => act("/api/warehouse/cancel", row)));
   }
-  if (!box.childElementCount) {
+  // Lotを開くだけなら「操作」ではないので、理由の文は出したままにする
+  if (!box.querySelector("button")) {
     const why = document.createElement("span");
     why.className = "why";
     why.style.margin = "0";

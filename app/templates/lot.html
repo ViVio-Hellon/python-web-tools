@@ -375,6 +375,7 @@
 <script type="module">
   import { start } from "{{ url_for('static', filename='js/views/lot.js') }}";
   start({ available: {{ available | tojson }},
-          list: {{ list_view | tojson }} });
+          list: {{ list_view | tojson }},
+          openLot: {{ open_lot | tojson }} });
 </script>
 {% endblock %}

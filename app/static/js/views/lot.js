@@ -526,6 +526,10 @@ export function start(options) {
   lotlist.start({ view: options.list, onOpen: openLot,
                   onChanged: onListChanged });
 
+  // 発注一覧から「このLotを開く」で来たとき。**番号を打ち直させない**
+  // ── 7桁の打ち間違いは、そのまま別のロットを開いてしまう
+  if (options.openLot) openLot(options.openLot);
+
   // 画面を出たら図面の見張りを打ち切る。`specRun` を進めるだけでよい ──
   // 走っている `specPoll` は自分の回が古いことに気づいて静かに終わる
   nav.onLeave(() => { specRun += 1; });

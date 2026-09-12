@@ -87,18 +87,19 @@ class ViewColumn:
 ORDER_VIEW: tuple[ViewColumn, ...] = (
     ViewColumn("管理番号 / 登録日時", "管理番号", ("登録日時",),
                numeric=True, width="10%"),
-    ViewColumn("LotNo / 品名", "LotNo", ("品名",), width="16%"),
+    ViewColumn("LotNo / 品名", "LotNo", ("品名",), width="14%"),
     ViewColumn("発注コード", "発注コード", width="8%"),
     ViewColumn("用途", "用途コード", width="6%"),
     ViewColumn("発注数 / 単位", "発注数", ("単位",), numeric=True, width="7%"),
     ViewColumn("材質 / 調質", "材質", ("調質",), width="8%"),
     ViewColumn("厚 / 幅×丈", "厚", ("幅", "丈"), sep=" × ",
                numeric=True, width="10%"),
-    ViewColumn("納入先", "納入先", width="11%"),
+    ViewColumn("納入先", "納入先", width="10%"),
     ViewColumn("状態", "状態", kind="status", width="7%"),
 )
-# 操作の列の幅。ボタン2つ(確認・取り消し)が並んでも切れない幅
-ORDER_ACTION_WIDTH = "17%"
+# 操作の列の幅。ボタンが3つ(Lotを開く・確認・取り消し)並んでも
+# 切れない幅。足りないと列幅を分け合って互いに重なる
+ORDER_ACTION_WIDTH = "20%"
 
 # 新規発注フォームの項目。VBA の入力欄の並びに合わせる。
 #   (見出し, キー, 必須か, 数値か, 横に広げるか)
@@ -155,6 +156,19 @@ class OrderRow:
     # (確認=資材だけ / 取消=現場だけ、どちらも未確認のときだけ)
     can_confirm: bool = False
     can_cancel: bool = False
+    # その発注がどのLotのものか。**押すとロット検索でそのLotが開く。**
+    # 空なら出さない(Lotが入っていない発注は辿れない)
+    lot_no: str = ""
+
+    @property
+    def lot_url(self) -> str:
+        """そのLotを開いた状態のロット検索。
+
+        番号を目で読んで打ち直させない ── 7桁の打ち間違いは、そのまま
+        別のロットを開いてしまい、しかも開けてしまうので気づけない。
+        """
+        from urllib.parse import quote
+        return f"/lot?lot={quote(self.lot_no)}" if self.lot_no else ""
 
     @property
     def status_kind(self) -> str:
@@ -225,6 +239,9 @@ def _row(item: dict, *, is_material: bool) -> OrderRow:
         # なっていた(現場の声:「送った発注を取り消せない」)。
         # 現場であっても、倉庫が確認したあとは取り消せない
         can_cancel=not is_material and status == svc.STATUS_PENDING,
+        # **どのモードでも出す。** 現場にとっても「この発注は何のLotか」は
+        # 確かめたい事実で、資材だけのものではない
+        lot_no=str(item.get("LotNo") or "").strip(),
     )
 
 
@@ -318,6 +335,8 @@ def row_dict(row: OrderRow) -> dict[str, Any]:
         "status_kind": row.status_kind,
         "can_confirm": row.can_confirm,
         "can_cancel": row.can_cancel,
+        "lot_no": row.lot_no,
+        "lot_url": row.lot_url,
     }
 
 

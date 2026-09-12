@@ -40,11 +40,19 @@ bp = Blueprint("lot", __name__)
 
 @bp.get("/lot")
 def page():
+    """ロット検索の画面。
+
+    `?lot=1234567` を付けて開くと、その行を**開いた状態で**出す。
+    発注一覧から「このLotを開く」で来るときに使う ── 番号を目で読んで
+    打ち直させると、7桁の打ち間違いがそのまま別のロットを開く。
+    """
     conn = get_db()
     available = lot_presenter.has_data(conn)
     return render_template(
         "lot.html",
         available=available,
+        # 開いた直後に開く行。空なら何も開かない
+        open_lot=request.args.get("lot", "").strip(),
         # 初回描画のぶんはサーバが埋める。空の表が一瞬出ると
         # 「データが無い」ように見える
         list_view=_list_view(conn, available),

@@ -384,6 +384,50 @@ class ExOrderPageTests(WarehouseWebTestCase):
         self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
 
 
+class LotBackTrackTests(WarehouseWebTestCase):
+    """**発注からLotへ辿れる。** 現場の逆順。
+
+    現場は ロット情報 → 資材選択 → 送信 の順に進む。受け取る側からは
+    その逆ができないと、何のための発注なのかを確かめる手立てが、番号を
+    目で読んで別の端末で引き直すしかない(現場の指摘:「倉庫モードの
+    時に送られてきたデータに添付しているLOT情報を現場モードのように
+    展開できる必要があります」)。
+    """
+
+    def test_行にLotを開く行き先が付く(self) -> None:
+        self.send()
+        for mode in ("field", "material"):
+            with self.subTest(mode=mode):
+                body = self.clients[mode].get("/api/warehouse/orders",
+                                              headers=self.auth()).get_json()
+                row = body["rows"][0]
+                self.assertEqual(row["lot_no"], ORDER["lot_no"])
+                # **番号を打ち直させない。** 7桁の打ち間違いは、そのまま
+                # 別のロットを開いてしまい、開けるので気づけない
+                self.assertEqual(row["lot_url"], f"/lot?lot={ORDER['lot_no']}")
+
+    def test_Lotが入っていない発注は辿り先を出さない(self) -> None:
+        """空のリンクを出すと、押しても何も起きない画面になる。"""
+        row = presenter._row({"LotNo": "", "状態": "未確認"}, is_material=True)
+        self.assertEqual(row.lot_url, "")
+
+    def test_資材でもロット検索と資材選択を開ける(self) -> None:
+        """辿り先が開けなければ、辿れるようにした意味が無い。"""
+        for path in ("/lot", "/selection"):
+            with self.subTest(path=path):
+                res = self.clients["material"].get(path, headers=self.auth())
+                self.assertEqual(res.status_code, 200)
+
+    def test_資材から発注は出せないまま(self) -> None:
+        """**広げたのは辿る道だけ。** 出すのは現場だけという決まりは
+        そのまま(`warehouse.field_only`)。
+        """
+        res = self.clients["material"].post(
+            "/api/warehouse/send", json={"orders": []}, headers=self.auth())
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"], "wrong_mode")
+
+
 class RoleSeparationTests(WarehouseWebTestCase):
     """この画面の要。**現場から確認済みにできない**。"""
 
