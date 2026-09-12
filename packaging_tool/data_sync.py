@@ -54,7 +54,15 @@ Rows = list[dict[str, object]]
 WRITEBACK_SPECS: list[WriteBackSpec] = [
     WriteBackSpec(sqlite_table=config.TBL_WAREHOUSE_ORDER,
                   access_table=config.TBL_WAREHOUSE_ORDER,
-                  key_column="管理番号"),
+                  key_column="管理番号",
+                  # **確認・取消の印はあとから付く。** 行を送ったあとに
+                  # 手元で変わる値なので、足すだけでは共有へ届かない
+                  # (届かないと、現場から確認状況が見えず、次の取り込みで
+                  #  印が消える)
+                  mark_columns=("確認済み", "確認日時",
+                                "取り消し済", "取り消し日時"),
+                  mark_pending="印未反映",
+                  source_key="取込元管理番号"),
     WriteBackSpec(sqlite_table=config.TBL_STOCK_HISTORY,
                   access_table=config.TBL_STOCK_HISTORY,
                   key_column="id"),
@@ -508,6 +516,167 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
             log.info("適合範囲を再計算しました(%s行): %s", summary.total,
                      " / ".join(f"{name}={count}"
                                 for name, count in summary.counts()))
+
+    # いまの姿で読んだ、と覚えておく。**起動直後の見張りが、取り込んだ
+    # ばかりのものをもう一度取り込みに行かないため**
+    note_source_read(path)
+    return result
+
+
+# ==================================================================
+# 開いたままでも、届いた発注に気づくための取り込み
+# ==================================================================
+#
+# 取り込みは起動時と手動だけだった。資材の端末を朝から開きっぱなしに
+# すると、**その朝の発注一覧を一日出し続ける**(現場の指摘を受けて実測:
+# 画面の自動更新は無く、「最新にする」も手元DBを引き直すだけだった)。
+# 現場が昼に出した発注は、閉じて開き直すまで出てこない。
+#
+# ここでは発注まわりの表だけを取り込み直す。マスタ全部の総入れ替えは
+# 重すぎて、何度も走らせるものではない。
+ORDER_TABLES: tuple[str, ...] = tuple(
+    spec.sqlite_table for spec in WRITEBACK_SPECS)
+
+# 最後に取り込んだときの取り込み元の姿(大きさと更新時刻)。**プロセスに
+# 1つ。** モードごとに別プロセスなので、端末の中で混ざることはない
+_stamp_lock = threading.Lock()
+_last_stamp: dict[str, tuple[int, int]] = {}
+
+
+def source_stamp(path: Path) -> Optional[tuple[int, int]]:
+    """取り込み元の姿。共有の上にあるので、**開かずに分かるものだけ**見る。"""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+def note_source_read(path: Path) -> None:
+    """いまの姿で取り込んだ、と覚える。"""
+    stamp = source_stamp(path)
+    if stamp is None:
+        return
+    with _stamp_lock:
+        _last_stamp[str(path)] = stamp
+
+
+def source_changed(path: Path) -> bool:
+    """前に取り込んだときから変わったか。
+
+    **一度も取り込んでいなければ「変わった」**と答える。分からないのに
+    「変わっていない」と答えると、届いた発注を見落とす方向に倒れる。
+    """
+    stamp = source_stamp(path)
+    if stamp is None:
+        return False                              # 届いていない。見に行けない
+    with _stamp_lock:
+        return _last_stamp.get(str(path)) != stamp
+
+
+@dataclass
+class OrderRefresh:
+    """発注の取り込み直し1回分。画面に出す文はここで作る。"""
+
+    looked: bool = False          # 取り込み元を見に行けたか
+    changed: bool = False         # 前回から変わっていたか
+    imported: int = 0             # 入れ直した行数
+    tables: int = 0               # 入れ直せた表の数
+    errors: list[str] = field(default_factory=list)
+    reason: str = ""              # 見に行けなかった理由
+
+    @property
+    def updated(self) -> bool:
+        """画面を出し直す必要があるか。
+
+        **表が1つ読めなかったからといって、出し直さないのは違う。**
+        発注は入れ替わっているのに古い一覧を出したままになる。
+        1つでも入れ替えられたなら出し直す。
+        """
+        return self.changed and self.tables > 0
+
+    def message(self) -> str:
+        if not self.looked:
+            return self.reason or "取り込み元を見に行けませんでした。"
+        if not self.tables and self.errors:
+            return "取り込み元を見に行きましたが、取り込めませんでした。"
+        if not self.changed:
+            return "取り込み元を見ました。新しいものはありません。"
+        return f"取り込み元から{self.imported}件を取り込みました。"
+
+
+def refresh_orders(conn: sqlite3.Connection,
+                   source_path: Optional[Path] = None,
+                   *, only_if_changed: bool = False) -> OrderRefresh:
+    """発注まわりの表だけを取り込み直す。
+
+    `only_if_changed` は見張り用。取り込み元が前回から変わっていなければ
+    **開かずに帰る**ので、共有への往復はファイルの姿を見るだけで済む。
+
+    総入れ替えなので、送れていない行・送れていない印がある表は入れ替え
+    ない(`import_master` と同じ関門を通す)。先に書き戻しを走らせて、
+    それでも残るものがあれば、その表は今回見送る。
+    """
+    result = OrderRefresh()
+    path = source_path or find_material_db()
+    if path is None:
+        result.reason = (
+            "取り込み元が見つかりません。設定画面で置き場所を確かめてください。")
+        return result
+
+    # **届いていないのを「見た」と言わない。** 共有へ繋がらない端末では
+    # ここで止まる。一覧は手元のもののままで、画面には理由を出す
+    if source_stamp(path) is None:
+        result.reason = (f"取り込み元に届きませんでした({path})。"
+                         "共有に繋がっているか確かめてください。")
+        return result
+
+    result.looked = True
+    changed = source_changed(path)
+    if only_if_changed and not changed:
+        return result
+
+    specs = {t: s for t, s in import_specs.IMPORT_SPECS.items()
+             if t in ORDER_TABLES}
+    unsent = _unsent_writeback_tables(conn)
+    if unsent:
+        write_back(conn, path)
+        unsent = _unsent_writeback_tables(conn)
+    for table in unsent:
+        specs.pop(table, None)
+        result.errors.append(
+            f"{table}: まだ取り込み元へ送れていないものがあるため、"
+            "取り込みを見送りました")
+    if not specs:
+        return result
+
+    imported = import_tables(
+        conn, path, specs,
+        required=import_specs.REQUIRED_KEY_COLUMNS,
+        blank_is_missing=import_specs.BLANK_IS_MISSING,
+        optional=import_specs.OPTIONAL_TABLES,
+        fallbacks=import_specs.NULL_FALLBACKS)
+    for spec in WRITEBACK_SPECS:
+        if spec.sqlite_table in imported.imported:
+            outbox_sync.mark_all_sent(conn, spec)
+
+    result.imported = imported.total
+    result.tables = len(imported.imported)
+    result.errors.extend(imported.errors)
+    # **「変わっていた」は取り込み元の姿で決める。** 押されたから取り込んだ
+    # だけのときに「新しいものがありました」と言うと、押すたびに何かが
+    # 起きたように見える
+    result.changed = changed
+    # **1つでも読めたなら、その姿で読んだと覚える。**
+    #
+    # 「1つも失敗しなかったら」にすると、取り込み元に無い表が1つでも
+    # あるかぎり覚えないまま ── 見張りが同じものを何度でも取り込み直す
+    # (実際にそうなっていた。共有に パレット入出庫履歴 が無い環境で、
+    #  60秒ごとに総入れ替えが走る)。読めなかった表は次も読めないので、
+    #  待っても変わらない。何も読めなかったときだけ、次にやり直す
+    if result.tables:
+        note_source_read(path)
+    log.info("発注を取り込み直しました: %s件(変化=%s)", result.imported, changed)
     return result
 
 
@@ -537,8 +706,20 @@ def duplicate_count(conn: sqlite3.Connection, table: str,
 
 
 def _unsent_writeback_tables(conn: sqlite3.Connection) -> dict[str, int]:
-    """書き戻し対象で、まだ送っていない行が残っているテーブル。"""
-    return outbox_sync.unsent_tables(conn, WRITEBACK_SPECS)
+    """書き戻し対象で、**まだ共有へ渡せていないもの**が残っているテーブル。
+
+    2種類ある。どちらも総入れ替えで消えると取り返せない。
+
+        まだ送っていない行   … 手元で登録した発注そのもの
+        まだ送っていない印   … 確認済み・取消の印(あとから付く)
+
+    印のほうを数え忘れると、「確認したのに翌朝消えている」が起きる。
+    """
+    remaining = dict(outbox_sync.unsent_tables(conn, WRITEBACK_SPECS))
+    for table, count in outbox_sync.unpushed_mark_tables(
+            conn, WRITEBACK_SPECS).items():
+        remaining[table] = remaining.get(table, 0) + count
+    return remaining
 
 
 def import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = None,

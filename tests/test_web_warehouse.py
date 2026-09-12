@@ -697,5 +697,55 @@ class ActionApiTests(WarehouseWebTestCase):
         self.assertEqual(res.status_code, 400)
 
 
+class RefreshEndpointTests(WarehouseWebTestCase):
+    """**「最新にする」が取り込み元まで見に行くこと。**
+
+    以前は手元DBを引き直すだけだった。押しても新しい発注が出てこないので、
+    「まだ来ていない」と読めてしまう ── 実際は共有に届いていて、こちらが
+    取りに行っていないだけだった。
+    """
+
+    def refresh(self, mode: str, query: str = ""):
+        return self.clients[mode].post(f"/api/warehouse/refresh{query}",
+                                       json={}, headers=self.auth())
+
+    def test_どちらのモードからも押せる(self) -> None:
+        """出す側も受ける側も、相手が何をしたかを見るのに要る。"""
+        for mode in ("field", "material", "field-allowed"):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.refresh(mode).status_code, 200)
+
+    def test_一覧も一緒に返る(self) -> None:
+        """取り込んだのに古い一覧のままでは、押した意味が画面に出ない。"""
+        body = self.refresh("material").get_json()
+        self.assertIn("rows", body)
+        self.assertIn("columns", body)
+
+    def test_見に行った結果を言葉で返す(self) -> None:
+        body = self.refresh("material").get_json()
+        self.assertIn("refresh", body)
+        self.assertIn("message", body["refresh"])
+        self.assertIn("updated", body["refresh"])
+
+    def test_見張りは変わったときだけ取り込む(self) -> None:
+        """`only_if_changed` を付けると、取り込み元の姿だけ見て帰る。"""
+        with mock.patch("packaging_tool.data_sync.refresh_orders") as fake:
+            fake.return_value = __import__(
+                "packaging_tool.data_sync", fromlist=["x"]).OrderRefresh()
+            self.refresh("material", "?only_if_changed=1")
+            self.assertTrue(fake.call_args.kwargs["only_if_changed"])
+            self.refresh("material")
+            self.assertFalse(fake.call_args.kwargs["only_if_changed"])
+
+    def test_絞り込みは持ち越す(self) -> None:
+        """押した瞬間に絞り込みが外れたら、打ち直しになる。"""
+        svc.create_order(self.conn, lot_no="7777777", hinmei="パレット",
+                         hatchu_code="P9", tani="台", atu=3.0, haba=1000,
+                         take=2000, hatchu_suu=1)
+        self.conn.commit()
+        body = self.refresh("material", "?q=9999999").get_json()
+        self.assertEqual(body["rows"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

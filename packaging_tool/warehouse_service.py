@@ -35,7 +35,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Optional
 
-from . import db
+from . import db, outbox_sync
 from .logging_utils import get_logger
 
 log = get_logger("warehouse_service")
@@ -207,6 +207,7 @@ def confirm_order(conn: sqlite3.Connection, mgr_no: int) -> ActionResult:
         return ActionResult(ok=False, message="対象が見つからないか、既に確認済み/取り消し済みです。画面を更新してください。")
     if not result.ok:
         return ActionResult(ok=False, message=f"更新に失敗しました。({result.error})")
+    _mark_unsent(conn, mgr_no)
     return ActionResult(ok=True, message="確認済みにしました。")
 
 
@@ -225,4 +226,21 @@ def cancel_order(conn: sqlite3.Connection, mgr_no: int) -> ActionResult:
         return ActionResult(ok=False, message="対象が見つからないか、既に倉庫確認済み/取消済みのため取り消せません。")
     if not result.ok:
         return ActionResult(ok=False, message=f"更新に失敗しました。({result.error})")
+    _mark_unsent(conn, mgr_no)
     return ActionResult(ok=True, message="発注を取り消しました。")
+
+
+def _mark_unsent(conn: sqlite3.Connection, mgr_no: int) -> None:
+    """付けた印を「まだ共有へ送っていない」と覚える。
+
+    **印は手元のUPDATEなので、放っておくと共有へ届きません。**
+    届かないと、相手側(現場/資材)から状況が見えず、次の取り込みの
+    総入れ替えで消えます。ここで目印を立てておけば、書き戻しが拾って
+    共有の同じ行へ書き、送るまでは取り込みが見送られます。
+    """
+    from . import data_sync
+    for spec in data_sync.WRITEBACK_SPECS:
+        if spec.sqlite_table == TABLE:
+            outbox_sync.mark_pending(conn, spec, mgr_no)
+            conn.commit()
+            return

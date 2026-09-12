@@ -167,6 +167,40 @@ def orders():
     return jsonify(presenter.to_dict(view))
 
 
+@bp.post("/api/warehouse/refresh")
+def refresh():
+    """取り込み元を見に行ってから一覧を返す。
+
+    **どちらのモードからも押せる。** 出す側も受ける側も、相手が何を
+    したかを見るのに要る。
+
+    2通りの呼ばれ方をする。
+
+        押されたとき     … `only_if_changed` 無し。必ず見に行く。
+                           変わっていなければ「新しいものはありません」
+        見張りのとき     … `only_if_changed=1`。取り込み元の姿だけ見て、
+                           変わっていなければ**開かずに帰る**
+
+    どちらも一覧を一緒に返す。取り込んだのに古い一覧のままでは、
+    押した意味が画面に出ない。
+    """
+    only_if_changed = request.args.get("only_if_changed") == "1"
+    conn = get_db()
+    got = data_sync.refresh_orders(conn, only_if_changed=only_if_changed)
+    if got.errors:
+        for message in got.errors:
+            log.warning("発注の取り込み直し: %s", message)
+    view = presenter.build(
+        conn, mode=_mode(),
+        keyword=request.args.get("q", ""),
+        date_filter=request.args.get("period", ""),
+        include_cancelled=request.args.get("cancelled") == "1")
+    return jsonify({**presenter.to_dict(view),
+                    "refresh": {"updated": got.updated,
+                                "looked": got.looked,
+                                "message": got.message()}})
+
+
 @field_only.post("/api/warehouse/send")
 def send():
     """発注を出す(VBA `SendWarehouseRow`)。**出せるのは現場だけ。**"""
@@ -247,4 +281,9 @@ def _action(func, label: str):
                         "error": {"code": "conflict",
                                   "message": result.message}}), 409
     log.info("%s しました: 管理番号=%s", label, mgr_no)
+    # **印も共有へ届けにいく。** 確認・取消は手元の書き換えなので、
+    # 送りにいかないと相手側から状況が見えず、次の取り込みで消える。
+    # 発注を出したときと同じで、画面には何も出さない(手元の更新は
+    # もう終わっており、届かなくても次の反映でまとめて送られる)
+    data_sync.write_back_in_background()
     return jsonify(presenter.action_dict(result))

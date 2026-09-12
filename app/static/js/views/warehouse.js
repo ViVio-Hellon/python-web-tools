@@ -10,6 +10,7 @@
 */
 
 import { api } from "../api.js";
+import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as toggles from "../toggles.js";
 
@@ -163,11 +164,15 @@ function button(label, kind, onClick) {
 // ------------------------------------------------------------------
 // 通信
 // ------------------------------------------------------------------
-function query() {
+function params() {
   const period = toggles.value(el.periodGroup, "period") || "all";
   const params = new URLSearchParams({ q: el.q.value.trim(), period });
   if (el.cancelled && el.cancelled.checked) params.set("cancelled", "1");
-  return `/api/warehouse/orders?${params}`;
+  return params;
+}
+
+function query() {
+  return `/api/warehouse/orders?${params()}`;
 }
 
 async function load() {
@@ -175,6 +180,30 @@ async function load() {
     render(await api.get(query()));
   } catch (err) {
     toastError(err);
+  }
+}
+
+// **取り込み元まで見に行く更新。** 手元のDBを引き直すだけでは、ツールを
+// 開きっぱなしにした端末に新しい発注が出てこない ── 現場が昼に出した
+// ぶんは、閉じて開き直すまで一覧に現れなかった。
+//
+//     押されたとき … 必ず見に行く。変わっていなければそう言う
+//     見張りのとき … 取り込み元の姿だけ見て、変わっていたら取り込む
+//
+async function pull({ quiet = false } = {}) {
+  const search = params();
+  if (quiet) search.set("only_if_changed", "1");
+  try {
+    const body = await api.post(`/api/warehouse/refresh?${search}`, {});
+    // 見張りのときは、変わっていないのに画面を作り直さない ── 選んで
+    // いる行や途中の操作を、何も起きていないのに取り上げることになる
+    if (!quiet || body.refresh.updated) render(body);
+    if (!quiet) toast(body.refresh.message, body.refresh.looked ? "ok" : "ng");
+    else if (body.refresh.updated) toast(body.refresh.message, "ok");
+  } catch (err) {
+    // 見張りは黙って諦める。共有へ届かない端末で、一定の間隔で
+    // 赤い帯が出続けるのは邪魔でしかない(次の回でまた試す)
+    if (!quiet) toastError(err);
   }
 }
 
@@ -296,7 +325,8 @@ export function start(state, material) {
   render(state);
   load();
 
-  el.refresh.addEventListener("click", load);
+  el.refresh.addEventListener("click", () => pull());
+  startWatch();
   // **打つそばから絞る。** Enterを押すまで何も起きない作りだったので、
   // 現場からは「絞り込みが効かない」に見えていた ── 打った本人には
   // 押し忘れたのか効かないのか区別できない。連打で毎回サーバへ
@@ -339,4 +369,26 @@ export function start(state, material) {
     el.draftNext.addEventListener("click", () => { draftAt += 1; showDraft(); });
     showDraft();
   }
+}
+
+// ------------------------------------------------------------------
+// 見張り
+// ------------------------------------------------------------------
+// 一定の間隔で取り込み元の姿だけを見に行き、変わっていたら取り込む。
+// **見に行くだけなら共有への往復は軽い**(ファイルの大きさと更新時刻を
+// 見るだけで、開きも読みもしない)。
+//
+// 間隔は「気づくのが遅れて困る長さ」で決める。発注は出してすぐ動く
+// ものではないので、分の単位で足りる。短くしても共有を叩く回数が
+// 増えるだけで、現場の仕事は速くならない。
+const WATCH_MS = 60_000;
+
+let watch = 0;
+
+function startWatch() {
+  window.clearInterval(watch);
+  watch = window.setInterval(() => pull({ quiet: true }), WATCH_MS);
+  // 画面を出たら止める。**出たあとも見に行き続けない** ── 見えていない
+  // 画面のために共有を叩くのは、誰の役にも立たない
+  nav.onLeave(() => window.clearInterval(watch));
 }

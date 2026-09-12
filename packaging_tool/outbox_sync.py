@@ -32,7 +32,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from . import source_db
 from .logging_utils import get_logger
@@ -72,17 +72,37 @@ class WriteBackSpec:
                      作成してよいか。他チーム管理のテーブル等、
                      スキーマを触りたくない送り先では False にする
                      (その場合は予約による二重防止だけで動く)
+    mark_columns   : あとから付ける印の列(確認済み・確認日時など)。
+                     **行を足したあとに手元で変わる値**を送り直すため。
+                     空なら印の送り直しはしない(足すだけのテーブル)
+    mark_pending   : 「まだ送れていない印がある」を表す手元の列。
+                     送れたら空に戻す
+    source_key     : 送り先の行番号を覚えてある手元の列。取り込みで
+                     受け取った行がこれを持つ。手元で作った行は持たない
+                     ので、そちらは送信IDで行を決める
     """
+
     sqlite_table: str
     access_table: str
     key_column: str
     op_id_column: str = DEFAULT_OP_ID_COLUMN
     use_op_id_guard: bool = True
+    mark_columns: tuple[str, ...] = ()
+    mark_pending: str = ""
+    source_key: str = ""
+
+    @property
+    def marks_enabled(self) -> bool:
+        return bool(self.mark_columns and self.mark_pending)
 
 
 @dataclass
 class WriteBackResult:
     sent: dict[str, int] = field(default_factory=dict)
+    # 送り直した印の件数(確認済みにした等)。**足した行とは別に数える**
+    # ── 「3件送りました」の3が、新しい発注なのか確認の印なのかで
+    # 読む人のすることが変わる
+    marked: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     skipped_reason: str = ""
 
@@ -91,17 +111,23 @@ class WriteBackResult:
         return sum(self.sent.values())
 
     @property
+    def total_marked(self) -> int:
+        return sum(self.marked.values())
+
+    @property
     def ok(self) -> bool:
         return not self.errors and not self.skipped_reason
 
     def summary(self) -> str:
         if self.skipped_reason:
             return self.skipped_reason
-        if not self.total and not self.errors:
+        if not self.total and not self.total_marked and not self.errors:
             return "送る新しいデータはありませんでした。"
         lines = [f"取り込み元へ{self.total}件を反映しました。"]
         for table, count in self.sent.items():
             lines.append(f"  {table}: {count}件")
+        if self.total_marked:
+            lines.append(f"確認・取消の印を{self.total_marked}件送りました。")
         if self.errors:
             lines.append("")
             lines.append("送れなかったもの:")
@@ -180,6 +206,129 @@ def pending_rows(conn: sqlite3.Connection, spec: WriteBackSpec) -> list[sqlite3.
         f"  WHERE テーブル名 = ? AND 状態 = ?)"
         f" ORDER BY [{spec.key_column}]",
         (spec.sqlite_table, SYNC_DONE)).fetchall()
+
+
+def unpushed_mark_rows(conn: sqlite3.Connection,
+                       spec: WriteBackSpec) -> list[sqlite3.Row]:
+    """印を付けたのに、まだ送り先へ送れていない行。
+
+    **総入れ替えの前に必ず見る。** 送れていない印は手元にしか無いので、
+    先に消してしまうと二度と戻らない(印を付けた人には、押したはずの
+    ものが翌朝消えているようにしか見えない)。
+    """
+    if not spec.marks_enabled:
+        return []
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        f"SELECT * FROM [{spec.sqlite_table}]"
+        f" WHERE [{spec.mark_pending}] IS NOT NULL"
+        f"   AND [{spec.mark_pending}] <> ''"
+        f" ORDER BY [{spec.key_column}]").fetchall()
+
+
+def unpushed_mark_tables(conn: sqlite3.Connection,
+                         specs: Iterable[WriteBackSpec]) -> dict[str, int]:
+    """印を送れていない行が残っているテーブル(`unsent_tables` の印版)。"""
+    remaining: dict[str, int] = {}
+    for spec in specs:
+        try:
+            rows = unpushed_mark_rows(conn, spec)
+        except sqlite3.Error:
+            continue
+        if rows:
+            remaining[spec.sqlite_table] = len(rows)
+    return remaining
+
+
+def mark_pending(conn: sqlite3.Connection, spec: WriteBackSpec,
+                 row_id: int) -> None:
+    """この行の印をまだ送っていない、と覚える。
+
+    印を付ける業務の処理(確認済みにする等)から呼ぶ。送るのは
+    `push_marks`。
+    """
+    if not spec.marks_enabled:
+        return
+    conn.execute(
+        f"UPDATE [{spec.sqlite_table}] SET [{spec.mark_pending}] = '1'"
+        f" WHERE [{spec.key_column}] = ?", (row_id,))
+
+
+def _clear_mark_pending(conn: sqlite3.Connection, spec: WriteBackSpec,
+                        row_id: int) -> None:
+    """この行の印は送り終わった、と覚え直す。"""
+    if not spec.marks_enabled:
+        return
+    conn.execute(
+        f"UPDATE [{spec.sqlite_table}] SET [{spec.mark_pending}] = ''"
+        f" WHERE [{spec.key_column}] = ?", (row_id,))
+
+
+def _mark_target(conn: sqlite3.Connection, spec: WriteBackSpec,
+                 row: sqlite3.Row) -> Optional[dict[str, Any]]:
+    """送り先のどの行に印を付けるか。**決まらなければ None。**
+
+    2通りある。取り込みで受け取った行は送り先の行番号を覚えている。
+    手元で作って送った行は覚えていないので、送信IDで決める
+    (送信IDは送るときに採番して、その行だけに書いてある)。
+    """
+    if spec.source_key and spec.source_key in row.keys():
+        value = row[spec.source_key]
+        if value not in (None, ""):
+            return {spec.key_column: int(value)}
+    found = conn.execute(
+        f"SELECT 送信ID FROM [{SYNC_LOG_TABLE}]"
+        " WHERE テーブル名 = ? AND 行ID = ? AND 状態 = ?",
+        (spec.sqlite_table, int(row[spec.key_column]), SYNC_DONE)).fetchone()
+    op_id = found[0] if found else None
+    if op_id:
+        return {spec.op_id_column: op_id}
+    return None
+
+
+def push_marks(conn: sqlite3.Connection,
+               source: "source_db.SourceConnection",
+               spec: WriteBackSpec) -> tuple[int, list[str]]:
+    """手元で付けた印を、送り先の同じ行へ書き戻す。
+
+    足すのではなく**書き換える**ので、行を取り違えると別の発注に印が
+    付く。どの行かが決まらない行は送らずに残す(`_mark_target`)。
+    1行も書き換えられなかったときも、送れたことにしない ── 送り先から
+    行が消えている場合があり、印だけ手元から消えると追えなくなる。
+    """
+    if not spec.marks_enabled:
+        return 0, []
+    rows = unpushed_mark_rows(conn, spec)
+    if not rows:
+        return 0, []
+
+    pushed, errors = 0, []
+    for row in rows:
+        row_id = int(row[spec.key_column])
+        where = _mark_target(conn, spec, row)
+        if where is None:
+            errors.append(
+                f"{spec.access_table}(行{row_id}): 送り先のどの行か決められません"
+                "(取り込み元の行番号も送信IDも分かりません)")
+            continue
+        values = {c: row[c] for c in spec.mark_columns if c in row.keys()}
+        try:
+            changed = source.update(spec.access_table, values, where)
+        except source_db.SourceError as exc:
+            log.warning("%s の印を送れませんでした: %s", spec.access_table, exc)
+            errors.append(f"{spec.access_table}(行{row_id}): {exc}")
+            continue
+        if not changed:
+            errors.append(
+                f"{spec.access_table}(行{row_id}): 送り先に該当する行が"
+                "ありません")
+            continue
+        _clear_mark_pending(conn, spec, row_id)
+        conn.commit()
+        pushed += 1
+    if pushed:
+        log.info("%s: 印を%s件書き戻しました", spec.access_table, pushed)
+    return pushed, errors
 
 
 def unsent_tables(conn: sqlite3.Connection,
@@ -542,12 +691,14 @@ def write_back(conn: sqlite3.Connection,
     result = WriteBackResult()
     for spec in specs:
         op_id_ready = spec.use_op_id_guard and ensure_op_id_column(source, spec)
+        local_only = {c for c in (spec.mark_pending, spec.source_key) if c}
         try:
             rows, op_ids = claim_rows(conn, spec)
         except sqlite3.Error as exc:
             result.errors.append(f"{spec.sqlite_table}: {exc}")
             continue
         if not rows:
+            _push_marks_into(result, conn, source, spec)
             continue
 
         sent = 0
@@ -556,7 +707,10 @@ def write_back(conn: sqlite3.Connection,
         try:
             for row in rows:
                 row_id = int(row[spec.key_column])
-                values = {k: row[k] for k in row.keys() if k != spec.key_column}
+                # **手元にしか無い列は送らない。** 送り先にその列は無く、
+                # 混ぜると1行も入らなくなる(印の管理用に手元へ足した列)
+                values = {k: row[k] for k in row.keys()
+                          if k != spec.key_column and k not in local_only}
                 if op_id_ready:
                     values[spec.op_id_column] = op_ids[row_id]
                 try:
@@ -574,6 +728,9 @@ def write_back(conn: sqlite3.Connection,
                         failed.append(row_id)
                         continue
                 mark_synced(conn, spec, [row_id])
+                # いま送った行には印も一緒に乗っている(INSERTの値に
+                # 含まれている)ので、送り直す必要はない
+                _clear_mark_pending(conn, spec, row_id)
                 sent += 1
         except Exception:
             # 想定外の例外。ここまでに確実に失敗したとわかった分だけ予約を
@@ -586,4 +743,19 @@ def write_back(conn: sqlite3.Connection,
         release_claim(conn, spec, failed)
         if sent:
             result.sent[spec.sqlite_table] = sent
+        # 送り終わってから印を送る。**順番が逆だとできない** ── まだ
+        # 送っていない行は送り先に無く、印を付ける相手がいない
+        _push_marks_into(result, conn, source, spec)
     return result
+
+
+def _push_marks_into(result: WriteBackResult, conn: sqlite3.Connection,
+                     source: "source_db.SourceConnection",
+                     spec: WriteBackSpec) -> None:
+    """`push_marks` を呼んで、結果を書き戻しの集計へ足す。"""
+    if not spec.marks_enabled:
+        return
+    pushed, errors = push_marks(conn, source, spec)
+    if pushed:
+        result.marked[spec.sqlite_table] = pushed
+    result.errors.extend(errors)

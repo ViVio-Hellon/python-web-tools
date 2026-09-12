@@ -172,6 +172,32 @@ def _park_old_board_usage(conn: sqlite3.Connection) -> None:
 def _migrate_after_schema(conn: sqlite3.Connection) -> None:
     """`schema.sql` を当てたあとに片付けること。"""
     _move_old_board_usage(conn)
+    _add_order_mark_columns(conn)
+
+
+# 発注テーブルにあとから足した列。`CREATE TABLE IF NOT EXISTS` は
+# **すでにある表には何もしない**ので、前の版から入れ替えた端末には
+# 足しに行く必要がある
+_ORDER_ADDED_COLUMNS = (("取込元管理番号", "INTEGER"), ("印未反映", "TEXT"))
+
+
+def _add_order_mark_columns(conn: sqlite3.Connection) -> None:
+    """確認の印を共有へ送るために足した2列を、古い手元DBにも足す。
+
+    列が無いままだと、確認した印が共有へ届かず、次の取り込みで消えます
+    (VER2.58.0 より前はそうなっていました)。
+    """
+    have = {r[1] for r in conn.execute(
+        "PRAGMA table_info([資材パレット注文管理])")}
+    if not have:
+        return                                    # 表そのものが無い
+    for column, kind in _ORDER_ADDED_COLUMNS:
+        if column in have:
+            continue
+        conn.execute(
+            f"ALTER TABLE [資材パレット注文管理] ADD COLUMN [{column}] {kind}")
+        log.info("資材パレット注文管理 に %s 列を足しました", column)
+    conn.commit()
 
 
 def _move_old_board_usage(conn: sqlite3.Connection) -> None:

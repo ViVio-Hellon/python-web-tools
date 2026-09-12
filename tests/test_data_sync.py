@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from packaging_tool import config, data_sync, db, import_specs, outbox_sync
+from packaging_tool import warehouse_service as svc
 
 
 def make_conn() -> sqlite3.Connection:
@@ -934,3 +935,390 @@ class KanbanImportTests(unittest.TestCase):
         self._make_kanban(self.kanban_src)
         result = data_sync.import_master(self.conn, self.master_src)
         self.assertEqual(result.imported.get("看板_AIM"), 1)
+
+
+class ConfirmMarkWriteBackTests(unittest.TestCase):
+    """**確認・取消の印が共有へ届くこと。**
+
+    書き戻しは長らく「新しい行を足す」だけだった。確認済み・取り消し済は
+    行を送ったあとに手元で付く印なので、共有には一度も届いていなかった。
+
+    そのせいで2つ起きていた(実測で再現した)。
+
+        1. 現場から「確認されたかどうか」が見えない
+        2. 印が手元にしか無いので、**次の取り込みの総入れ替えで消える**
+           ── 起動時の自動取り込みも総入れ替えなので、資材が今日
+           確認した印は翌朝の起動で消えていた
+
+    手元の管理番号は取り込みのたびに振り直される(共有41,42 → 手元1,2)
+    ので、共有のどの行かは `取込元管理番号`(取り込みで受け取った行)か
+    `送信ID`(手元で作って送った行)で決める。
+    """
+
+    TABLE = config.TBL_WAREHOUSE_ORDER
+    COLUMNS = ImportDoesNotEchoBackTests.COLUMNS
+
+    def setUp(self) -> None:
+        self.dir = Path(tempfile.mkdtemp(prefix="mark_"))
+        self.src = self.dir / config.MATERIAL_DB_NAME
+        conn = sqlite3.connect(self.src)
+        cols = ", ".join(f'"{c}"' for c in self.COLUMNS)
+        conn.execute(f'CREATE TABLE "{self.TABLE}"'
+                     f" (管理番号 INTEGER PRIMARY KEY, {cols})")
+        # **共有側の番号はわざと手元とずらす。** 同じ番号だと、取り違えて
+        # いても試験が通ってしまう
+        conn.execute(
+            f'INSERT INTO "{self.TABLE}" (管理番号, 登録日時, LotNo, 品名,'
+            ' 発注コード, 単位, 厚, 幅, 丈, 発注数)'
+            " VALUES (41, '2026-01-01 00:00:00', 'L41', 'パレット',"
+            " 'P9', '台', 0.0, 0, 0, 1)")
+        conn.execute(
+            f'INSERT INTO "{self.TABLE}" (管理番号, 登録日時, LotNo, 品名,'
+            ' 発注コード, 単位, 厚, 幅, 丈, 発注数)'
+            " VALUES (42, '2026-01-01 00:00:00', 'L42', 'パレット',"
+            " 'P9', '台', 0.0, 0, 0, 1)")
+        conn.commit()
+        conn.close()
+        self.conn = make_conn()
+        self.addCleanup(self.conn.close)
+
+    # -- 覗き見の道具 ------------------------------------------------
+    def source_row(self, lot: str) -> dict:
+        conn = sqlite3.connect(self.src)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                f'SELECT * FROM "{self.TABLE}" WHERE LotNo = ?', (lot,)
+            ).fetchone()
+            return dict(row) if row else {}
+        finally:
+            conn.close()
+
+    def local_row(self, lot: str) -> dict:
+        row = self.conn.execute(
+            f'SELECT * FROM "{self.TABLE}" WHERE LotNo = ?', (lot,)).fetchone()
+        return dict(row) if row else {}
+
+    def mgr_no(self, lot: str) -> int:
+        return int(self.local_row(lot)["管理番号"])
+
+    # -- 取り込みで受け取った行 --------------------------------------
+    def test_確認の印が共有へ届く(self) -> None:
+        data_sync.import_master(self.conn, self.src)
+        svc.confirm_order(self.conn, self.mgr_no("L41"))
+        data_sync.write_back(self.conn, self.src)
+        self.assertEqual(self.source_row("L41")["確認済み"], "1")
+        self.assertTrue(self.source_row("L41")["確認日時"])
+
+    def test_印を付けた行だけが変わる(self) -> None:
+        """**書き換えは足すのと違って、取り違えると別の発注を汚す。**"""
+        data_sync.import_master(self.conn, self.src)
+        svc.confirm_order(self.conn, self.mgr_no("L41"))
+        data_sync.write_back(self.conn, self.src)
+        self.assertIn(self.source_row("L42")["確認済み"], (None, ""))
+
+    def test_手元の番号ではなく共有の番号で当てている(self) -> None:
+        """手元は1,2 / 共有は41,42。手元の番号で書いたら当たらない。"""
+        data_sync.import_master(self.conn, self.src)
+        self.assertEqual(self.local_row("L41")["取込元管理番号"], 41)
+        self.assertNotEqual(self.mgr_no("L41"), 41)
+
+    def test_取り込み直しても印は消えない(self) -> None:
+        """いちばん効くところ。翌朝の起動で消えていたのがこれ。"""
+        data_sync.import_master(self.conn, self.src)
+        svc.confirm_order(self.conn, self.mgr_no("L41"))
+        data_sync.write_back(self.conn, self.src)
+        data_sync.import_master(self.conn, self.src)
+        self.assertEqual(self.local_row("L41")["確認済み"], "1")
+
+    def test_印を付けた直後は送り待ちとして数える(self) -> None:
+        """総入れ替えの前に見る数(`_unsent_writeback_tables`)に入ること。
+
+        ここに入らないと、取り込みが何の遠慮もなく印を消していく。
+        """
+        data_sync.import_master(self.conn, self.src)
+        svc.confirm_order(self.conn, self.mgr_no("L41"))
+        self.assertEqual(
+            data_sync._unsent_writeback_tables(self.conn), {self.TABLE: 1})
+
+    def test_取り込みは先に印を送ってから入れ替える(self) -> None:
+        """送り待ちがあっても止まらない。**先に送ってから**入れ替える。"""
+        data_sync.import_master(self.conn, self.src)
+        svc.confirm_order(self.conn, self.mgr_no("L41"))
+        result = data_sync.import_master(self.conn, self.src)   # 書き戻さずに
+        self.assertIn(self.TABLE, result.imported)              # 入れ替わり
+        self.assertEqual(self.source_row("L41")["確認済み"], "1")  # 印は届いた
+        self.assertEqual(self.local_row("L41")["確認済み"], "1")   # 消えてない
+
+    def test_どうしても送れない印は取り込みを見送らせる(self) -> None:
+        """送れないまま入れ替えたら、手元にしか無い印が消える。
+
+        ここでは共有の行そのものが消えている場合を作る(誰かが消した、
+        取り込み元を差し替えた等)。印の行き先が無いので送れない ──
+        そのときは**その表を取り込まない**のが正しい。
+        """
+        data_sync.import_master(self.conn, self.src)
+        svc.confirm_order(self.conn, self.mgr_no("L41"))
+        conn = sqlite3.connect(self.src)
+        conn.execute(f'DELETE FROM "{self.TABLE}" WHERE 管理番号 = 41')
+        conn.commit()
+        conn.close()
+
+        result = data_sync.import_master(self.conn, self.src)
+        self.assertNotIn(self.TABLE, result.imported)
+        self.assertEqual(self.local_row("L41")["確認済み"], "1")
+        self.assertTrue(any("見送りました" in e for e in result.errors),
+                        result.errors)
+
+    def test_送り終われば見送りは解ける(self) -> None:
+        data_sync.import_master(self.conn, self.src)
+        svc.confirm_order(self.conn, self.mgr_no("L41"))
+        data_sync.write_back(self.conn, self.src)
+        self.assertEqual(data_sync._unsent_writeback_tables(self.conn), {})
+
+    # -- 手元で作って送った行 ----------------------------------------
+    def test_手元で出した発注の取消も届く(self) -> None:
+        """こちらは取込元管理番号を持たない。送信IDで相手の行を決める。"""
+        data_sync.import_master(self.conn, self.src)
+        made = svc.create_order(
+            self.conn, lot_no="NEW", hinmei="パレット", hatchu_code="P9",
+            tani="台", atu=3.0, haba=1000, take=2000, hatchu_suu=1)
+        self.conn.commit()
+        data_sync.write_back(self.conn, self.src)          # まず行を送る
+        self.assertEqual(self.source_row("NEW")["LotNo"], "NEW")
+
+        svc.cancel_order(self.conn, made.mgr_no)
+        data_sync.write_back(self.conn, self.src)          # 次に印を送る
+        self.assertEqual(self.source_row("NEW")["取り消し済"], "1")
+
+    def test_送る前に取り消したぶんは行と一緒に届く(self) -> None:
+        """まだ送っていない行に印を付けても、送信は1回で足りる。"""
+        data_sync.import_master(self.conn, self.src)
+        made = svc.create_order(
+            self.conn, lot_no="NEW", hinmei="パレット", hatchu_code="P9",
+            tani="台", atu=3.0, haba=1000, take=2000, hatchu_suu=1)
+        self.conn.commit()
+        svc.cancel_order(self.conn, made.mgr_no)
+        data_sync.write_back(self.conn, self.src)
+        self.assertEqual(self.source_row("NEW")["取り消し済"], "1")
+        # 送り終わったら見送りの理由も残らない
+        self.assertEqual(data_sync._unsent_writeback_tables(self.conn), {})
+
+    # -- 手元にしか無い列 --------------------------------------------
+    def test_手元だけの列は共有へ送らない(self) -> None:
+        """共有にその列は無い。混ぜると1行も入らなくなる。"""
+        data_sync.import_master(self.conn, self.src)
+        svc.create_order(
+            self.conn, lot_no="NEW", hinmei="パレット", hatchu_code="P9",
+            tani="台", atu=3.0, haba=1000, take=2000, hatchu_suu=1)
+        self.conn.commit()
+        result = data_sync.write_back(self.conn, self.src)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(self.source_row("NEW")["LotNo"], "NEW")
+
+
+class OldLocalDbGetsMarkColumnsTests(unittest.TestCase):
+    """**前の版から入れ替えた端末にも、足した2列が入ること。**
+
+    `CREATE TABLE IF NOT EXISTS` はすでにある表には何もしない。列が
+    無いままだと確認の印が共有へ届かず、次の取り込みで消える ── つまり
+    直したはずの不具合が、入れ替えた端末にだけ残る。
+    """
+
+    TABLE = config.TBL_WAREHOUSE_ORDER
+    ADDED = ("取込元管理番号", "印未反映")
+
+    def old_shape(self) -> sqlite3.Connection:
+        """VER2.57.1 までの形の発注テーブルだけを持つ手元DB。"""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            f'CREATE TABLE "{self.TABLE}" ('
+            " 管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " 登録日時 TEXT, LotNo TEXT NOT NULL, 品名 TEXT NOT NULL,"
+            " 発注コード TEXT NOT NULL, 単位 TEXT NOT NULL, 材質 TEXT,"
+            " 調質 TEXT, 厚 REAL NOT NULL, 幅 INTEGER NOT NULL,"
+            " 丈 INTEGER NOT NULL, 用途コード TEXT, 納入先 TEXT,"
+            " 発注数 INTEGER, 取り消し済 TEXT, 取り消し日時 TEXT,"
+            " 確認済み TEXT, 確認日時 TEXT)")
+        conn.execute(
+            f'INSERT INTO "{self.TABLE}"'
+            " (登録日時, LotNo, 品名, 発注コード, 単位, 厚, 幅, 丈, 発注数)"
+            " VALUES ('2026-01-01 00:00:00','L1','パレット','P9','台',"
+            " 0.0, 0, 0, 1)")
+        conn.commit()
+        return conn
+
+    def columns(self, conn: sqlite3.Connection) -> set:
+        return {r[1] for r in conn.execute(
+            f'PRAGMA table_info(["{self.TABLE}"])'.replace('"', ''))}
+
+    def test_足りない列は足される(self) -> None:
+        conn = self.old_shape()
+        self.addCleanup(conn.close)
+        self.assertFalse(self.columns(conn) & set(self.ADDED))
+        db.apply_schema(conn)
+        self.assertTrue(set(self.ADDED) <= self.columns(conn))
+
+    def test_すでにある行は消えない(self) -> None:
+        """列を足すだけ。**中の発注は触らない。**"""
+        conn = self.old_shape()
+        self.addCleanup(conn.close)
+        db.apply_schema(conn)
+        row = conn.execute(f'SELECT * FROM "{self.TABLE}"').fetchone()
+        self.assertEqual(row["LotNo"], "L1")
+        self.assertIsNone(row["取込元管理番号"])
+
+    def test_二度当てても落ちない(self) -> None:
+        """起動のたびに当たる。2回目に「列がもうある」で落ちないこと。"""
+        conn = self.old_shape()
+        self.addCleanup(conn.close)
+        db.apply_schema(conn)
+        db.apply_schema(conn)
+        self.assertTrue(set(self.ADDED) <= self.columns(conn))
+
+
+class RefreshOrdersTests(unittest.TestCase):
+    """**開いたままでも、届いた発注に気づくこと。**
+
+    取り込みは起動時と手動だけで、画面の自動更新は無かった。資材の端末を
+    朝から開きっぱなしにすると、その朝の一覧を一日出し続ける ── しかも
+    「最新にする」は手元DBを引き直すだけなので、押しても出てこない。
+    現場と資材で「送った」「来ていない」が食い違う形になっていた。
+    """
+
+    TABLE = config.TBL_WAREHOUSE_ORDER
+    COLUMNS = ImportDoesNotEchoBackTests.COLUMNS
+
+    def setUp(self) -> None:
+        self.dir = Path(tempfile.mkdtemp(prefix="refresh_"))
+        self.src = self.dir / config.MATERIAL_DB_NAME
+        conn = sqlite3.connect(self.src)
+        cols = ", ".join(f'"{c}"' for c in self.COLUMNS)
+        conn.execute(f'CREATE TABLE "{self.TABLE}"'
+                     f" (管理番号 INTEGER PRIMARY KEY, {cols})")
+        conn.commit()
+        conn.close()
+        self.add_order("L1")
+        self.conn = make_conn()
+        self.addCleanup(self.conn.close)
+        data_sync._last_stamp.clear()
+        self.addCleanup(data_sync._last_stamp.clear)
+
+    def add_order(self, lot: str) -> None:
+        """現場が発注を1件出した(共有のファイルに行が増える)。"""
+        conn = sqlite3.connect(self.src)
+        conn.execute(
+            f'INSERT INTO "{self.TABLE}"'
+            " (登録日時, LotNo, 品名, 発注コード, 単位, 厚, 幅, 丈, 発注数)"
+            " VALUES ('2026-01-01 00:00:00', ?, 'パレット', 'P9', '台',"
+            " 0.0, 0, 0, 1)", (lot,))
+        conn.commit()
+        conn.close()
+        # 更新時刻の刻みが細かすぎて、同じ秒だと見分けが付かない環境がある
+        time.sleep(0.01)
+
+    def lots(self) -> list[str]:
+        return [r[0] for r in self.conn.execute(
+            f'SELECT LotNo FROM "{self.TABLE}" ORDER BY 管理番号')]
+
+    # -- 1. 押されたとき(念押し) -----------------------------------
+    def test_押せば取り込み元まで見に行く(self) -> None:
+        data_sync.import_master(self.conn, self.src)
+        self.add_order("L2")                       # 現場が昼に1件出した
+        self.assertEqual(self.lots(), ["L1"])      # まだ手元には無い
+
+        got = data_sync.refresh_orders(self.conn, self.src)
+        self.assertTrue(got.updated)
+        self.assertEqual(self.lots(), ["L1", "L2"])
+
+    def test_変わっていなければそう言う(self) -> None:
+        """押した意味を画面に出す。黙って何も起きないのが一番困る。"""
+        data_sync.import_master(self.conn, self.src)
+        got = data_sync.refresh_orders(self.conn, self.src)
+        self.assertTrue(got.looked)
+        self.assertFalse(got.changed)
+        self.assertIn("新しいものはありません", got.message())
+
+    def test_取り込み元が無ければ理由を言う(self) -> None:
+        got = data_sync.refresh_orders(self.conn, self.dir / "無い.sqlite3")
+        self.assertFalse(got.looked)
+        self.assertEqual(self.lots(), [])
+
+    # -- 2. 見張り ---------------------------------------------------
+    def test_見張りは変わったときだけ取り込む(self) -> None:
+        data_sync.import_master(self.conn, self.src)
+        got = data_sync.refresh_orders(self.conn, self.src, only_if_changed=True)
+        self.assertFalse(got.changed)
+        self.assertEqual(got.imported, 0)          # 開いてすらいない
+
+        self.add_order("L2")
+        got = data_sync.refresh_orders(self.conn, self.src, only_if_changed=True)
+        self.assertTrue(got.updated)
+        self.assertEqual(self.lots(), ["L1", "L2"])
+
+    def test_起動直後に取り込み直さない(self) -> None:
+        """起動時の自動取り込みの直後に、見張りがもう一度取り込まない。"""
+        data_sync.import_master(self.conn, self.src)
+        got = data_sync.refresh_orders(self.conn, self.src, only_if_changed=True)
+        self.assertFalse(got.changed)
+
+    def test_一度も取り込んでいなければ見に行く(self) -> None:
+        """分からないときは**見落とさない方へ倒す**。"""
+        got = data_sync.refresh_orders(self.conn, self.src, only_if_changed=True)
+        self.assertTrue(got.changed)
+        self.assertEqual(self.lots(), ["L1"])
+
+    def test_取り込み元に無い表があっても取り込み直し続けない(self) -> None:
+        """**1つでも読めたなら、読んだと覚える。**
+
+        「1つも失敗しなかったら覚える」にすると、取り込み元に無い表が
+        1つでもあるかぎり永久に覚えず、見張りが60秒ごとに総入れ替えを
+        走らせ続ける(実際にそうなっていた。共有に パレット入出庫履歴 が
+        無い環境で踏んだ)。読めなかった表は待っても読めるようにならない。
+        """
+        data_sync.import_master(self.conn, self.src)
+        self.add_order("L2")
+        first = data_sync.refresh_orders(self.conn, self.src,
+                                         only_if_changed=True)
+        self.assertTrue(first.changed)
+        self.assertTrue(first.errors)              # 入出庫履歴は元に無い
+        second = data_sync.refresh_orders(self.conn, self.src,
+                                          only_if_changed=True)
+        self.assertFalse(second.changed)           # 2回目は行かない
+
+    def test_何も読めなければ次にやり直す(self) -> None:
+        """1つも読めなかったのは「読んだ」ではない。"""
+        data_sync._last_stamp.clear()
+        with mock.patch.object(data_sync, "import_tables") as fake:
+            fake.return_value = data_sync.ImportResult(
+                errors=["資材パレット注文管理: 読めませんでした"])
+            got = data_sync.refresh_orders(self.conn, self.src)
+        self.assertEqual(got.tables, 0)
+        self.assertTrue(data_sync.source_changed(self.src))
+
+    # -- 消してはいけないもの ----------------------------------------
+    def test_送れていない発注は消さない(self) -> None:
+        """総入れ替えなので、手元にしか無いものを先に送る。"""
+        data_sync.import_master(self.conn, self.src)
+        svc.create_order(self.conn, lot_no="MINE", hinmei="パレット",
+                         hatchu_code="P9", tani="台", atu=3.0, haba=1000,
+                         take=2000, hatchu_suu=1)
+        self.conn.commit()
+        self.add_order("L2")
+        data_sync.refresh_orders(self.conn, self.src)
+        self.assertIn("MINE", self.lots())
+        self.assertIn("L2", self.lots())
+
+    def test_送れていない確認の印も消さない(self) -> None:
+        data_sync.import_master(self.conn, self.src)
+        mgr = self.conn.execute(
+            f'SELECT 管理番号 FROM "{self.TABLE}" WHERE LotNo = ?',
+            ("L1",)).fetchone()[0]
+        svc.confirm_order(self.conn, mgr)
+        self.add_order("L2")
+        data_sync.refresh_orders(self.conn, self.src)
+        row = self.conn.execute(
+            f'SELECT 確認済み FROM "{self.TABLE}" WHERE LotNo = ?',
+            ("L1",)).fetchone()
+        self.assertEqual(row[0], "1")

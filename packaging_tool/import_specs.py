@@ -176,6 +176,10 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("取り消し日時", "取り消し日時", to_datetime_text),
         ("確認済み", "確認済み", to_text),
         ("確認日時", "確認日時", to_datetime_text),
+        # **取り込み元の行番号を覚えておく。** 手元の管理番号は取り込みの
+        # たびに振り直される(AUTOINCREMENT)ので、あとから確認の印を
+        # 共有の同じ行へ書き戻すときの手がかりにならない
+        ("取込元管理番号", "管理番号", to_int),
     ],
     "PalletMaster": [
         ("幅", "幅", to_int),
