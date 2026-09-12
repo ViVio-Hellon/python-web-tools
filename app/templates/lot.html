@@ -22,12 +22,23 @@
       <h2>ロット検索</h2>
     </div>
     {# 次の一手。押せない理由はボタンの真下に置く ── 離すと、
-       押せないことに気づいたときに理由が視野の外にある #}
+       押せないことに気づいたときに理由が視野の外にある。
+
+       **資材モードには出さない。** 資材展開は「これから資材を決めて
+       発注する」の一歩目で、受けて確認する側の操作ではない
+       (現場の指摘:「倉庫モードは資材展開して資材選択へが出ていては
+       ダメです」)。押せないボタンとして残さないのは、発注一覧の
+       確認ボタンを現場に出さないのと同じ考え方 ── 役割が違うものは
+       隠すのではなく**無い** #}
     <div class="nextstep">
+      {% if can_expand_here %}
       <button class="btn btn--nav" type="button" id="expand" disabled>
         資材展開<span class="gl">▸</span>
       </button>
       <p class="why" id="expandWhy">先にロットを選んでください。</p>
+      {% else %}
+      <p class="why">{{ expand_absent_why }}</p>
+      {% endif %}
     </div>
   </div>
 
@@ -213,9 +224,11 @@
   {# 読み終わった先に次の一手を置く。作業の順序と画面の順序をそろえる #}
   <footer class="modal__foot">
     <p class="why" id="modalWhy"></p>
+    {% if can_expand_here %}
     <button class="btn btn--nav btn--primary" type="button" id="modalExpand" disabled>
       資材展開して資材選択へ<span class="gl">▸</span>
     </button>
+    {% endif %}
   </footer>
 </dialog>
 {% endblock %}
@@ -376,6 +389,7 @@
   import { start } from "{{ url_for('static', filename='js/views/lot.js') }}";
   start({ available: {{ available | tojson }},
           list: {{ list_view | tojson }},
-          openLot: {{ open_lot | tojson }} });
+          openLot: {{ open_lot | tojson }},
+          expandAbsentWhy: {{ expand_absent_why | tojson }} });
 </script>
 {% endblock %}

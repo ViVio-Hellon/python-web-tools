@@ -269,17 +269,20 @@ class NavTests(unittest.TestCase):
         """資材は現場より狭い。**発注を出す前の段(簡易在庫・棚検索・
         選定ログ)は持たない。**
 
-        ロット検索と資材選択は持つ ── 届いた発注のLotを開いて、何が
-        要るのかを確かめるため(現場の指摘:「倉庫モードの時に送られて
-        きたデータに添付しているLOT情報を現場モードのように展開できる
-        必要があります」)。**出せるようにはなっていない** ── 発注を
-        出すのは現場だけで、そこは `warehouse.field_only` が守る。
+        ロット検索は持つ ── 届いた発注のLotを確かめるため(現場の指摘:
+        「倉庫モードの時に送られてきたデータに添付しているLOT情報を
+        現場モードのように展開できる必要があります」)。
+
+        **資材選択は持たない。** 資材展開はここには出さないので
+        (現場の指摘:「倉庫モードは資材展開して資材選択へが出ていては
+        ダメです」)、辿り着く道の無い画面になる。並べると押した人には
+        壊れて見える。
         """
         from app.shell import nav_items
         keys = [i.key for i in nav_items(modes.MATERIAL)]
         self.assertLess(len(keys), 7)
-        self.assertEqual(keys, ["warehouse", "lot", "selection", "settings"])
-        for absent in ("inventory", "layout", "log"):
+        self.assertEqual(keys, ["warehouse", "lot", "settings"])
+        for absent in ("selection", "inventory", "layout", "log"):
             self.assertNotIn(absent, keys)
 
     def test_モードごとにタブのアイコンが違う(self) -> None:

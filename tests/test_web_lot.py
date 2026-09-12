@@ -780,5 +780,74 @@ class AccessTests(unittest.TestCase):
                 self.assertEqual(res.status_code, 404)
 
 
+
+class ExpandIsFieldOnlyTests(unittest.TestCase):
+    """**資材展開は現場の操作。** 資材モードには出さないし、通さない。
+
+    資材展開は「これから資材を決めて発注する」の一歩目で、受けて確認する
+    側の操作ではない(現場の指摘:「倉庫モードは資材展開して資材選択へが
+    出ていてはダメです」)。届いた発注のロット情報を**見る**ところまでは
+    できる。
+    """
+
+    def setUp(self) -> None:
+        from app.routes import lot as lot_routes
+        from packaging_tool import access_control
+        self.conn = _web.bind_db(self, lot_routes, make_db())
+        # **権限は明示して渡す。** 開発機のアクセス権限マスタの中身で
+        # 試験の結果が変わってはいけない(倉庫連携の試験と同じ形)
+        both = access_control.grant_of("mode:field", "mode:material")
+        self.clients = {
+            "field": _web.make_client("field", port=8713, grant=both),
+            "material": _web.make_client("material", port=8723, grant=both),
+        }
+
+    def page(self, mode: str) -> str:
+        res = self.clients[mode].get("/lot", headers=_web.auth())
+        self.assertEqual(res.status_code, 200)
+        return res.get_data(as_text=True)
+
+    def test_現場には出す(self) -> None:
+        html = self.page("field")
+        self.assertIn('id="expand"', html)
+        self.assertIn('id="modalExpand"', html)
+
+    def test_資材には出さない(self) -> None:
+        """押せないボタンとして残さない。役割が違うものは**無い**。"""
+        html = self.page("material")
+        self.assertNotIn('id="expand"', html)
+        self.assertNotIn('id="modalExpand"', html)
+        self.assertIn("現場モードの操作です", html)
+
+    def test_資材でもロット情報は見られる(self) -> None:
+        """出さないのは資材展開だけ。確かめる道まで塞がない。"""
+        html = self.page("material")
+        self.assertIn('id="lotFields"', html)      # ロット情報
+        self.assertIn('id="odrFields"', html)      # 受注情報
+        self.assertIn('id="hikiRows"', html)       # 引当情報
+        self.assertIn('id="specCard"', html)       # 包装仕様書の図面
+
+    def test_資材ではモーダルの説明文も差し替わる(self) -> None:
+        """ボタンを消しただけでは足りない。
+
+        モーダル下の説明文は画面を作ったあとに JS が書き替える。ボタンが
+        無いのに「資材選択へ移ります」と出ていては、消した意味がない
+        (現場の指摘で見つかった)。差し替える文言を画面から JS へ渡す。
+        """
+        html = self.page("material")
+        self.assertIn("expandAbsentWhy", html)
+        self.assertIn("現場モードの操作です", html)
+
+    def test_資材からの資材展開は通さない(self) -> None:
+        """画面に出していないだけでなく、要求そのものも断る。
+
+        守りは1枚ではない(倉庫連携の確認・取消と同じ形)。
+        """
+        res = self.clients["material"].post("/api/lot/expand", json={},
+                                            headers=_web.auth())
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"], "wrong_mode")
+
+
 if __name__ == "__main__":
     unittest.main()

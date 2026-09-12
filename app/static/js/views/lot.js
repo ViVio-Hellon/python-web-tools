@@ -26,6 +26,9 @@ const SPEC_POLL_MAX = 24;
 let current = null;      // いま開いているロットの詳細(資材展開の可否に使う)
 let specNo = "";         // いま出している包装仕様NO
 let specRun = 0;         // 見に行っている回。ロットを変えたら古いものは捨てる
+// 資材モードには資材展開のボタンそのものが無い。そのとき説明文に出す
+// 「なぜ無いのか」(サーバから貰う。無いボタンの押せない理由ではない)
+let absentWhy = "";
 
 const el = {};
 
@@ -348,13 +351,21 @@ function renderDetail(view) {
   // 見出し(閉じたあとも押せるように)。**押せるかどうかと理由は
   // どちらもサーバの同じ値**を写す
   const canExpand = Boolean(view.found && view.can_expand);
-  const why = view.found
-    ? (view.can_expand
-        ? "製造板幅・板丈を製品サイズ欄に入れて資材選択へ移ります。"
-        : view.expand_reason)
-    : "先にロットを選んでください。";
-  for (const button of [el.expand, el.modalExpand]) button.disabled = !canExpand;
-  el.expandWhy.textContent = why;
+  // ボタンが無いモード(資材)では、押せる/押せないの話をしても意味が
+  // 通らない。**無い理由**だけを言う
+  const why = el.modalExpand === null && absentWhy
+    ? absentWhy
+    : view.found
+      ? (view.can_expand
+          ? "製造板幅・板丈を製品サイズ欄に入れて資材選択へ移ります。"
+          : view.expand_reason)
+      : "先にロットを選んでください。";
+  // **資材モードには資材展開のボタンが無い。** 役割が違う操作なので
+  // 隠すのではなく出していない(`can_expand_here`)。無い前提で触る
+  for (const button of [el.expand, el.modalExpand]) {
+    if (button) button.disabled = !canExpand;
+  }
+  if (el.expandWhy) el.expandWhy.textContent = why;
   el.modalWhy.textContent = why;
 
   if (!view.found) {
@@ -517,11 +528,12 @@ export function start(options) {
     }
   };
   for (const button of [el.expand, el.modalExpand]) {
-    button.addEventListener("click", expand);
+    if (button) button.addEventListener("click", expand);
   }
 
   current = null;       // 再入場のたびに真っさらから(`nav.js`)
   specNo = "";
+  absentWhy = options.expandAbsentWhy || "";
 
   lotlist.start({ view: options.list, onOpen: openLot,
                   onChanged: onListChanged });

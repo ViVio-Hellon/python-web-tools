@@ -27,15 +27,24 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, render_template, request
 
-from packaging_tool import (lot_browse_session, lot_query, lot_service,
+from packaging_tool import (lot_browse_session, lot_query, lot_service, modes,
                             selection_session, spec_sheet, work_context)
+from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import lot as lot_presenter
 from packaging_tool.presenters import lot_list as list_presenter
 
-from .. import get_db
+from .. import current_mode, get_db
 from ..shell import shell_context
 
 bp = Blueprint("lot", __name__)
+
+log = get_logger("app.routes.lot")
+
+# 資材モードで資材展開を出さない理由。**画面にも応答にも同じ文を使う**
+# ── 2か所で言葉が育つと、断りの理由と画面の説明が食い違う
+EXPAND_ABSENT_WHY = (
+    "資材展開は現場モードの操作です。"
+    "ここでは届いた発注のロット情報を確かめられます。")
 
 
 @bp.get("/lot")
@@ -61,6 +70,10 @@ def page():
         unavailable_message=(
             "" if available else
             "仕掛台帳が未取り込みです。設定画面から取り込んでください。"),
+        # **資材展開は現場の操作。** 資材モードには出さない
+        # (`EXPAND_ABSENT_WHY` に理由がある)
+        can_expand_here=current_mode() == modes.FIELD,
+        expand_absent_why=EXPAND_ABSENT_WHY,
         lot_url=lot_presenter.URL_LOT_DISPLAY,
         # 図面が取れないときに、いままでどおり閲覧システムを開けるように
         url_hoso=lot_presenter.URL_HOSO_SHIYOSHO,
@@ -313,7 +326,15 @@ def expand():
     製造板幅・板丈を製品サイズとして覚え、資材選択へ送る。
     **「セット」までは押さない**のがVBAの挙動で、パレットに収まるかの
     検証(回転の要否を含む)は利用者が自分で行う。
+
+    **現場モードのときだけ。** 画面にも出していないが、要求そのものも
+    断る ── 守りは1枚ではない(倉庫連携の確認・取消と同じ形)。
     """
+    if current_mode() != modes.FIELD:
+        log.info("現場モードではないため断りました: %s", request.path)
+        return jsonify({"error": {
+            "code": "wrong_mode", "message": EXPAND_ABSENT_WHY}}), 403
+
     context = work_context.get_context()
     if not context.expand_materials():
         return jsonify({"error": {
