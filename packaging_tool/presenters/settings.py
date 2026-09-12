@@ -133,6 +133,11 @@ class Section:
     # 「見つかりません」と書いてある面には直す手立てが無いので、
     # 利用者はタブを探し回ることになる。(文言, 行き先の面)
     action: tuple[str, str] = ("", "")
+    # 見出しに出す言葉の差し替え。**「要確認」だけでは何をすればよいか
+    # 分からない**ので、次にすることが決まっているまとまりはそれを言う
+    # (現場の指摘:「この端末の権限の 要確認 もちょっと意味が分からない」)。
+    # 空なら段階の名前(足りません/要確認)をそのまま出す
+    headline: str = ""
 
     @property
     def level(self) -> str:
@@ -146,6 +151,10 @@ class Section:
     def badge_tone(self) -> str:
         """印の色。**中身の一番重い状態を見出しが背負う**(タブと同じ規則)。"""
         return {NG: "ng", WARN: "ng", OK: "ok"}.get(self.level, "accent")
+
+    def label(self) -> str:
+        """見出しに出す言葉。差し替えが無ければ段階の名前。"""
+        return self.headline or LEVEL_LABEL.get(self.level, self.level)
 
 
 @dataclass
@@ -818,6 +827,10 @@ def _access_section(conn, startup_modes=None) -> Section:
     if startup_modes is not None:
         fresh = [m for m in grant.allowed_modes() if m not in set(startup_modes)]
         if fresh:
+            # **見出しにも書く。** ここだけは「要確認」ではなく、
+            # することそのものを出す ── 読んだ人が次にするのは
+            # 「確かめる」ではなく「起動し直す」
+            section.headline = "開き直してください"
             section.checks.append(Check(
                 "開き直しが要ります",
                 " / ".join(modes.label(m) for m in fresh), WARN,
@@ -1031,6 +1044,8 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
             # (どの節が何の印かを知っているのはここだけ)
             {"title": s.title, "level": s.level,
              "mark": s.mark, "badge_tone": s.badge_tone,
+             # 見出しに出す言葉。**画面では決めない**(§4)
+             "label": s.label(),
              # 直しに行く先。**問題を見せた面には直す手立てが無い**ので、
              # そこから繋ぐ(文言も行き先もサーバが決める)
              "action": {"label": s.action[0], "tab": s.action[1]}

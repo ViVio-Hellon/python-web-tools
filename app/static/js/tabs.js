@@ -154,6 +154,22 @@ export function attachAll(scope = document) {
  * 値の出どころはサーバで、ここは写すだけ。
  */
 export function setBadges(root, badges) {
+  // **先に全部消してから付け直す。**
+  //
+  // 渡されたぶんだけ書いていたので、**消えた印が消えなかった**
+  // ── 取り込み元が見つかるようになっても「できません」が出たままで、
+  // 画面を丸ごと読み込み直すまで消えない(現場の指摘:「今の状態を
+  // リロードしたら できません が消えた」)。直っても直ったと言わない
+  // 画面は、次から誰も信じない
+  for (const tab of root.querySelectorAll(":scope > .tabs__bar > .tab")) {
+    delete tab.dataset.level;
+    const badge = tab.querySelector(".tab__badge");
+    if (!badge) continue;
+    badge.textContent = "";
+    badge.hidden = true;
+    delete badge.dataset.level;
+  }
+
   for (const [key, info] of Object.entries(badges || {})) {
     const tab = root.querySelector(
       `:scope > .tabs__bar > .tab[data-key="${CSS.escape(key)}"]`);

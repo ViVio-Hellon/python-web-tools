@@ -169,7 +169,9 @@ function sectionCard(section, labels) {
   title.textContent = section.title;
   const level = document.createElement("span");
   level.className = `lv lv--${section.level}`;
-  level.textContent = labels[section.level] || section.level;
+  // 言葉はサーバが決める。「要確認」で済むところと、することを
+  // 書いたほうがよいところがある(`Section.label`)
+  level.textContent = section.label || labels[section.level] || section.level;
   head.append(badge, title, level);
 
   const pad = document.createElement("div");

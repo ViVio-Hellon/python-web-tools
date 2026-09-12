@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 import sys
 import tempfile
@@ -22,7 +23,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from tests import _web  # noqa: E402
-from packaging_tool import config, jobs  # noqa: E402
+from packaging_tool import config, db, jobs  # noqa: E402
 from packaging_tool.presenters import settings as presenter  # noqa: E402
 
 try:
@@ -1057,3 +1058,112 @@ class BoardUsageCsvTests(DataWebTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaleBadgeTests(unittest.TestCase):
+    """**消えた印が消えること。**
+
+    タブの印は「渡されたぶんを書く」だけで、渡されなくなったものを
+    消していなかった。取り込み元が見つかるようになっても
+    「できません」が出たままで、画面を丸ごと読み込み直すまで消えない
+    (現場の指摘:「今の状態をリロードしたら できません が消えた /
+    リロードしないとだめなの?」)。
+
+    直っても直ったと言わない画面は、次から誰も信じない。
+    """
+
+    def test_付ける側と消す側が同じ場所にある(self) -> None:
+        """`setBadges` が、書く前に全部消していること。"""
+        js = (Path(__file__).resolve().parent.parent
+              / "app/static/js/tabs.js").read_text("utf-8")
+        body = js.split("export function setBadges")[1]
+        clear, write = body.find('badge.hidden = true'), body.find("Object.entries")
+        self.assertGreater(clear, 0, "消す処理がありません")
+        self.assertGreater(write, 0)
+        self.assertLess(clear, write, "消すのが後では、消えた印が残ります")
+
+
+class SectionHeadlineTests(unittest.TestCase):
+    """**見出しは、次にすることを言う。**
+
+    段階の名前(要確認)だけでは何をすればよいか分からない ── 現場の
+    指摘:「この端末の権限の 要確認 もちょっと意味が分からない」。
+    することが決まっているまとまりは、それを見出しに出す。
+    """
+
+    def test_ふだんは段階の名前のまま(self) -> None:
+        section = presenter.Section("試験", checks=[
+            presenter.Check("何か", "変です", presenter.WARN)])
+        self.assertEqual(section.label(), "要確認")
+
+    def test_差し替えたらそれを出す(self) -> None:
+        section = presenter.Section("試験", headline="開き直してください",
+                                    checks=[presenter.Check(
+                                        "何か", "変です", presenter.WARN)])
+        self.assertEqual(section.label(), "開き直してください")
+
+    def test_権限が増えたら開き直してくださいと出る(self) -> None:
+        """起動後に権限が増えた端末。**確かめるのではなく起動し直す。**
+
+        起動時に1つも権限が無かったことにすると、いま使えるモードは
+        すべて「あとから増えたぶん」になる。
+        """
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        self.addCleanup(conn.close)
+        section = presenter._access_section(conn, startup_modes=[])
+        self.assertTrue(any(c.label == "開き直しが要ります"
+                            for c in section.checks), section.checks)
+        self.assertEqual(section.label(), "開き直してください")
+
+    def test_開き直しが要らなければ差し替えない(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        self.addCleanup(conn.close)
+        section = presenter._access_section(conn, startup_modes=None)
+        self.assertFalse(any(c.label == "開き直しが要ります"
+                             for c in section.checks))
+        self.assertNotEqual(section.label(), "開き直してください")
+
+
+class BrowserDialogPlacementTests(unittest.TestCase):
+    """**フォルダ参照はどのタブからでも開けること。**
+
+    `<dialog>` をタブの中に置くと、別のタブを開いているあいだ
+    `display:none` の中に居る。その状態で `showModal()` すると、
+    ダイアログは見えないのに画面だけがモーダルで固まる
+    (現場の指摘:「ボード人気 CSV 書き出し先を参照すると固まる」)。
+    """
+
+    def setUp(self) -> None:
+        self.html = (Path(__file__).resolve().parent.parent
+                     / "app/templates/settings.html").read_text("utf-8")
+
+    def test_ダイアログはタブの中に無い(self) -> None:
+        lines = self.html.splitlines()
+        panel = ""
+        for line in lines:
+            found = re.search(r'id="(panel-[a-z]+)"', line)
+            if found:
+                panel = found.group(1)
+            if "</section>" in line and panel:
+                panel = ""
+            if 'id="browser"' in line:
+                self.assertEqual(
+                    panel, "",
+                    f"フォルダ参照が {panel} の中にあります。"
+                    "別のタブから開くと画面が固まります")
+
+    def test_参照を持つ欄は複数のタブにある(self) -> None:
+        """1つのタブに閉じているなら、この試験自体が要らなくなる。"""
+        tabs = set()
+        panel = ""
+        for line in self.html.splitlines():
+            found = re.search(r'id="(panel-[a-z]+)"', line)
+            if found:
+                panel = found.group(1)
+            if "data-browse=" in line:
+                tabs.add(panel)
+        self.assertGreater(len(tabs), 1, tabs)

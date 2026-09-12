@@ -6,7 +6,9 @@
   <header>
     <i class="ib ib--sm ib--{{ section.badge_tone }}" aria-hidden="true">{{ section.mark }}</i>
     <h3>{{ section.title }}</h3>
-    <span class="lv lv--{{ section.level }}">{{ level_label[section.level] }}</span>
+    {# 言葉はサーバが決める(`Section.label`)。「要確認」で済むところと、
+       することを書いたほうがよいところがある #}
+    <span class="lv lv--{{ section.level }}">{{ section.label() }}</span>
   </header>
   <div class="pad">
     <dl class="checks">
@@ -347,26 +349,6 @@
         <b>ファイルを押しても選べます</b> ── そのファイルの入れ物が入ります。
       </p>
 
-      {# サーバ側のフォルダ参照。出すのはフォルダ名と、そこにある
-         取り込み元ファイルの名前だけ ── 中身を読ませる口はここに作らない #}
-      <dialog id="browser" class="browser">
-        <form method="dialog" class="browser__head">
-          <b id="browseFor"></b>
-          <input class="input" id="browsePath" spellcheck="false"
-                 autocomplete="off" aria-label="いま見ているフォルダ">
-          <button class="btn" type="button" id="browseGo">開く</button>
-          <button class="btn" type="button" id="browseUp">上へ</button>
-          <button class="btn btn--danger" value="cancel">閉じる</button>
-        </form>
-        <p class="status status--ng" id="browseNote" hidden></p>
-        <div class="tablewrap tablewrap--browse">
-          <table class="table"><tbody id="browseRows"></tbody></table>
-        </div>
-        <div class="btn-row" style="margin-top:8px">
-          <button class="btn btn--commit" type="button" id="browsePick">
-            このフォルダにする</button>
-        </div>
-      </dialog>
     </div>
   </section>
       </section>
@@ -673,6 +655,32 @@
     </div>
   </div>
 </div>
+
+{# **タブの外に置く。** dialog はタブの中に置くと、別のタブを開いて
+   いるあいだ display:none の中に居る。その状態で showModal() すると、
+   ダイアログは見えないのに画面だけがモーダルで固まる(現場の指摘:
+   「書き出し先を参照すると固まる」)。開く相手はどのタブにもあるので、
+   置き場もどのタブにも属さない場所にする #}
+{# 出すのはフォルダ名と、そこにある取り込み元ファイルの名前だけ ──
+   中身を読ませる口はここに作らない #}
+<dialog id="browser" class="browser">
+  <form method="dialog" class="browser__head">
+    <b id="browseFor"></b>
+    <input class="input" id="browsePath" spellcheck="false"
+           autocomplete="off" aria-label="いま見ているフォルダ">
+    <button class="btn" type="button" id="browseGo">開く</button>
+    <button class="btn" type="button" id="browseUp">上へ</button>
+    <button class="btn btn--danger" value="cancel">閉じる</button>
+  </form>
+  <p class="status status--ng" id="browseNote" hidden></p>
+  <div class="tablewrap tablewrap--browse">
+    <table class="table"><tbody id="browseRows"></tbody></table>
+  </div>
+  <div class="btn-row" style="margin-top:8px">
+    <button class="btn btn--commit" type="button" id="browsePick">
+      このフォルダにする</button>
+  </div>
+</dialog>
 {% endblock %}
 
 {% block head %}
