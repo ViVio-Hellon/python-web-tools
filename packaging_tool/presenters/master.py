@@ -65,6 +65,12 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
         view.page = master_admin.page(None, "", query=view.query)
         return view
 
+    # **表ごとに取り込み元が違う。** パレット適合閾値の7表は別ファイル
+    # なので、梱包資材マスタを渡すと「在るのに空」に見える
+    if path is None:
+        found = master_admin.source_for(view.table) or found
+        view.source = str(found) if found else ""
+
     # `frame()` はまだ表を知らない時点の判定(既定は mode:material 有無
     # だけを見る)。アクセス権限マスタだけの逃げ道(mode:field+パスワード)
     # は表が決まらないと判断できないので、表が決まった時点で引き直す

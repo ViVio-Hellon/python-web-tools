@@ -18,6 +18,7 @@ from __future__ import annotations
 import sqlite3
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -401,6 +402,43 @@ class MasterAdminTests(ThresholdTestCase):
         stamps = [c for c in master_admin.columns(self.conn, "PalletDakeThreshold")
                   if c.stamp]
         self.assertEqual([c.name for c in stamps], ["更新日時"])
+
+
+# ------------------------------------------------------------------
+# 6.5 別ファイルから読むこと
+# ------------------------------------------------------------------
+class SeparateFileTests(unittest.TestCase):
+    """閾値の7表は**梱包資材マスタには入っていない。**
+
+    移植元(VBA)が閾値だけを別ファイルに持っていて、現場の写しもその形で
+    配られている(現場の指摘:「取り込み元にパレット閾値の条件がないので
+    テーブルを読み込めていない」)。読む先も、直す先も、そちらにする。
+    """
+
+    def test_取り込み元は閾値マスタのほう(self):
+        from packaging_tool import data_sync
+        with unittest.mock.patch.object(
+                data_sync, "find_threshold_db",
+                return_value=Path("/tmp/PalletThresholdMaster.sqlite3")):
+            for table in pallet_threshold.TABLES:
+                with self.subTest(table=table):
+                    self.assertEqual(
+                        master_admin.source_for(table).name,
+                        "PalletThresholdMaster.sqlite3")
+
+    def test_ほかの表は梱包資材マスタのまま(self):
+        from packaging_tool import data_sync
+        with unittest.mock.patch.object(
+                data_sync, "find_material_db",
+                return_value=Path("/tmp/梱包資材マスタ.sqlite3")):
+            self.assertEqual(master_admin.source_for("PalletMaster").name,
+                             "梱包資材マスタ.sqlite3")
+
+    def test_見つからない理由は探した場所ごと言う(self):
+        """「見つかりません」だけでは、どこを直せばよいか分からない。"""
+        why = master_admin.source_label("PalletHabaThreshold")
+        self.assertIn("パレット閾値マスタ", why)
+        self.assertIn("PalletThresholdMaster", why)
 
 
 # ------------------------------------------------------------------

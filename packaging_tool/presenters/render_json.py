@@ -208,9 +208,11 @@ FILL_TOKENS: dict[str, str] = {
 LINE_TOKENS: dict[str, str] = {
     placement_render.COLOR_BORDER: "--ink",
     placement_render.COLOR_FILL_OUTLINE: "--mat-fill-line",
-    # はみ出したボードの輪郭。「注意」の意味を持つ既存の状態色を使う
-    # (新しい色相を増やさない)
-    placement_render.COLOR_OVERHANG_LINE: "--state-warn",
+    # はみ出したボードの輪郭。**カットと同じ色**にする ── はみ出しは
+    # 「ここを切る」という結論そのもので、切る線・切り落とす帯と
+    # 別の色にすると、同じ1つの事実が3色に散る(現場の指摘:
+    # 「カットも色を統一」)
+    placement_render.COLOR_OVERHANG_LINE: "--cut-line",
     angle_render.COLOR_LEG_BORDER: "--muted",
     angle_render.COLOR_WASTE_BORDER: "--muted",
     angle_render.COLOR_BAR_BORDER: "--ink",

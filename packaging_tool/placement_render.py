@@ -452,6 +452,27 @@ def board_color(category: str) -> str:
     return COLOR_UPPER if category == CATEGORY_UPPER else COLOR_LOWER
 
 
+def fill_board_color(thin_side: int) -> str:
+    """補填ボードの塗り。**厚みで決める(30/50/100)。**
+
+    以前は補填ならどれも1色(`COLOR_FILL`)でした。ところが細くて
+    キャプションが入らない補填は `thin_board_color` を通り、そちらは
+    30/50/100 で色が分かれます。つまり**同じ補填材が、文字が入るか
+    どうかで色が変わって**いました(現場の指摘:「補填3種は30,50,100で
+    色を統一」)。
+
+    どちらの道でも同じ色になるよう、補填はここ1つで決めます。
+    30/50/100 以外の厚みは補填の地色のまま(そこは種類ではなく端数)。
+    """
+    if thin_side == 30:
+        return COLOR_THIN_30
+    if thin_side == 50:
+        return COLOR_THIN_50
+    if thin_side == 100:
+        return COLOR_THIN_100
+    return COLOR_FILL
+
+
 def thin_board_color(thin_side: int, screen_h: float) -> str:
     """細くてキャプションが入らないボードの色分け(VBA `DrawSingleBoardOnCanvas`)。
 
@@ -581,12 +602,20 @@ def build_render_plan(
             board.original_width, board.original_length, board.width, board.length)
         tooltip = f"幅{board.width} × 丈{board.length}"
 
-        if screen_w < THIN_LABEL_LIMIT or screen_h < THIN_LABEL_LIMIT:
+        # **文字が入るかどうかと、色は別の話。** 以前はこの2つを1つの
+        # 分岐で決めていたため、同じ補填材が幅によって色を変えていた
+        thin = screen_w < THIN_LABEL_LIMIT or screen_h < THIN_LABEL_LIMIT
+        if thin:
             caption, font_size = "", 14
-            fill = thin_board_color(thin_side, screen_h)
         else:
             caption, font_size = build_caption(board, cut, screen_h)
-            fill = COLOR_FILL if board.is_fill_board else board_color(board.board_category)
+
+        if board.is_fill_board:
+            fill = fill_board_color(thin_side)
+        elif thin:
+            fill = thin_board_color(thin_side, screen_h)
+        else:
+            fill = board_color(board.board_category)
 
         if board.is_fill_board and cut.note:
             tooltip += f" / カット:{cut.note}"

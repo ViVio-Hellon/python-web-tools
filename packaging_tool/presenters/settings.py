@@ -157,10 +157,12 @@ class SettingsViewModel:
     master_dir: str = ""
     lot_dir: str = ""
     kanban_dir: str = ""
+    threshold_dir: str = ""
     # 実際に見に行く道。**相対で書いたときに「どこを見ているか」を出す**
     master_dir_real: str = ""
     lot_dir_real: str = ""
     kanban_dir_real: str = ""
+    threshold_dir_real: str = ""
     path_base: str = ""            # 相対の起点(アプリのフォルダ)
 
     # --- 動作 ---
@@ -216,15 +218,19 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
     material = _find_material()
     lots = _find_lots()
     kanban = _find_kanban()
+    threshold = _find_threshold()
 
     view = SettingsViewModel(
         master_dir=_typed(config.KEY_MASTER_DB_DIR, config.master_db_dir(),
                           config.KEY_ACCDB_DIR_LEGACY),
         lot_dir=_typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
         kanban_dir=_typed(config.KEY_KANBAN_DB_DIR, config.kanban_db_dir()),
+        threshold_dir=_typed(config.KEY_THRESHOLD_DB_DIR,
+                             config.threshold_db_dir()),
         master_dir_real=str(config.master_db_dir()),
         lot_dir_real=str(config.lot_db_dir()),
         kanban_dir_real=str(config.kanban_db_dir()),
+        threshold_dir_real=str(config.threshold_db_dir()),
         path_base=str(config.BASE_DIR),
         auto_import=bool(user_settings.get(config.KEY_AUTO_IMPORT,
                                            config.AUTO_IMPORT_DEFAULT)),
@@ -241,15 +247,27 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
     view.sections = [
         _material_section(material, conn),
         _kanban_section(kanban),
+        _threshold_section(threshold),
         _lot_section(lots),
         _access_section(conn, startup_modes),
         _terminal_section(),
     ]
 
+    # **押せないのは、読む元が1つも無いときだけ。**
+    # 一部が欠けているだけなら、残りは取り込める(欠けは「いまの状態」が
+    # 節ごとに言う)。ここで止めると、届いているものまで入らなくなる
     if material is None and not lots:
         view.can_import = False
-        view.import_reason = ("取り込み元のファイルが1つも見つかりません。"
-                              "下の置き場所を確かめてください。")
+        # **どこを探して何が無かったかを言う。** 「1つも見つかりません」
+        # だけでは、置き場所が違うのか・名前が違うのか・共有に届いて
+        # いないのかが分からず、直しようがない(現場の指摘:
+        # 「取り込めているし取り込める状態でもできませんとでる」)
+        view.import_reason = (
+            "取り込み元のファイルが1つも見つかりません。探した場所は "
+            f"{config.master_db_dir()}({config.MATERIAL_DB_NAME})と "
+            f"{config.lot_db_dir()}"
+            f"({' / '.join(config.LOT_DB_FILES.values())})です。"
+            "「いまの状態」に節ごとの結果が出ています。")
     return view
 
 
@@ -333,6 +351,13 @@ def _find_material() -> Optional[Path]:
     except OSError:
         # 共有フォルダに届かないとき(UNCパスのタイムアウト等)。
         # 例外を上げると画面自体が開かなくなる
+        return None
+
+
+def _find_threshold() -> Optional[Path]:
+    try:
+        return data_sync.find_threshold_db()
+    except OSError:
         return None
 
 
@@ -458,6 +483,52 @@ def _kanban_section(kanban: Optional[Path]) -> Section:
 
     names = found.tables
     missing = [t for t in import_specs.KANBAN_TABLES if t not in names]
+    if missing:
+        section.checks.append(Check(
+            "テーブル", f"{len(names)}個(不足 {len(missing)}件)", WARN,
+            "取り込む予定なのに無い: " + ", ".join(missing)))
+    else:
+        section.checks.append(Check("テーブル", f"{len(names)}個", OK))
+    return section
+
+
+def _threshold_section(threshold: Optional[Path]) -> Section:
+    """パレット適合閾値マスタ。梱包資材マスタとは別ファイル。
+
+    見つからないのを NG にはしない ── 見つからないあいだは手元に
+    入れてある基準表の初期値(`pallet_threshold.SEED`)で動くので、
+    現場は止まりません。ただし**資材課が直した値は届いていない**ので、
+    黙ってもいません。
+    """
+    from .. import import_specs
+
+    section = Section("パレット閾値マスタ", mark="閾")
+    if threshold is None:
+        section.checks.append(Check(
+            "ファイル", "見つかりません", WARN,
+            f"探した場所: {config.threshold_db_dir()}"
+            f"(名前は {config.THRESHOLD_DB_NAME}。"
+            f"拡張子 {' / '.join(source_db.SUFFIXES)} を見ます)。"
+            "いまは手元に入れてある基準表の初期値で動いています ── "
+            "資材課が直した値を使うには、このファイルの置き場所を"
+            "指してください。"))
+        section.action = FIX_SOURCE
+        return section
+
+    section.checks.append(Check("ファイル", threshold.name, OK, str(threshold)))
+
+    found = source_db.probe(threshold)
+    if not found.ok:
+        section.checks.append(Check("中身", "開けませんでした", NG,
+                                    _why_unreadable(found)))
+        section.action = FIX_SOURCE
+        return section
+    if found.opened_by != source_db.WAY_URI:
+        section.checks.append(Check(
+            "開き方", found.opened_by, WARN, _why_detoured(found)))
+
+    names = found.tables
+    missing = [t for t in import_specs.THRESHOLD_TABLES if t not in names]
     if missing:
         section.checks.append(Check(
             "テーブル", f"{len(names)}個(不足 {len(missing)}件)", WARN,
@@ -934,6 +1005,7 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         "master_dir": view.master_dir,
         "lot_dir": view.lot_dir,
         "kanban_dir": view.kanban_dir,
+        "threshold_dir": view.threshold_dir,
         # 相対で書かれたときに「実際どこを見ているか」。同じ道なら空で返す
         # ── 同じものを2行に出すと、違うものに見える
         "master_dir_real": (view.master_dir_real
@@ -942,6 +1014,9 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
                          if view.lot_dir_real != view.lot_dir else ""),
         "kanban_dir_real": (view.kanban_dir_real
                             if view.kanban_dir_real != view.kanban_dir else ""),
+        "threshold_dir_real": (view.threshold_dir_real
+                               if view.threshold_dir_real != view.threshold_dir
+                               else ""),
         "path_base": view.path_base,
         "auto_import": view.auto_import,
         "position": view.position,
@@ -996,11 +1071,13 @@ PROTECTED_LABELS = {
     "master_dir": "梱包資材マスタの置き場所",
     "lot_dir": "仕掛台帳の置き場所",
     "kanban_dir": "看板マスタの置き場所",
+    "threshold_dir": "パレット閾値マスタの置き場所",
 }
 
 
 def _protected_changes(master_dir: Optional[str], lot_dir: Optional[str],
-                       kanban_dir: Optional[str]) -> list[str]:
+                       kanban_dir: Optional[str],
+                       threshold_dir: Optional[str] = None) -> list[str]:
     """今回**本当に変わる**置き場所の名前。
 
     値が変わらない保存で聞かないのは、設定画面が置き場所を毎回
@@ -1013,8 +1090,11 @@ def _protected_changes(master_dir: Optional[str], lot_dir: Optional[str],
                              config.KEY_ACCDB_DIR_LEGACY),
         "lot_dir": _typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
         "kanban_dir": _typed(config.KEY_KANBAN_DB_DIR, config.kanban_db_dir()),
+        "threshold_dir": _typed(config.KEY_THRESHOLD_DB_DIR,
+                                config.threshold_db_dir()),
     }
-    sent = {"master_dir": master_dir, "lot_dir": lot_dir, "kanban_dir": kanban_dir}
+    sent = {"master_dir": master_dir, "lot_dir": lot_dir,
+            "kanban_dir": kanban_dir, "threshold_dir": threshold_dir}
     return [PROTECTED_LABELS[key] for key, value in sent.items()
             if value is not None and value.strip() != now[key]]
 
@@ -1023,7 +1103,8 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
          auto_import: Optional[bool] = None, spec_url: Optional[str] = None,
          position: Optional[str] = None,
          password: Optional[str] = None,
-         kanban_dir: Optional[str] = None) -> SaveResult:
+         kanban_dir: Optional[str] = None,
+         threshold_dir: Optional[str] = None) -> SaveResult:
     """設定を保存する。**渡されたものだけ**を触る。
 
     `None` は「この項目は今回いじらない」の意味。画面が一部だけ送って
@@ -1054,7 +1135,8 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
 
     # **書く前に通す関門。** ここより下で1つでも書いてしまうと、
     # 断ったのに一部だけ変わった状態が残る
-    changing = _protected_changes(master_dir, lot_dir, kanban_dir)
+    changing = _protected_changes(master_dir, lot_dir, kanban_dir,
+                                  threshold_dir)
     if changing:
         if not admin_password.verify(str(password or "")):
             # 合っていないのか、そもそも送っていないのかは言い分けない
@@ -1074,6 +1156,8 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
         user_settings.save(config.KEY_LOT_DB_DIR, lot_dir.strip())
     if kanban_dir is not None:
         user_settings.save(config.KEY_KANBAN_DB_DIR, kanban_dir.strip())
+    if threshold_dir is not None:
+        user_settings.save(config.KEY_THRESHOLD_DB_DIR, threshold_dir.strip())
     if auto_import is not None:
         user_settings.save(config.KEY_AUTO_IMPORT, bool(auto_import))
     if spec_url is not None:

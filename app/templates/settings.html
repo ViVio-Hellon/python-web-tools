@@ -292,6 +292,23 @@
         <small class="why real" id="kanbanDirReal"
                {% if not state.kanban_dir_real %}hidden{% endif %}
         >→ {{ state.kanban_dir_real }}</small>
+
+        {# パレット適合閾値マスタ。移植元(VBA)が閾値だけを別ファイルに
+           持っていて、現場の写しもその形で配られている。梱包資材マスタの
+           中には7表が無いので、そこを見ていると読み込めない
+           (現場の指摘:「取り込み元にパレット閾値の条件がないので
+           テーブルを読み込めていない」)。見つからないあいだは手元に
+           入れてある基準表の初期値で動く #}
+        <label for="thresholdDir">パレット閾値マスタ</label>
+        <span class="pathrow">
+          <input class="input" id="thresholdDir" value="{{ view.threshold_dir }}"
+                 spellcheck="false" autocomplete="off">
+          <button class="btn btn--find" type="button" data-browse="thresholdDir">
+            <span class="gl">▸</span>参照…</button>
+        </span>
+        <small class="why real" id="thresholdDirReal"
+               {% if not state.threshold_dir_real %}hidden{% endif %}
+        >→ {{ state.threshold_dir_real }}</small>
       </div>
       {# 置き場所を**変えるとき**だけ要る。押す前から出すと、変えない人まで
          打つことになるので、断られてから出す(理由はサーバが持つ) #}

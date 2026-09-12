@@ -138,6 +138,41 @@ REFUSE_ALREADY = "already"              # もうある
 
 
 # ==================================================================
+# どのファイルにある表か
+# ==================================================================
+def source_for(table: str) -> Optional[Path]:
+    """その表がどのファイルにあるか。**表ごとに置き場所が違う。**
+
+    以前は全部が梱包資材マスタ1つにあった。いまは移植元(VBA)と同じ形で
+    別ファイルに分かれているものがある ── 現場の写しがその形で配られて
+    いて、梱包資材マスタの中には無いため(現場の指摘:「取り込み元に
+    パレット閾値の条件がないのでテーブルを読み込めていない」)。
+
+        パレット適合閾値の7表 … PalletThresholdMaster.sqlite3
+        それ以外              … 梱包資材マスタ.sqlite3
+
+    **判断はここ1つ。** 画面も保存も取り込み直しも同じ答えを使う。
+    分かれていると、読めた表に書けない(あるいはその逆)が起きる。
+    """
+    if table in import_specs.THRESHOLD_TABLES:
+        return data_sync.find_threshold_db()
+    return data_sync.find_material_db()
+
+
+def source_label(table: str) -> str:
+    """その表の取り込み元の呼び名。見つからないときの案内に使う。"""
+    if table in import_specs.THRESHOLD_TABLES:
+        return f"パレット閾値マスタ({config.THRESHOLD_DB_NAME})"
+    return f"梱包資材マスタ({config.MATERIAL_DB_NAME})"
+
+
+def source_dir(table: str) -> Path:
+    if table in import_specs.THRESHOLD_TABLES:
+        return config.threshold_db_dir()
+    return config.master_db_dir()
+
+
+# ==================================================================
 # 取り込み元に作ってよい表
 # ==================================================================
 # **このツールが後から足した表だけ**を作る。
@@ -229,11 +264,11 @@ def create_table(conn: sqlite3.Connection, table: str, *,
                       "取り込み元にあるはずのものなので、"
                       "ファイルの置き場所を確かめてください。",
                       REFUSE_NOT_CREATABLE)
-    found = path or data_sync.find_material_db()
+    found = path or source_for(table)
     if found is None:
         return Result(False,
-                      f"梱包資材マスタが見つかりません。"
-                      f"{config.master_db_dir()} を確かめてください。",
+                      f"{source_label(table)}が見つかりません。"
+                      f"{source_dir(table)} を確かめてください。",
                       REFUSE_NO_SOURCE)
 
     try:
@@ -293,7 +328,7 @@ def can_rebuild(conn: sqlite3.Connection, table: str,
     """
     if not can_create(table):
         return False
-    found = path or data_sync.find_material_db()
+    found = path or source_for(table)
     if found is None:
         return False
     present = source_db.columns(found, table)
@@ -326,11 +361,11 @@ def rebuild_table(conn: sqlite3.Connection, table: str, *,
         return Result(False,
                       f"{_label(table)}は、このツールが作り直す表ではありません。",
                       REFUSE_NOT_CREATABLE)
-    found = path or data_sync.find_material_db()
+    found = path or source_for(table)
     if found is None:
         return Result(False,
-                      f"梱包資材マスタが見つかりません。"
-                      f"{config.master_db_dir()} を確かめてください。",
+                      f"{source_label(table)}が見つかりません。"
+                      f"{source_dir(table)} を確かめてください。",
                       REFUSE_NO_SOURCE)
 
     present = source_db.columns(found, table)
@@ -583,7 +618,8 @@ class TableInfo:
                 "missing": self.missing}
 
 
-def tables(path: Optional[Path]) -> list[TableInfo]:
+def tables(path: Optional[Path],
+           threshold_path: Optional[Path] = None) -> list[TableInfo]:
     """取り込み元にある表ぜんぶ。**直せないものも出す。**
 
     直せる表だけを出すと「あるはずの表が無い」に見えます。中身を
@@ -593,12 +629,23 @@ def tables(path: Optional[Path]) -> list[TableInfo]:
     **作れる表は、取り込み元に無くても並びに出します。** 出さないと
     「無い表は画面にも無い」になり、アクセス権限を一度も入れていない
     端末では、モードを決める場所がどこにも見えません。
+
+    **取り込み元は1つではありません。** パレット適合閾値の7表は別の
+    ファイル(`PalletThresholdMaster.sqlite3`)にあるので、そちらの
+    件数はそちらを数えます ── 梱包資材マスタだけを見ていると、
+    在るのに「無い」と出ます(`source_for`)。
     """
     if path is None:
         return []
     counts = source_db.table_counts(path)
     if not counts:
         return []
+    if threshold_path is None:
+        threshold_path = data_sync.find_threshold_db()
+    if threshold_path is not None and threshold_path != path:
+        for name, rows in source_db.table_counts(threshold_path).items():
+            if name in import_specs.THRESHOLD_TABLES:
+                counts[name] = rows
     out: list[TableInfo] = []
     for managed in MANAGED:
         if managed.table not in counts:
@@ -849,11 +896,11 @@ def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],
     if table not in BY_TABLE:
         return None, Result(False, view_only_why(table) or "直せない表です。",
                             REFUSE_NOT_EDITABLE)
-    found = path or data_sync.find_material_db()
+    found = path or source_for(table)
     if found is None:
         return None, Result(False,
-                            f"梱包資材マスタが見つかりません。"
-                            f"{config.master_db_dir()} を確かめてください。",
+                            f"{source_label(table)}が見つかりません。"
+                            f"{source_dir(table)} を確かめてください。",
                             REFUSE_NO_SOURCE)
     present = source_db.columns(found, table)
     if not present:

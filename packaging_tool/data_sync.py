@@ -148,6 +148,17 @@ def find_kanban_db(directory: Optional[Path] = None) -> Optional[Path]:
     return source_db.find(directory, config.KANBAN_DB_NAME)
 
 
+def find_threshold_db(directory: Optional[Path] = None) -> Optional[Path]:
+    """パレット閾値マスタの sqlite3 をフォルダから探す。
+
+    看板マスタと同じく、**名前が一致したときだけ**返す ── 梱包資材
+    マスタと同じフォルダに置かれることがあり、緩い一致だとそちらを
+    誤って拾いかねない。
+    """
+    directory = Path(directory or config.threshold_db_dir())
+    return source_db.find(directory, config.THRESHOLD_DB_NAME)
+
+
 def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
     """仕掛台帳の3ファイルを探す。見つかったものだけ返す。
 
@@ -348,6 +359,7 @@ def import_tables(
 
 def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
                   *, kanban_path: Optional[Path] = None,
+                  threshold_path: Optional[Path] = None,
                   progress: Optional[Progress] = None,
                   progress_range: tuple[int, int] = (0, 100)) -> ImportResult:
     """梱包資材マスタを取り込む。パスを省略すると設定のフォルダから探す。
@@ -365,6 +377,13 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
     (アクセス権限と違い機能そのものが任意なわけではないが、
     分けたばかりで置き場所が未設定の端末が多いうちは
     「毎回失敗」に見せないため)。
+
+    【パレット閾値マスタも別ファイル】
+    `import_specs.THRESHOLD_TABLES`(PalletDakeThreshold ほか7表)は
+    PalletThresholdMaster.sqlite3 から読む。移植元(VBA)が閾値だけを
+    別ファイルに持っていて、現場の写しもその形で配られているため
+    (現場の指摘:「取り込み元にパレット閾値の条件がないのでテーブルを
+    読み込めていない」)。見つからないときの扱いは看板マスタと同じ。
     """
     path = source_path or find_material_db()
     if path is None:
@@ -375,10 +394,13 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
         return result
 
     log.info("マスタ取り込み開始: %s", path)
+    apart = import_specs.KANBAN_TABLES | frozenset(import_specs.THRESHOLD_TABLES)
     specs = {t: s for t, s in import_specs.IMPORT_SPECS.items()
-             if t not in import_specs.KANBAN_TABLES}
+             if t not in apart}
     kanban_specs = {t: s for t, s in import_specs.IMPORT_SPECS.items()
                     if t in import_specs.KANBAN_TABLES}
+    threshold_specs = {t: s for t, s in import_specs.IMPORT_SPECS.items()
+                       if t in import_specs.THRESHOLD_TABLES}
     result = ImportResult()
 
     unsent = _unsent_writeback_tables(conn)
@@ -393,10 +415,13 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
                 f"({reason})")
             log.warning("%s: 未送信 %s件のため総入れ替えを見送り", table, unsent[table])
 
-    # 梱包資材マスタと看板マスタで進捗の帯を分ける(テーブル数の比で配分)
+    # 梱包資材マスタ / 看板マスタ / 閾値マスタで進捗の帯を分ける
+    # (テーブル数の比で配分)
     start_pct, end_pct = progress_range
-    split_pct = start_pct + (end_pct - start_pct) * len(specs) // max(
-        len(specs) + len(kanban_specs), 1)
+    total_tables = max(len(specs) + len(kanban_specs) + len(threshold_specs), 1)
+    span = end_pct - start_pct
+    split_pct = start_pct + span * len(specs) // total_tables
+    split2_pct = split_pct + span * len(kanban_specs) // total_tables
 
     result = import_tables(
         conn, path, specs,
@@ -421,7 +446,25 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
             required=import_specs.REQUIRED_KEY_COLUMNS,
             blank_is_missing=import_specs.BLANK_IS_MISSING,
             fallbacks=import_specs.NULL_FALLBACKS, result=result,
-            progress=progress, progress_range=(split_pct, end_pct))
+            progress=progress, progress_range=(split_pct, split2_pct))
+
+    threshold_source = threshold_path or find_threshold_db()
+    if threshold_source is None:
+        log.info("パレット閾値マスタが見つかりません(%s): %s",
+                 config.threshold_db_dir(), config.THRESHOLD_DB_NAME)
+        result.notes.append(
+            f"{config.THRESHOLD_DB_NAME} が見つかりません(探した場所: "
+            f"{config.threshold_db_dir()})。見つかるとパレット適合閾値の"
+            "7テーブルが取り込まれます。いまは手元に入れてある"
+            "基準表の初期値で動いています。")
+    else:
+        log.info("パレット閾値マスタ取り込み: %s", threshold_source)
+        result = import_tables(
+            conn, threshold_source, threshold_specs,
+            required=import_specs.REQUIRED_KEY_COLUMNS,
+            blank_is_missing=import_specs.BLANK_IS_MISSING,
+            fallbacks=import_specs.NULL_FALLBACKS, result=result,
+            progress=progress, progress_range=(split2_pct, end_pct))
 
     # **取り込んだ行は、取り込み元から来た行。** 送り返す必要はない。
     #

@@ -90,6 +90,25 @@ DEFAULT_KANBAN_DB_DIR = Path(os.environ.get(
 KANBAN_DB_NAME = os.environ.get("PACKAGING_TOOL_KANBAN_DB",
                                 "看板マスタ.sqlite3")
 
+# パレット適合閾値マスタの置き場所。
+#
+# 移植元(VBA)は閾値だけを別ファイル(PalletThresholdMaster.accdb)に
+# 持っていて、現場の写しもその形で配られている。当初は梱包資材マスタに
+# 同居させる前提で作ったが、**取り込み元にその7表が無い**ので読み込め
+# なかった(現場の指摘:「取り込み元にパレット閾値の条件がないので
+# テーブルを読み込めていない」)。看板マスタと同じく、別ファイルとして
+# 見に行く。
+#
+# 既定は梱包資材マスタと同じ共有フォルダ。設定画面の独立した欄で
+# 変えられる。
+DEFAULT_THRESHOLD_DB_DIR = Path(os.environ.get(
+    "PACKAGING_TOOL_THRESHOLD_DB_DIR", str(DEFAULT_MASTER_DB_DIR)))
+
+# 閾値マスタのファイル名。看板マスタと同じ理由で、見つからなくても
+# フォルダ内の自動判別はしない(梱包資材マスタ自身を誤って拾わない)
+THRESHOLD_DB_NAME = os.environ.get("PACKAGING_TOOL_THRESHOLD_DB",
+                                   "PalletThresholdMaster.sqlite3")
+
 # 仕掛台帳(ロット検索用)の置き場所。
 #   \\nlmsrvngy03\Read\【New】仕掛\台帳\
 # 共有に届かない端末では、設定画面か環境変数でローカルのコピー先を指定する。
@@ -172,6 +191,15 @@ def kanban_db_dir() -> Path:
     return DEFAULT_KANBAN_DB_DIR
 
 
+def threshold_db_dir() -> Path:
+    """いま使うパレット閾値マスタのフォルダ。設定画面の値を優先する。"""
+    from . import user_settings
+    configured = user_settings.get(KEY_THRESHOLD_DB_DIR)
+    if isinstance(configured, str) and configured.strip():
+        return resolve_dir(configured)
+    return DEFAULT_THRESHOLD_DB_DIR
+
+
 # `user_settings` に入れるキー
 KEY_MASTER_DB_DIR = "master_db_dir"
 # 旧名(Accessだったころ)。**読むだけ**残す ── 設定済みの端末が
@@ -179,6 +207,7 @@ KEY_MASTER_DB_DIR = "master_db_dir"
 KEY_ACCDB_DIR_LEGACY = "accdb_dir"
 KEY_LOT_DB_DIR = "lot_db_dir"
 KEY_KANBAN_DB_DIR = "kanban_db_dir"
+KEY_THRESHOLD_DB_DIR = "threshold_db_dir"
 KEY_AUTO_IMPORT = "auto_import_on_start"
 
 # 包装仕様書の図面を返すURLのひな形(`{no}` が包装仕様NOに置き換わる)。

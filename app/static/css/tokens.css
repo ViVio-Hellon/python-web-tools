@@ -82,11 +82,19 @@
      ボード塗り(-fill)・輪郭(-line)は、図の地(-bg)に埋もれて
      「濁って見える」という現場の声を受け、地からはっきり離る濃さに
      している(色相はVBAのまま) */
-  --mat-upper:#b4232a; --mat-upper-bg:#fdf6f6; --mat-upper-fill:#f19aa0; --mat-upper-line:#8c2f38;
-  --mat-lower:#125334; --mat-lower-bg:#f5fbf7; --mat-lower-fill:#93d8a8; --mat-lower-line:#2f6e4e;
+  /* **図の地は中立。** 地をボードと同じ色相で染めると、板が地に沈んで
+     どこまでが板か読めない(現場の指摘:「メインボードが背景色と
+     被らせているのも良くない」)。色相は板だけが持つ */
+  --mat-upper:#b4232a; --mat-upper-bg:#f4f6f8; --mat-upper-fill:#f19aa0; --mat-upper-line:#8c2f38;
+  --mat-lower:#125334; --mat-lower-bg:#f4f6f8; --mat-lower-fill:#93d8a8; --mat-lower-line:#2f6e4e;
   --mat-angle:#0f766e; --mat-angle-bg:#f3fafa;
   --mat-pallet:#1e3a8a; --mat-product:#c2410c;
-  --cut-line:#b4232a; --cut-zone:#f6c99a;
+  /* **カットは1色。** 切る線・切り落とす帯・はみ出した板の輪郭は
+     どれも「ここを切る」という同じ事実なので、同じ色相でそろえる
+     (現場の指摘:「カットも色を統一」)。濃さだけで役割を分ける。
+     **橙にするのは資材と被らせないため** ── 以前は線が上用と同じ赤で、
+     上用の図では板とカットが同じ色相になっていた */
+  --cut-line:#8f3f06; --cut-zone:#bd6f2b;
   /* 補填ボード(幅補填/丈補填)。主ボード(上用=赤系/下用=緑系)とは別の
      色相(黄系)にして、キャプションを読まなくても見分けられるようにする
      (現場の声:「補填ボードがあまりにも解かりにくい」)。上用/下用どちらの
@@ -230,12 +238,12 @@
     --bar-face:#ffffff12; --bar-face-on:#ffffff22; --bar-edge:#ffffff2b;
     --bar-focus:#7fe3ea;
 
-    --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#8a3f4a; --mat-upper-line:#eaacb0;
-    --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#2a5e39; --mat-lower-line:#6fc78f;
+    --mat-upper:#f4a0a4; --mat-upper-bg:#141c23; --mat-upper-fill:#9c4653; --mat-upper-line:#eaacb0;
+    --mat-lower:#4bab79; --mat-lower-bg:#141c23; --mat-lower-fill:#2f6b41; --mat-lower-line:#6fc78f;
     --mat-fill:#e0c264; --mat-fill-fill:#6b551c; --mat-fill-line:#e0c264;
     --mat-angle:#4fbdb2; --mat-angle-bg:#152726;
     --mat-pallet:#8fb4f5; --mat-product:#f59e5b;
-    --cut-line:#f4a0a4; --cut-zone:#7a4a1e;
+    --cut-line:#f2ad7e; --cut-zone:#b26c35;
     --coded-30:#8fb4f5;   --coded-50:#4bab79;  --coded-100:#c4a2f5;
     --coded-tiny:#f2909f;  --coded-small:#f0a06a; --coded-other:#5fc0d6;
     --angle-pallet:#d3a273; --angle-edge:#f4a0a4;
@@ -288,12 +296,12 @@
   --bar-face:#ffffff12; --bar-face-on:#ffffff22; --bar-edge:#ffffff2b;
   --bar-focus:#7fe3ea;
 
-  --mat-upper:#f4a0a4; --mat-upper-bg:#241a1c; --mat-upper-fill:#8a3f4a; --mat-upper-line:#eaacb0;
-  --mat-lower:#4bab79; --mat-lower-bg:#16241d; --mat-lower-fill:#2a5e39; --mat-lower-line:#6fc78f;
+  --mat-upper:#f4a0a4; --mat-upper-bg:#141c23; --mat-upper-fill:#9c4653; --mat-upper-line:#eaacb0;
+  --mat-lower:#4bab79; --mat-lower-bg:#141c23; --mat-lower-fill:#2f6b41; --mat-lower-line:#6fc78f;
   --mat-fill:#e0c264; --mat-fill-fill:#6b551c; --mat-fill-line:#e0c264;
   --mat-angle:#4fbdb2; --mat-angle-bg:#152726;
   --mat-pallet:#8fb4f5; --mat-product:#f59e5b;
-  --cut-line:#f4a0a4; --cut-zone:#7a4a1e;
+  --cut-line:#f2ad7e; --cut-zone:#b26c35;
   --coded-30:#8fb4f5;   --coded-50:#4bab79;  --coded-100:#c4a2f5;
   --coded-tiny:#f2909f;  --coded-small:#f0a06a; --coded-other:#5fc0d6;
   --angle-pallet:#d3a273; --angle-edge:#f4a0a4;
