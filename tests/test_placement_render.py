@@ -151,6 +151,34 @@ class ColorTests(unittest.TestCase):
         self.assertEqual(render.thin_board_color(70, 11), render.COLOR_THIN_SMALL)
         self.assertEqual(render.thin_board_color(70, 13), render.COLOR_THIN_OTHER)
 
+    def test_補填の色は厚みだけで決まる(self):
+        """30/50/100 で統一する(現場の指摘:「補填3種は30,50,100で色を統一」)。"""
+        self.assertEqual(render.fill_board_color(30), render.COLOR_THIN_30)
+        self.assertEqual(render.fill_board_color(50), render.COLOR_THIN_50)
+        self.assertEqual(render.fill_board_color(100), render.COLOR_THIN_100)
+        # 3種以外は端数。補填の地色のまま(種類ではないので色分けしない)
+        self.assertEqual(render.fill_board_color(70), render.COLOR_FILL)
+
+    def test_補填の色は文字が入るかどうかで変わらない(self):
+        """**これが直したかった食い違い。**
+
+        以前は色を決める分岐が「キャプションが入るか」の分岐と一体で、
+        入る補填は黄色1色、入らない細い補填は30/50/100の色分けだった。
+        つまり**同じ補填材が、図の中での大きさによって色を変えて**いた。
+        """
+        for thickness in (30, 50, 100):
+            with self.subTest(厚み=thickness):
+                # 細い図(文字が入らない)と大きい図(文字が入る)
+                narrow = render.build_render_plan(
+                    [placed(0, 0, thickness, 2000, is_fill=True)],
+                    LOWER, 1100, 2000, 980, 460)
+                wide = render.build_render_plan(
+                    [placed(0, 0, thickness, 2000, is_fill=True)],
+                    LOWER, thickness, 2000, 980, 460)
+                self.assertEqual(narrow.boards[0].fill, wide.boards[0].fill)
+                self.assertEqual(narrow.boards[0].fill,
+                                 render.fill_board_color(thickness))
+
 
 class CaptionTests(unittest.TestCase):
     def test_two_lines_when_tall(self):
