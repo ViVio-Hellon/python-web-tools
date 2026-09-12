@@ -560,6 +560,30 @@
         1回の配置でパレットをどれだけ覆えたか(<b>使用率・はみ出し</b>)は、
         資材選択の配置図の下に出ています。こことは別の話です。
       </p>
+      {# CSVに出す。**書き出し先はここに置く** ── 使う場所と設定する場所が
+         離れていると、出すたびに別の面へ往復することになる。
+         打った道はそのまま覚えるので、次からは押すだけでよい #}
+      <div class="field" style="align-items:flex-start">
+        <label for="exportDir">書き出し先</label>
+        <span class="pathrow">
+          <input class="input" id="exportDir" value="{{ view.export_dir }}"
+                 spellcheck="false" autocomplete="off"
+                 placeholder="空ならツールのフォルダの下(export)">
+          <button class="btn btn--find" type="button" data-browse="exportDir">
+            <span class="gl">▸</span>参照…</button>
+        </span>
+        <button class="btn btn--commit" type="button" id="exportUsage">
+          <span class="gl">▸</span>CSVで書き出す</button>
+      </div>
+      <small class="why real" id="exportDirReal"
+             {% if not state.export_dir_real %}hidden{% endif %}
+      >→ {{ state.export_dir_real }}</small>
+      <p class="why" id="exportWhy">
+        いまの表をそのままCSVにします(一覧に無い寸法も同じ表に入ります)。
+        文字は <b>UTF-8(BOM付き)</b> で、Excelでそのまま開けます。
+        ファイル名に日時が入るので、前に出したものは残ります。
+      </p>
+
       <div class="tablewrap">
         <table class="table">
           <thead><tr>

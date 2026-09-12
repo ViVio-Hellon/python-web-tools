@@ -158,11 +158,13 @@ class SettingsViewModel:
     lot_dir: str = ""
     kanban_dir: str = ""
     threshold_dir: str = ""
+    export_dir: str = ""
     # 実際に見に行く道。**相対で書いたときに「どこを見ているか」を出す**
     master_dir_real: str = ""
     lot_dir_real: str = ""
     kanban_dir_real: str = ""
     threshold_dir_real: str = ""
+    export_dir_real: str = ""
     path_base: str = ""            # 相対の起点(アプリのフォルダ)
 
     # --- 動作 ---
@@ -227,10 +229,12 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
         kanban_dir=_typed(config.KEY_KANBAN_DB_DIR, config.kanban_db_dir()),
         threshold_dir=_typed(config.KEY_THRESHOLD_DB_DIR,
                              config.threshold_db_dir()),
+        export_dir=_typed(config.KEY_EXPORT_DIR, config.export_dir()),
         master_dir_real=str(config.master_db_dir()),
         lot_dir_real=str(config.lot_db_dir()),
         kanban_dir_real=str(config.kanban_db_dir()),
         threshold_dir_real=str(config.threshold_db_dir()),
+        export_dir_real=str(config.export_dir()),
         path_base=str(config.BASE_DIR),
         auto_import=bool(user_settings.get(config.KEY_AUTO_IMPORT,
                                            config.AUTO_IMPORT_DEFAULT)),
@@ -1006,6 +1010,7 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         "lot_dir": view.lot_dir,
         "kanban_dir": view.kanban_dir,
         "threshold_dir": view.threshold_dir,
+        "export_dir": view.export_dir,
         # 相対で書かれたときに「実際どこを見ているか」。同じ道なら空で返す
         # ── 同じものを2行に出すと、違うものに見える
         "master_dir_real": (view.master_dir_real
@@ -1017,6 +1022,8 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         "threshold_dir_real": (view.threshold_dir_real
                                if view.threshold_dir_real != view.threshold_dir
                                else ""),
+        "export_dir_real": (view.export_dir_real
+                            if view.export_dir_real != view.export_dir else ""),
         "path_base": view.path_base,
         "auto_import": view.auto_import,
         "position": view.position,
@@ -1165,6 +1172,37 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
     if position is not None:
         user_settings.set_position(position)
     return SaveResult(True, "設定を保存しました")
+
+
+def export_board_usage(conn, directory: str = "") -> SaveResult:
+    """ボード人気度をCSVに書き出す。**書いた場所を返す。**
+
+    渡された書き出し先は**そのまま設定として覚える** ── 毎回打ち直す
+    ものではないため。次からは空で押せば同じ場所に出る。
+
+    【管理者パスワードを要らなくしてある理由】
+    取り込み元の置き場所(`PROTECTED_LABELS`)は、変えると**全員の
+    見えるデータが変わる**ので守っています。書き出し先は違います ──
+    出力を自分のどこに置くかという、その端末の都合です。守る対象を
+    増やすほど、現場はパスワードを紙に貼るようになります。
+    """
+    from .. import board_usage
+
+    text = (directory or "").strip()
+    if text:
+        user_settings.save(config.KEY_EXPORT_DIR, text)
+    try:
+        path = board_usage.write_csv(
+            conn, config.resolve_dir(text) if text else None)
+    except OSError as exc:
+        # **どこへ書こうとして駄目だったのかを言う。** 「書けません」
+        # だけでは、道が違うのか権限が無いのかが分からない
+        where = config.resolve_dir(text) if text else config.export_dir()
+        log.warning("ボード人気度を書き出せません(%s): %s", where, exc)
+        return SaveResult(
+            False, f"{where} に書き出せませんでした({exc})。"
+                   "書き出し先を確かめてください。", REFUSE_BAD_INPUT)
+    return SaveResult(True, f"書き出しました: {path}")
 
 
 def delete_lot_filter(name: str) -> SaveResult:

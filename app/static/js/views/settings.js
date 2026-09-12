@@ -209,11 +209,13 @@ function renderStatus(state) {
   el.lotDir.value = state.lot_dir;
   el.kanbanDir.value = state.kanban_dir;
   el.thresholdDir.value = state.threshold_dir;
+  el.exportDir.value = state.export_dir;
   // 相対で書かれたときだけ、実際に見に行く先を出す(サーバが決める)
   showReal(el.masterDirReal, state.master_dir_real);
   showReal(el.lotDirReal, state.lot_dir_real);
   showReal(el.kanbanDirReal, state.kanban_dir_real);
   showReal(el.thresholdDirReal, state.threshold_dir_real);
+  showReal(el.exportDirReal, state.export_dir_real);
   el.autoImport.checked = state.auto_import;
   el.position.value = state.position;
   el.specUrl.value = state.spec_sheet_url;
@@ -403,6 +405,7 @@ async function startJob(path, body) {
 // ------------------------------------------------------------------
 export function start(state, jobState, masterFrame) {
   for (const id of ["statusGrid", "importWhy", "masterDir", "lotDir", "kanbanDir", "thresholdDir",
+                    "exportDir", "exportDirReal", "exportUsage",
                     "masterDirReal", "lotDirReal", "kanbanDirReal",
                     "thresholdDirReal", "autoImport",
                     "position", "specUrl", "specUrlProblem",
@@ -435,6 +438,19 @@ export function start(state, jobState, masterFrame) {
   el.recompute.addEventListener("click", () =>
     startJob("/api/settings/recompute", {}));
   el.refresh.addEventListener("click", refreshStatus);
+
+  // ボード人気度をCSVに。**書いた場所をそのまま出す** ── 書き出しで
+  // いちばん困るのは「書けたのに、どこにあるか分からない」
+  el.exportUsage.addEventListener("click", async () => {
+    try {
+      const state = await api.post("/api/settings/board-usage/export",
+                                   { dir: el.exportDir.value });
+      renderStatus(state);
+      if (state.message) toast(state.message, "ok");
+    } catch (err) {
+      toastError(err);
+    }
+  });
 
   // 「置き場所を直す」── 状態の面から、直せる面へ移る。
   // 一度だけ張って、描き直された中身にも効くように委譲で拾う

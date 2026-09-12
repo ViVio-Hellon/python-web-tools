@@ -109,6 +109,12 @@ DEFAULT_THRESHOLD_DB_DIR = Path(os.environ.get(
 THRESHOLD_DB_NAME = os.environ.get("PACKAGING_TOOL_THRESHOLD_DB",
                                    "PalletThresholdMaster.sqlite3")
 
+# CSVなどの書き出し先。**読む場所ではなく書く場所**なので、既定は
+# 共有ではなくこのツールのフォルダの下にする ── 共有に届かない端末でも
+# 書き出しそのものは必ず成功させる。
+DEFAULT_EXPORT_DIR = Path(os.environ.get(
+    "PACKAGING_TOOL_EXPORT_DIR", str(BASE_DIR / "export")))
+
 # 仕掛台帳(ロット検索用)の置き場所。
 #   \\nlmsrvngy03\Read\【New】仕掛\台帳\
 # 共有に届かない端末では、設定画面か環境変数でローカルのコピー先を指定する。
@@ -191,6 +197,20 @@ def kanban_db_dir() -> Path:
     return DEFAULT_KANBAN_DB_DIR
 
 
+def export_dir() -> Path:
+    """CSVの書き出し先。設定画面の値を優先する。
+
+    既定を**このツールのフォルダの下**にしてあるのは、共有に届かない
+    端末でも必ず書けるからです。共有に置きたい人は設定で指すだけ。
+    取り込み元(読む場所)と違い、書けないと操作そのものが失敗します。
+    """
+    from . import user_settings
+    configured = user_settings.get(KEY_EXPORT_DIR)
+    if isinstance(configured, str) and configured.strip():
+        return resolve_dir(configured)
+    return DEFAULT_EXPORT_DIR
+
+
 def threshold_db_dir() -> Path:
     """いま使うパレット閾値マスタのフォルダ。設定画面の値を優先する。"""
     from . import user_settings
@@ -208,6 +228,7 @@ KEY_ACCDB_DIR_LEGACY = "accdb_dir"
 KEY_LOT_DB_DIR = "lot_db_dir"
 KEY_KANBAN_DB_DIR = "kanban_db_dir"
 KEY_THRESHOLD_DB_DIR = "threshold_db_dir"
+KEY_EXPORT_DIR = "export_dir"
 KEY_AUTO_IMPORT = "auto_import_on_start"
 
 # 包装仕様書の図面を返すURLのひな形(`{no}` が包装仕様NOに置き換わる)。

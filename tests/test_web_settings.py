@@ -21,6 +21,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
+from tests import _web  # noqa: E402
 from packaging_tool import config, jobs  # noqa: E402
 from packaging_tool.presenters import settings as presenter  # noqa: E402
 
@@ -52,7 +53,8 @@ class PresenterTestCase(unittest.TestCase):
         self._saved = {
             key: user_settings.get(key)
             for key in (config.KEY_MASTER_DB_DIR, config.KEY_LOT_DB_DIR,
-                        config.KEY_KANBAN_DB_DIR, config.KEY_AUTO_IMPORT)
+                        config.KEY_KANBAN_DB_DIR, config.KEY_AUTO_IMPORT,
+                        config.KEY_EXPORT_DIR)
         }
         user_settings.save(config.KEY_MASTER_DB_DIR, str(self.dir))
         user_settings.save(config.KEY_LOT_DB_DIR, str(self.dir))
@@ -959,6 +961,98 @@ class PathPasswordApiTests(DataWebTestCase):
         res = self.save(kanban_dir=str(other), password=config.ADMIN_PASSWORD)
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.get_json()["kanban_dir"], str(other))
+
+
+
+class BoardUsageCsvTests(DataWebTestCase):
+    """ボード人気度のCSV書き出し。"""
+
+    role = "material"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from app.routes import settings as routes
+        self.conn = _web.bind_db(self, routes)
+        self.out = self.dir / "out"
+        self.conn.execute(
+            "INSERT INTO BoardMaster (ボード幅,ボード丈,ボードタイプ) "
+            "VALUES (900,1800,'ハードボード')")
+        self.conn.execute(
+            "INSERT INTO BoardMaster (ボード幅,ボード丈,ボードタイプ) "
+            "VALUES (1200,2400,'ハードボード')")
+        self.conn.execute(
+            "INSERT INTO ボード使用実績 "
+            "(ボード幅,ボード丈,ボードタイプ,枚数,使用日時) "
+            "VALUES (900,1800,'ハードボード',12,'2026-09-10 09:30:00')")
+        self.conn.commit()
+
+    def export(self, directory=None, expect=200) -> dict:
+        res = self.client.post("/api/settings/board-usage/export",
+                               json={"dir": str(directory or self.out)},
+                               headers=self.auth())
+        self.assertEqual(res.status_code, expect, res.get_json())
+        return res.get_json()
+
+    def written(self) -> Path:
+        files = sorted(self.out.glob("*.csv"))
+        self.assertEqual(len(files), 1, f"書き出したファイルが1つではない: {files}")
+        return files[0]
+
+    def test_書いた場所を必ず返す(self) -> None:
+        """**「書けました」だけでは足りない。** どこにあるか分からない。"""
+        body = self.export()
+        self.assertIn(str(self.out), body["message"])
+        self.assertIn(".csv", body["message"])
+
+    def test_無いフォルダは作る(self) -> None:
+        """既定の書き出し先は初回に存在しない。作らないと1回目だけ落ちる。"""
+        self.assertFalse(self.out.exists())
+        self.export()
+        self.assertTrue(self.written().exists())
+
+    def test_使っていない寸法も入る(self) -> None:
+        """画面と同じ中身にする。CSVだけ減っていると突き合わせられない。"""
+        self.export()
+        text = self.written().read_text(encoding="utf-8-sig")
+        self.assertIn("900,1800,12", text)
+        self.assertIn("1200,2400,0", text)       # 0回の行も出す
+
+    def test_一覧に無い寸法も同じ表に入る(self) -> None:
+        """別ファイルにすると、片方だけ配られて「無い」と読まれる。"""
+        self.conn.execute(
+            "INSERT INTO ボード使用実績 "
+            "(ボード幅,ボード丈,ボードタイプ,枚数,使用日時) "
+            "VALUES (930,1800,'ハードボード',1,'2026-09-09 14:00:00')")
+        self.conn.commit()
+        self.export()
+        text = self.written().read_text(encoding="utf-8-sig")
+        self.assertIn("一覧に無い,ハードボード,930,1800", text)
+
+    def test_ExcelがそのままUTF8と読める(self) -> None:
+        """BOMを付ける。付けないとExcelで日本語が化ける。"""
+        self.export()
+        self.assertEqual(self.written().read_bytes()[:3], b"\xef\xbb\xbf")
+
+    def test_書き出し先は覚える(self) -> None:
+        """毎回打ち直すものではない。次からは空で押せば同じ場所へ。"""
+        from packaging_tool import user_settings
+        self.export()
+        self.assertEqual(user_settings.get(config.KEY_EXPORT_DIR), str(self.out))
+
+    def test_前に出したものを上書きしない(self) -> None:
+        """上書きすると、増えたのか減ったのかを見比べられなくなる。"""
+        self.export()
+        time.sleep(1.05)                          # ファイル名は秒まで
+        self.export()
+        self.assertEqual(len(list(self.out.glob("*.csv"))), 2)
+
+    def test_書けないときはどこへ書こうとしたかを言う(self) -> None:
+        """「書けません」だけでは、道が違うのか権限が無いのか分からない。"""
+        wall = self.dir / "壁"
+        wall.write_text("", encoding="utf-8")     # 同名のファイルがあると作れない
+        body = self.export(wall, expect=400)
+        self.assertIn(str(wall), body["error"]["message"])
+
 
 
 if __name__ == "__main__":

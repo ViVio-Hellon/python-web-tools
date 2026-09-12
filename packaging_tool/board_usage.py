@@ -32,9 +32,11 @@
 """
 from __future__ import annotations
 
+import csv
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from . import db
@@ -276,3 +278,70 @@ def board_types(conn: sqlite3.Connection) -> list[str]:
         "WHERE ボードタイプ <> '' ORDER BY ボードタイプ",
         caller_name="board_usage.board_types") or []
     return [r["ボードタイプ"] for r in rows]
+
+
+# ==================================================================
+# CSVに書き出す
+# ==================================================================
+# 書き出しの列。**画面の表と同じ並び**にする ── 画面で見たものと
+# CSVで開いたものが違う並びだと、どちらが正しいのか確かめる手間が増える
+CSV_COLUMNS: tuple[str, ...] = (
+    "区分", "種別", "幅", "丈", "枚数", "回数", "割合(%)", "最終使用",
+)
+
+# 一覧に載っているか。**一覧に無いのに使われた寸法も同じ表に入れる** ──
+# 別ファイルにすると、片方だけ配られて「使っていない」と読まれる
+KIND_LISTED = "一覧"
+KIND_UNLISTED = "一覧に無い"
+
+# 文字の入れ方。**UTF-8 に BOM を付ける(utf-8-sig)。**
+#
+# Excel は BOM を見て UTF-8 と判断するので、日本語がそのまま開けます。
+# Shift-JIS にしないのは、書けない文字が来たときに**黙って化けるか
+# 例外で止まるか**のどちらかになるためです ── ボード種別は上流の
+# マスタから来る文字で、こちらでは何が入るか決められません。
+CSV_ENCODING = "utf-8-sig"
+
+# ファイル名。**日時を入れて上書きしない** ── 上書きすると、前に出した
+# ものと見比べられなくなる(増えたのか減ったのかが分からない)
+CSV_NAME = "ボード人気度_%Y%m%d_%H%M%S.csv"
+
+
+def csv_rows(got: Popularity) -> list[list[str]]:
+    """CSVの中身(見出しを含む)。画面の表と同じ並び・同じ値。"""
+    out: list[list[str]] = [list(CSV_COLUMNS)]
+    for kind, rows in ((KIND_LISTED, got.rows), (KIND_UNLISTED, got.unlisted)):
+        for row in rows:
+            out.append([
+                kind, row.board_type, str(row.width), str(row.length),
+                str(row.sheets), str(row.times), f"{row.share}",
+                row.last_used_at,
+            ])
+    return out
+
+
+def write_csv(conn: sqlite3.Connection, directory: Optional[Path] = None,
+              *, board_type: str = "") -> Path:
+    """ボード人気度をCSVにして書き出す。戻り値は**書いた場所**。
+
+    戻り値を「成功しました」ではなく道そのものにしてあるのは、
+    書き出しでいちばん困るのが「書けたのに、どこにあるか分からない」
+    だからです。
+
+    フォルダが無ければ作ります ── 既定の書き出し先はこのツールの
+    フォルダの下で、初回は存在しません。ここで作らないと、何も
+    していないのに1回目だけ必ず失敗します。
+    """
+    from datetime import datetime
+    from . import config
+
+    folder = Path(directory) if directory is not None else config.export_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / datetime.now().strftime(CSV_NAME)
+
+    rows = csv_rows(popularity(conn, board_type))
+    with path.open("w", encoding=CSV_ENCODING, newline="") as out:
+        csv.writer(out).writerows(rows)
+
+    log.info("ボード人気度を書き出しました: %s (%s行)", path, len(rows) - 1)
+    return path

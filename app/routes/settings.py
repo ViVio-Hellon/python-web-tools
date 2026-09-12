@@ -174,6 +174,24 @@ def delete_lot_filter():
     return jsonify(state)
 
 
+@bp.post("/api/settings/board-usage/export")
+def export_board_usage():
+    """ボード人気度をCSVに書き出す。`{"dir": "..."}`(省略可)。
+
+    渡した書き出し先はそのまま設定として覚えるので、次からは空で
+    押せば同じ場所に出る。**書いた場所を必ず返す** ── 書き出しで
+    いちばん困るのは「書けたのに、どこにあるか分からない」。
+    """
+    directory = str((request.get_json(silent=True) or {}).get("dir", ""))
+    result = settings_presenter.export_board_usage(get_db(), directory)
+    if not result.ok:
+        return jsonify(_error(result.reason, result.message)), 400
+    state = settings_presenter.to_dict(
+        settings_presenter.build(get_db(), _startup_modes()))
+    state["message"] = result.message
+    return jsonify(state)
+
+
 # ------------------------------------------------------------------
 # 長時間処理
 # ------------------------------------------------------------------
