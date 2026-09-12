@@ -21,6 +21,14 @@
 
 集計単位は 幅×丈×ボードタイプ。上用/下用は物理的には同じ板なので
 分けません(現場の指示)。
+
+【被覆率(パレットをどれだけ覆えたか)とは別の話】
+ここが答えるのは「**どのサイズを多く持っておけばよいか**」で、
+何回ぶんも積み上がって初めて意味を持ちます。
+1回の配置がうまく覆えたかどうかは、その場で見るべきことなので、
+配置の段に「使用率」「はみ出し」として出ています
+(`placement_render.usage_ratio_by_category`)。同じ語で別のものを
+2か所に置くと、どちらの話をしているのか読めなくなります。
 """
 from __future__ import annotations
 
@@ -50,11 +58,11 @@ class UsageRow:
 
 
 @dataclass
-class RateRow:
-    """ボード一覧1行ぶんの使用率。**使っていない行も出す。**
+class PopularityRow:
+    """ボード一覧1行ぶんの人気度。**使っていない行も出す。**
 
-    使われていないサイズが分かることに意味があります ── 一覧に載って
-    いるのに一度も使われていないなら、持たなくてよいかもしれません。
+    一度も使っていないサイズが分かることに意味があります ── 一覧に
+    載っているのに使われていないなら、持たなくてよいかもしれません。
     出さなければ「無い」のか「0回」なのか区別できません。
     """
 
@@ -72,27 +80,27 @@ class RateRow:
 
 
 @dataclass
-class RateSummary:
-    """ボード一覧ぜんぶに対する使用の広がり。
+class Popularity:
+    """どのボードがよく使われているか。
 
-    「登録55件のうち12件が使われています」という一文が、一覧を全部
-    読まなくても現状を言い当てます。
+    **パレットをどれだけ覆えたか(被覆率)とは別の話です。** そちらは
+    1回の配置ごとの出来ばえで、配置の段に「使用率」「はみ出し」として
+    出ています。ここで答えるのは「どのサイズを多く持っておけばよいか」
+    ── 何回ぶんも積み上がって初めて意味を持つ数です。
     """
 
-    rows: list[RateRow]
-    listed: int = 0              # ボード一覧に載っている寸法の数
-    used: int = 0               # そのうち一度でも使われた数
+    rows: list[PopularityRow]
     total_sheets: int = 0        # 使った枚数の合計
-    unlisted: list[RateRow] = None  # 一覧に無いのに使われた寸法
+    unlisted: list[PopularityRow] = None  # 一覧に無いのに使われた寸法
 
     def __post_init__(self) -> None:
         if self.unlisted is None:
             self.unlisted = []
 
     @property
-    def coverage(self) -> float:
-        """一覧のうち何%が使われているか。"""
-        return round(self.used * 100 / self.listed, 1) if self.listed else 0.0
+    def top(self) -> Optional[PopularityRow]:
+        """いちばん使われている寸法。まだ1枚も無ければ None。"""
+        return self.rows[0] if self.rows and self.rows[0].used else None
 
 
 def _listed_sizes(conn: sqlite3.Connection, board_type: str) -> set[tuple[int, int]]:
@@ -193,9 +201,9 @@ def list_usage(conn: sqlite3.Connection) -> list[UsageRow]:
             for r in rows]
 
 
-def usage_rates(conn: sqlite3.Connection,
-                board_type: str = "") -> RateSummary:
-    """**ボード一覧を軸にした**使用率。設定画面に出す。
+def popularity(conn: sqlite3.Connection,
+               board_type: str = "") -> Popularity:
+    """**ボード一覧を軸にした**人気度。設定画面に出す。
 
     分母はボードマスタに載っている寸法ぜんぶです。使われていない行も
     0%で並べます ── 「一覧に載っているのに使っていないサイズ」を
@@ -213,7 +221,7 @@ def usage_rates(conn: sqlite3.Connection,
         "SELECT ボード幅, ボード丈, ボードタイプ FROM BoardMaster "
         + ("WHERE ボードタイプ = ?" if board_type else "")
         + " ORDER BY ボードタイプ, ボード幅, ボード丈",
-        args, caller_name="board_usage.usage_rates.listed") or []
+        args, caller_name="board_usage.popularity.listed") or []
 
     used = db.fetch_all(
         conn,
@@ -222,7 +230,7 @@ def usage_rates(conn: sqlite3.Connection,
         "       MAX(使用日時) AS 最終使用日時 "
         f"FROM {TABLE} {where} "
         "GROUP BY ボード幅, ボード丈, ボードタイプ",
-        args, caller_name="board_usage.usage_rates.used") or []
+        args, caller_name="board_usage.popularity.used") or []
 
     by_key = {(r["ボード幅"], r["ボード丈"], r["ボードタイプ"]): r for r in used}
     total_sheets = sum((r["枚数"] or 0) for r in used)
@@ -230,7 +238,7 @@ def usage_rates(conn: sqlite3.Connection,
     def share(sheets: int) -> float:
         return round(sheets * 100 / total_sheets, 1) if total_sheets else 0.0
 
-    rows: list[RateRow] = []
+    rows: list[PopularityRow] = []
     seen: set[tuple] = set()
     for row in listed:
         key = (row["ボード幅"], row["ボード丈"], row["ボードタイプ"])
@@ -239,7 +247,7 @@ def usage_rates(conn: sqlite3.Connection,
         seen.add(key)
         hit = by_key.get(key)
         sheets = (hit["枚数"] or 0) if hit else 0
-        rows.append(RateRow(
+        rows.append(PopularityRow(
             width=key[0], length=key[1], board_type=key[2],
             sheets=sheets, times=(hit["回数"] if hit else 0),
             share=share(sheets),
@@ -250,16 +258,14 @@ def usage_rates(conn: sqlite3.Connection,
     rows.sort(key=lambda r: (-r.sheets, r.board_type, r.width, r.length))
 
     unlisted = [
-        RateRow(width=k[0], length=k[1], board_type=k[2],
-                sheets=(r["枚数"] or 0), times=r["回数"],
-                share=share(r["枚数"] or 0),
-                last_used_at=r["最終使用日時"] or "")
+        PopularityRow(width=k[0], length=k[1], board_type=k[2],
+                      sheets=(r["枚数"] or 0), times=r["回数"],
+                      share=share(r["枚数"] or 0),
+                      last_used_at=r["最終使用日時"] or "")
         for k, r in by_key.items() if k not in seen]
     unlisted.sort(key=lambda r: -r.sheets)
 
-    return RateSummary(rows=rows, listed=len(rows),
-                       used=sum(1 for r in rows if r.used),
-                       total_sheets=total_sheets, unlisted=unlisted)
+    return Popularity(rows=rows, total_sheets=total_sheets, unlisted=unlisted)
 
 
 def board_types(conn: sqlite3.Connection) -> list[str]:

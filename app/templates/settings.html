@@ -504,38 +504,51 @@
   </section>
       </section>
       <section class="tabpanel tabpanel--scroll" id="panel-boards" role="tabpanel" aria-labelledby="tab-boards" hidden>
-  <!-- 6. ボード使用率 -->
+  <!-- 6. ボード人気度 -->
   {#
-    **分母はボード一覧ぜんぶ。** 使っていない寸法も0%で並べる ──
-    一覧に載っているのに一度も使っていないサイズを見つけるのが、この表の
-    目的だから。隠すと「無い」のか「0回」なのか区別できなくなる。
+    **どのサイズをよく使っているか。** 何を多めに持っておけばよいかを
+    決めるための表なので、何回ぶんも積み上がって初めて意味を持つ。
+
+    **「使用率」とは呼ばない。** 配置の段に出している「使用率」は
+    パレットをどれだけ覆えたか(被覆率)で、1回の配置ごとの出来ばえ。
+    別のものを同じ語で2か所に置くと、どちらの話か読めなくなる
+    (現場の指摘:「カバーしているかは配置したタイミングで観れるべき
+    内容で、設定部で観れるべきはボードの人気度」)。
+
+    分母はボード一覧ぜんぶ。使っていない寸法も0%で並べる ── 一覧に
+    載っているのに使っていないサイズを見つけるのもこの表の役目で、
+    隠すと「無い」のか「0回」なのか区別できなくなる。
 
     積むのは資材選択の「使用する」を押したときだけ(配置しただけでは
-    積まない)。以前は配置図の印刷を合図にしていたが、確かめるために
-    印刷しても積まれ、印刷せずに使えば積まれなかった。
+    積まない)。
   #}
   <section class="card">
     <header>
-      <i class="ib ib--sm" aria-hidden="true">率</i>
-      <h3>ボード使用率</h3>
-      <span class="eyebrow" id="usageSummary">{% if view.board_usage.rows %}{{
-        view.board_usage.listed }}件中 {{ view.board_usage.used }}件を使用({{
-        view.board_usage.coverage }}%) / 累計 {{ view.board_usage.total_sheets
-        }}枚{% else %}0 件{% endif %}</span>
+      <i class="ib ib--sm" aria-hidden="true">人</i>
+      <h3>ボード人気度</h3>
+      <span class="eyebrow" id="usageSummary">{% if view.board_usage.top %}{{
+        view.board_usage.top }} / 累計 {{ view.board_usage.total_sheets
+        }}枚{% elif view.board_usage.rows %}まだ使われていません{% else %}0 件{% endif %}</span>
     </header>
     <div class="pad">
       <p class="why">
-        ボード一覧に載っている寸法ぜんぶを、使った枚数の多い順に並べます。
-        <b>使っていない寸法も0%で出します</b> ── 持たなくてよいサイズを
-        見つけるための表なので、隠すと意味がなくなります。
-        積まれるのは資材選択で<b>「使用する」</b>を押したときだけです。
+        <b>どのサイズをよく使っているか。</b>ボード一覧に載っている寸法
+        ぜんぶを、使った枚数の多い順に並べます。何を多めに持っておけば
+        よいかの目安です。使っていない寸法も0%で出します ── 持たなくて
+        よいサイズを見つけるのもこの表の役目なので、隠すと意味が
+        なくなります。積まれるのは資材選択で<b>「使用する」</b>を
+        押したときだけです。
+      </p>
+      <p class="why">
+        1回の配置でパレットをどれだけ覆えたか(<b>使用率・はみ出し</b>)は、
+        資材選択の配置図の下に出ています。こことは別の話です。
       </p>
       <div class="tablewrap">
         <table class="table">
           <thead><tr>
             <th>種別</th><th class="n">幅</th><th class="n">丈</th>
             <th class="n">枚数</th><th class="n">回数</th>
-            <th class="n">割合</th><th>最終使用</th>
+            <th class="n">割合</th><th class="t">人気度</th><th>最終使用</th>
           </tr></thead>
           <tbody id="usageRateRows">
             {# **初回はサーバが描く。** JS に任せると、開いた瞬間だけ空に
@@ -549,6 +562,10 @@
               <td class="n">{{ r.sheets }}</td>
               <td class="n">{{ r.times }}</td>
               <td class="n">{{ r.share }}%</td>
+              {# 棒。数字だけだと**順位が読み取れない**(60.0と25.0の差が
+                 どのくらいかは、並べて初めて目に入る) #}
+              <td class="t"><span class="popbar"
+                  style="--w: {{ r.share }}%" aria-hidden="true"></span></td>
               <td>{{ r.last_used_at or "—" }}</td>
             </tr>
             {% endfor %}

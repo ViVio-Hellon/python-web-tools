@@ -77,21 +77,24 @@ function renderFilters(items) {
 }
 
 /**
- * ボード使用率。**分母はボード一覧ぜんぶ。**
+ * ボード人気度。**どのサイズをよく使っているか。**
  *
- * 使っていない寸法も0%で並べる ── 一覧に載っているのに一度も
- * 使っていないサイズを見つけるのがこの表の目的で、隠すと「無い」のか
- * 「0回」なのか区別できなくなる。
+ * パレットをどれだけ覆えたか(被覆率)とは別の話 ── そちらは1回の
+ * 配置の出来ばえで、資材選択の配置図の下に「使用率」「はみ出し」と
+ * して出ている。同じ語を2か所で違う意味に使わない。
+ *
+ * 分母はボード一覧ぜんぶ。使っていない寸法も0%で並べる ── 一覧に
+ * 載っているのに使っていないサイズを見つけるのもこの表の役目で、
+ * 隠すと「無い」のか「0回」なのか区別できなくなる。
  */
 function renderBoardUsage(usage) {
   const rows = usage.rows || [];
   const unlisted = usage.unlisted || [];
 
   el.usageRateEmpty.hidden = rows.length > 0;
-  el.usageSummary.textContent = rows.length
-    ? `${usage.listed}件中 ${usage.used}件を使用(${usage.coverage}%) `
-      + `/ 累計 ${usage.total_sheets}枚`
-    : "0 件";
+  el.usageSummary.textContent = usage.top
+    ? `${usage.top} / 累計 ${usage.total_sheets}枚`
+    : (rows.length ? "まだ使われていません" : "0 件");
 
   const cells = (values, right) => values.map((value, index) => {
     const td = document.createElement("td");
@@ -106,8 +109,17 @@ function renderBoardUsage(usage) {
     // 自体が「一覧にはあるが使っていない」という事実だから
     if (!r.used) tr.classList.add("off");
     tr.append(...cells([r.board_type, r.width, r.length, r.sheets, r.times,
-                        `${r.share}%`, r.last_used_at || "—"],
-                       [1, 2, 3, 4, 5]));
+                        `${r.share}%`], [1, 2, 3, 4, 5]));
+    // 棒。数字だけだと順位の差が読み取れない
+    const bar = document.createElement("td");
+    bar.className = "t";
+    const fill = document.createElement("span");
+    fill.className = "popbar";
+    fill.style.setProperty("--w", `${r.share}%`);
+    fill.setAttribute("aria-hidden", "true");
+    bar.appendChild(fill);
+    tr.appendChild(bar);
+    tr.append(...cells([r.last_used_at || "—"], []));
     return tr;
   }));
 

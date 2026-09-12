@@ -328,8 +328,22 @@ select.input { cursor: pointer; }
 
 /* 一度も使われていない行。**消さずに薄くする** ── 並んでいること自体が
    「一覧にはあるが使っていない」という事実で、消すと「無い」のか
-   「0回」なのか区別できなくなる(ボード使用率) */
+   「0回」なのか区別できなくなる(ボード人気度) */
 .table tbody tr.off td { color: var(--faint); }
+
+/* 人気度の棒。**数字だけだと順位の差が読み取れない**(60.0% と 25.0% が
+   どのくらい違うかは、並べて初めて目に入る)。割合は隣の列に数字でも
+   出しているので、棒は読み上げから外す(同じことを2回言わない) */
+.popbar {
+  display: block; height: 8px; border-radius: 4px;
+  background: var(--rule);
+  position: relative; min-width: 60px;
+}
+.popbar::before {
+  content: ""; position: absolute; inset: 0 auto 0 0;
+  width: var(--w, 0%); border-radius: 4px;
+  background: var(--accent);
+}
 
 /* 図と一覧の相互ハイライト(ゲシュタルトの共通運命) */
 .table tbody tr.is-linked {

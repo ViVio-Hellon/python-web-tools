@@ -69,9 +69,13 @@ TABS: tuple[tuple[str, str], ...] = (
     # 並べて置くと「動作の設定を保存」で一緒に変わるように見える
     ("password", "パスワード"),
     ("filters", "よく使う条件"),
-    # 使ったものを見る面。設定を**変える**面ではないが、ボードマスタに
-    # 何を載せておくかを決める材料なので、マスタ管理の隣に置く
-    ("boards", "ボード使用率"),
+    # どのボードがよく使われているかを見る面。設定を**変える**面では
+    # ないが、ボードマスタに何を載せておくかを決める材料なので置く。
+    #
+    # **「使用率」とは呼ばない。** 配置の段に出している「使用率」は
+    # パレットをどれだけ覆えたか(被覆率)で、まったく別のもの。
+    # 同じ語を2か所で違う意味に使うと、どちらの話か読めなくなる
+    ("boards", "ボード人気度"),
     ("history", "最近の結果"),
 )
 TAB_KEYS = frozenset(key for key, _ in TABS)
@@ -179,7 +183,7 @@ class SettingsViewModel:
     # --- よく使う条件(ロット一覧) ---
     lot_filters: list[dict[str, Any]] = field(default_factory=list)
 
-    # --- ボード使用率 ---
+    # --- ボード人気度 ---
     # **ボード一覧を軸にした**割合。使っていない寸法も0%で並ぶ
     # (一覧に載っているのに使っていないものを見つけるのが目的)
     board_usage: dict[str, Any] = field(default_factory=dict)
@@ -265,10 +269,15 @@ def _typed(key: str, fallback: Path, *legacy: str) -> str:
 
 
 def _board_usage(conn: Optional[sqlite3.Connection]) -> dict[str, Any]:
-    """ボード一覧を軸にした使用率。
+    """ボードの人気度 ── どのサイズがよく使われているか。
+
+    **パレットをどれだけ覆えたかとは別の話です。** そちらは1回の配置の
+    出来ばえで、配置の段に「使用率」「はみ出し」として出ています。
+    ここで答えるのは「どのサイズを多く持っておけばよいか」で、
+    何回ぶんも積み上がって初めて意味を持ちます。
 
     **使っていない寸法も並べます。** 一覧に載っているのに一度も
-    使っていないサイズを見つけるのがこの表の目的なので、そこを隠すと
+    使っていないサイズを見つけるのもこの表の役目なので、そこを隠すと
     意味がなくなります(出さなければ「無い」のか「0回」なのか
     区別できません)。
 
@@ -276,23 +285,27 @@ def _board_usage(conn: Optional[sqlite3.Connection]) -> dict[str, Any]:
     いるか、寸法を打ち間違えているかのどちらかで、どちらも直すべき
     事実です。
     """
+    empty = {"rows": [], "unlisted": [], "total_sheets": 0, "top": ""}
     if conn is None:
-        return {"rows": [], "unlisted": [], "listed": 0, "used": 0,
-                "coverage": 0.0, "total_sheets": 0}
+        return empty
     from .. import board_usage as usage
 
-    def line(row: usage.RateRow) -> dict[str, Any]:
+    def line(row: usage.PopularityRow) -> dict[str, Any]:
         return {"width": row.width, "length": row.length,
                 "board_type": row.board_type, "sheets": row.sheets,
                 "times": row.times, "share": row.share,
                 "last_used_at": row.last_used_at, "used": row.used}
 
-    got = usage.usage_rates(conn)
+    got = usage.popularity(conn)
+    top = got.top
     return {
         "rows": [line(r) for r in got.rows],
         "unlisted": [line(r) for r in got.unlisted],
-        "listed": got.listed, "used": got.used,
-        "coverage": got.coverage, "total_sheets": got.total_sheets,
+        "total_sheets": got.total_sheets,
+        # 見出しの一文。**一覧を全部読まなくても現状が分かる**ように、
+        # 「いちばん使うもの」と「累計」だけを言う
+        "top": (f"よく使うのは {top.board_type} {top.width}×{top.length}"
+                f"({top.share}%)" if top else ""),
     }
 
 
