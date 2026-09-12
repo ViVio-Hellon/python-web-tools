@@ -751,6 +751,16 @@ def place_tiling_boards(ctx: place.PlacementContext, cand: TileCand,
         _place_thin_row(ctx, thickness, row_w, x_pos, category, seq)
         x_pos += thickness
 
+    # **幅方向は中央へ寄せる。** 行はどれも y=0 から積むので、幅が
+    # 足りない行はそのままだと上詰めで出る ── 図を見た人は「この板は
+    # 下にずらして置くのか」と読んでしまうが、実際は上下に等分して
+    # 置くもの(現場の指摘:「ボードを幅方向のセンター配置をしていない」)。
+    #
+    # **現行の配置と同じ規則を使う**(`center_boards_in_width`)。
+    # ここだけ別に書くと、同じ図が経路によって違う位置に出る。
+    # 幅補填を行内で上下に振り分けた行は、その規則が避けてくれる
+    place.center_boards_in_width(ctx, category)
+
 
 def _place_thin_row(ctx: place.PlacementContext, thickness: int, row_w: int,
                     x_pos: int, category: str, seq: _Seq) -> None:

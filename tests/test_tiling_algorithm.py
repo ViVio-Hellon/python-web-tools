@@ -332,9 +332,11 @@ class 配置(unittest.TestCase):
         ctx = place.PlacementContext(palette=Palette(width=900, length=1200),
                                      product=ProductSize(width=800, length=1000))
         T.place_tiling_boards(ctx, cand, place.CATEGORY_LOWER)
-        # 1行目は X=0、2行目は X=500(行高ぶん進む)
+        # 1行目は X=0、2行目は X=500(行高ぶん進む)。
+        # Y は**中央へ寄る** ── 行の幅800に対しパレット幅900なので
+        # 上下50ずつ(現行の配置と同じ規則。行の中の並びは変わらない)
         self.assertEqual([(p.x, p.y) for p in ctx.placed],
-                         [(0, 0), (0, 400), (500, 0), (500, 400)])
+                         [(0, 50), (0, 450), (500, 50), (500, 450)])
         for p in ctx.placed:
             self.assertEqual((p.width, p.length), (400, 500))
 
@@ -427,3 +429,65 @@ class 速度(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 幅方向のセンタリング(unittest.TestCase):
+    """**敷き詰め方式の配置も、幅方向は中央へ寄せる。**
+
+    行はどれも y=0 から積むので、幅が足りない行は上詰めで出ていた。
+    現行の配置(`place_boards_from_list`)は `center_boards_in_width` で
+    寄せているのに、候補変更(敷き詰め方式)だけが通っていなかった ──
+    同じ図が、どちらの経路で作ったかで違う位置に出ていた。
+
+    現場の指摘:「ボードを幅方向のセンター配置をしていない」。
+    """
+
+    def upper(self, rows, pal=(850, 2350), prod=(812, 2302)):
+        """行の並びを置いて、(幅, x, y) を返す。"""
+        comps = [T.TileRowComp(height=h, dims=[w], qty=[1], width=w, boards=1)
+                 for w, h in rows]
+        cand = T.TileCand(h1=rows[0][1], n1=1, c1=comps[0])
+        if len(rows) > 1:
+            cand.h2, cand.n2, cand.c2 = rows[1][1], 1, comps[1]
+        ctx = place.PlacementContext(
+            palette=Palette(width=pal[0], length=pal[1]),
+            product=ProductSize(width=prod[0], length=prod[1]))
+        T.place_tiling_boards(ctx, cand, place.CATEGORY_UPPER)
+        return ctx, [(p.width, p.x, p.y) for p in ctx.placed]
+
+    def test_現場が出した図のとおりに寄る(self) -> None:
+        """パレット850x2350 / 製品812x2302 の候補C(カット1枚許容)。
+
+            上用 1000x1200 [カット前提] → 幅811へカット(189カット)
+            上用 750x1130  [主]
+
+        811 はちょうど一杯(基準812)なので動かない。750 は62mm余るので
+        上下31mmずつ。**直す前は 750 が上詰めのままだった。**
+        """
+        _ctx, placed = self.upper([(811, 1200), (750, 1130)])
+        self.assertEqual(placed, [(811, 0, 0), (750, 1200, 31)])
+
+    def test_幅がちょうどなら動かさない(self) -> None:
+        _ctx, placed = self.upper([(812, 1200)])
+        self.assertEqual(placed, [(812, 0, 0)])
+
+    def test_行ごとに寄せる(self) -> None:
+        """行は丈方向に別の場所なので、まとめてではなく行ごとに寄せる。"""
+        _ctx, placed = self.upper([(700, 1100), (600, 1100)])
+        self.assertEqual(placed, [(700, 0, 56), (600, 1100, 106)])
+
+    def test_幅補填の上下振り分けは崩さない(self) -> None:
+        """行の中で上下に振り分けた幅補填は、**既に置き場を決めている**。
+
+        そのうえで中央へ寄せ直すと、振り分けた意味が消える。
+        """
+        comp = T.TileRowComp(height=1200, dims=[700], qty=[1], width=800,
+                             boards=1, thin_th=[50, 0, 0], thin_qty=[2, 0, 0])
+        cand = T.TileCand(h1=1200, n1=1, c1=comp)
+        ctx = place.PlacementContext(
+            palette=Palette(width=850, length=2350),
+            product=ProductSize(width=812, length=2302))
+        T.place_tiling_boards(ctx, cand, place.CATEGORY_UPPER)
+        ys = [p.y for p in ctx.placed]
+        self.assertEqual(ys, sorted(ys))
+        self.assertEqual(ys[0], 0, "振り分けた幅補填が動いています")
