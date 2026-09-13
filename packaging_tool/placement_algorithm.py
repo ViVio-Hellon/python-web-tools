@@ -1166,10 +1166,18 @@ def center_boards_in_width(ctx: PlacementContext, category: str) -> None:
         # センタリングが効かなくなる(現場の指摘:「ボードを幅方向の
         # センター配置をしていない」)。
         # 幅補填は主ボードの下端に敷くので同じまとまりに入り、これまで
-        # どおり触らない
-        if any(pb.is_fill_board for pb in group):
-            log.debug("センタリング(%s): x=%s は補填があるので触りません",
-                      category, group[0].x)
+        # どおり触らない。
+        #
+        # **避けるのは「振り分けが起きているまとまり」だけ。** 補填と主
+        # ボードが同じまとまりに居るときが、その振り分けの跡である。
+        # 補填だけでできたまとまり(丈補填の帯)は振り分けと関係が無く、
+        # 避けると**隣の主ボードと段違いになる** ── 帯は主ボードの丈を
+        # 継ぎ足すものなので、幅方向の位置は主ボードと揃っていないと
+        # おかしい(実画面で通して見つけた)
+        fills = [pb for pb in group if pb.is_fill_board]
+        if fills and len(fills) != len(group):
+            log.debug("センタリング(%s): x=%s は幅補填の振り分けがあるので"
+                      "触りません", category, group[0].x)
             continue
         min_y = min(pb.y for pb in group)
         max_y = max(pb.y + pb.width for pb in group)
