@@ -130,11 +130,8 @@ function render(next) {
 
   renderMap(next);
   el.basePoint.value = next.base_point;
-  toggles.mark(el.kindGroup, "kind", next.kind);
   el.searchWidth.value = next.width_text;
   el.searchLength.value = next.length_text;
-  // ボードは幅×丈、アングルは丈だけ。使わない欄を残すと入れてしまう
-  el.searchWidth.disabled = next.kind !== "board";
 
   el.result.hidden = !next.result;
   el.result.textContent = next.result;
@@ -289,7 +286,6 @@ export function start(initial) {
     el[id] = document.getElementById(id);
   }
   el.layoutTabs = document.getElementById("layoutTabs");
-  el.kindGroup = document.querySelector('.choose[aria-label="探す資材の種別"]');
   tabs.attachAll();
   dragger?.reset();     // 再入場のたびに真っさらから(`nav.js`)
 
@@ -298,8 +294,8 @@ export function start(initial) {
   el.basePoint.addEventListener("change", () =>
     send("/api/layout/base-point", { name: el.basePoint.value }));
 
+  // **種別は送らない。** 打った寸法で、ボードとアングルの両方を見る
   const doSearch = () => send("/api/layout/search", {
-    kind: toggles.value(el.kindGroup, "kind") || "board",
     width: el.searchWidth.value,
     length: el.searchLength.value,
   });
@@ -309,11 +305,6 @@ export function start(initial) {
       if (event.key === "Enter") { event.preventDefault(); doSearch(); }
     });
   }
-  // 種別を変えただけでは探さない。幅が要るかどうかだけ切り替える
-  toggles.attach(el.kindGroup, "kind", (kind) => {
-    el.searchWidth.disabled = kind !== "board";
-  });
-
   // 資材選択から渡ってきた資材を、まとめて光らせる(旧版 `btnMap`)。
   // **品目を画面から送らない。** 何を渡したかはサーバ側の作業状態が
   // 持っているので、押したことだけを伝える(同じ事実を2か所に置かない)

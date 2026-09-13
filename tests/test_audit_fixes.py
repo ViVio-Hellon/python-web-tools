@@ -358,12 +358,20 @@ class LayoutSearchTests(_LAYOUT_BASE):
                  sorted(s.highlight))
         self.assertEqual(before, after)
 
-    def test_知らない種別でも状態は動かない(self) -> None:
-        self.search({"kind": "board", "width": "1000", "length": "1200"})
+    def test_種別はもう見ない(self) -> None:
+        """**両方を一度に見る**ようにしたので、種別で断らない。
+
+        古い画面が `kind` を送ってくることがあるので、受け取っても
+        断らずに無視する(断ると、入れ替えの途中で検索が使えなくなる)。
+        """
+        self.search({"kind": "なにか", "length": "1200"}, expect=422)
         s = layout_session.get_session()
-        before = (s.kind, s.width_text, s.length_text)
-        self.search({"kind": "なにか", "length": "1200"}, expect=400)
-        self.assertEqual(before, (s.kind, s.width_text, s.length_text))
+        self.assertEqual(s.length_text, "1200")
+
+    def test_片側だけなら断らない(self) -> None:
+        """空欄は「その寸法では絞らない」。打ち間違いとは別。"""
+        res = self.search({"width": "", "length": "1200"})
+        self.assertNotEqual(res.status_code, 400, res.get_json())
 
 
 # ==================================================================

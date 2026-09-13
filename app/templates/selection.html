@@ -381,18 +381,6 @@
       </div>
       <p class="why">追加できるのは<b>一覧にあるボードだけ</b>です。行を選んでから押してください。</p>
 
-      {# 旧版 `btnMap`。選んだボードとアングルの置き場を**まとめて**光らせる。
-         1件ずつ探すと、5種類あれば5回打ち直すことになる。
-         「どれを取りに行くか」ではなく「**全部でどれだけ歩くか**」が要点 #}
-      <div class="btn-row">
-        <button class="btn btn--nav" type="button" id="showOnMap">
-          置き場をまとめて見る<span class="gl">▸</span></button>
-      </div>
-      <p class="why">
-        選んだボードとアングルの置き場を、棚検索でまとめて光らせます
-        (合計疲労度も出ます)。
-      </p>
-
       {# **左が実行、右がその効き方。**
              選定 │ 疲労度優先
              配置 │ 在庫考慮
@@ -490,6 +478,28 @@
           <span class="gl">▶</span>アングル配置</button>
       </div>
       <p class="why" id="angleWhy" {% if not view.angles.why %}hidden{% endif %}>{{ view.angles.why | join("　") }}</p>
+    </div>
+  </section>
+
+  {# 旧版 `btnMap`。選んだボードとアングルの置き場を**まとめて**光らせる。
+     1件ずつ探すと、5種類あれば5回打ち直すことになる。
+     「どれを取りに行くか」ではなく「**全部でどれだけ歩くか**」が要点。
+
+     **アングルより下に置く。** 以前はボードの欄の中にあったので、
+     アングルを選びに下へ進んだ時点で通り過ぎてしまい、押すには
+     戻る必要があった(現場の指摘:「アングルを選んだ時点で通過して
+     いる(もどる必要がある)」)。**このボタンが見るのはボードと
+     アングルの両方**なので、両方そろったあとに置くのが筋 #}
+  <section class="card">
+    <div class="pad">
+      <div class="btn-row">
+        <button class="btn btn--nav" type="button" id="showOnMap">
+          置き場をまとめて見る<span class="gl">▸</span></button>
+      </div>
+      <p class="why">
+        選んだ<b>ボードとアングルの両方</b>の置き場を、棚検索でまとめて
+        光らせます(合計疲労度も出ます)。
+      </p>
     </div>
   </section>
 

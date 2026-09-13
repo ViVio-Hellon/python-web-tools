@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 from . import floor_plan, location_service as svc, user_settings
 from .logging_utils import get_logger
-from .presenters.layout import KIND_BOARD, KINDS
+from .presenters.layout import KIND_BOARD, KIND_LABEL, KINDS
 
 log = get_logger("layout_session")
 
@@ -80,48 +80,70 @@ class LayoutSession:
     # --- 検索 -------------------------------------------------------
     def search(self, conn: Any, kind: str, width_text: str,
                length_text: str) -> LayoutOpResult:
-        """最寄りの置き場を探す(VBA `frmLayout` の検索)。"""
-        # **断る条件は、状態に触れる前に全部確かめる。**
-        # 400 は「入力の形が違う」であって、サーバの状態は動いていない、
-        # というのが約束(設計書 §6.1)。動かしてから断ると、画面は前の
-        # 検索結果を出したままサーバだけが取り消した状態になり、
-        # どちらが本当なのか分からなくなる
-        if kind not in KINDS:
-            return LayoutOpResult(False, f"知らない種別です: {kind}",
-                                  REFUSE_BAD_INPUT)
+        """最寄りの置き場を探す(VBA `frmLayout` の検索)。
+
+        **片側だけでも探せる。ボードとアングルを一度に見る。**
+
+        以前は種別を先に選ばせ、ボードなら幅と丈の両方を必須にしていた。
+        手元に片方の寸法しか分からないときに打ちようがなく、種別の選び
+        直しも手間だった(現場の指摘:「両方の入力が必須になっていて
+        使いにくい」「両方チェックとか両方でいいのでは」)。
+
+        `kind` は**もう使わない**。画面から消したが、古い画面が残って
+        いても断らないよう、受け取るだけ受け取って無視する。
+        """
+        # **打ち間違いと、打たなかったことを混ぜない。**
+        # 空欄は「その寸法では絞らない」。数でない字が入っているのは
+        # 入力の誤りなので、黙って無視せずに断る(無視すると、打った
+        # つもりの寸法で絞られていない結果が出る)
+        for label, text in (("幅", width_text), ("丈", length_text)):
+            if text.strip() and _to_int(text) is None:
+                return LayoutOpResult(False, f"{label}は数字で入力してください。",
+                                      REFUSE_BAD_INPUT)
         length = _to_int(length_text)
         width = _to_int(width_text)
-        if length is None or (kind == KIND_BOARD and width is None):
-            return LayoutOpResult(False, "サイズを入力してください。",
+        if length is None and width is None:
+            return LayoutOpResult(False, "幅か丈のどちらかを入力してください。",
                                   REFUSE_BAD_INPUT)
 
-        self.kind = kind
         self.width_text = width_text
         self.length_text = length_text
         self.highlight.clear()
         self.result = ""
 
         base = user_settings.get_position()
-        if kind == KIND_BOARD:
-            nearest = svc.find_nearest_shelf_for_board(conn, width, length, base)
-            score = svc.score_board_pick(nearest.distance, width, length)
-        else:
-            nearest = svc.find_nearest_shelf_for_angle(conn, length, base)
-            score = svc.score_angle_pick(nearest.distance, length)
+        hits = svc.find_shelves_by_size(conn, width, length, base)
+        found = [h for h in hits if h.found]
 
-        if nearest.shelf_name is None:
-            # 「見つからない」と「マスタに置き場が書かれていない」は別。
-            # 直し方まで書く(データラベル列を見ればよい)
-            self.result = ("このサイズには置き場(データラベル)が登録されて"
-                           "いません。マスタの「データラベル」列を確認してください。")
+        if not hits:
+            # 「そのサイズの在庫が無い」と「置き場が書かれていない」は
+            # 別の話。ここは前者
+            self.result = _not_in_stock(width, length)
             return LayoutOpResult(False, self.result, REFUSE_NOT_FOUND)
 
-        self.highlight.add(nearest.shelf_name)
-        self.selected = nearest.shelf_name
-        self.result = (f"最寄り: {nearest.shelf_name}  "
-                       f"距離={nearest.distance:.0f}  "
-                       f"疲労度スコア={score:.1f}  "
-                       f"(候補{nearest.candidate_count}件)")
+        if not found:
+            # 在庫にはあるが、どこに置いてあるかが分からない
+            self.result = _no_shelf(hits)
+            return LayoutOpResult(False, self.result, REFUSE_NOT_FOUND)
+
+        parts = []
+        for hit in found:
+            self.highlight.add(hit.nearest.shelf_name)
+            score = (svc.score_board_pick(hit.nearest.distance,
+                                          width or 0, length or 0)
+                     if hit.kind == KIND_BOARD
+                     else svc.score_angle_pick(hit.nearest.distance, length or 0))
+            parts.append(
+                f"{KIND_LABEL[hit.kind]} {' / '.join(hit.matched_sizes)}"
+                f" → {hit.nearest.shelf_name}"
+                f"(距離{hit.nearest.distance:.0f} 疲労度{score:.1f}"
+                f" 候補{hit.nearest.candidate_count}件)")
+
+        self.kind = found[0].kind
+        self.selected = found[0].nearest.shelf_name
+        missing = [KIND_LABEL[h.kind] for h in hits if not h.found]
+        tail = (f"  ※{' / '.join(missing)}は置き場が未登録" if missing else "")
+        self.result = "最寄り: " + "  ".join(parts) + tail
         return LayoutOpResult(True, self.result)
 
     def show_selection(self, conn: Any, items: list) -> LayoutOpResult:
@@ -171,9 +193,10 @@ class LayoutSession:
             found += 1
 
         if not self.highlight:
-            self.result = ("選定した資材の置き場(データラベル)が"
-                           "1つも登録されていません。"
-                           "マスタの「データラベル」列を確認してください。")
+            self.result = (
+                "選定した資材が、配置図のどこに置いてあるか分かりません。"
+                "置き場の登録がまだのようです ── "
+                "資材課の人に伝えてください(マスタの「データラベル」欄)。")
             return LayoutOpResult(False, self.result, REFUSE_NOT_FOUND)
 
         self.kind = KIND_BOARD
@@ -393,3 +416,36 @@ def reset_session() -> None:
     global _session
     with _lock:
         _session = None
+
+
+def _size_label(width: Optional[int], length: Optional[int]) -> str:
+    """打たれた寸法の言い方。片側だけのときは、そう分かるように書く。"""
+    if width is not None and length is not None:
+        return f"{width}×{length}"
+    if width is not None:
+        return f"幅{width}"
+    return f"丈{length}"
+
+
+def _not_in_stock(width: Optional[int], length: Optional[int]) -> str:
+    """その寸法の資材が見当たらない。**在庫の話。**"""
+    return (f"{_size_label(width, length)} の資材が見当たりません。"
+            "寸法を確かめてください(片方だけでも探せます)。")
+
+
+def _no_shelf(hits: list) -> str:
+    """資材はあるが、どこに置いてあるかが分からない。**置き場の話。**
+
+    以前は「このサイズには置き場(データラベル)が登録されていません。
+    マスタの「データラベル」列を確認してください。」と出していた。
+    作り手の言葉で、読んだ作業者は「あぁ無いのか」で終わってしまう
+    (現場の指摘:「ツール制作者よりのコメントすぎる」)。
+
+    **作業者が次にすることを書く。** その場で直せるものではないので、
+    誰に言えばよいかまで書く。
+    """
+    names = " / ".join(sorted({KIND_LABEL[h.kind] for h in hits}))
+    sizes = " / ".join(sorted({s for h in hits for s in h.matched_sizes}))
+    return (f"{names} {sizes} はありますが、配置図のどこに置いてあるかが"
+            "分かりません。置き場の登録がまだのようです ── "
+            "資材課の人に伝えてください(マスタの「データラベル」欄)。")

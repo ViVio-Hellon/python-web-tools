@@ -37,10 +37,13 @@ STATE_EMPTY = "empty"      # データラベルがどの資材にも紐付いて
 STATE_HIT = "hit"          # 検索で当たった
 STATE_BASE = "base"        # 拠点
 
-# 検索の種別。VBA `frmLayout` のラジオボタンと同じ2つ
+# 資材の種別。VBA `frmLayout` はこれをラジオボタンで先に選ばせていたが、
+# **いまは選ばせない**(検索は両方を一度に見る)。結果に「どちらが
+# 当たったか」を書くために名前だけ残す
 KIND_BOARD = "board"
 KIND_ANGLE = "angle"
 KINDS = (KIND_BOARD, KIND_ANGLE)
+KIND_LABEL = {KIND_BOARD: "ボード", KIND_ANGLE: "アングル"}
 
 # 資材カテゴリ。色分けの種別として画面へ渡す(VBA版には無い区別で、
 # 「mapのラベルがどの資材の置き場か一目で分からない」という要望への対応)

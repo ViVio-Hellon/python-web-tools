@@ -131,32 +131,94 @@ class SearchTests(LayoutWebTestCase):
 
     def test_最寄りが当たる(self) -> None:
         state = self.post("/api/layout/search",
-                          {"kind": "board", "width": 750, "length": 1130})
+                          {"width": 750, "length": 1130})
         self.assertTrue(state["found"])
         self.assertIn(self.label, state["result"])
-        self.assertIn("疲労度スコア", state["result"])
+        self.assertIn("疲労度", state["result"])
         hit = [s for s in state["shelves"] if s["state"] == presenter.STATE_HIT]
         self.assertEqual([s["name"] for s in hit], [self.label])
 
     def test_サイズが無ければ400(self) -> None:
-        self.post("/api/layout/search", {"kind": "board", "width": "", "length": ""},
-                  expect=400)
+        self.post("/api/layout/search", {"width": "", "length": ""}, expect=400)
 
-    def test_置き場が登録されていなければ422(self) -> None:
-        """「見つからない」と「マスタに置き場が書かれていない」は別。
+    def test_打ち間違いは無視せず断る(self) -> None:
+        """**空欄と打ち間違いを混ぜない。**
 
-        直し方(データラベル列を見る)まで書く。
+        空欄は「その寸法では絞らない」。数でない字は入力の誤りなので、
+        黙って無視すると、打ったつもりの寸法で絞られていない結果が出る。
         """
+        body = self.post("/api/layout/search", {"width": "あ", "length": "1130"},
+                         expect=400)
+        self.assertIn("幅は数字で", body["error"]["message"])
+
+    def test_その寸法の資材が無ければ422(self) -> None:
+        """「資材が無い」と「置き場が書かれていない」は別の話。"""
         body = self.post("/api/layout/search",
-                         {"kind": "board", "width": 9999, "length": 9999},
-                         expect=422)
-        self.assertIn("データラベル", body["message"])
+                         {"width": 9999, "length": 9999}, expect=422)
+        self.assertIn("見当たりません", body["message"])
         # 断られても画面ぜんぶが入っている
         self.assertIn("shelves", body)
 
-    def test_知らない種別は400(self) -> None:
-        self.post("/api/layout/search", {"kind": "なにか", "length": 100},
-                  expect=400)
+    def test_置き場が登録されていなければ422(self) -> None:
+        """**作業者の言葉で言う。**
+
+        以前は「マスタの『データラベル』列を確認してください」と出して
+        いた。作り手の言葉で、読んだ作業者は「あぁ無いのか」で終わる
+        (現場の指摘:「ツール制作者よりのコメントすぎる」)。
+        次にすること ── 誰に言えばよいか ── まで書く。
+        """
+        insert_board(self.conn, width=321, length=654, label="")
+        body = self.post("/api/layout/search",
+                         {"width": 321, "length": 654}, expect=422)
+        self.assertIn("資材課の人に伝えてください", body["message"])
+        self.assertIn("321×654", body["message"])
+
+    def test_種別を選ばせない(self) -> None:
+        """**両方を一度に見る。** 古い画面が `kind` を送っても断らない。"""
+        state = self.post("/api/layout/search",
+                          {"kind": "なにか", "width": 750, "length": 1130})
+        self.assertTrue(state["found"])
+
+    def test_片側だけでも探せる(self) -> None:
+        """手元に片方の寸法しか分からないことがある。"""
+        for body in ({"width": 750}, {"length": 1130}):
+            with self.subTest(body=body):
+                state = self.post("/api/layout/search", body)
+                self.assertTrue(state["found"], state["result"])
+                self.assertIn(self.label, state["result"])
+
+    def test_向きを入れ替えても当たる(self) -> None:
+        state = self.post("/api/layout/search", {"width": 1130, "length": 750})
+        self.assertTrue(state["found"])
+
+    def test_アングルは打った数のどれかに当たれば出る(self) -> None:
+        """**ボードと不揃いにしない。**
+
+        ボードは向きを入れ替えて当てるのに、アングルだけ「幅の欄に
+        打ったから当たらない」では、1130と打ったのに1130のアングルが
+        出てこないことになる。
+        """
+        other = floor_plan.load().item_names[1]
+        self.conn.execute(
+            "INSERT INTO CornerboardMaster (アングル丈, データラベル)"
+            " VALUES (?, ?)", (1130, other))
+        self.conn.commit()
+        state = self.post("/api/layout/search", {"width": 1130, "length": 750})
+        self.assertIn("アングル", state["result"])
+
+    def test_アングルも一緒に当たる(self) -> None:
+        """種別を選び直さずに、ボードとアングルの両方を見る。"""
+        other = floor_plan.load().item_names[1]
+        self.conn.execute(
+            "INSERT INTO CornerboardMaster (アングル丈, データラベル)"
+            " VALUES (?, ?)", (1130, other))
+        self.conn.commit()
+        state = self.post("/api/layout/search", {"length": 1130})
+        self.assertIn("ボード", state["result"])
+        self.assertIn("アングル", state["result"])
+        names = {s["name"] for s in state["shelves"]
+                 if s["state"] == presenter.STATE_HIT}
+        self.assertEqual(names, {self.label, other})
 
     def test_押すと中身が出る(self) -> None:
         """VBA版に無い機能。図から何があるか読めるようにする。"""

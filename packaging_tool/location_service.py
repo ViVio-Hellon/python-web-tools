@@ -86,6 +86,94 @@ def find_nearest_shelf_for_board(
     return _nearest_among(labels, base_point)
 
 
+@dataclass
+class SizeSearchHit:
+    """片側だけ・あいまいでも探せる検索の、1種別ぶんの答え。"""
+
+    kind: str                      # "board" / "angle"
+    nearest: NearestShelfResult
+    matched_sizes: list[str]       # 当たった寸法(画面に出して確かめてもらう)
+
+    @property
+    def found(self) -> bool:
+        return self.nearest.shelf_name is not None
+
+
+def find_shelves_by_size(
+    conn: sqlite3.Connection, width: Optional[int], length: Optional[int],
+    base_point: str, board_type: str = "",
+) -> list[SizeSearchHit]:
+    """**幅か丈のどちらかだけでも探す。ボードとアングルを一度に見る。**
+
+    以前は「ボードなら幅と丈の両方が要る」「アングルなら丈だけ」で、
+    しかも種別を先に選ばせていた。手元に片方の寸法しか分からないときに
+    打ちようがなく、種別を選び直すのも手間になっていた
+    (現場の指摘:「両方の入力が必須になっていて使いにくい」
+    「両方チェックとか両方でいいのでは」)。
+
+    渡された寸法だけで絞る。幅だけならその幅の板を全部、丈だけなら
+    その丈の板とアングルを全部。**向きは入れ替えても当てる**
+    (1000x2000 を探すのに 2000x1000 が出ないと、探せないのと同じ)。
+    """
+    hits: list[SizeSearchHit] = []
+    if width is None and length is None:
+        return hits
+
+    # --- ボード -----------------------------------------------------
+    where, params = _board_where(width, length)
+    if where:
+        if board_type:
+            where += " AND ボードタイプ = ?"
+            params.append(board_type)
+        rows = db.fetch_all(
+            conn,
+            f"SELECT ボード幅, ボード丈, データラベル FROM BoardMaster WHERE {where}",
+            params, caller_name="find_shelves_by_size") or []
+        labels: list[str] = []
+        sizes: set[str] = set()
+        for row in rows:
+            labels.extend(_split_labels(row["データラベル"]))
+            sizes.add(f"{row['ボード幅']}×{row['ボード丈']}")
+        if rows:
+            hits.append(SizeSearchHit("board", _nearest_among(labels, base_point),
+                                      sorted(sizes)))
+
+    # --- アングル ---------------------------------------------------
+    # アングルは丈しか持たない。**打たれた数のどれかに当たれば出す。**
+    # ボード側は向きを入れ替えて当てるので、アングルだけ「幅の欄に
+    # 打ったから当たらない」では不揃いになる(1130 と打ったのに
+    # 1130のアングルが出てこない)
+    values = sorted({v for v in (width, length) if v is not None})
+    if values:
+        marks = ", ".join("?" for _ in values)
+        rows = db.fetch_all(
+            conn,
+            "SELECT アングル丈, データラベル FROM CornerboardMaster"
+            f" WHERE アングル丈 IN ({marks})", list(values),
+            caller_name="find_shelves_by_size") or []
+        labels = []
+        sizes = set()
+        for row in rows:
+            labels.extend(_split_labels(row["データラベル"]))
+            sizes.add(f"{row['アングル丈']}")
+        if rows:
+            hits.append(SizeSearchHit("angle", _nearest_among(labels, base_point),
+                                      sorted(sizes)))
+    return hits
+
+
+def _board_where(width: Optional[int],
+                 length: Optional[int]) -> tuple[str, list]:
+    """渡された寸法だけで絞る条件。**向きの入れ替えも当てる。**"""
+    if width is not None and length is not None:
+        return ("((ボード幅 = ? AND ボード丈 = ?) OR (ボード幅 = ? AND ボード丈 = ?))",
+                [width, length, length, width])
+    only = width if width is not None else length
+    if only is None:
+        return "", []
+    return "(ボード幅 = ? OR ボード丈 = ?)", [only, only]
+
+
 def find_nearest_shelf_for_angle(
     conn: sqlite3.Connection, angle_length: int, base_point: str,
 ) -> NearestShelfResult:

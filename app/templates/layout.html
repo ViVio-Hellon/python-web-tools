@@ -207,28 +207,20 @@
          画面ごとに別の拠点を持たせると、同じロットで違う結果が出る #}
       <p class="why">拠点は<b>資材選択の疲労度優先とも共有</b>します。</p>
 
-      {# 種別。カードにして、探すものの違いを1行で添える(§1.2) #}
-      <div class="choose" role="group" aria-label="探す資材の種別">
-        <button class="choice" type="button" data-kind="board"
-                aria-pressed="{{ 'true' if view.kind == 'board' else 'false' }}">
-          <i class="ib ib--sm ib--lower" aria-hidden="true">板</i>
-          <span class="choice__tx"><b>ボード</b><small>幅と丈で探す</small></span>
-          <i class="choice__ck" aria-hidden="true">✓</i>
-        </button>
-        <button class="choice" type="button" data-kind="angle"
-                aria-pressed="{{ 'true' if view.kind == 'angle' else 'false' }}">
-          <i class="ib ib--sm ib--angle" aria-hidden="true">ｱ</i>
-          <span class="choice__tx"><b>アングル</b><small>丈だけで探す</small></span>
-          <i class="choice__ck" aria-hidden="true">✓</i>
-        </button>
-      </div>
+      {# **種別は選ばせない。** 打った寸法で、ボードとアングルの両方を
+         一度に見る。以前は先に種別を選ばせ、ボードなら幅と丈の両方を
+         必須にしていたが、手元に片方の寸法しか分からないときに打ちよう
+         がなく、種別の選び直しも手間だった(現場の指摘:「両方の入力が
+         必須になっていて使いにくい」「両方チェックとか両方でいいのでは」) #}
       <div class="field">
         <label for="searchWidth">幅</label>
         <input class="input input--num" id="searchWidth" inputmode="numeric"
-               value="{{ view.width_text }}" autocomplete="off">
+               value="{{ view.width_text }}" autocomplete="off"
+               placeholder="任意">
         <label for="searchLength">丈</label>
         <input class="input input--num" id="searchLength" inputmode="numeric"
-               value="{{ view.length_text }}" autocomplete="off">
+               value="{{ view.length_text }}" autocomplete="off"
+               placeholder="任意">
         <button class="btn btn--find" type="button" id="search">
           <span class="gl">⌕</span>検索</button>
         {# 資材選択から渡ってきた資材を、まとめて光らせる。
@@ -239,6 +231,9 @@
                 {% if not view.handoff %}hidden{% endif %}>
           <span class="gl">▦</span><span id="handoffLabel">選定した資材 {{ view.handoff }}件をまとめて</span></button>
       </div>
+      <p class="why">幅・丈は<b>どちらか一方だけでも</b>探せます。
+        ボードとアングルの両方を見て、当たったものを光らせます
+        (向きを入れ替えても当たります)。</p>
       <p class="status {{ 'status--ok' if view.found else 'status--ng' }}"
          id="result" {% if not view.result %}hidden{% endif %}>{{ view.result }}</p>
     </div>
