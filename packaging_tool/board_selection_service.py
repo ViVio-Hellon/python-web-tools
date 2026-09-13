@@ -80,6 +80,10 @@ class ProductSize:
 REFUSE_BAD_INPUT = "bad_input"   # 数値でない・0以下
 REFUSE_BUSINESS = "business"     # 形は正しいが業務として通せない
 
+# 手動追加1回あたりの枚数(VBA `spnBoardCount` の `.Min` / `.Max`)
+COUNT_MIN = 1
+COUNT_MAX = 100
+
 
 @dataclass
 class ApplyResult:
@@ -370,15 +374,22 @@ class SelectedBoards:
 
 
 def add_selected_board(target: list[SelectedBoard], width: int, length: int, count: int) -> ApplyResult:
-    """手動でのボード追加(簡易版)。
+    """手動でのボード追加(VBA `btnAddBoardUpper/Lower_Click`)。
 
-    VBA `btnAddBoardUpper/Lower_Click` は「幅が対象サイズ以下か」等の
-    検証を行っていたが、その詳細な条件は今回の調査範囲に含まれて
-    いなかったため未移植(次フェーズで実ソースを確認して精緻化する)。
-    現時点では数量が1以上であることのみ確認する。
+    **原文を確認済み。** 「幅が製品幅以下か」の検証は原文でも
+    **コメントアウトされていた**(意図的に外されている)ので、
+    こちらにも入れない。手で足す以上、一覧に無い寸法でなければ
+    通す ── 収まるかどうかは配置が答える。
+
+    枚数の範囲は原文のスピンボタン(`spnBoardCount` の `.Min = 1`
+    `.Max = 100`)から。原文はテキスト欄に直接打てば素通りしたが、
+    ここでは**打った値も同じ範囲で見る**。上限が無いと、配置が
+    現実に無い枚数を並べようとして黙って時間を使う。
     """
-    if count <= 0:
-        return ApplyResult(False, "枚数は1以上を入力してください。", REFUSE_BAD_INPUT)
+    if not COUNT_MIN <= count <= COUNT_MAX:
+        return ApplyResult(
+            False, f"枚数は{COUNT_MIN}〜{COUNT_MAX}で入力してください。",
+            REFUSE_BAD_INPUT)
     target.append(SelectedBoard(width=width, length=length, count=count))
     return ApplyResult(True, "追加しました。")
 

@@ -959,6 +959,21 @@ class ManualBoardTests(BoardTestCase):
                   {"category": "lower", "width": 500, "length": 1000,
                    "count": 0}, expect=400)
 
+    def test_枚数の上限は100(self) -> None:
+        """VBA `spnBoardCount` の `.Max = 100`。原文はテキスト欄に直接
+        打てば素通りしたが、上限が無いと配置が現実に無い枚数を並べようと
+        して黙って時間を使う。"""
+        self.sizes()
+        body = self.post("/api/selection/boards/add",
+                         {"category": "lower", "width": 500,
+                          "length": 1000, "count": 101}, expect=400)
+        self.assertIn("1〜100", body["error"]["message"])
+
+        boards = self.boards(self.post(
+            "/api/selection/boards/add",
+            {"category": "lower", "width": 500, "length": 1000, "count": 100}))
+        self.assertEqual(boards["lower"][0]["count"], 100)
+
     def test_上下の指定を間違えたら400(self) -> None:
         self.sizes()
         self.post("/api/selection/boards/add",

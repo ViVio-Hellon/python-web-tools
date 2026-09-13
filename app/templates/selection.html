@@ -375,7 +375,11 @@
          VBA も候補リストの真下にこの並びで置いていた #}
       <div class="field">
         <label for="addCount">枚数</label>
-        <input class="input input--num" id="addCount" inputmode="numeric" value="1" autocomplete="off">
+        {# 範囲は**打つ前に見える所**に置く。断ってから言うと、打ち直しの
+           ために一度戻ることになる(上限はVBA `spnBoardCount` の .Max) #}
+        <input class="input input--num" id="addCount" type="number"
+               min="1" max="100" step="1" inputmode="numeric"
+               value="1" autocomplete="off">
         <button class="btn btn--upper" type="button" id="addUpper">上用へ追加</button>
         <button class="btn btn--lower" type="button" id="addLower">下用へ追加</button>
       </div>
