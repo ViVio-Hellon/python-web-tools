@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from pathlib import Path
 
 from packaging_tool import db, special_packaging as spk
 
@@ -245,6 +246,73 @@ class TextRoundTripTests(unittest.TestCase):
         miss = spk.load_materials(self.conn, 5000, 1500)
         self.assertEqual(miss.kakuzai.cell_text, f"溝切角材 {spk.INFO_NOT_FOUND}")
 
+
+class モード一覧と実装が合っているか(unittest.TestCase):
+    """`docs/モード一覧.md` に書いた判定条件を、実装で確かめる。
+
+    **文書だけが古くなるのを防ぐ。** モードは「なぜこの結果になったのか」に
+    答えるときの出発点で、書いてあることが違うと調べ直しが要る。
+    条件を変えるときは、文書と一緒にここも直すことになる。
+
+    条件はすべてVBA原文(`CheckAndSetProtecMode` /
+    `CheckAndSet1P1185Mode` / `Apply1P0113Mode`)と突き合わせ済み。
+    """
+
+    def test_プロテックは3つの包装仕様NO(self) -> None:
+        for spec in ("1P1216", "1P1125", "1P1211"):
+            with self.subTest(spec=spec):
+                self.assertTrue(spk.protec_state(spec).is_protec)
+
+    def test_1P1216だけ許容が違う(self) -> None:
+        """コーミ金属。幅の許容が -10mm(ほかは -80mm)。"""
+        self.assertTrue(spk.protec_state("1P1216").is_1p1216)
+        for spec in ("1P1125", "1P1211"):
+            with self.subTest(spec=spec):
+                self.assertFalse(spk.protec_state(spec).is_1p1216)
+
+    def test_プロテックでないものは入らない(self) -> None:
+        for spec in ("", "1P0113", "1P1185", "1P0001"):
+            with self.subTest(spec=spec):
+                self.assertFalse(spk.protec_state(spec).is_protec)
+
+    def test_1P1185は4条件のAND(self) -> None:
+        base = dict(packaging_spec="1P1185", customer_name="ﾅﾒｶﾜｱﾙﾐ(ｶ",
+                    manufactured_width=1245, manufactured_length=1245)
+        self.assertTrue(spk.check_1p1185_mode(**base).is_1p1185)
+        for name, over in (
+                ("包装仕様NO", {"packaging_spec": "1P1186"}),
+                ("取引先", {"customer_name": "ほかの会社"}),
+                ("製造板幅", {"manufactured_width": 1241}),
+                ("製造板丈", {"manufactured_length": 1250})):
+            with self.subTest(欠ける条件=name):
+                self.assertFalse(
+                    spk.check_1p1185_mode(**{**base, **over}).is_1p1185)
+
+    def test_1P1185の寸法は1242から1249(self) -> None:
+        """**寸法が条件に入っている唯一のモード。** 境界を固定する。"""
+        base = dict(packaging_spec="1P1185", customer_name="ﾅﾒｶﾜｱﾙﾐ(ｶ",
+                    manufactured_length=1245)
+        for width, want in ((1241, False), (1242, True),
+                            (1249, True), (1250, False)):
+            with self.subTest(width=width):
+                self.assertEqual(
+                    spk.check_1p1185_mode(**base,
+                                         manufactured_width=width).is_1p1185,
+                    want)
+
+    def test_松板の丈は4段階(self) -> None:
+        """949以下→製品丈 / 1800以下→950 / 2400以下→1600 / それ以上→2330。"""
+        self.assertEqual((spk.A_THR1, spk.A_THR2, spk.A_THR3), (949, 1800, 2400))
+        self.assertEqual((spk.A_VAL1, spk.A_VAL2, spk.A_VAL3), (950, 1600, 2330))
+
+    def test_文書に全部のモードが載っている(self) -> None:
+        """**書き漏らしを防ぐ。** 実装にあるモードは文書にも要る。"""
+        doc = (Path(__file__).resolve().parent.parent
+               / "docs" / "モード一覧.md").read_text(encoding="utf-8")
+        for name in ("EX受注", "1P0113", "プロテック", "1P1185",
+                     "上下共用", "疲労度優先", "在庫考慮", "サイズ指定"):
+            with self.subTest(name=name):
+                self.assertIn(name, doc)
 
 if __name__ == "__main__":
     unittest.main()
