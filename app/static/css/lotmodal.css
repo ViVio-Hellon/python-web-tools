@@ -129,3 +129,16 @@
 .specview--full img { max-width: none; }        /* 実寸。枠の中をスクロール */
 .specview iframe { width: 100%; height: 52vh; border: 0; }
 .specview .why { margin: 0; text-align: center; }
+
+/* 発注1件を大きく出すモーダル(発注一覧の行を押したとき)。
+   **一覧は詰めて並べるので小さい。** どの発注だったかを確かめる場所は
+   別に要る(現場の指摘:「選択したものが別ウィンドウで大きく表示」) */
+.modal--order { width: min(720px, 92vw); }
+.modal--order .pad { overflow: auto; }
+.fields--order { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* 打ち写す値(発注コード・LotNo・発注数)は、離れて見ても読める大きさに */
+.fields--order > div.big { grid-column: 1 / -1; }
+.fields--order > div.big dd {
+  font-size: var(--fs-xl); font-weight: 700; letter-spacing: .02em;
+}
+.modal--order .why { margin: 10px 0 0; }

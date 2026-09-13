@@ -823,5 +823,59 @@ class LotPeekApiTests(unittest.TestCase):
         return {"X-Tool-Token": TOKEN}
 
 
+class OrderDetailTests(WarehouseWebTestCase):
+    """**1行を大きく出す場所。**
+
+    現場の指摘:「倉庫モードで一覧から選択時にVBAでは選択したものが別
+    ウィンドウで大きく表示したはず」「発注コード 自動コピーも効いて
+    いない」。
+
+    一覧は詰めて並べるので字が小さい。どの発注だったかを確かめる場所を
+    作り、開いた時点で発注コードを控える(打ち写す値なので)。
+    """
+
+    def page(self, mode: str = "material") -> str:
+        res = self.clients[mode].get("/warehouse", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        return res.get_data(as_text=True)
+
+    def test_開く場所が画面にある(self) -> None:
+        for mode in ("field", "material"):
+            with self.subTest(mode=mode):
+                html = self.page(mode)
+                self.assertIn('id="orderModal"', html)
+                self.assertIn('id="orderFields"', html)
+
+    def test_出す項目と控える列はサーバが決める(self) -> None:
+        """**見せ方の決め事を画面に散らさない**(一覧の列と同じ約束)。"""
+        res = self.clients["material"].get("/api/warehouse/orders",
+                                           headers=self.auth())
+        body = res.get_json()
+        self.assertEqual(body["copy_column"], "発注コード")
+        labels = [f["label"] for f in body["detail_fields"]]
+        self.assertEqual(labels[0], "発注コード")
+        for must in ("LotNo", "品名", "発注数", "納入先", "登録日時"):
+            self.assertIn(must, labels)
+
+    def test_打ち写す値は大きく出す(self) -> None:
+        """発注コード・LotNo・発注数は、離れて見ても読める大きさに。"""
+        body = self.clients["material"].get(
+            "/api/warehouse/orders", headers=self.auth()).get_json()
+        big = {f["label"] for f in body["detail_fields"] if f["big"]}
+        self.assertEqual(big, {"発注コード", "LotNo", "発注数"})
+
+    def test_一覧の値をそのまま使う(self) -> None:
+        """**事実の置き場所は `values` ただ1つ。** 別の口を作らない。"""
+        svc.create_order(self.conn, lot_no="7654321", hinmei="パレット",
+                         hatchu_code="P9", tani="台", atu=3.0, haba=1000,
+                         take=2000, hatchu_suu=2)
+        self.conn.commit()
+        body = self.clients["material"].get(
+            "/api/warehouse/orders", headers=self.auth()).get_json()
+        row = body["rows"][0]
+        for field in body["detail_fields"]:
+            self.assertIn(field["key"], row["values"], field)
+
+
 if __name__ == "__main__":
     unittest.main()

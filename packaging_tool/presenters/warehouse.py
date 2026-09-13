@@ -97,6 +97,35 @@ ORDER_VIEW: tuple[ViewColumn, ...] = (
     ViewColumn("納入先", "納入先", width="10%"),
     ViewColumn("状態", "状態", kind="status", width="7%"),
 )
+# 1行を開いたときに、大きく出す項目の並び。
+#
+# **一覧は詰めて並べるので小さい。** 現場からは「選択したものを大きく
+# 表示してほしい」「発注コードの自動コピーが効いていない」と言われた。
+# 開いて確かめる場所を作り、そこで発注コードを控えておく。
+#
+# 並びは「どの発注か」→「何を頼んだか」→「どこへ」の順。
+#   (見出し, 列名, 大きく出すか)
+ORDER_DETAIL: tuple[tuple[str, str, bool], ...] = (
+    ("発注コード", "発注コード", True),
+    ("LotNo", "LotNo", True),
+    ("品名", "品名", False),
+    ("発注数", "発注数", True),
+    ("単位", "単位", False),
+    ("材質", "材質", False),
+    ("調質", "調質", False),
+    ("厚", "厚", False),
+    ("幅", "幅", False),
+    ("丈", "丈", False),
+    ("用途コード", "用途コード", False),
+    ("納入先", "納入先", False),
+    ("管理番号", "管理番号", False),
+    ("登録日時", "登録日時", False),
+)
+
+# 行を開いたときに自動で控える列。**発注コードは打ち写す値**で、
+# 8桁前後を目で読んで別のシステムへ入れ直すことになる
+ORDER_COPY_COLUMN = "発注コード"
+
 # 操作の列の幅。ボタンが3つ(Lotを開く・確認・取り消し)並んでも
 # 切れない幅。足りないと列幅を分け合って互いに重なる
 ORDER_ACTION_WIDTH = "20%"
@@ -314,6 +343,10 @@ def to_dict(view: WarehouseViewModel) -> dict[str, Any]:
                      "sub": list(c.sub), "sep": c.sep,
                      "numeric": c.numeric, "width": c.width, "kind": c.kind}
                     for c in ORDER_VIEW],
+        # 1行を開いたときの中身。**見せ方だけ**で、事実は `rows` にある
+        "detail_fields": [{"label": label, "key": key, "big": big}
+                          for label, key, big in ORDER_DETAIL],
+        "copy_column": ORDER_COPY_COLUMN,
         "rows": [row_dict(r) for r in view.rows],
         "keyword": view.keyword,
         "date_filter": view.date_filter,

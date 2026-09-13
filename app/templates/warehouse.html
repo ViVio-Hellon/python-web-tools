@@ -145,6 +145,26 @@
   </div>
 </div>
 
+{# 1行を開いたときの中身。**一覧は詰めて並べるので小さい。**
+   現場の指摘:「倉庫モードで一覧から選択時にVBAでは選択したものが別
+   ウィンドウで大きく表示したはず」「発注コード 自動コピーも効いていない」。
+   開いて確かめる場所を作り、開いた時点で発注コードを控える #}
+<dialog class="modal modal--order" id="orderModal" aria-labelledby="orderTitle">
+  <header class="modal__head">
+    <div class="modal__title">
+      <span class="eyebrow">発注</span>
+      <h2 id="orderTitle">—</h2>
+      <span class="st" id="orderStatus"></span>
+    </div>
+    <button class="btn btn--danger" type="button" id="orderClose">
+      <span class="gl">×</span>閉じる</button>
+  </header>
+  <div class="pad">
+    <dl class="fields fields--order" id="orderFields"></dl>
+    <p class="why" id="orderCopied"></p>
+  </div>
+</dialog>
+
 {# 「Lotを開く」で出す詳細。**画面を移らない。**
    発注を見ていて「どんなロットだっけ?」を確かめるだけなのに、ロット検索
    まで連れていかれて戻るにはたどり直し、では手間でしかない(現場の指摘)。

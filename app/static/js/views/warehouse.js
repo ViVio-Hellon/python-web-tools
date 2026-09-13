@@ -21,6 +21,9 @@ const lotdetail = await import(`../lotdetail.js${VERSION_QUERY}`);
 const el = {};
 let columns = [];
 let isMaterial = false;
+// 1行を開いたときの見せ方。**サーバが決める**(`ORDER_DETAIL`)
+let detailFields = [];
+let copyColumn = "発注コード";
 
 function setStatus(node, message, kind) {
   if (!message) { node.hidden = true; return; }
@@ -34,6 +37,8 @@ function setStatus(node, message, kind) {
 // ------------------------------------------------------------------
 function render(view) {
   columns = view.columns;
+  if (view.detail_fields) detailFields = view.detail_fields;
+  if (view.copy_column) copyColumn = view.copy_column;
   el.rows.replaceChildren(...view.rows.map(rowElement));
   el.listNote.textContent = view.message || "";
   el.listNote.hidden = !view.message;
@@ -95,7 +100,59 @@ function rowElement(row) {
   const tr = document.createElement("tr");
   for (const column of columns) tr.appendChild(cell(row, column));
   tr.appendChild(actionsCell(row));
+  // **行を押したら開く。** 一覧は詰めて並べるので字が小さく、
+  // 「どの発注だったか」を確かめるには開く場所が要る。
+  // ボタンを押したときは開かない(操作と閲覧を混ぜない)
+  tr.tabIndex = 0;
+  tr.addEventListener("click", (event) => {
+    if (event.target.closest("button, a")) return;
+    openOrder(row);
+  });
+  tr.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openOrder(row);
+  });
   return tr;
+}
+
+/**
+ * 1行を大きく出す。**開いた時点で発注コードを控える。**
+ *
+ * 発注コードは打ち写す値で、8桁前後を目で読んで別のシステムへ入れ直す
+ * ことになる(現場の指摘:「発注コード 自動コピーも効いていない」)。
+ * 控えられたかどうかは必ず言う ── 黙って控えたつもりでいると、
+ * 貼れなかったときに何が起きたのか分からない
+ */
+async function openOrder(row) {
+  el.orderTitle.textContent = row.values[copyColumn] || `管理番号 ${row.mgr_no}`;
+  el.orderStatus.textContent = row.status;
+  el.orderStatus.className = `st st--${row.status_kind}`;
+  el.orderFields.replaceChildren(...detailFields.map((f) => {
+    const box = document.createElement("div");
+    if (f.big) box.className = "big";
+    const dt = document.createElement("dt");
+    dt.textContent = f.label;
+    const dd = document.createElement("dd");
+    const value = row.values[f.key];
+    dd.textContent = (value === "" || value === null || value === undefined)
+      ? "---" : value;
+    box.append(dt, dd);
+    return box;
+  }));
+
+  const code = row.values[copyColumn];
+  el.orderCopied.textContent = "";
+  el.orderModal.showModal();
+  if (!code) return;
+  try {
+    await navigator.clipboard.writeText(String(code));
+    el.orderCopied.textContent = `${copyColumn} ${code} を控えました(貼り付けできます)`;
+  } catch {
+    // 権限やブラウザの都合で控えられないことがある。**黙らない**
+    el.orderCopied.textContent =
+      `${copyColumn} を自動で控えられませんでした。上の値を選んで写してください。`;
+  }
 }
 
 function actionsCell(row) {
@@ -342,6 +399,15 @@ export function start(state, material, lotPeekWhy) {
   startWatch();
   // ロットの詳細を使えるようにする。**資材展開は渡さない** ── ここは
   // 確かめる場所なので、ボタンはテンプレートにも出していない
+  for (const id of ["orderModal", "orderTitle", "orderStatus",
+                    "orderFields", "orderClose", "orderCopied"]) {
+    el[id] = document.getElementById(id);
+  }
+  el.orderClose.addEventListener("click", () => el.orderModal.close());
+  el.orderModal.addEventListener("click", (event) => {
+    if (event.target === el.orderModal) el.orderModal.close();
+  });
+
   lotdetail.mount({ expandAbsentWhy: lotPeekWhy });
   nav.onLeave(lotdetail.stop);
   // **打つそばから絞る。** Enterを押すまで何も起きない作りだったので、
