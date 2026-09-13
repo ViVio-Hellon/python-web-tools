@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packaging_tool import board_selection_service as svc
 from packaging_tool import db
+from packaging_tool.user_log import UserLog
 
 
 def insert_pallet(conn, *, width, length, w_min, w_max, l_min, l_max, industry="一般",
@@ -244,6 +245,27 @@ class AutoSelectPalletTests(BoardSelectionTestCase):
         )
         self.assertTrue(result.ok)
         self.assertEqual(result.width, 2010)
+
+    def test_桁数のせいでないものを桁数のせいにしない(self):
+        """**落ちた理由を取り違えない。**
+
+        「△桁数偶数のため2山除外」の別枠は、サイズ・属性はOKで
+        **桁数だけ**が原因のものを全件出すためのもの。ここに、桁数は
+        奇数なのに現物に載らなくて落ちた行まで混ざると、マスタの桁数を
+        直しに行くことになる。
+        """
+        # 適合範囲は通るが現物が小さい(壊れた行)。桁数は奇数
+        insert_pallet(self.conn, width=1500, length=900,
+                      w_min=1900, w_max=2100, l_min=900, l_max=1100,
+                      industry="一般", keta=3)
+        log = UserLog()
+        svc.auto_select_pallet(
+            self.conn, product_width_text="1000", product_length_text="1000",
+            two_stack=True, user_log=log)
+        text = "\n".join(e.text for e in log.entries)
+        self.assertNotIn("桁数偶数", text)
+        # 落ちた本当の理由はちゃんと出る
+        self.assertIn("現物に載らない", text)
 
     # -- 現物に載らないパレットは選ばない ------------------------------
     #

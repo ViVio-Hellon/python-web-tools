@@ -442,6 +442,24 @@ class SearchTests(SelectionWebTestCase):
         self.assertIn("直接検索", state["message"])
         self.assertEqual([row["width"] for row in state["rows"]], [1100])
 
+    def test_何も入っていなければ断る(self) -> None:
+        """**条件を出していないのに絞ったことにしない。**
+
+        全件をそのまま出して「前後50mmで探しました」と言うと、出た一覧を
+        正しい答えだと読んでしまう。何を打てばよいかも言う(VBAも同じ)。
+        """
+        body = self.post("/api/selection/pallet/search", {}, expect=422)
+        self.assertIn("パレット幅またはパレット丈", body["message"])
+        self.assertFalse(body["found"])
+        # 直接検索モードにも入れない(入ると一覧の見出しが「—×—の前後
+        # 50mm」になり、条件があるように読める)
+        self.assertNotEqual(self.session().list_mode, "direct")
+
+    def test_片方だけでも探せる(self) -> None:
+        state = self.post("/api/selection/pallet/search",
+                          {"pallet_width": "1100"})
+        self.assertTrue(state["direct"])
+
     def test_直接検索も引き直す(self) -> None:
         """条件だけ覚えているので、絞り込みを触っても文脈が残る。"""
         self.post("/api/selection/pallet/search",

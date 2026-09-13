@@ -908,8 +908,15 @@ def auto_select_pallet(
           処理ごと不要になり、不具合も自然に解消されている。
         - フォールバック探索時のパス名表示は、元VBAでは直前に失敗した
           パスの名前が誤って使い回されるバグがあったが、Python版では
-          素直に「強制フォールバック」と表示する(選定結果そのものは
-          元VBAのフォールバック探索ロジックを忠実に再現している)。
+          素直に「強制フォールバック」と表示する。
+        - フォールバックで**どれを採るか**も変えてある。元VBAは条件に
+          合った**最初の1件**(管理番号順)で打ち切っていた。こちらは
+          本探索と同じく**面積最小**を採る ── マスタの並び順で結果が
+          変わると、同じ製品サイズで昨日と違うパレットが出ても説明が
+          付かない。
+        - フォールバックの桁数条件も、元VBAはスカシを外していなかった。
+          スカシで奇数桁を求めない理由(桁間隔が狭い)は本探索と同じなので、
+          こちらは**フォールバックでもスカシを外す**。
 
     `is_1p1185_mode` がTrueのとき、探索対象を業界=タイト・幅丈=1300x1300
     のみに絞る(`special_packaging.reject_1p1185`)。この絞り込みは
@@ -1009,9 +1016,17 @@ def auto_select_pallet(
                     size_ok=size_ok, type_ok=type_ok, keta_ok=keta_ok,
                     fits=fits, search_w=search_w, search_l=search_l)
                 rejects.append((diff, f"{row['幅']}x{row['丈']} → {reason}"))
-                # サイズ・属性はOKで桁数偶数だけが原因のものは別枠で全件出す
-                # (「惜しい」上位3件に埋もれて見えなくなるのを防ぐ)
-                if two_stack and pass_def.number <= 16 and size_ok and type_ok:
+                # サイズ・属性はOKで桁数偶数**だけ**が原因のものは別枠で全件出す
+                # (「惜しい」上位3件に埋もれて見えなくなるのを防ぐ)。
+                #
+                # **`keta_ok` も見る。** ここに来る行は size/type/keta/fits の
+                # どれかが落ちている。size・typeがOKでも落ちた理由が
+                # `fits`(現物に載らない)のことがあり、`keta_ok` を見ないと
+                # その行にまで「桁数偶数のため2山不可」と書いてしまう ──
+                # 桁数は奇数なのに桁数のせいだと読まされ、マスタの桁数を
+                # 直しに行くことになる
+                if (two_stack and pass_def.number <= 16
+                        and size_ok and type_ok and not keta_ok):
                     keta_rejects.append(
                         f"{row['幅']}x{row['丈']} (桁数={row['桁数']}/偶数のため2山不可)")
                 continue

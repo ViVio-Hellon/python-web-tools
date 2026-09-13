@@ -223,9 +223,21 @@ def search_pallet():
 
     if not product_width or not product_length:
         # 直接検索モード。条件だけ覚えて、一覧はビューモデルが引き直す
+        pallet_width = str(body.get("pallet_width", "")).strip()
+        pallet_length = str(body.get("pallet_length", "")).strip()
+        # **何も入っていなければ断る**(VBA も同じ)。全件をそのまま出して
+        # 「前後50mm で探しました」と言うと、条件を出していないのに
+        # 絞ったことになる ── 何を打てばよいかも分からないまま、
+        # 出た一覧を正しい答えだと読んでしまう
+        if not pallet_width and not pallet_length:
+            return _state(
+                session,
+                message="パレット幅またはパレット丈を入れてください"
+                        "(製品サイズが空のときは、パレットの寸法で探します)",
+                found=False), 422
         session.list_mode = selection_session.LIST_DIRECT
-        session.direct_width = str(body.get("pallet_width", "")).strip()
-        session.direct_length = str(body.get("pallet_length", "")).strip()
+        session.direct_width = pallet_width
+        session.direct_length = pallet_length
         return _state(session, direct=True,
                       message="製品サイズが空なので、パレット寸法で直接検索しました")
 
