@@ -846,23 +846,43 @@ class OrderDetailTests(WarehouseWebTestCase):
                 self.assertIn('id="orderModal"', html)
                 self.assertIn('id="orderFields"', html)
 
-    def test_出す項目と控える列はサーバが決める(self) -> None:
-        """**見せ方の決め事を画面に散らさない**(一覧の列と同じ約束)。"""
-        res = self.clients["material"].get("/api/warehouse/orders",
-                                           headers=self.auth())
-        body = res.get_json()
-        self.assertEqual(body["copy_column"], "発注コード")
-        labels = [f["label"] for f in body["detail_fields"]]
-        self.assertEqual(labels[0], "発注コード")
-        for must in ("LotNo", "品名", "発注数", "納入先", "登録日時"):
-            self.assertIn(must, labels)
+    def test_並びはVBAの13項目と同じ(self) -> None:
+        """VBA `lstOrders_Click` が埋めていたラベルの順。
 
-    def test_打ち写す値は大きく出す(self) -> None:
-        """発注コード・LotNo・発注数は、離れて見ても読める大きさに。"""
+        並べ替えると、VBAを見慣れた人が目で追う順が変わる。
+        """
+        body = self.clients["material"].get(
+            "/api/warehouse/orders", headers=self.auth()).get_json()
+        labels = [f["label"] for f in body["detail_fields"]]
+        self.assertEqual(labels[:13], [
+            "登録日時", "LotNo", "品名", "発注コード", "発注数", "単位",
+            "材質", "調質", "厚", "幅", "丈", "用途コード", "納入先"])
+
+    def test_大きく出すのはVBAが目立たせていた2つ(self) -> None:
+        """発注コード(青字・下線・枠)と発注数(Font.Size 13・色)。"""
         body = self.clients["material"].get(
             "/api/warehouse/orders", headers=self.auth()).get_json()
         big = {f["label"] for f in body["detail_fields"] if f["big"]}
-        self.assertEqual(big, {"発注コード", "LotNo", "発注数"})
+        self.assertEqual(big, {"発注コード", "発注数"})
+
+    def test_控えるのは発注コードだけ(self) -> None:
+        """VBA `evtHatchu_Click` が控えていたのは発注コード。"""
+        body = self.clients["material"].get(
+            "/api/warehouse/orders", headers=self.auth()).get_json()
+        self.assertEqual(body["copy_column"], "発注コード")
+
+    def test_自動では控えない(self) -> None:
+        """**開いただけでクリップボードを書き換えない。**
+
+        VBAは発注コードのラベルを押したときだけ控えていた
+        (`ControlTipText = "クリックでコピー"`)。開いた時点で控えると、
+        利用者が別に写していたものを黙って消すことになる。
+        """
+        js = (Path(__file__).resolve().parent.parent
+              / "app/static/js/views/warehouse.js").read_text("utf-8")
+        body = js.split("function openOrder(")[1].split("\n}")[0]
+        self.assertNotIn("clipboard", body,
+                         "開いた時点で控えています(VBAは押したときだけ)")
 
     def test_一覧の値をそのまま使う(self) -> None:
         """**事実の置き場所は `values` ただ1つ。** 別の口を作らない。"""

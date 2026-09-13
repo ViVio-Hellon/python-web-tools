@@ -117,41 +117,68 @@ function rowElement(row) {
 }
 
 /**
- * 1行を大きく出す。**開いた時点で発注コードを控える。**
+ * 1行を大きく出す(VBA `frmWarehouseOrder.lstOrders_Click`)。
  *
- * 発注コードは打ち写す値で、8桁前後を目で読んで別のシステムへ入れ直す
- * ことになる(現場の指摘:「発注コード 自動コピーも効いていない」)。
- * 控えられたかどうかは必ず言う ── 黙って控えたつもりでいると、
- * 貼れなかったときに何が起きたのか分からない
+ * VBAは同じフォームの中に13個のラベルを並べて埋めていた。こちらは
+ * 一覧が14列の表で、同じ場所に置くと表が読めなくなるので開いて出す。
+ *
+ * **発注コードは押したときだけ控える**(VBA `evtHatchu_Click`)。
+ * あちらは青字・下線・枠付きのラベルに「クリックでコピー」と出して
+ * いた。開いただけで控えると、利用者が別に写していたものを黙って
+ * 消すことになる。
  */
-async function openOrder(row) {
+function openOrder(row) {
   el.orderTitle.textContent = row.values[copyColumn] || `管理番号 ${row.mgr_no}`;
   el.orderStatus.textContent = row.status;
   el.orderStatus.className = `st st--${row.status_kind}`;
-  el.orderFields.replaceChildren(...detailFields.map((f) => {
-    const box = document.createElement("div");
-    if (f.big) box.className = "big";
-    const dt = document.createElement("dt");
-    dt.textContent = f.label;
-    const dd = document.createElement("dd");
-    const value = row.values[f.key];
-    dd.textContent = (value === "" || value === null || value === undefined)
-      ? "---" : value;
-    box.append(dt, dd);
-    return box;
-  }));
-
-  const code = row.values[copyColumn];
+  el.orderFields.replaceChildren(
+    ...detailFields.map((f) => detailRow(row, f)));
+  // 前の行で出した「コピーしました」を持ち越さない(VBA も選択のたびに
+  // `lblCopyMsg` を空にしていた)
   el.orderCopied.textContent = "";
   el.orderModal.showModal();
-  if (!code) return;
+}
+
+function detailRow(row, field) {
+  const box = document.createElement("div");
+  if (field.big) box.className = "big";
+  const dt = document.createElement("dt");
+  dt.textContent = field.label;
+  const dd = document.createElement("dd");
+  const value = row.values[field.key];
+  const text = (value === "" || value === null || value === undefined)
+    ? "---" : String(value);
+  dd.textContent = text;
+
+  if (field.key === copyColumn && text !== "---") {
+    // **押せることが見て分かる形にする**(VBA は青字・下線・枠付き)
+    dd.className = "copyable";
+    dd.tabIndex = 0;
+    dd.role = "button";
+    dd.title = "クリックでコピー";
+    const copy = () => copyCode(text);
+    dd.addEventListener("click", copy);
+    dd.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      copy();
+    });
+  }
+  box.append(dt, dd);
+  return box;
+}
+
+/** 発注コードを控える。**控えられたかどうかは必ず言う。** */
+async function copyCode(text) {
   try {
-    await navigator.clipboard.writeText(String(code));
-    el.orderCopied.textContent = `${copyColumn} ${code} を控えました(貼り付けできます)`;
+    await navigator.clipboard.writeText(text);
+    el.orderCopied.textContent = "コピーしました";
+    el.orderCopied.className = "why ok";
   } catch {
     // 権限やブラウザの都合で控えられないことがある。**黙らない**
     el.orderCopied.textContent =
-      `${copyColumn} を自動で控えられませんでした。上の値を選んで写してください。`;
+      "コピーできませんでした。値を選んで写してください。";
+    el.orderCopied.className = "why";
   }
 }
 

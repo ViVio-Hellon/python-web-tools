@@ -142,3 +142,12 @@
   font-size: var(--fs-xl); font-weight: 700; letter-spacing: .02em;
 }
 .modal--order .why { margin: 10px 0 0; }
+.modal--order .why.ok { color: var(--state-ok); font-weight: 700; }
+/* 押すと控えられる値。**押せることが見て分かる形に**
+   (VBA は青字・下線・枠付きで「クリックでコピー」と出していた) */
+.fields--order dd.copyable {
+  cursor: pointer; text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.fields--order dd.copyable:hover,
+.fields--order dd.copyable:focus-visible { color: var(--accent); }
