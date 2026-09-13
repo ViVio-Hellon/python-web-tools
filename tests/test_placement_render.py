@@ -567,6 +567,7 @@ class 入らない文字は凡例に回す(unittest.TestCase):
     """
 
     def fill(self, thickness: int, base_w: int = 812, base_l: int = 2302):
+        """丈補填の帯を1枚だけ置いた図を作る。"""
         board = PlacedBoardModel(
             width=base_w, length=thickness, x=2000, y=0,
             board_category="上用", original_width=base_w,
@@ -592,6 +593,45 @@ class 入らない文字は凡例に回す(unittest.TestCase):
         """凡例は色で引く。板と違う色を出したら引けない。"""
         plan = self.fill(100)
         self.assertEqual(plan.legend[0][1], plan.boards[0].fill)
+
+    # -- 色の案内 ----------------------------------------------------
+    def test_厚みで色が決まる補填は必ず凡例に出る(self) -> None:
+        """**色だけ出して意味を言わない状態を作らない。**
+
+        30/50/100 は「何ミリの補填か」を色で言っている。以前は「文字が
+        入らなかったもの」だけを凡例に出していたので、帯が太くて文字が
+        入る図では、色は付いているのに凡例から消えていた(現場の指摘:
+        「補填用ボードの30,50,100が出るときと出ないときがある(色での
+        案内)」)。
+        """
+        for thickness in (30, 50, 100):
+            with self.subTest(thickness=thickness):
+                plan = self.fill(thickness, base_w=420, base_l=985)
+                self.assertEqual([t for t, _c in plan.legend], [thickness])
+
+    def test_凡例の色は図に出ている色(self) -> None:
+        for thickness in (30, 50, 100):
+            with self.subTest(thickness=thickness):
+                plan = self.fill(thickness, base_w=420, base_l=985)
+                self.assertEqual(plan.legend[0][1], plan.boards[0].fill)
+
+    def test_端数の厚みは色の案内に出さない(self) -> None:
+        """30/50/100 以外は補填の地色で、**色が種類を指していない。**
+
+        文字が入る大きさで試す(入らなければ、そちらの規則で凡例に回る
+        ── それは色の案内ではなく「名乗る手段が無いから」)。
+        """
+        plan = self.fill(300, base_w=420, base_l=985)
+        self.assertTrue(plan.boards[0].caption)
+        self.assertEqual(plan.legend, [])
+
+    def test_主ボードは色の案内に出さない(self) -> None:
+        """細くない主ボードの色は上用/下用の区別で、厚みではない。"""
+        board = PlacedBoardModel(
+            width=50, length=985, x=0, y=0, board_category="上用",
+            original_width=50, original_length=985, is_fill_board=False)
+        plan = render.build_render_plan([board], "上用", 420, 985, 980, 460)
+        self.assertEqual(plan.legend, [])
 
     # -- 入るかどうかの見積もり --------------------------------------
     def test_全角と半角を分けて数える(self) -> None:

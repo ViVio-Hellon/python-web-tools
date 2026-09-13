@@ -458,6 +458,13 @@ def board_color(category: str) -> str:
     return COLOR_UPPER if category == CATEGORY_UPPER else COLOR_LOWER
 
 
+# 厚みで色が決まっている補填の3種。**この色が図に出たら、凡例も出す。**
+# 30/50/100 は「何ミリの補填か」を色で言っているので、色だけ出して
+# 意味を言わないと読めない(現場の指摘:「補填用ボードの30,50,100が
+# 出るときと出ないときがある(色での案内)」)
+FIXED_THIN_SIDES = (30, 50, 100)
+
+
 def fill_board_color(thin_side: int) -> str:
     """補填ボードの塗り。**厚みで決める(30/50/100)。**
 
@@ -675,14 +682,18 @@ def build_render_plan(
             caption_cy=(py + keep_bottom) / 2 if keep_bottom < py + screen_h else None,
         ))
 
-        # **文字を出さなかったものは、必ず凡例に出す。**
-        # 以前は凡例の条件(細さ)だけで決めていたので、「文字は入らない
-        # が凡例には載らない」中途半端な太さのボードが、何も名乗らずに
-        # 図に出ていた
-        if thin and thin_side not in legend_seen:
-            legend_seen[thin_side] = (fill_board_color(thin_side)
-                                      if board.is_fill_board
-                                      else thin_board_color(thin_side, screen_h))
+        # 凡例に出すのは次の2つ。どちらも**色だけ出して意味を言わない**
+        # 状態を作らないため。
+        #
+        #   1. 文字を出さなかったもの ── ほかに名乗る手段が無い
+        #   2. 厚みで色が決まっている補填(30/50/100)── 文字が入っても、
+        #      その色が何ミリを指すのかは凡例にしか書いていない。
+        #      以前は 1 だけを見ていたので、同じ100の補填が、帯が太くて
+        #      文字が入る図では凡例から消えていた
+        show_in_legend = thin or (board.is_fill_board
+                                  and thin_side in FIXED_THIN_SIDES)
+        if show_in_legend and thin_side not in legend_seen:
+            legend_seen[thin_side] = fill  # 図に出ている色をそのまま出す
 
         # 補填ボードはカットが無ければカット表示を出さない(VBA踏襲)
         if board.is_fill_board and not cut.cut_length and not cut.cut_width:
