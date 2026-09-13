@@ -2592,5 +2592,79 @@ class ReasonTests(unittest.TestCase):
         self.assertEqual(result.reason, "")
 
 
+class ManualAddPlacementTests(SelectionWebTestCase):
+    """**手で追加したのに何も起きない、をやめる。**
+
+    現場の指摘:「手動でボードを選択して上用へ追加 下用へ追加 とあるのに
+    追加しても配置すらしない この仕様であればこのボタンはいらないのでは」。
+
+    置けない寸法を足せば置けないのは当たり前だが、**そう言っていなかった**
+    のが問題だった。選定ログにも画面にも何も出ず、押した人からはボタンが
+    壊れているようにしか見えない。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # 手動追加は**候補一覧にある寸法しか受け付けない**ので、
+        # 試したい寸法を在庫に入れておく
+        for width, length in ((1250, 1250), (450, 1520), (540, 900)):
+            self.conn.execute(
+                "INSERT INTO BoardMaster (ボード幅, ボード丈, ボードタイプ)"
+                " VALUES (?, ?, 'ハードボード')", (width, length))
+        self.conn.commit()
+        self.post("/api/selection/pallet/apply",
+                  {"width": "550", "length": "985"})
+        self.post("/api/selection/product/apply",
+                  {"width": "482", "length": "967"})
+
+    def add(self, side: str, width: int, length: int):
+        return self.post("/api/selection/boards/add",
+                         {"category": side, "width": str(width),
+                          "length": str(length), "count": "1"})
+
+    def place(self):
+        return self.client.post("/api/selection/boards/place", json={},
+                                headers=self.auth())
+
+    def notes_of(self, res) -> str:
+        body = res.get_json()
+        notes = body.get("notes") or (body.get("error") or {}).get("notes") or []
+        return " / ".join(notes)
+
+    def test_置けない寸法を足したら理由が返る(self) -> None:
+        """現場のログにあった 450x1520(パレット丈985)。"""
+        self.add("lower", 450, 1520)
+        text = self.notes_of(self.place())
+        self.assertIn("450x1520", text)
+        self.assertIn("丈がパレット丈", text)
+
+    def test_1枚も置けなければ成功にしない(self) -> None:
+        """「配置しました(0枚)」は、押した人には成功に見える。"""
+        self.add("lower", 1250, 1250)
+        self.assertEqual(self.place().status_code, 422)
+
+    def test_置けたものがあれば成功のまま(self) -> None:
+        """置けなかった分を言うために、置けた分まで失敗にはしない。
+
+        どう置いても入らない 1250x1250 と、置ける 540x900 を混ぜる。
+        (450x1520 は隣に板があるとスナップ探索で置けてしまうので、
+         ここでは使わない ── 置けるものを「置けない」と言わせない)
+        """
+        self.add("lower", 540, 900)
+        self.add("lower", 1250, 1250)
+        res = self.place()
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("1250x1250", self.notes_of(res))
+
+    def test_選定ログにも残る(self) -> None:
+        """あとから追えるようにする。画面の通知は消える。"""
+        self.add("lower", 450, 1520)
+        self.place()
+        text = "\n".join(e.text for e in self.session().presenter.user_log.entries)
+        self.assertIn("置けませんでした", text)
+        self.assertIn("450x1520", text)
+
+
+
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()

@@ -1013,3 +1013,71 @@ class CenterBoardsInWidthTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class 置けなかった理由(unittest.TestCase):
+    """**断るなら理由を言う。**
+
+    置けないボードを黙って飛ばしていた。手で「上用へ追加」したのに図に
+    出てこず、選定ログにも何も残らないので、押した人には「このボタンは
+    効かない」としか見えない(現場の指摘:「手動でボードを選択して上用へ
+    追加 下用へ追加 とあるのに 追加しても配置すらしない この仕様であれば
+    このボタンはいらないのでは」)。
+
+    寸法のどこが足りないかで、次にすることが変わる。
+    """
+
+    def run_case(self, lower, upper, pal=(550, 985), prod=(482, 967)):
+        ctx = pl.auto_place_boards(
+            lower, upper, make_palette(*pal),
+            ProductSize(width=prod[0], length=prod[1]))
+        return ctx, [u.reason for u in ctx.unplaced]
+
+    def test_どちらの向きでも幅が入らない(self) -> None:
+        """現場のログにあった 1250x1250(パレット550 / 製品482)。"""
+        _ctx, why = self.run_case([SelectedBoard(1250, 1250, 1, "")], [])
+        self.assertEqual(len(why), 1)
+        self.assertIn("幅がパレット幅", why[0])
+        self.assertIn("1250mm", why[0])
+
+    def test_現場が知っている数で言う(self) -> None:
+        """**内部の数だけ出さない。**
+
+        下用の幅はパレット幅に はみ出し許容(2割)を乗せた値で判定する。
+        その660だけを出すと「うちのパレットは550なのに660とは何のことだ」
+        になる。元の数と、許容を入れた数の両方を出す。
+        """
+        _ctx, why = self.run_case([SelectedBoard(1250, 1250, 1, "")], [])
+        self.assertIn("550mm", why[0])
+        self.assertIn("660mm", why[0])
+
+    def test_許容が乗らないものは1つだけ言う(self) -> None:
+        """丈は許容が乗らない。**同じ数を2度書かない。**"""
+        _ctx, why = self.run_case([SelectedBoard(450, 1520, 1, "")], [])
+        self.assertIn("パレット丈985mm", why[0])
+        self.assertNotIn("はみ出し許容", why[0])
+
+    def test_幅は入るが丈が長い(self) -> None:
+        """同じログの 450x1520。幅は足りるので、丈だと言い分ける。"""
+        _ctx, why = self.run_case([SelectedBoard(450, 1520, 1, "")], [])
+        self.assertEqual(len(why), 1)
+        self.assertIn("丈がパレット丈", why[0])
+        self.assertIn("1520mm", why[0])
+
+    def test_上用は製品の寸法で言う(self) -> None:
+        """境界が違うので、言う相手も違う(上用=製品 / 下用=パレット)。"""
+        _ctx, why = self.run_case([], [SelectedBoard(1250, 1250, 1, "")])
+        self.assertIn("製品幅", why[0])
+
+    def test_置けたものは理由に出さない(self) -> None:
+        """**置けたのに文句だけ出る**、が一番たちが悪い。"""
+        ctx, why = self.run_case([SelectedBoard(540, 900, 1, "")], [])
+        self.assertTrue(ctx.placed)
+        self.assertEqual(why, [])
+
+    def test_場所が埋まっているときはそう言う(self) -> None:
+        """寸法は入るのに置けない、は理由が別。"""
+        ctx = make_ctx(pal_w=1000, pal_l=1000)
+        ctx.placed.append(placed(0, 0, 1000, 1000))
+        self.assertIn("置ける場所が残っていません",
+                      pl.explain_unplaced(ctx, 400, 400, LOWER))

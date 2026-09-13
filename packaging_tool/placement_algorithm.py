@@ -119,6 +119,22 @@ FILL_SORT_TOLERANCE = 5
 
 
 @dataclass
+class UnplacedBoard:
+    """置けなかったボード1件。**理由まで持つ。**"""
+
+    category: str
+    width: int
+    length: int
+    count: int
+    reason: str
+
+    def label(self) -> str:
+        return (f"{self.category} {self.width}x{self.length}"
+                f"{f' × {self.count}枚' if self.count > 1 else ''}"
+                f": {self.reason}")
+
+
+@dataclass
 class PlacementContext:
     """配置中の状態(VBA のモジュール変数 `placedBoards` 相当)。
 
@@ -147,6 +163,20 @@ class PlacementContext:
     # 在庫の実寸(長辺)が limit_w を超えるときだけ `place_length_fill_boards`
     # が記録する。キーは在庫の"幅x丈"、値は短辺(丈方向のサイズ)
     cut_info: dict[str, int] = field(default_factory=dict)
+    # **置けなかったボードと、その理由。**
+    #
+    # 以前は置けないボードを黙って飛ばしていた。手で「上用へ追加」した
+    # のに図に出てこず、選定ログにも何も残らないので、現場からは
+    # 「追加しても配置すらしない、このボタンはいらないのでは」に
+    # しか見えない(実際にそう言われた)。断るなら理由を言う
+    unplaced: list["UnplacedBoard"] = field(default_factory=list)
+
+    def note_unplaced(self, category: str, width: int, length: int,
+                      count: int) -> None:
+        """置けなかったことを、理由付きで覚える。"""
+        self.unplaced.append(UnplacedBoard(
+            category=category, width=width, length=length, count=count,
+            reason=explain_unplaced(self, width, length, category)))
 
     def limit_width(self, category: str) -> int:
         """カテゴリごとの幅方向の基準値(VBA `limitW`)。
@@ -347,6 +377,45 @@ def place_board_at(
 # ------------------------------------------------------------------
 # 位置探索
 # ------------------------------------------------------------------
+def explain_unplaced(ctx: "PlacementContext", width: int, length: int,
+                     category: str) -> str:
+    """なぜ置けなかったのかを、現場の言葉で1行にする。
+
+    **判定そのものはやり直さない。** 置く側(`try_place_*`)が駄目だと
+    決めたあとに、境界と突き合わせて「どこが足りないか」を言うだけ。
+    どちらの向きでも幅が入らないのか、幅は入るが丈が足りないのか、
+    寸法は足りているが場所が空いていないのか、で次にすることが違う。
+    """
+    # **現場が知っている数で言う。** 許容ぶんを足した内部の数だけ出すと、
+    # 「うちのパレットは550なのに660とは何のことだ」になる
+    if category == CATEGORY_UPPER:
+        base_w, limit_w = ctx.product.width, ctx.limit_width(CATEGORY_UPPER)
+        base_l, limit_l = ctx.product.length, ctx.product.length + X_OVERHANG_LIMIT
+        w_name, l_name = "製品幅", "製品丈"
+    else:
+        base_w, limit_w = ctx.palette.width, int(ctx.palette.width * LOWER_OVERHANG_Y)
+        base_l, limit_l = ctx.palette.length, ctx.palette.length
+        w_name, l_name = "パレット幅", "パレット丈"
+
+    def bound(base: int, limit: int) -> str:
+        """許容ぶんが乗っているなら、そこまで言う。"""
+        return (f"{base}mm" if limit == base
+                else f"{base}mm(はみ出し許容を入れて{limit}mm)")
+
+    # 幅方向に入る向き(短辺でも入らなければ、どう置いても入らない)
+    fits = [(w, l) for w, l in ((width, length), (length, width)) if w <= limit_w]
+    if not fits:
+        return (f"幅が{w_name}{bound(base_w, limit_w)}を超えています"
+                f"(どちらの向きでも {min(width, length)}mm)")
+
+    shortest = min(l for _w, l in fits)
+    if shortest > limit_l:
+        return (f"丈が{l_name}{bound(base_l, limit_l)}を超えています"
+                f"(入る向きで {shortest}mm)")
+
+    return "寸法は入りますが、置ける場所が残っていません(先のボードで埋まっています)"
+
+
 def try_place_single_orientation(
     ctx: PlacementContext, board: BoardModel, rotate: bool, min_waste: float,
     y_start: int = 0,
@@ -1034,6 +1103,7 @@ def place_boards_from_list(
 
             state = RotationState(first_placed=False, first_rotation=rot)
             is_l_fill = False
+            put = 0                       # この行で実際に置けた枚数
 
             for _ in range(b.count):
                 if tag == TAG_Y_STACK:
@@ -1075,6 +1145,14 @@ def place_boards_from_list(
 
                 if not placed_ok:
                     break
+                put += 1
+
+            # **1枚も置けなかったら、そう言う。** 黙って飛ばすと、手で
+            # 追加した人には「押しても何も起きない」としか見えない
+            if put == 0:
+                ctx.note_unplaced(category, b.width, b.length, b.count)
+                log.debug("  %s%s: 置けませんでした ── %s", category, model.id,
+                          ctx.unplaced[-1].reason)
 
             if pass_num == 1 and tag != TAG_Y_STACK:
                 if not is_l_fill:

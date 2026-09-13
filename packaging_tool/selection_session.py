@@ -711,8 +711,25 @@ class SelectionSession:
         placed = self.placement.placed
         log.info("配置完了: %s枚", len(placed))
         _log_placed(ulog, placed)
+
+        # **置けなかったものは黙って飛ばさない。**
+        # 手で「上用へ追加」したのに図に出てこず、ログにも何も残らないと、
+        # 押した人には「このボタンは効かない」としか見えない
+        # (現場の指摘:「追加しても配置すらしない」)
+        notes = []
+        for miss in self.placement.unplaced:
+            ulog.log(f"  置けませんでした: {miss.label()}", emphasis=True)
+            log.info("配置できず: %s", miss.label())
+            notes.append(miss.label())
+
         ulog.log(f"ボード配置 完了: {len(placed)}枚", emphasis=True)
-        return BoardOpResult(True, f"ボードを配置しました({len(placed)}枚)")
+        if notes and not placed:
+            # 1枚も置けていないなら、それは成功ではない
+            return BoardOpResult(
+                False, "ボードを配置できませんでした。",
+                REFUSE_NOT_FOUND, notes=notes)
+        return BoardOpResult(True, f"ボードを配置しました({len(placed)}枚)",
+                             notes=notes)
 
     # ------------------------------------------------------------------
     # 候補変更(敷き詰め方式) ── 現行の選定・配置には触らない
