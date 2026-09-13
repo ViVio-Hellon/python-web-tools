@@ -370,6 +370,13 @@ class SelectionSession:
 
         setattr(self, name, not getattr(self, name))
         now = bool(getattr(self, name))
+        # 「EXまで表示」と「EXオンリー」は同時に立たない(VBA `chkShowAll_Click`
+        # / `chkExOnly_Click`)。絞り込みは `ex_only` を先に見るので、
+        # 両方ONだと「EXまで表示」は**押せるのに何も起きない**。
+        # 効いていない印を画面に残さない
+        if now and name in ("show_all", "ex_only"):
+            other = "ex_only" if name == "show_all" else "show_all"
+            setattr(self, other, False)
         if name == "two_stack":
             # 2山積はパレット一覧の当たり方そのものを変える
             # (`list_pallets_for_product` が片側2倍の寸法も見る)。
@@ -1112,11 +1119,25 @@ class SelectionSession:
                 if length]
 
     def add_angle(self, length: int) -> BoardOpResult:
-        """アングル追加(VBA `btnAngleAdd_Click`)。候補にある丈だけ受け付ける。"""
+        """アングル追加(VBA `btnAngleAdd_Click`)。候補にある丈だけ受け付ける。
+
+        **本数の上限は自動選定と同じ**(`angle_service.max_pieces`)。
+        手で足すときだけ無制限だと、自動では出せない本数の選定結果が
+        でき上がり、あとから「なぜこうなったか」を説明できない。
+        """
         if length not in self.angle_candidates():
             return BoardOpResult(
                 False, f"アングル丈 {length} は候補一覧にありません。一覧から選んでください。",
                 REFUSE_NOT_LISTED)
+        limit = angle_service.max_pieces(self.product.length)
+        if len(self.selected_angles) >= limit:
+            # 上限そのものが製品丈で変わるので、いまの丈も添える
+            return BoardOpResult(
+                False,
+                f"アングルは最大{limit}本までです"
+                f"(製品丈 {self.product.length}mm のとき)。"
+                "外してから足してください。",
+                REFUSE_BAD_INPUT)
         self.selected_angles.append(length)
         # 手動追加はカット前提の情報を持たない(tkinter版 `do_add_angle`)
         self.angle_need_cut = False

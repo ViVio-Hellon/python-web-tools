@@ -168,6 +168,29 @@ class ListTests(SelectionWebTestCase):
         state = self.post("/api/selection/toggle/ex_only")
         self.assertIn("EX受注", state["message"])
 
+    def test_EXの2つは同時に立たない(self) -> None:
+        """絞り込みは `ex_only` を先に見るので、両方ONだと
+        「EXまで表示」は**押せるのに何も起きない**。効いていない印を
+        画面に残さない(VBA `chkShowAll_Click` / `chkExOnly_Click`)。"""
+        state = self.post("/api/selection/toggle/show_all")
+        self.assertTrue(state["show_all"])
+
+        state = self.post("/api/selection/toggle/ex_only")
+        self.assertTrue(state["ex_only"])
+        self.assertFalse(state["show_all"])
+
+        state = self.post("/api/selection/toggle/show_all")
+        self.assertTrue(state["show_all"])
+        self.assertFalse(state["ex_only"])
+
+    def test_消すほうは相手に触らない(self) -> None:
+        """OFFにするのは片方だけ。**両方OFF**にできなくなると、
+        EXを含まない既定の一覧に戻れない。"""
+        self.post("/api/selection/toggle/show_all")
+        state = self.post("/api/selection/toggle/show_all")
+        self.assertFalse(state["show_all"])
+        self.assertFalse(state["ex_only"])
+
     def test_知らない切り替えは400(self) -> None:
         self.post("/api/selection/toggle/nonsense", expect=400)
 
@@ -1450,6 +1473,38 @@ class AngleTests(BoardTestCase):
         angles = self.angles(self.post("/api/selection/angles/add",
                                        {"length": 1800}))
         self.assertEqual(angles["selected"], [1800])
+
+    def test_本数の上限は手動でも効く(self) -> None:
+        """**自動選定と同じ上限。** 手で足すときだけ無制限だと、
+        自動では出せない本数の選定結果ができ上がる。
+        製品丈 5000未満は3本まで(VBA `btnAngleAdd_Click`)。"""
+        for _ in range(3):
+            self.post("/api/selection/angles/add", {"length": 1800})
+        body = self.post("/api/selection/angles/add", {"length": 900},
+                         expect=400)
+        self.assertIn("最大3本", body["error"]["message"])
+        self.assertEqual(self.angles()["selected"], [1800, 1800, 1800])
+
+    def test_製品丈が5000以上なら6本まで(self) -> None:
+        """上限そのものが製品丈で変わる(`ANGLE_MULTI_THRESHOLD`)。"""
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1100", "length": "5200"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1000", "length": "5000"})
+        for _ in range(6):
+            self.post("/api/selection/angles/add", {"length": 1800})
+        body = self.post("/api/selection/angles/add", {"length": 900},
+                         expect=400)
+        self.assertIn("最大6本", body["error"]["message"])
+
+    def test_外せば足せる(self) -> None:
+        """上限は「もう足せない」であって「詰んだ」ではない。"""
+        for _ in range(3):
+            self.post("/api/selection/angles/add", {"length": 1800})
+        self.post("/api/selection/angles/remove", {"index": 0})
+        angles = self.angles(self.post("/api/selection/angles/add",
+                                       {"length": 900}))
+        self.assertEqual(angles["selected"], [1800, 1800, 900])
 
     def test_外せる(self) -> None:
         self.post("/api/selection/angles/add", {"length": 1800})

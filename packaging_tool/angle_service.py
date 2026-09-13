@@ -31,6 +31,16 @@ ANGLE_MULTI_THRESHOLD = 5000  # 3本以上切替閾値mm(Step3cの最大本数�
 ANGLE_MAX_PIECES_LONG = 6     # 製品丈が閾値以上のときの最大本数
 ANGLE_MAX_PIECES_SHORT = 3    # 製品丈が閾値未満のときの最大本数
 
+
+def max_pieces(product_len: int) -> int:
+    """アングルの最大本数(VBA `btnAngleAdd_Click` / `SelectAngles` Step3c)。
+
+    **自動選定と手動追加の両方がここを見る。** VBAは同じ上限を2か所に
+    別々に書いていて、片方だけ直せば静かに食い違う形だった。
+    """
+    return (ANGLE_MAX_PIECES_LONG if product_len >= ANGLE_MULTI_THRESHOLD
+            else ANGLE_MAX_PIECES_SHORT)
+
 # ── 疲労スコア計算(modFatigueCore) ──
 CUT_FAT_MULT = 233.0     # frmLayout・MaterialMasterFormも参照。変更時はここだけ
 FAT_MAX_DIST = 1000.0    # 距離スコア分母
@@ -276,7 +286,7 @@ def select_angles(
         )
 
     # ── Step3c: 3本以上 対称配置(奇数=両サイド先行+中央、偶数=均等) ──
-    max_pcs = ANGLE_MAX_PIECES_LONG if product_len >= ANGLE_MULTI_THRESHOLD else ANGLE_MAX_PIECES_SHORT
+    max_pcs = max_pieces(product_len)
     for n_pcs in range(3, max_pcs + 1):
         pc_target = product_len // n_pcs
         if min_len > 0 and pc_target < min_len:
