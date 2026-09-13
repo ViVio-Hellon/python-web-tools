@@ -151,3 +151,8 @@
 }
 .fields--order dd.copyable:hover,
 .fields--order dd.copyable:focus-visible { color: var(--accent); }
+
+/* 押す前に訊くダイアログ。**何を動かすのかを見せてから訊く** */
+.modal--ask { width: min(460px, 92vw); }
+.modal--ask .fields--order { grid-template-columns: 1fr; }
+.modal--ask .btn-row { margin-top: 14px; justify-content: flex-end; }

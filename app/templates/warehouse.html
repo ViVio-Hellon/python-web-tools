@@ -145,6 +145,23 @@
   </div>
 </div>
 
+{# 押す前に訊く(VBA `btnConfirm_Click` / `btnDelete_Click`)。
+   **何を動かすのかを見せてから訊く。** どちらも取り返しのつかない操作で、
+   一覧は14列を詰めて並べるので、押す行を1行ずれて選んでも気づけない #}
+<dialog class="modal modal--ask" id="askModal" aria-labelledby="askTitle">
+  <header class="modal__head">
+    <div class="modal__title"><h2 id="askTitle">—</h2></div>
+  </header>
+  <div class="pad">
+    <dl class="fields fields--order" id="askFields"></dl>
+    <p class="why" id="askWhy"></p>
+    <div class="btn-row">
+      <button class="btn" type="button" id="askNo">やめる</button>
+      <button class="btn btn--danger" type="button" id="askYes">する</button>
+    </div>
+  </div>
+</dialog>
+
 {# 1行を開いたときの中身。**一覧は詰めて並べるので小さい。**
    現場の指摘:「倉庫モードで一覧から選択時にVBAでは選択したものが別
    ウィンドウで大きく表示したはず」「発注コード 自動コピーも効いていない」。

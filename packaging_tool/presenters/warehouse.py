@@ -134,6 +134,28 @@ ORDER_DETAIL: tuple[tuple[str, str, bool], ...] = (
 # 控えると、利用者が別に写していたものを黙って消すことになる
 ORDER_COPY_COLUMN = "発注コード"
 
+# 押す前に見せる項目(VBA `btnConfirm_Click` / `btnDelete_Click`)。
+#
+# **何を動かすのかを見せてから訊く。** どちらも取り返しのつかない操作で、
+# 一覧は14列を詰めて並べるので、押す行を1行ずれて選んでも気づけない。
+# VBAはどちらの操作でも同じ3項目を出して Yes/No を訊いていた
+ORDER_ASK_FIELDS: tuple[str, ...] = ("品名", "発注コード", "登録日時")
+
+# 操作ごとの訊き方。**言葉もサーバが持つ**(設計書 §4)
+ORDER_ASK: dict[str, dict[str, str]] = {
+    "confirm": {
+        "title": "確認済みにしますか？",
+        "ok": "確認済みにする",
+        # 資材が受け取ったことの記録。現場はこれ以降取り消せなくなる
+        "why": "確認済みにすると、現場はこの発注を取り消せなくなります。",
+    },
+    "cancel": {
+        "title": "この発注を取り消しますか？",
+        "ok": "取り消す",
+        "why": "取り消した発注は元に戻せません。",
+    },
+}
+
 # 操作の列の幅。ボタンが3つ(Lotを開く・確認・取り消し)並んでも
 # 切れない幅。足りないと列幅を分け合って互いに重なる
 ORDER_ACTION_WIDTH = "20%"
@@ -355,6 +377,9 @@ def to_dict(view: WarehouseViewModel) -> dict[str, Any]:
         "detail_fields": [{"label": label, "key": key, "big": big}
                           for label, key, big in ORDER_DETAIL],
         "copy_column": ORDER_COPY_COLUMN,
+        # 押す前に見せる項目と言葉。**画面では決めない**
+        "ask_fields": list(ORDER_ASK_FIELDS),
+        "ask": ORDER_ASK,
         "rows": [row_dict(r) for r in view.rows],
         "keyword": view.keyword,
         "date_filter": view.date_filter,

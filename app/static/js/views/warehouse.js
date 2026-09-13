@@ -24,6 +24,9 @@ let isMaterial = false;
 // 1行を開いたときの見せ方。**サーバが決める**(`ORDER_DETAIL`)
 let detailFields = [];
 let copyColumn = "発注コード";
+// 押す前に見せる項目と言葉。**サーバが決める**(`ORDER_ASK*`)
+let askFields = [];
+let askTexts = {};
 
 function setStatus(node, message, kind) {
   if (!message) { node.hidden = true; return; }
@@ -39,6 +42,8 @@ function render(view) {
   columns = view.columns;
   if (view.detail_fields) detailFields = view.detail_fields;
   if (view.copy_column) copyColumn = view.copy_column;
+  if (view.ask_fields) askFields = view.ask_fields;
+  if (view.ask) askTexts = view.ask;
   el.rows.replaceChildren(...view.rows.map(rowElement));
   el.listNote.textContent = view.message || "";
   el.listNote.hidden = !view.message;
@@ -205,12 +210,14 @@ function actionsCell(row) {
 
   // できることはサーバが返す。ここで条件を組み立て直さない
   if (row.can_confirm) {
-    box.appendChild(button("確認済みにする", "btn--commit",
-                           () => act("/api/warehouse/confirm", row)));
+    box.appendChild(button("確認済みにする", "btn--commit", async () => {
+      if (await ask("confirm", row)) act("/api/warehouse/confirm", row);
+    }));
   }
   if (row.can_cancel) {
-    box.appendChild(button("取り消し", "btn--danger",
-                           () => act("/api/warehouse/cancel", row)));
+    box.appendChild(button("取り消し", "btn--danger", async () => {
+      if (await ask("cancel", row)) act("/api/warehouse/cancel", row);
+    }));
   }
   // Lotを開くだけなら「操作」ではないので、理由の文は出したままにする
   if (!box.querySelector("button")) {
@@ -302,6 +309,50 @@ async function peekLot(lotNo) {
   } catch (err) {
     toastError(err);
   }
+}
+
+/**
+ * 押す前に訊く(VBA `btnConfirm_Click` / `btnDelete_Click`)。
+ *
+ * **何を動かすのかを見せてから訊く。** 確認も取り消しも取り返しが
+ * つかず、一覧は14列を詰めて並べるので、押す行を1行ずれて選んでも
+ * 気づけない。VBAはどちらの操作でも 品名・発注コード・登録日時 を
+ * 出して Yes/No を訊いていた。
+ */
+function ask(kind, row) {
+  const text = askTexts[kind] || {};
+  return new Promise((resolve) => {
+    el.askTitle.textContent = text.title || "よろしいですか？";
+    el.askWhy.textContent = text.why || "";
+    el.askYes.textContent = text.ok || "する";
+    el.askFields.replaceChildren(...askFields.map((label) => {
+      const box = document.createElement("div");
+      box.className = "big";
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      const value = row.values[label];
+      dd.textContent = (value === "" || value === null || value === undefined)
+        ? "---" : value;
+      box.append(dt, dd);
+      return box;
+    }));
+
+    const done = (yes) => {
+      el.askYes.removeEventListener("click", onYes);
+      el.askNo.removeEventListener("click", onNo);
+      el.askModal.removeEventListener("close", onNo);
+      el.askModal.close();
+      resolve(yes);
+    };
+    const onYes = () => done(true);
+    const onNo = () => done(false);
+    el.askYes.addEventListener("click", onYes);
+    el.askNo.addEventListener("click", onNo);
+    // Esc や枠の外で閉じたときも「やめる」
+    el.askModal.addEventListener("close", onNo);
+    el.askModal.showModal();
+  });
 }
 
 async function act(path, row) {
@@ -427,7 +478,9 @@ export function start(state, material, lotPeekWhy) {
   // ロットの詳細を使えるようにする。**資材展開は渡さない** ── ここは
   // 確かめる場所なので、ボタンはテンプレートにも出していない
   for (const id of ["orderModal", "orderTitle", "orderStatus",
-                    "orderFields", "orderClose", "orderCopied"]) {
+                    "orderFields", "orderClose", "orderCopied",
+                    "askModal", "askTitle", "askFields", "askWhy",
+                    "askYes", "askNo"]) {
     el[id] = document.getElementById(id);
   }
   el.orderClose.addEventListener("click", () => el.orderModal.close());

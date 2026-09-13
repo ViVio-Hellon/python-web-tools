@@ -871,6 +871,33 @@ class OrderDetailTests(WarehouseWebTestCase):
             "/api/warehouse/orders", headers=self.auth()).get_json()
         self.assertEqual(body["copy_column"], "発注コード")
 
+    def test_押す前に訊く(self) -> None:
+        """**何を動かすのかを見せてから訊く**(VBA `btnConfirm_Click` /
+        `btnDelete_Click`)。
+
+        どちらも取り返しがつかず、一覧は14列を詰めて並べるので、押す行を
+        1行ずれて選んでも気づけない。VBAはどちらでも 品名・発注コード・
+        登録日時 を出して Yes/No を訊いていた。
+        """
+        body = self.clients["material"].get(
+            "/api/warehouse/orders", headers=self.auth()).get_json()
+        self.assertEqual(body["ask_fields"], ["品名", "発注コード", "登録日時"])
+        for kind in ("confirm", "cancel"):
+            with self.subTest(kind=kind):
+                text = body["ask"][kind]
+                self.assertTrue(text["title"] and text["ok"] and text["why"])
+
+    def test_訊かずに動かさない(self) -> None:
+        """画面の側でも、訊いてから投げていること。"""
+        js = (Path(__file__).resolve().parent.parent
+              / "app/static/js/views/warehouse.js").read_text("utf-8")
+        for kind, path in (("confirm", "/api/warehouse/confirm"),
+                           ("cancel", "/api/warehouse/cancel")):
+            with self.subTest(kind=kind):
+                line = [l for l in js.splitlines() if path in l]
+                self.assertTrue(line, path)
+                self.assertTrue(all("await ask(" in l for l in line), line)
+
     def test_自動では控えない(self) -> None:
         """**開いただけでクリップボードを書き換えない。**
 
