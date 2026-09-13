@@ -61,12 +61,19 @@ class LayoutSession:
     dirty: bool = False
 
     # ------------------------------------------------------------------
-    def set_base_point(self, name: str) -> LayoutOpResult:
+    def set_base_point(self, name: str, conn: Any = None) -> LayoutOpResult:
         """拠点の切替。
 
         拠点は資材選択とも共有する設定(VBAのレジストリ1値に相当)なので、
         ここで保存すれば疲労度の計算もそろう。画面ごとに別の拠点を
         持たせると、同じロットで違う結果が出る。
+
+        **出したままの答えを置き去りにしない。** 距離も疲労度も拠点から
+        測るので、切り替えた時点で画面に出ている「最寄り」は前の拠点の
+        ものになる。VBAはここで「直前ラベル記憶がリセットされます」と
+        訊いていた(`lstPosition_Change`)。こちらは訊くのではなく、
+        **同じ条件で探し直す** ── 拠点を替えるのは、そこからの答えが
+        見たいからで、訊かれても答えは1つしかない。
         """
         if name not in self.plan.base_point_names:
             return LayoutOpResult(False, f"拠点 '{name}' は配置図にありません。",
@@ -75,6 +82,17 @@ class LayoutSession:
             return LayoutOpResult(False, "設定を保存できませんでした。",
                                   REFUSE_FAILED)
         log.info("拠点を切り替えました: %s", name)
+
+        if self.width_text or self.length_text:
+            if conn is not None:
+                # 探し直した結果(見つからなくても)がそのまま画面に載る。
+                # 拠点の切替そのものは成功しているので、断りにはしない
+                self.search(conn, self.kind, self.width_text, self.length_text)
+            else:
+                # 探し直せないなら、前の拠点の答えを**消す**。
+                # 残すと、新しい拠点の答えとして読まれる
+                self.result = ""
+                self.highlight.clear()
         return LayoutOpResult(True, f"拠点を {name} にしました")
 
     # --- 検索 -------------------------------------------------------
@@ -111,8 +129,16 @@ class LayoutSession:
         self.highlight.clear()
         self.result = ""
 
-        base = user_settings.get_position()
-        hits = svc.find_shelves_by_size(conn, width, length, base)
+        # **距離を測る原点が怪しいときは、先にそれを言う。**
+        # 拠点が配置図に無いと候補の距離が1件も測れず、結果としては
+        # 「置き場が登録されていません」になる ── 読んだ人はマスタの
+        # データラベルを直しに行くが、原因は拠点のほう
+        base_point = svc.current_base_point()
+        if not base_point.known:
+            self.result = base_point.note
+            return LayoutOpResult(False, self.result, REFUSE_NOT_FOUND)
+
+        hits = svc.find_shelves_by_size(conn, width, length, base_point.name)
         found = [h for h in hits if h.found]
 
         if not hits:
@@ -143,6 +169,10 @@ class LayoutSession:
         self.selected = found[0].nearest.shelf_name
         missing = [KIND_LABEL[h.kind] for h in hits if not h.found]
         tail = (f"  ※{' / '.join(missing)}は置き場が未登録" if missing else "")
+        # **どこから測った距離なのかを添える。** 拠点が違えば答えが全部
+        # 変わるのに、既定で当てているだけのときも数字は同じ顔で出る
+        if base_point.note:
+            tail += f"  ※{base_point.note}"
         self.result = "最寄り: " + "  ".join(parts) + tail
         return LayoutOpResult(True, self.result)
 
@@ -164,7 +194,13 @@ class LayoutSession:
                                   "先に資材選択でボードを決めてください。",
                                   REFUSE_NO_HANDOFF)
 
-        base = user_settings.get_position()
+        # 検索と同じく、原点が怪しいときは先にそれを言う
+        base_point = svc.current_base_point()
+        if not base_point.known:
+            self.result = base_point.note
+            return LayoutOpResult(False, self.result, REFUSE_NOT_FOUND)
+
+        base = base_point.name
         total = 0.0
         found = 0
         missing: list[str] = []
@@ -202,6 +238,9 @@ class LayoutSession:
         self.kind = KIND_BOARD
         self.selected = ""
         note = f"({len(missing)}件は置き場が未登録: {', '.join(missing)})" if missing else ""
+        # 合計疲労度も拠点からの距離で決まる。どこから測ったかを添える
+        if base_point.note:
+            note += f"  ※{base_point.note}"
         self.result = (f"選定した資材 {found}件 / 置き場 {len(self.highlight)}か所  "
                        f"合計疲労度={total:.1f}  {note}").strip()
         return LayoutOpResult(True, self.result)

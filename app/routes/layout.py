@@ -107,7 +107,10 @@ def base_point():
     """拠点の切替。**資材選択と共有する設定**なので疲労度にも効く。"""
     body = request.get_json(silent=True) or {}
     session = _session()
-    return _apply(session, session.set_base_point(str(body.get("name", ""))))
+    # 出したままの「最寄り」は前の拠点のもの。同じ条件で探し直せるよう
+    # 接続を渡す(`set_base_point` の説明を参照)
+    return _apply(session, session.set_base_point(
+        str(body.get("name", "")), get_db()))
 
 
 # ------------------------------------------------------------------

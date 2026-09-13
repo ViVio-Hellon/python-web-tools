@@ -561,7 +561,14 @@ class SelectionSession:
                 notes.append("疲労度マップを取得できなかったため通常選定で実行しました。")
                 ulog.log("  ※疲労度マップを取得できず、通常選定に切り替えました")
             else:
-                ulog.log(f"  疲労度マップ: 拠点 {user_settings.get_position() or '(未設定)'}")
+                # **どこから測ったかを残す。** 疲労度優先の点はすべて
+                # 拠点からの距離で決まるので、あとから「なぜこの選定に
+                # なったか」を追うときに拠点が要る。既定を当てている
+                # だけのときはそう書く(`get_position` は空を返さないので、
+                # 名前だけ出すと人が選んだように読める)
+                base_point = location_service.current_base_point()
+                ulog.log(f"  疲労度マップ: 拠点 {base_point.name}"
+                         + ("" if base_point.chosen else "(未登録のため既定)"))
 
         try:
             # **却下と補正の理由をそのまま流す**(`user_log.bridge_from`)。

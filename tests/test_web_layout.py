@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -241,6 +242,54 @@ class SearchTests(LayoutWebTestCase):
         self.assertIn("lblItem999", self.get()["unplaced"])
 
 
+class BasePointNoteTests(LayoutWebTestCase):
+    """**どこから測った距離なのかを言う。**
+
+    距離も疲労度も拠点を原点に測るので、拠点が違えば答えが全部変わる。
+    VBAは拠点が選ばれていないとき「拠点未選択 → クリック位置で計算」と
+    その場に書いていた(`FindNearestSameSize` / `CalcDistance`)。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        name = floor_plan.load().item_names[0]
+        insert_board(self.conn, width=750, length=1130, label=name)
+
+    def search(self, **kw):
+        return self.post("/api/layout/search",
+                         {"width": 750, "length": 1130}, **kw)
+
+    def test_未登録のまま探したら既定で測っていると言う(self) -> None:
+        from packaging_tool import user_settings
+        with mock.patch.object(user_settings, "is_position_set",
+                               return_value=False):
+            state = self.search()
+        self.assertTrue(state["found"])
+        self.assertIn("拠点が未登録", state["result"])
+        self.assertIn(user_settings.get_position(), state["result"])
+
+    def test_選んであれば何も言わない(self) -> None:
+        from packaging_tool import user_settings
+        with mock.patch.object(user_settings, "is_position_set",
+                               return_value=True):
+            state = self.search()
+        self.assertNotIn("拠点が未登録", state["result"])
+
+    def test_図に無い拠点なら置き場のせいにしない(self) -> None:
+        """**原因の取り違えを防ぐ。**
+
+        拠点が配置図に無いと候補の距離が1件も測れず、結果としては
+        「置き場が登録されていません」になる。読んだ人はマスタの
+        データラベルを直しに行くが、直すべきは拠点のほう。
+        """
+        from packaging_tool import user_settings
+        with mock.patch.object(user_settings, "get_position",
+                               return_value="もう無い拠点"):
+            body = self.search(expect=422)
+        self.assertIn("配置図にありません", body["message"])
+        self.assertNotIn("資材課の人に伝えてください", body["message"])
+
+
 class BasePointTests(LayoutWebTestCase):
     def test_拠点は共有の設定(self) -> None:
         """画面ごとに別の拠点を持たせると、同じロットで違う結果が出る。"""
@@ -254,6 +303,43 @@ class BasePointTests(LayoutWebTestCase):
 
     def test_図に無い拠点は選べない(self) -> None:
         self.post("/api/layout/base-point", {"name": "どこか"}, expect=400)
+
+    def test_拠点を替えたら探し直す(self) -> None:
+        """**前の拠点の答えを置き去りにしない。**
+
+        距離も疲労度も拠点から測るので、切り替えた時点で画面に出ている
+        「最寄り」は前の拠点のもの。VBAはここで「直前ラベル記憶が
+        リセットされます」と訊いていた(`lstPosition_Change`)。
+        こちらは訊かずに同じ条件で探し直す ── 拠点を替えるのは、
+        そこからの答えが見たいからで、訊かれても答えは1つしかない。
+        """
+        from packaging_tool import user_settings
+        name = floor_plan.load().item_names[0]
+        insert_board(self.conn, width=750, length=1130, label=name)
+        first = self.post("/api/layout/search", {"width": 750, "length": 1130})
+        self.assertTrue(first["found"])
+
+        target = [n for n in self.get()["base_points"]
+                  if n != user_settings.get_position()][0]
+        state = self.post("/api/layout/base-point", {"name": target})
+
+        # 答えは残っている(消して空白にするのではなく、出し直す)
+        self.assertIn("最寄り", state["result"])
+        self.assertTrue(
+            [s for s in state["shelves"] if s["state"] == presenter.STATE_HIT])
+        # **新しい拠点から測り直した距離になっている。** 前の拠点の
+        # 数字が残っていれば、ここで食い違う
+        from packaging_tool import location_service
+        after = location_service.find_nearest_shelf_for_board(
+            self.conn, 750, 1130, target)
+        self.assertIn(f"距離{after.distance:.0f}", state["result"])
+
+    def test_探していなければ何も出さない(self) -> None:
+        from packaging_tool import user_settings
+        target = [n for n in self.get()["base_points"]
+                  if n != user_settings.get_position()][0]
+        state = self.post("/api/layout/base-point", {"name": target})
+        self.assertEqual(state["result"], "")
 
 
 class EditTests(LayoutWebTestCase):

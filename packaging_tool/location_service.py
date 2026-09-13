@@ -21,10 +21,45 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from . import angle_service, db, floor_plan
+from . import angle_service, db, floor_plan, user_settings
 from .logging_utils import get_logger
 
 log = get_logger("location_service")
+
+
+@dataclass
+class BasePoint:
+    """いま距離を測っている拠点と、**それが誰の決めた拠点か**。
+
+    距離も疲労度もここを原点に測るので、拠点が違えば答えが全部変わる。
+    VBAは拠点が選ばれていないとき「拠点未選択 → クリック位置で計算」と
+    その場に書いていた(`FindNearestSameSize` / `CalcDistance`)。
+    こちらは押した場所という概念が無いかわりに既定の拠点で測るので、
+    **測っていること自体は同じでも、誰が決めた拠点なのかを言う**。
+    """
+
+    name: str
+    chosen: bool   # 人が設定画面で選んだか(Falseなら既定を当てている)
+    known: bool    # その名前が配置図にあるか
+
+    @property
+    def note(self) -> str:
+        """画面に添える一言。**言うことが無ければ空。**"""
+        if not self.known:
+            return (f"拠点「{self.name}」が配置図にありません。"
+                    "設定画面で選び直してください(距離を測る原点です)。")
+        if not self.chosen:
+            return (f"拠点が未登録なので {self.name} から測っています。"
+                    "設定画面で選ぶと、自分の持ち場からの距離になります。")
+        return ""
+
+
+def current_base_point() -> BasePoint:
+    """設定の拠点と配置図を突き合わせる。"""
+    name = user_settings.get_position()
+    return BasePoint(name=name,
+                     chosen=user_settings.is_position_set(),
+                     known=name in floor_plan.load().base_point_names)
 
 
 def _split_labels(data_label: Optional[str]) -> list[str]:
