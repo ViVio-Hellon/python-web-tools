@@ -488,6 +488,21 @@ class RoleSeparationTests(WarehouseWebTestCase):
             "/api/warehouse/cancel", json={"mgr_no": mgr_no}, headers=self.auth())
         self.assertEqual(res.status_code, 409, res.get_json())
 
+    def test_画面の説明が取り消しの実装と食い違わない(self) -> None:
+        """**押せるボタンの真横で「できない」と言わない。**
+
+        一時は「取り消しは倉庫側の操作です。倉庫へ連絡してください」と
+        書いてあったが、実装は現場から取り消せる(倉庫の確認前まで)。
+        読んだ人は、目の前の取り消しボタンを使わずに電話することになる。
+        """
+        html = self.clients["field"].get(
+            "/warehouse", headers=self.auth()).get_data(as_text=True)
+        self.assertNotIn("取り消しは倉庫側の操作", html)
+        self.assertIn("取り消せます", html)
+        # **いつまで取り消せるか**も一緒に書く。条件の無い言い切りは、
+        # 確認済みで断られたときに「壊れた」に見える
+        self.assertIn("倉庫が確認する前", html)
+
     def test_発注を出せるのは現場だけ(self) -> None:
         """**出すのは現場の仕事。** 資材は受けて確認する側なので出さない。
 
