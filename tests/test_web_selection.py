@@ -512,6 +512,40 @@ class ModeFromLotTests(SelectionWebTestCase):
         self.assertTrue(state["ex_only_enabled"])
         self.assertEqual(state["banner"]["kind"], "ex")
 
+    def test_在庫マップはロットを引き直すと作り直す(self) -> None:
+        """**1日開けっぱなしでも朝の在庫のまま点が付き続けない。**
+
+        原文は資材選択のページに入るたびに捨てて、次に使うときに
+        作り直していた(`mpMain_Change`)。こちらは画面を行き来しても
+        同じセッションが残るので、ロットの引き直しを区切りにする。
+        """
+        self.post("/api/selection/toggle/stock_aware")
+        self.assertEqual(self.session().stock_map, {})
+
+        # かんばんの在庫が入れ替わった(取り込み直した、現物が動いた)
+        self.conn.execute(
+            "INSERT INTO 看板_大板小板 (資材, サイズ, 欲, 不)"
+            " VALUES ('ハードボード', '500×1000', '〇', '')")
+        self.conn.commit()
+        # 引き直すまでは古いまま(毎回6表を走査しないための割り切り)
+        self.assertEqual(self.session().stock_map, {})
+
+        self.search()
+        self.assertTrue(self.session().stock_map)
+        # 在庫考慮そのものは外れない ── マップの有無がON/OFFなので、
+        # 捨てるだけだと黙って効かなくなる
+        self.assertTrue(self.get()["boards"]["stock_aware"])
+
+    def test_OFFのままなら作り直さない(self) -> None:
+        """押していない機能のために6表を走査しない。"""
+        self.conn.execute(
+            "INSERT INTO 看板_大板小板 (資材, サイズ, 欲, 不)"
+            " VALUES ('ハードボード', '500×1000', '〇', '')")
+        self.conn.commit()
+        self.search()
+        self.assertIsNone(self.session().stock_map)
+        self.assertFalse(self.get()["boards"]["stock_aware"])
+
     def test_EX受注はパレット未設定でも倉庫送信できる(self) -> None:
         """**EXの実データは別の職場から届き、そちらが優先される。**
 

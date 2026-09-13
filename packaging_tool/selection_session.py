@@ -396,7 +396,8 @@ class SelectionSession:
 
         ONにした時点でかんばん6表を読んでマップを作る(tkinter版と同じ)。
         毎回引き直さないのは、候補一覧を描くたびに6表を走査することに
-        なるため。取り込み直したあとは押し直すと最新になる。
+        なるため。**ロットを引き直すたびに作り直す**(`_refresh_stock_map`)
+        ので、押しっぱなしでも古い在庫のまま点が付き続けることはない。
         """
         if self.stock_map is None:
             self.stock_map = material_service.build_board_stock_map(
@@ -406,6 +407,24 @@ class SelectionSession:
             self.stock_map = None
             log.info("在庫考慮OFF")
         return self.stock_map is not None
+
+    def _refresh_stock_map(self) -> None:
+        """在庫マップを引き直す(VBA `mpMain_Change` の `Set mStockMap = Nothing`)。
+
+        **ONのときだけ作り直す。** マップの有無がそのままON/OFFなので、
+        捨てるだけだと在庫考慮が黙って外れてしまう。
+
+        原文は資材選択のページに入るたびに捨てて、次に使うときに
+        作り直していた。こちらは画面を行き来しても同じセッションが
+        残り続ける ── 1日開けっぱなしにすると、朝の在庫のまま点が
+        付き続ける。ロットを引き直す所が、原文のページ切り替えに
+        いちばん近い区切りになる。
+        """
+        if self.stock_map is None:
+            return
+        self.stock_map = material_service.build_board_stock_map(
+            self.presenter.conn)
+        log.info("在庫マップを引き直しました: %s件", len(self.stock_map))
 
     # ------------------------------------------------------------------
     # 1P0113 裸梱包
@@ -1414,6 +1433,10 @@ class SelectionSession:
         # 寸法と発注コードのまま新しいロット番号で倉庫送信まで通る
         if self._is_new_lot(result):
             self.clear_for_new_lot()
+        # 同じロットを引き直したときも作り直す。**引き直しは「ここから
+        # やり直す」の合図**で、そのときに古い在庫で点が付いていると、
+        # なぜ前と違う(あるいは同じ)結果なのかを説明できない
+        self._refresh_stock_map()
 
         types = self.board_types()
         outcome = self.presenter.apply_lot(
