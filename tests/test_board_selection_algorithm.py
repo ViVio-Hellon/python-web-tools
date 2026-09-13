@@ -930,6 +930,36 @@ class SelectProtecLowerBoardsTests(unittest.TestCase):
         self.assertEqual((boards[0].width, boards[0].length), (950, 2000))
         self.assertTrue(result.valid)
 
+    def test_細い板は主ボードにしない(self):
+        """VBA冒頭の `ab.width <= 100 Or ab.length <= 100` が抜けていた。
+
+        補填に使う30/50/100の帯は、寝かせれば幅の条件を満たしてしまう
+        (100x3000 を回すと有効幅3000)。主ボードに選ぶと丈方向が帯の
+        厚みぶんずつになり、何十枚も並べる解になる。他のPASSでは元から
+        外していたので、ここだけ抜けていた。
+        """
+        thin = [board(100, 3000), board(50, 3000)]
+        boards, result = alg.select_protec_lower_boards(
+            thin, self.product, make_palette(1000, 2000), is_1p1216=False)
+        self.assertEqual(boards, [])
+        self.assertFalse(result.valid)
+
+    def test_細い板があっても普通の板は選べる(self):
+        """外すのは細い板だけ。**選べるものまで道連れにしない。**"""
+        available = [board(100, 3000), board(950, 2000)]
+        boards, _result = alg.select_protec_lower_boards(
+            available, self.product, make_palette(1000, 2000), is_1p1216=False)
+        self.assertEqual([(b.width, b.length) for b in boards], [(950, 2000)])
+
+    def test_ちょうど100は外す(self):
+        """VBAは `<= 100`。101から使う。"""
+        for width, expect in ((100, []), (101, [(101, 3000)])):
+            with self.subTest(width=width):
+                boards, _r = alg.select_protec_lower_boards(
+                    [board(width, 3000)], ProductSize(width=3000, length=1800),
+                    make_palette(3100, 2000), is_1p1216=False)
+                self.assertEqual([(b.width, b.length) for b in boards], expect)
+
     def test_count_covers_product_length_by_stacking(self):
         """**枚数を決める基準は製品丈。** 端数が100mm以下なら切り捨てる。
 

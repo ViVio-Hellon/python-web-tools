@@ -1373,6 +1373,13 @@ def select_protec_lower_boards(
     best: Optional[ProtecCutResult] = None
     best_fits_pallet = False
     for board in available:
+        # **細い板は主ボードにしない**(VBA `SelectProtecLowerBoards` 冒頭の
+        # `ab.width <= 100 Or ab.length <= 100` )。補填に使う30/50/100の帯を
+        # 主ボードとして寝かせて使うと、丈方向が帯の厚みぶんずつになり、
+        # 何十枚も並べる解になる。他のPASSでは元から外していたが、
+        # ここだけ移植が抜けていた
+        if board.width <= FILL_SIZE_100 or board.length <= FILL_SIZE_100:
+            continue
         candidate = decide_protec_orientation(
             board.width, board.length, product.width, is_1p1216=is_1p1216)
         if not candidate.valid:
