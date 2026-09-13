@@ -776,8 +776,9 @@ class PatternRow:
 class BoardUsageRow:
     """選定ボードの使用実績1件(`board_usage.py`)。
 
-    配置図を印刷したときだけ積む値なので、置いてみただけの試しは
-    ここに出ない(VBAには無い機能。現場の要望で追加)。
+    「使用する」を押したときだけ積む値なので、置いてみただけの試しは
+    ここに出ない(VBAには無い機能。現場の要望で追加)。数える入口は
+    `selection_session.record_usage` 1つだけ。
     """
 
     width: int = 0

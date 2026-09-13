@@ -2014,6 +2014,58 @@ class AdminTests(BoardTestCase):
         self.sizes()
         self.post("/api/selection/pattern/load", {"id": 99999}, expect=422)
 
+    # -- 削除 (VBA `frmPatterns.btnDelete_Click`) ----------------------
+    def saved(self) -> int:
+        """保存済みの実績を1件作って、その番号を返す。"""
+        self.login()
+        self.sizes()
+        self.post("/api/selection/boards/auto-select")
+        self.post("/api/selection/boards/place")
+        self.post("/api/selection/pattern/save")
+        return self.admin()["patterns"][0]["id"]
+
+    def test_実績を削除できる(self) -> None:
+        """VBAにはあったが移植されていなかった(`delete_pattern_by_id` は
+        用意されていて、呼ぶ所が無かった)。"""
+        pattern_id = self.saved()
+        body = self.post("/api/selection/pattern/delete", {"id": pattern_id})
+        self.assertIn("削除しました", body["message"])
+        self.assertFalse(self.admin()["patterns"])
+
+    def test_認証しないと削除できない(self) -> None:
+        """**保存と同じ扱い。** 実績は端末をまたいで共有するもので、
+        消えたことに気づけるのは次に使おうとした人だけ。
+        """
+        pattern_id = self.saved()
+        self.session().admin = False
+        body = self.post("/api/selection/pattern/delete",
+                         {"id": pattern_id}, expect=403)
+        self.assertIn("管理者認証", body["message"])
+        # 消えていない
+        self.assertTrue(self.admin()["patterns"])
+
+    def test_無いパターンの削除は422(self) -> None:
+        self.login()
+        self.post("/api/selection/pattern/delete", {"id": 99999}, expect=422)
+
+    def test_番号が無ければ400(self) -> None:
+        self.login()
+        self.post("/api/selection/pattern/delete", {}, expect=400)
+
+    def test_削除は認証したときだけ画面に出す(self) -> None:
+        """押せないボタンを並べても操作が増えるだけ。保存と同じ条件。"""
+        from pathlib import Path
+        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
+              / "views" / "selection.js").read_text(encoding="utf-8")
+        head = js[js.index("admin.patterns.map"):]
+        body = head[:head.index("}));")]
+        self.assertIn("deletePattern", body)
+        # **`can_save` ではない。** あちらは「認証してある**かつ**配置して
+        # ある」で、消すのに配置は要らない(消したい実績は、たいてい今の
+        # 作業とは別物)
+        self.assertIn("admin.authenticated", body)
+        self.assertNotIn("admin.can_save", body)
+
 
 # ==================================================================
 # 1P0113 裸梱包 (Phase 6d)

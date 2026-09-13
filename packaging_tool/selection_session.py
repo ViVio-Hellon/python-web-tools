@@ -1386,6 +1386,29 @@ class SelectionSession:
         return pattern_service.get_pattern_list(
             self.presenter.conn, self.palette.width, self.palette.length)
 
+    def delete_pattern(self, pattern_id: int) -> BoardOpResult:
+        """実績パターンの削除(VBA `frmPatterns.btnDelete_Click`)。
+
+        **保存と同じで認証が要る。** 実績は端末をまたいで共有するもので、
+        消えたことに気づけるのは次に使おうとした人だけ ── 保存に認証が
+        要るなら、消すのにも要る。VBA側は消すほうに認証が無かったが、
+        保存側だけ守っても意味がない。
+
+        取り消せないので、訊くのは画面の役目(`ask` の窓)。ここは
+        「消えたかどうか」だけを返す。
+        """
+        if not self.admin:
+            return BoardOpResult(False, "管理者認証が必要です。", REFUSE_DENIED)
+        if not pattern_service.delete_pattern_by_id(
+                self.presenter.conn, pattern_id):
+            # すでに誰かが消したか、番号が違う。どちらも「もう無い」
+            return BoardOpResult(False, "そのパターンは見つかりませんでした。",
+                                 REFUSE_NOT_FOUND)
+        log.info("実績パターンを削除しました: No.%s", pattern_id)
+        self.presenter.user_log.log(
+            f"[実績パターン] No.{pattern_id} を削除しました", emphasis=True)
+        return BoardOpResult(True, f"実績パターン No.{pattern_id} を削除しました")
+
     def load_pattern(self, pattern_id: int) -> BoardOpResult:
         """実績パターンの読み込み(VBA `LoadSinglePattern`)。"""
         if not self.palette.is_set:

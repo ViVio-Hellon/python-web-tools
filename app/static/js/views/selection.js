@@ -440,6 +440,21 @@ function renderAdmin(admin) {
     button.textContent = "読込";
     button.dataset.pattern = p.id;
     cell.appendChild(button);
+    // 削除(VBA `frmPatterns.btnDelete_Click`)。**認証したときだけ出す**
+    // ── 押せないボタンを並べても操作が増えるだけ。
+    //
+    // 見るのは `can_save` ではなく `authenticated`。`can_save` は
+    // 「認証してある**かつ**配置してある」で、消すのに配置は要らない
+    // (消したい実績は、たいてい今の作業とは別物)
+    if (admin.authenticated) {
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "btn btn--danger rowdel";
+      del.textContent = "削除";
+      del.dataset.deletePattern = p.id;
+      del.dataset.label = `No.${p.id}  ${p.product}  ${p.boards}`;
+      cell.appendChild(del);
+    }
     tr.append(count, at, cell);
     return tr;
   }));
@@ -1052,6 +1067,22 @@ export function start(initial) {
     send("/api/selection/pattern/save"));
   el.patternRows.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-pattern]");
-    if (button) send("/api/selection/pattern/load", { id: button.dataset.pattern });
+    if (button) {
+      send("/api/selection/pattern/load", { id: button.dataset.pattern });
+      return;
+    }
+    // 削除は取り消せない。**何を消すのかを見せてから訊く**
+    // (VBA も 管理番号 を出して Yes/No、既定は「いいえ」だった)
+    const del = event.target.closest("button[data-delete-pattern]");
+    if (!del) return;
+    showAsk({
+      title: "この実績パターンを削除しますか？",
+      body: `${del.dataset.label}\n削除すると元に戻せません。`,
+      choices: [{ key: "cancel", label: "やめる" },
+                { key: "delete", label: "削除する", note: "元に戻せません" }],
+    }, (key) => {
+      if (key !== "delete") return;
+      send("/api/selection/pattern/delete", { id: del.dataset.deletePattern });
+    });
   });
 }

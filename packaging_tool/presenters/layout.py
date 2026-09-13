@@ -200,11 +200,20 @@ def _shelf(item: Any, categories: set, *, hit: bool,
 
 def _materials(conn: sqlite3.Connection,
                label: str) -> tuple[list[ShelfMaterialRow], str]:
-    """置き場の中身(VBA版に無い機能。押したら何があるか分かるように)。"""
+    """置き場の中身(VBA `OpenSizePopup` → `frmSizePopup`)。
+
+    原文は押した置き場のボード(幅/丈/タイプ)とアングル(丈)を別窓に
+    出していた。**アングルがある置き場ではボードの一覧を隠していた**
+    (`ShowAngleSection` の `mAngleOnly`)ので、両方置いてある場所では
+    ボードが見えなかった。こちらは両方出す。
+    """
     rows = svc.materials_at_label(conn, label)
     if not rows:
-        return [], (f"{label} に割り当てられている資材はありません。"
-                    f"マスタの「データラベル」列を確認してください。")
+        # **作業者の言葉で言う。** 「マスタの列を確認してください」は
+        # 作り手の言葉で、読んだ作業者は次に何をすればよいか分からない
+        # (現場の指摘:「ツール制作者よりのコメントすぎる」)
+        return [], (f"{label} に置いてある資材が登録されていません。"
+                    f"資材課の人に伝えてください(マスタの「データラベル」欄)。")
     items = [ShelfMaterialRow(
         category=m.category,
         size=(f"{m.width}×{m.length}" if m.width else f"丈 {m.length}"))

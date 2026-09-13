@@ -535,6 +535,21 @@ def load_pattern():
     return _apply(session, session.load_pattern(pattern_id))
 
 
+@bp.post("/api/selection/pattern/delete")
+def delete_pattern():
+    """実績パターンの削除(VBA `frmPatterns.btnDelete_Click`)。
+
+    **保存と同じで認証が要る**(断るのはセッション側)。取り消せない
+    操作なので、何を消すのかを見せて訊くのは画面の役目。
+    """
+    body = request.get_json(silent=True) or {}
+    session = _session()
+    pattern_id = _parse_int(body.get("id"))
+    if pattern_id is None:
+        return jsonify(_error("bad_id", "削除するパターンを選んでください。")), 400
+    return _apply(session, session.delete_pattern(pattern_id))
+
+
 # ------------------------------------------------------------------
 # 出す ── 帳票と倉庫送信
 # ------------------------------------------------------------------

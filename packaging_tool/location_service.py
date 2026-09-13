@@ -279,10 +279,14 @@ class ShelfMaterial:
 def materials_at_label(conn: sqlite3.Connection, label: str) -> list[ShelfMaterial]:
     """置き場ラベルに割り当てられている資材の一覧。
 
-    VBA版には無い機能(ユーザー要望: Board MAP上のラベルをクリックしたら
-    そこにある資材が分かるようにしてほしい)。BoardMaster/CornerboardMaster
-    の「データラベル」列に自分の名前が含まれる行を集めるだけで、
-    `find_nearest_shelf_for_*` と同じデータソースを使う。
+    VBA `OpenSizePopup` → `frmSizePopup.SetListData` に当たる。
+    BoardMaster/CornerboardMaster の「データラベル」列に自分の名前が
+    含まれる行を集めるだけで、`find_nearest_shelf_for_*` と同じデータ
+    ソースを使う。
+
+    **原文と違って、ボードとアングルを両方返す。** 原文はアングルの
+    ある置き場でボードの一覧を隠していた(`ShowAngleSection` の
+    `mAngleOnly`)ので、両方置いてある場所ではボードが見えなかった。
     """
     result: list[ShelfMaterial] = []
     rows = db.fetch_all(

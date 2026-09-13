@@ -242,6 +242,39 @@ class SearchTests(LayoutWebTestCase):
         self.assertIn("lblItem999", self.get()["unplaced"])
 
 
+class ShelfContentsTests(LayoutWebTestCase):
+    """置き場の中身(VBA `OpenSizePopup` → `frmSizePopup`)。"""
+
+    def test_ボードとアングルを両方出す(self) -> None:
+        """**原文はアングルのある置き場でボードを隠していた**
+        (`ShowAngleSection` の `mAngleOnly`)。両方置いてある場所では
+        ボードが見えず、取りに行ってから気づくことになる。
+        """
+        name = floor_plan.load().item_names[0]
+        insert_board(self.conn, width=750, length=1130, label=name)
+        self.conn.execute(
+            "INSERT INTO CornerboardMaster (アングル丈, データラベル)"
+            " VALUES (?, ?)", (1500, name))
+        self.conn.commit()
+
+        state = self.post("/api/layout/select", {"name": name})
+        kinds = {row["category"] for row in state["materials"]}
+        self.assertEqual(kinds, {"ボード", "アングル"})
+
+    def test_中身が無いときは作業者の言葉で言う(self) -> None:
+        """「マスタの『データラベル』列を確認してください」は作り手の
+        言葉で、読んだ作業者は次に何をすればよいか分からない
+        (現場の指摘:「ツール制作者よりのコメントすぎる」)。
+        検索側は直してあったが、こちらが残っていた。
+        """
+        insert_board(self.conn, width=750, length=1130)
+        name = floor_plan.load().item_names[2]
+        state = self.post("/api/layout/select", {"name": name})
+        self.assertEqual(state["materials"], [])
+        self.assertIn("資材課の人に伝えてください", state["materials_note"])
+        self.assertNotIn("列を確認してください", state["materials_note"])
+
+
 class BasePointNoteTests(LayoutWebTestCase):
     """**どこから測った距離なのかを言う。**
 
