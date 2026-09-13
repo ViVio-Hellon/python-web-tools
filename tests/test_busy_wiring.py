@@ -62,7 +62,9 @@ class RowActionWiringTests(unittest.TestCase):
     """
 
     def test_ロット情報の引当行(self) -> None:
-        text = _read("views", "lot.js")
+        # モーダルの中身は `lotdetail.js` にある(ロット検索と発注一覧の
+        # 両方から同じものを出すため)。見る先もそちらへ移す
+        text = _read("lotdetail.js")
         self.assertIn("dataset.rowAction", text)
         # 引当行のクリックが受注情報を取りに行く経路も生きていること
         self.assertIn("/hiki/", text)

@@ -31,6 +31,15 @@ from flask import Flask, g, jsonify, request
 from packaging_tool import access_control, app_config, db, modes
 from packaging_tool.logging_utils import get_logger
 
+# **起動時の権限で登録するかどうかが決まるモード。**
+#
+# ここに挙げたモードだけが「あとから権限を足しても開き直すまで効かない」。
+# 資材モードの操作は要求のたびに権限を見る形に直してあるので
+# (`warehouse.material_only` の `before_request`)、**開き直しは要らない**。
+# 設定画面の案内もこの表を見る ── 2か所で持つと、直したのに案内だけが
+# 残って「面倒ですよ」と言われる(実際に言われた)
+GATED_MODES: tuple[str, ...] = (modes.FIELD,)
+
 log = get_logger("app")
 
 APP_DIR = Path(__file__).resolve().parent

@@ -23,7 +23,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from tests import _web  # noqa: E402
-from packaging_tool import config, db, jobs  # noqa: E402
+from packaging_tool import config, db, jobs, modes  # noqa: E402
 from packaging_tool.presenters import settings as presenter  # noqa: E402
 
 try:
@@ -1116,6 +1116,37 @@ class SectionHeadlineTests(unittest.TestCase):
         self.assertTrue(any(c.label == "開き直しが要ります"
                             for c in section.checks), section.checks)
         self.assertEqual(section.label(), "開き直してください")
+
+    def test_資材があとから増えても開き直しを求めない(self) -> None:
+        """**画面を起動時の権限で決めているモードだけが、開き直しを要る。**
+
+        資材モードの操作は要求のたびに権限を見る形に直してあるので、
+        あとから足してもその場で使える。それなのに「開き直してください」と
+        出していた(現場の指摘:「なぜ開きなおしが要るんですか 面倒ですよ」)。
+        """
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        self.addCleanup(conn.close)
+        # 起動時は現場だけ持っていた = 資材があとから増えた端末
+        section = presenter._access_section(conn, startup_modes=("field",))
+        self.assertFalse(any(c.label == "開き直しが要ります"
+                             for c in section.checks), section.checks)
+
+    def test_現場があとから増えたら開き直しを求める(self) -> None:
+        """こちらは本当に開き直さないと画面が出ない(URLを登録していない)。"""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        self.addCleanup(conn.close)
+        section = presenter._access_section(conn, startup_modes=("material",))
+        rows = [c for c in section.checks if c.label == "開き直しが要ります"]
+        self.assertEqual([c.value for c in rows], ["現場"])
+
+    def test_開き直しが要るモードの表は1か所(self) -> None:
+        """案内と実装が別々に持つと、直したのに案内だけ残る。"""
+        from app import GATED_MODES
+        self.assertEqual(GATED_MODES, (modes.FIELD,))
 
     def test_開き直しが要らなければ差し替えない(self) -> None:
         conn = sqlite3.connect(":memory:")

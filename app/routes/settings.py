@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, render_template, request
 
-from packaging_tool import data_sync, db, jobs, source_db
+from packaging_tool import data_sync, db, jobs, modes, source_db
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import settings as settings_presenter
 from packaging_tool.presenters import fs_browse
@@ -86,15 +86,24 @@ def state():
 
 
 def _startup_modes() -> tuple[str, ...]:
-    """**起動したときに**使えたモード。
+    """**起動したときに使えた、開き直しが要るモード。**
 
-    使える画面(登録するURL)は起動時の権限で決まる。あとから権限が
-    増えても増えないので、食い違ったら設定画面がそう言う
-    (`presenters/settings._access_section`)。
+    画面(登録するURL)を起動時の権限で決めているのは
+    `app.GATED_MODES` のモードだけ。それ以外は要求のたびに権限を見るので、
+    あとから足してもその場で使える ── 全部のモードを返すと、開き直しが
+    要らないモードにまで「開き直してください」と出る(現場の指摘:
+    「なぜ開きなおしが要るんですか 面倒ですよ」)。
+
+    ここで **GATED_MODES に無いモードは「起動時にもあった」ことにする**。
+    そうすれば `_access_section` の突き合わせに引っかからない。
     """
     from flask import current_app
+    from .. import GATED_MODES
     grant = current_app.config.get("STARTUP_GRANT")
-    return grant.allowed_modes() if grant is not None else ()
+    startup = set(grant.allowed_modes()) if grant is not None else set()
+    # 開き直しが要らないモードは、いま使えるなら起動時にもあった扱い
+    startup |= {m.key for m in modes.ALL if m.key not in GATED_MODES}
+    return tuple(m.key for m in modes.ALL if m.key in startup)
 
 
 @bp.post("/api/settings/save")

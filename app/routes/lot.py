@@ -279,6 +279,27 @@ def search(lot_no: str):
     return jsonify(body)
 
 
+@bp.get("/api/lot/<lot_no>/peek")
+def peek(lot_no: str):
+    """**見るだけ**。1件引いて返すが、作業中のロットにはしない。
+
+    発注一覧の「Lotを開く」が使う。そこでやりたいのは「この発注は
+    どんなロットだったか」を確かめることだけで、いま組み立てている
+    作業を横取りしたいわけではない(現場の指摘:「発注情報を見て
+    どんなロットだっけ? だけの話」)。
+
+    `/api/lot/<lot_no>` との違いはそこ1点 ── あちらは開くことが
+    「選ぶ」ことでもあるので、帯も資材選択の状態機械も動く。
+    """
+    result = lot_service.search_lot(get_db(), lot_presenter.normalize(lot_no))
+    view = lot_presenter.build(result)
+    # 図面だけは先に取りに行く。見に行くのは読むだけの操作で、
+    # 待たせる理由が無い(`_select` と同じ理由)
+    if view.packaging_spec and spec_sheet.is_valid_no(view.packaging_spec):
+        spec_sheet.get_fetcher().prefetch(view.packaging_spec)
+    return jsonify(lot_presenter.to_dict(view))
+
+
 @bp.get("/api/lot/<lot_no>/hiki/<hiki_no>")
 def odr_for_hiki_row(lot_no: str, hiki_no: str):
     """引当情報の行をクリックしたら、受注情報をその行のものに差し替える

@@ -144,6 +144,15 @@
   </section>
   </div>
 </div>
+
+{# 「Lotを開く」で出す詳細。**画面を移らない。**
+   発注を見ていて「どんなロットだっけ?」を確かめるだけなのに、ロット検索
+   まで連れていかれて戻るにはたどり直し、では手間でしかない(現場の指摘)。
+   出すものはロット検索と同じなので、置き場所も同じものを取り込む。
+
+   資材展開のボタンは出さない ── ここは確かめる場所で、資材を決める
+   場所ではない(現場モードでも同じ) #}
+{% include "_lot_modal.html" %}
 {% endblock %}
 
 {% block head %}
@@ -193,6 +202,7 @@
 {% block scripts %}
 <script type="module">
   import { start } from "{{ url_for('static', filename='js/views/warehouse.js') }}";
-  start({{ state | tojson }}, {{ is_material | tojson }});
+  start({{ state | tojson }}, {{ is_material | tojson }},
+        {{ lot_peek_why | tojson }});
 </script>
 {% endblock %}

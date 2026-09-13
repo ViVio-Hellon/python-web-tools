@@ -370,7 +370,8 @@ class SpecSheetApiTests(SpecSheetTestCase):
         JSの実行までは試験していないので、そのままのURLを入れていないか
         だけを見る。落ちたら `api.js` の `tokenUrl` を通すこと。
         """
-        source = (_ROOT / "app" / "static" / "js" / "views" / "lot.js").read_text(
+        # 図面の表示は `lotdetail.js`(モーダルの中身)が持つ
+        source = (_ROOT / "app" / "static" / "js" / "lotdetail.js").read_text(
             encoding="utf-8")
         self.assertIn("tokenUrl(status.image_url)", source)
         self.assertNotIn("node.src = status.image_url", source)

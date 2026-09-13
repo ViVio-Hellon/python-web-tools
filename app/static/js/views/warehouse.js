@@ -13,6 +13,10 @@ import { api } from "../api.js";
 import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as toggles from "../toggles.js";
+// ロットの詳細はロット検索と同じものを出す(`../lotdetail.js`)。
+// 動的に読むのは版クエリを合わせるため(`views/lot.js` と同じ理由)
+const VERSION_QUERY = new URL(import.meta.url).search;
+const lotdetail = await import(`../lotdetail.js${VERSION_QUERY}`);
 
 const el = {};
 let columns = [];
@@ -107,15 +111,12 @@ function actionsCell(row) {
   // 引き直すしかない(現場の指摘:「倉庫モードの時に送られてきた
   // データに添付しているLOT情報を現場モードのように展開できる必要が
   // あります」)。7桁を打ち直させない ── 打ち間違えても開けてしまう
-  if (row.lot_url) {
-    const link = document.createElement("a");
-    link.className = "btn btn--find";
-    link.href = row.lot_url;
-    // 番号は同じ行のLotNo欄に出ているので繰り返さない。
-    // 繰り返すと操作の列だけが広がり、他の列が読めなくなる
-    link.textContent = "Lotを開く";
-    link.title = "ロット検索でこのLotを開きます(そこから資材展開できます)";
-    box.appendChild(link);
+  if (row.lot_no) {
+    // **画面は移らない。** ここで出して、閉じれば一覧のまま。
+    // 以前はロット検索へ飛ばしていたが、確かめるだけなのに戻るには
+    // たどり直しで、現場から「非常に手間」と言われた
+    box.appendChild(button("Lotを開く", "btn--find",
+                           () => peekLot(row.lot_no)));
   }
 
   // できることはサーバが返す。ここで条件を組み立て直さない
@@ -204,6 +205,18 @@ async function pull({ quiet = false } = {}) {
     // 見張りは黙って諦める。共有へ届かない端末で、一定の間隔で
     // 赤い帯が出続けるのは邪魔でしかない(次の回でまた試す)
     if (!quiet) toastError(err);
+  }
+}
+
+/** そのLotの詳細をこの場で出す。**作業中のロットは変えない。** */
+async function peekLot(lotNo) {
+  try {
+    const body = await api.get(
+      `/api/lot/${encodeURIComponent(lotNo)}/peek`);
+    lotdetail.show(body);
+    if (!body.found) toast(body.message || "そのロットは見つかりません", "ng");
+  } catch (err) {
+    toastError(err);
   }
 }
 
@@ -301,7 +314,7 @@ function dropDraft() {
 }
 
 // ------------------------------------------------------------------
-export function start(state, material) {
+export function start(state, material, lotPeekWhy) {
   isMaterial = material;
   drafts = [];          // 再入場のたびに真っさらから(`nav.js`)
   draftAt = 0;
@@ -327,6 +340,10 @@ export function start(state, material) {
 
   el.refresh.addEventListener("click", () => pull());
   startWatch();
+  // ロットの詳細を使えるようにする。**資材展開は渡さない** ── ここは
+  // 確かめる場所なので、ボタンはテンプレートにも出していない
+  lotdetail.mount({ expandAbsentWhy: lotPeekWhy });
+  nav.onLeave(lotdetail.stop);
   // **打つそばから絞る。** Enterを押すまで何も起きない作りだったので、
   // 現場からは「絞り込みが効かない」に見えていた ── 打った本人には
   // 押し忘れたのか効かないのか区別できない。連打で毎回サーバへ

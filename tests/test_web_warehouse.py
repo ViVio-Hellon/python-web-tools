@@ -747,5 +747,81 @@ class RefreshEndpointTests(WarehouseWebTestCase):
         self.assertEqual(body["rows"], [])
 
 
+class LotPeekTests(WarehouseWebTestCase):
+    """**発注一覧から、画面を移らずにロットを確かめられること。**
+
+    以前は「Lotを開く」がロット検索の画面へのリンクだった。発注を見ていて
+    「どんなロットだっけ?」を確かめたいだけなのに、ロット検索まで連れて
+    いかれて、戻るにはもう一度たどり直す(現場の指摘:「ロット検索タブに
+    戻されると非常に手間」「ロット情報だけ出してくれればいい」)。
+    """
+
+    def page(self, mode: str = "material") -> str:
+        res = self.clients[mode].get("/warehouse", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        return res.get_data(as_text=True)
+
+    def test_発注一覧にロットの詳細が載っている(self) -> None:
+        """出すものはロット検索と同じ。置き場所を1つにしてある。"""
+        for mode in ("field", "material"):
+            with self.subTest(mode=mode):
+                html = self.page(mode)
+                self.assertIn('id="lotModal"', html)
+                self.assertIn('id="lotFields"', html)   # ロット情報
+                self.assertIn('id="odrFields"', html)   # 受注情報
+                self.assertIn('id="hikiRows"', html)    # 引当情報
+                self.assertIn('id="specCard"', html)    # 包装仕様書の図面
+
+    def test_ここに資材展開は出さない(self) -> None:
+        """確かめる場所であって、資材を決める場所ではない。"""
+        for mode in ("field", "material"):
+            with self.subTest(mode=mode):
+                html = self.page(mode)
+                self.assertNotIn('id="expand"', html)
+                self.assertNotIn('id="modalExpand"', html)
+
+    def test_画面を移るリンクではない(self) -> None:
+        """`/lot?lot=…` へのリンクを残さない。押せばまた飛ばされる。"""
+        html = self.page()
+        self.assertNotIn('href="/lot?lot=', html)
+
+
+class LotPeekApiTests(unittest.TestCase):
+    """`/api/lot/<no>/peek` ── **見るだけで、作業中のロットは変えない。**"""
+
+    def setUp(self) -> None:
+        from app.routes import lot as lot_routes
+        from packaging_tool import work_context
+        from tests.test_lot_service import insert_lot
+        self.conn = _web.bind_db(self, lot_routes, make_db())
+        insert_lot(self.conn)
+        self.conn.commit()
+        self.client = _web.make_client(modes.FIELD, port=8753)
+        work_context.reset_context()
+        self.addCleanup(work_context.reset_context)
+
+    def test_ロット情報は返る(self) -> None:
+        res = self.client.get("/api/lot/1234567/peek", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertTrue(body["found"])
+        self.assertEqual(body["lot_no"], "1234567")
+
+    def test_作業中のロットにはしない(self) -> None:
+        """**ここが本題。** 確かめただけで、組み立て中の作業を横取りしない。"""
+        from packaging_tool import work_context
+        self.client.get("/api/lot/1234567/peek", headers=self.auth())
+        self.assertEqual(work_context.get_context().lot_no, "")
+
+    def test_開くほうは今までどおり作業中にする(self) -> None:
+        """見るだけの口を足しただけで、選ぶ口は変えていない。"""
+        from packaging_tool import work_context
+        self.client.get("/api/lot/1234567", headers=self.auth())
+        self.assertEqual(work_context.get_context().lot_no, "1234567")
+
+    def auth(self) -> dict:
+        return {"X-Tool-Token": TOKEN}
+
+
 if __name__ == "__main__":
     unittest.main()

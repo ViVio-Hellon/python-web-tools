@@ -53,6 +53,12 @@ from ..shell import shell_context
 
 log = get_logger("app.routes.warehouse")
 
+# 発注一覧から開いたロットの詳細で、資材展開のボタンがあった場所に出す一文。
+# **ここは確かめる場所。** 発注を見て「どんなロットだっけ?」を確かめる
+# ためだけに開くので、資材を決める操作は置かない(現場モードでも同じ)
+LOT_PEEK_WHY = ("この発注のロット情報です。"
+                "資材展開はロット検索から行います。")
+
 # どのモードにもある部分(一覧・検索)
 bp = Blueprint("warehouse", __name__)
 # 現場モードで見ているときだけ使える部分(発注・取消)。
@@ -150,6 +156,11 @@ def page():
         date_filters=presenter.DATE_FILTERS,
         drafts=drafts,
         is_material=mode == modes.MATERIAL,
+        # 「Lotを開く」で出すモーダルは、ここでは**確かめるだけ**。
+        # 資材展開のボタンは出さないので、その場所に出す一文を渡す
+        can_expand_here=False,
+        lot_peek_why=LOT_PEEK_WHY,
+        expand_absent_why=LOT_PEEK_WHY,
         **shell_context("warehouse",
                         badges={"warehouse": (str(view.pending), "todo")}
                         if view.pending else None),

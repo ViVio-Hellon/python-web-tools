@@ -1,0 +1,109 @@
+{# ロットの詳細(モーダル)
+
+   **2つの画面で同じものを出す。** ロット検索と、発注一覧の「Lotを開く」。
+   発注を見ていて「どんなロットだっけ?」を確かめるだけなのに、ロット検索の
+   画面まで連れていかれるのは手間でしかない(現場の指摘:「ロット検索タブに
+   戻されると非常に手間」)。出すものは同じなので、置き場所をここ1つにする。
+
+   `can_expand_here` が真のときだけ資材展開のボタンを出す。発注一覧から
+   開いたときは出さない ── そこは確かめる場所で、資材を決める場所ではない。
+#}
+{# 見た目は共通のCSSに置く(この部品を取り込む画面すべてで要る) #}
+<link rel="stylesheet"
+      href="{{ url_for('static', filename='css/lotmodal.css') }}">
+<dialog class="modal" id="lotModal" aria-labelledby="modalLot">
+  <header class="modal__head">
+    <div class="modal__title">
+      <span class="eyebrow">ロット</span>
+      <h2 class="num" id="modalLot">—</h2>
+      <span class="badges" id="lotBadges"></span>
+    </div>
+    <button class="btn" type="button" id="modalClose" aria-label="閉じる">
+      <span class="gl">×</span>閉じる</button>
+  </header>
+
+  <div class="modal__body">
+    {# 左: 数値と文字。読む順は VBA のフレーム順のまま
+       (ロット情報 → 引当情報 → 受注情報) #}
+    <div class="modal__col">
+      <section class="mblock">
+        <h3 id="lotHeader">ロット情報</h3>
+        <div id="lotFields"></div>
+      </section>
+
+      <section class="mblock">
+        <h3>試験指示票</h3>
+        <div class="field" style="margin:0">
+          <button class="slip" type="button" id="slip" aria-expanded="false"
+                  aria-controls="slipWhy" disabled>---</button>
+          <span class="why" id="slipNote" style="margin:0"></span>
+        </div>
+        {# 「要」とだけ出しても、現場は正しいかどうかを確かめられない。
+           押すと判定の根拠が出る #}
+        <div class="slipwhy" id="slipWhy" hidden>
+          <ul class="checks" id="slipChecks"></ul>
+          <p class="why">
+            VBA <code>AdvanceCheck</code> の判定式:
+            <b>表面処理が免除対象でない</b> かつ(<b>板厚が薄い</b> または
+            <b>用途コードが該当</b>)
+          </p>
+        </div>
+      </section>
+
+      <section class="mblock">
+        <h3>引当情報 <span class="eyebrow" id="hikiCount"></span></h3>
+        <div class="tablewrap">
+          <table class="table">
+            <thead><tr>
+              <th>受注番号</th><th class="n">引当数量</th><th>引当調整NO</th><th class="n">引当番号</th>
+            </tr></thead>
+            <tbody id="hikiRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="mblock">
+        <h3><span id="odrHeader">受注情報</span>
+            <span class="badges" id="odrBadges"></span></h3>
+        <div id="odrFields"></div>
+        <p class="why">材質_比重: <span class="num" id="gravity">---</span></p>
+      </section>
+    </div>
+
+    {# 右: 図面。読みながら見比べるものなので、横に並べる #}
+    <div class="modal__col modal__col--spec" id="specCard" hidden>
+      <section class="mblock">
+        <h3>包装仕様書 <span class="eyebrow num" id="specNo" role="button" tabindex="0"
+              title="クリックでコピー"></span></h3>
+        <div class="specbar">
+          {# 「枠に収める」と「実寸」は片方だけが有効。押されているほうを
+             色で示す。「幅に合わせる」ではなく「収める」なのは、小さい図を
+             引き伸ばしてぼかさないため ── 縮めることしかしない #}
+          <div class="btn-row" role="group" aria-label="表示の大きさ">
+            <button class="btn btn--on" type="button" id="specFit"
+                    aria-pressed="true">枠に収める</button>
+            <button class="btn" type="button" id="specFull"
+                    aria-pressed="false">実寸</button>
+          </div>
+          <button class="btn" type="button" id="specReload"><span class="gl">↻</span>再取得</button>
+          <a class="btn btn--nav" id="specOpen" href="{{ url_hoso }}"
+             target="_blank" rel="noopener">閲覧システム<span class="gl">▸</span></a>
+        </div>
+        <div class="specview" id="specView">
+          <p class="why" id="specMsg">図面を取得しています…</p>
+        </div>
+        <p class="why" id="specSource"></p>
+      </section>
+    </div>
+  </div>
+
+  {# 読み終わった先に次の一手を置く。作業の順序と画面の順序をそろえる #}
+  <footer class="modal__foot">
+    <p class="why" id="modalWhy"></p>
+    {% if can_expand_here %}
+    <button class="btn btn--nav btn--primary" type="button" id="modalExpand" disabled>
+      資材展開して資材選択へ<span class="gl">▸</span>
+    </button>
+    {% endif %}
+  </footer>
+</dialog>
