@@ -214,13 +214,35 @@ def refresh():
 
 @field_only.post("/api/warehouse/send")
 def send():
-    """発注を出す(VBA `SendWarehouseRow`)。**出せるのは現場だけ。**"""
+    """発注を出す(VBA `SendWarehouseRow`)。**出せるのは現場だけ。**
+
+    下書き(資材選択の「倉庫送信」から届いたもの)は、**発注数のほかを
+    打ち直せない**。原文の `frmSendConfirm.BuildRowUI` も発注数だけを
+    入力欄にして、ほかはラベルで出していた ── 送るのは道具が組み立てた
+    ものだから。
+
+    画面で打てなくするだけにしない(守りは1枚ではない)。ここでは
+    **LotNo がいま作業中のロットと同じか**を確かめる。書き替えられると
+    別のロットの発注になり、倉庫が受け取った現物と帳簿が合わなくなる。
+    手入力(`from_draft` が無い)には掛けない ── 別のロットの分を手で
+    起こすことがあるため。
+    """
     body = request.get_json(silent=True) or {}
     values, problem = presenter.validate(body)
     if problem:
         field, message = problem
         return jsonify({"error": {"code": "invalid", "message": message,
                                   "field": field}}), 400
+
+    if body.get("from_draft"):
+        working = (work_context.get_context().lot_no or "").strip()
+        if working and values["lot_no"] != working:
+            log.warning("下書きのLotNoが作業中と違います: %s ≠ %s",
+                        values["lot_no"], working)
+            return jsonify({"error": {
+                "code": "lot_mismatch", "field": "lot_no",
+                "message": (f"下書きのLotNoが作業中のロット({working})と"
+                            "違います。画面を開き直してください。")}}), 400
 
     result = svc.create_order(get_db(), **values)
     if not result.ok:

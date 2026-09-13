@@ -372,6 +372,19 @@ class ExOrderPageTests(WarehouseWebTestCase):
         self.assertIn('id="exNote"', html)
         self.assertIn("EXの実データは別の職場から届き", html)
 
+    def test_下書きの錠の説明が画面にある(self) -> None:
+        """**打てない理由と、打ちたいときの逃げ道を一緒に置く。**
+
+        押せないことだけ示して黙ると、壊れているのか決まりなのかが
+        分からない(§2.3)。錠を掛けるのは `applyDraftLock`。
+        """
+        html = self.clients["field"].get(
+            "/warehouse", headers=self.auth()).get_data(as_text=True)
+        self.assertIn('id="draftNote"', html)
+        self.assertIn("発注数のほかは打ち直せません", html)
+        # 逃げ道。これが無いと、道具が間違えたときに詰む
+        self.assertIn("入力を消す", html)
+
     def test_空にしてよい欄はサーバが決める(self) -> None:
         """画面側で持つと、どちらかが古くなる。"""
         body = self.clients["field"].get(
@@ -662,6 +675,39 @@ class SendApiTests(WarehouseWebTestCase):
         with mock.patch("packaging_tool.data_sync.write_back_in_background") as sent:
             self.assertEqual(self.send(hatchu_suu="0").status_code, 422)
         sent.assert_not_called()
+
+    def test_下書きのLotNoは書き替えられない(self) -> None:
+        """**送るのは道具が組み立てたもの。** 人が触るのは発注数だけ
+        (VBA `BuildRowUI` は発注数だけを入力欄にしていた)。
+
+        画面で打てなくするだけにしない ── 守りは1枚ではない。
+        """
+        from packaging_tool import work_context
+        work_context.get_context().lot_no = "4102781"
+
+        res = self.send(from_draft=True, lot_no="9999999")
+        self.assertEqual(res.status_code, 400)
+        body = res.get_json()
+        self.assertEqual(body["error"]["code"], "lot_mismatch")
+        self.assertEqual(body["error"]["field"], "lot_no")
+        self.assertIn("4102781", body["error"]["message"])
+
+    def test_下書きでも同じLotNoなら通る(self) -> None:
+        from packaging_tool import work_context
+        work_context.get_context().lot_no = "4102781"
+        self.assertTrue(self.send(from_draft=True).get_json()["ok"])
+
+    def test_手入力には掛けない(self) -> None:
+        """別のロットの分を手で起こすことがある。下書きだけの決まり。"""
+        from packaging_tool import work_context
+        work_context.get_context().lot_no = "4102781"
+        self.assertTrue(self.send(lot_no="9999999").get_json()["ok"])
+
+    def test_作業中のロットが無ければ掛けない(self) -> None:
+        """引き直す前でも、届いている下書きは送れる。"""
+        from packaging_tool import work_context
+        work_context.get_context().lot_no = ""
+        self.assertTrue(self.send(from_draft=True).get_json()["ok"])
 
     def test_必須漏れは400で欄を返す(self) -> None:
         res = self.send(hinmei="")

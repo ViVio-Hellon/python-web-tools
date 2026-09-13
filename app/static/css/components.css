@@ -283,6 +283,10 @@ a.btn { text-decoration: none; }
 }
 
 .input:disabled { background: var(--sunken); color: var(--muted); cursor: not-allowed; }
+/* 打ち直せないが**読める**欄(倉庫送信の下書きなど)。
+   `:disabled` と違って字は薄めない ── 値そのものは読んで確かめる
+   ためにあるので、沈んだ地で「打つ場所ではない」ことだけを示す */
+.input:read-only:not(:disabled) { background: var(--sunken); cursor: default; }
 select.input { cursor: pointer; }
 
 /* ================================================================

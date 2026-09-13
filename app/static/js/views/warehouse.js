@@ -372,6 +372,10 @@ async function send() {
   // EX受注かどうかは**打った内容から推し量らない**。組み立てた側
   // (資材選択)が立てた旗をそのまま運ぶ(`presenters/outputs.build_orders`)
   values.is_ex_order = draftIsEx;
+  // 下書きかどうかも運ぶ。サーバはこれを見て**LotNoが作業中のロットと
+  // 同じか**を確かめる ── 画面で打てなくするだけにしない(守りは1枚では
+  // ない)。手入力は別のロットの分を起こすことがあるので掛からない
+  values.from_draft = drafts.length > 0;
 
   try {
     const body = await api.post("/api/warehouse/send", values);
@@ -424,11 +428,32 @@ function applyExLock(on) {
   if (el.exNote) el.exNote.hidden = !draftIsEx;
 }
 
+/**
+ * 下書きを出しているあいだ、**発注数以外を打ち直せなくする**
+ * (VBA `BuildRowUI`。原文は発注数だけが入力欄で、ほかはラベルだった)。
+ *
+ * **送るのは道具が組み立てたもの、人が触るのは発注数だけ。** 資材選択が
+ * ロットから引いた値を打ち直せると、LotNo を書き替えて別のロットの発注に
+ * してしまえる ── そうなると倉庫が受け取った現物と帳簿が合わなくなり、
+ * どちらが正しいのかを後から決められない。
+ *
+ * `disabled` ではなく `readOnly` にするのは、**読めて選べるまま**に
+ * するため。原文もラベルで出していた(発注コードを控えることがある)。
+ *
+ * 打ち直したいときは「入力を消す」で下書きから抜け、手入力に切り替わる。
+ */
+function applyDraftLock(on) {
+  for (const [key, node] of Object.entries(el.fields)) {
+    node.readOnly = on && key !== "hatchu_suu";
+  }
+  if (el.draftNote) el.draftNote.hidden = !on;
+}
+
 function showDraft() {
   const box = el.drafts;
   if (!box) return;
   box.hidden = !drafts.length;
-  if (!drafts.length) { applyExLock(false); return; }
+  if (!drafts.length) { applyExLock(false); applyDraftLock(false); return; }
 
   draftAt = Math.max(0, Math.min(draftAt, drafts.length - 1));
   const order = drafts[draftAt];
@@ -436,6 +461,7 @@ function showDraft() {
     node.value = order[key] === undefined || order[key] === null ? "" : String(order[key]);
   }
   applyExLock(order.is_ex_order);
+  applyDraftLock(true);
   el.draftPos.textContent = `${draftAt + 1} / ${drafts.length}`;
   el.draftPrev.disabled = draftAt === 0;
   el.draftNext.disabled = draftAt === drafts.length - 1;
@@ -457,7 +483,7 @@ export function start(state, material, lotPeekWhy) {
   draftIsEx = false;
   for (const id of ["rows", "listNote", "found", "pending", "q", "refresh",
                     "send", "clearForm", "sendStatus", "cancelled", "exNote",
-                    "drafts", "draftPrev", "draftNext", "draftPos"]) {
+                    "drafts", "draftPrev", "draftNext", "draftPos", "draftNote"]) {
     el[id] = document.getElementById(id);
   }
   // 発注フォームは現場モードにしか無い
@@ -513,9 +539,16 @@ export function start(state, material, lotPeekWhy) {
   if (el.send) el.send.addEventListener("click", send);
   if (el.clearForm) {
     el.clearForm.addEventListener("click", () => {
+      // **下書きから抜ける。** 消したのに下書きの錠が残っていると、
+      // 空欄なのに打てない状態になる。ここが手入力への切り替え口でも
+      // ある(道具が組み立てた値を直したいときは、一度消して打ち直す)
+      drafts = [];
+      draftAt = 0;
       // 先に錠を外す。外さないと、EXの下書きを消したあとも
       // 発注コード欄が押せないまま残る
       applyExLock(false);
+      applyDraftLock(false);
+      showDraft();
       for (const node of Object.values(el.fields)) node.value = "";
       setStatus(el.sendStatus, "", "ok");
     });
