@@ -710,9 +710,7 @@ class SelectionSession:
 
         placed = self.placement.placed
         log.info("配置完了: %s枚", len(placed))
-        for item in placed:
-            ulog.log(f"  配置: [{item.board_category or '?'}]"
-                     f" {item.width} x {item.length} @ ({item.x}, {item.y})")
+        _log_placed(ulog, placed)
         ulog.log(f"ボード配置 完了: {len(placed)}枚", emphasis=True)
         return BoardOpResult(True, f"ボードを配置しました({len(placed)}枚)")
 
@@ -985,6 +983,11 @@ class SelectionSession:
             for board in boards:
                 ulog.log(f"  {label}: {board.width} x {board.length}"
                          f" × {board.count}枚 [{board.tag}]")
+        # **置いた結果も残す。** 現行の経路と同じ形で書く ── 図がおかしい
+        # という声が届いたときに、選んだものだけ分かっても座標が分からず
+        # 追えない(現場に「選定ログを見せてください」と頼んだら、候補変更の
+        # ぶんには配置の行が1つも無かった)
+        _log_placed(ulog, ctx.placed)
         log.info("候補変更: 軸=%s 上用%s種 下用%s種 配置%s枚",
                  name, len(self.selected.upper), len(self.selected.lower),
                  len(ctx.placed))
@@ -1446,6 +1449,20 @@ class SelectionSession:
 # ------------------------------------------------------------------
 _session: Optional[SelectionSession] = None
 _lock = threading.Lock()
+
+
+def _log_placed(ulog: Any, placed: list) -> None:
+    """置いた結果を選定ログに残す。**経路で形を変えない。**
+
+    現行の「ボード配置」も「候補変更」もここを通す。図がおかしいという
+    声が届いたときに読むのはこの行で、書き方が経路ごとに違うと、
+    現場から送られてきたログのどこを見ればよいかが毎回変わる。
+
+    座標系はVBA踏襲で X=丈方向 / Y=幅方向。
+    """
+    for item in placed:
+        ulog.log(f"  配置: [{item.board_category or '?'}]"
+                 f" {item.width} x {item.length} @ ({item.x}, {item.y})")
 
 
 def _tiling_note(cand: Optional[tiling.TileCand]) -> str:

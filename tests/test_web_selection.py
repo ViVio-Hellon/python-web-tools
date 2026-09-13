@@ -1379,6 +1379,32 @@ class ChangeCandidateTests(SelectionWebTestCase):
         self.assertIn("枚", text)
         self.assertIn("カット", text)
 
+    def test_選定ログに置いた座標も残る(self) -> None:
+        """**選んだものだけ分かっても、図がおかしい理由は追えない。**
+
+        現行の「ボード配置」は置いた座標を残していたが、候補変更は
+        選んだものを並べるだけで、配置の行が1つも無かった。現場から
+        「配置がおかしい」と写真が届いたときに、選定ログを見ても
+        どこに置いたのかが分からない(実際にそうなった)。
+
+        書き方は現行と同じにする(`_log_placed`)。経路ごとに形が違うと、
+        送られてきたログのどこを読めばよいかが毎回変わる。
+        """
+        self.sizes()
+        # 選定ログはプロセスに1つ(他の試験のぶんが残っている)。
+        # **この回で書かれた行だけ**を見たいので、押す前に空にする
+        self.session().presenter.user_log.clear()
+        self.change()
+        session = self.session()
+        lines = [e.text for e in session.presenter.user_log.entries
+                 if "配置:" in e.text]
+        self.assertEqual(len(lines), len(session.placement.placed),
+                         "置いた枚数とログの行数が合っていません")
+        for item in session.placement.placed:
+            self.assertTrue(
+                any(f"@ ({item.x}, {item.y})" in line for line in lines),
+                f"{item.width}x{item.length} の座標がログにありません")
+
 
 # ==================================================================
 # アングル (Phase 6b)

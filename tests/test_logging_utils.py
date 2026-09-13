@@ -27,6 +27,18 @@ class DailyFileHandlerTests(unittest.TestCase):
             logging_utils.config, "LOG_DIR", self.dir)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # **今日がいつかを試験が決める。**
+        #
+        # 実際の日付に寄りかかると、その日しか通らない試験になる ──
+        # 「9/12 に起動した」つもりの手口が、9/13 に走らせると
+        # 初めの1行から日またぎの扱いになって落ちた(実際に落ちた)。
+        # 直したいのは「日付が変わったら書き先も変わる」ことなので、
+        # いつ走らせても同じ筋になるよう、こちらで日付を握る
+        self.today = date(2026, 9, 12)
+        clock = unittest.mock.patch.object(logging_utils, "date")
+        fake = clock.start()
+        fake.today.side_effect = lambda: self.today
+        self.addCleanup(clock.stop)
 
     def record(self, text: str) -> logging.LogRecord:
         return logging.LogRecord("packaging_tool.試験", logging.INFO,
@@ -49,9 +61,8 @@ class DailyFileHandlerTests(unittest.TestCase):
         self.addCleanup(handler.close)
         handler.emit(self.record("12日の出来事"))
 
-        with unittest.mock.patch.object(logging_utils, "date") as fake:
-            fake.today.return_value = date(2026, 9, 13)
-            handler.emit(self.record("13日の出来事"))
+        self.today = date(2026, 9, 13)            # 日付が変わった
+        handler.emit(self.record("13日の出来事"))
 
         self.assertEqual(self.names(), ["packaging_tool_20260912.log",
                                         "packaging_tool_20260913.log"])
@@ -65,9 +76,8 @@ class DailyFileHandlerTests(unittest.TestCase):
                                                  encoding="utf-8")
         self.addCleanup(handler.close)
         handler.emit(self.record("先に書いたもの"))
-        with unittest.mock.patch.object(logging_utils, "date") as fake:
-            fake.today.return_value = date(2026, 9, 13)
-            handler.emit(self.record("あとで書いたもの"))
+        self.today = date(2026, 9, 13)
+        handler.emit(self.record("あとで書いたもの"))
         self.assertIn("先に書いたもの",
                       (self.dir / "packaging_tool_20260912.log").read_text("utf-8"))
 
