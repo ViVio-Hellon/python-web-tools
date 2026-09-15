@@ -12,6 +12,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packaging_tool import board_selection_algorithm as alg
+# カット前提の内側(`_wide_cut_length_fill`)はここが持つ。
+# ハブ(`alg`)は外向けの名前だけを公開するので、内側は持ち主から引く
+from packaging_tool import board_selection_narrow as narrow
 from packaging_tool import reports
 from packaging_tool.board_scoring import FatigueEntry
 from packaging_tool.board_selection_service import Palette, ProductSize, SelectedBoard
@@ -1773,7 +1776,7 @@ class WideCutLengthFillTests(unittest.TestCase):
     def _fill(self, boards, available, *, gap, short_side=300, target_width=1000):
         """丈残がちょうど `gap` になる条件で呼ぶ(枚数1・製品丈=短辺+gap)。"""
         product = ProductSize(width=900, length=short_side + gap)
-        alg._wide_cut_length_fill(
+        narrow._wide_cut_length_fill(
             boards, short_side, 1, product, available, target_width)
 
     def test_gap_over_400_now_searches_a_fill_board_first(self):

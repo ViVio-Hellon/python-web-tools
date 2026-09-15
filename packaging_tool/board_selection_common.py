@@ -61,6 +61,8 @@ MAX_MAIN_BOARD_KINDS = 3
 TAG_MAIN = "主"
 TAG_WIDTH_FILL = "幅補填"
 TAG_LENGTH_FILL = "丈補填"
+# カット前提で選んだ印。狭幅・カット前提とプロテックの両方が使う
+TAG_CUT_PREMISE = "カット前提"
 
 # 丈カットの判定で「残りはもう切らなくてよい」とみなす長さ(mm)
 LENGTH_CUT_REMAIN_THRESHOLD = 100
