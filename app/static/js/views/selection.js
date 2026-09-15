@@ -18,6 +18,13 @@ import { angleSvg, boardSvg, fitToContent, legendItems } from "../svgplan.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 
+// アングルと管理者の段は**それぞれで完結**している(`lotlist.js` と同じ形)。
+// 動的に読むのは版クエリを合わせるため ── 静的に書くと版の付かないURLに
+// なり、同じモジュールが2つ読み込まれる
+const VERSION_QUERY = new URL(import.meta.url).search;
+const angles = await import(`./selection_angles.js${VERSION_QUERY}`);
+const admin = await import(`./selection_admin.js${VERSION_QUERY}`);
+
 const el = {};
 let state = null;
 
@@ -258,10 +265,10 @@ function render(next) {
   renderResultTabs(next);
   render1P0113(next.p1);
   renderBoards(next.boards);
-  renderAngles(next.angles);
+  angles.render(next.angles);
   renderPlans(next.plans);
   renderOutputs(next.outputs);
-  renderAdmin(next.admin);
+  admin.render(next.admin);
   // 描き直したあとも、光らせていたボードは光らせたままにする
   applyLink();
 
@@ -404,78 +411,6 @@ function renderOutputs(outputs) {
 /* ================================================================
    管理者
    ================================================================ */
-function renderAdmin(admin) {
-  if (!admin) return;
-
-  el.adminState.textContent = admin.authenticated ? "認証済み" : "未認証";
-  // 認証が通っていれば、置き場所を案内する文はもう要らない
-  if (el.authWhere) el.authWhere.hidden = admin.authenticated;
-  el.savePattern.disabled = !admin.can_save;
-  why(el.saveWhy, admin.save_why);
-  el.patternsNote.textContent = admin.patterns_note;
-
-  el.patternRows.replaceChildren(...admin.patterns.map((p) => {
-    const tr = document.createElement("tr");
-    for (const value of [p.id, p.product, p.boards]) {
-      const td = document.createElement("td");
-      td.textContent = value;
-      tr.appendChild(td);
-    }
-    // ボードの内訳は長い。省略して**「読込」を押せる位置に残す** ──
-    // 押せないところへ追いやると、一覧に出ている意味が無い。
-    // 全文は押さえたままにする(title)
-    const boards = tr.lastElementChild;
-    boards.className = "clip";
-    boards.title = p.boards;
-    const count = document.createElement("td");
-    count.className = "n";
-    count.textContent = p.usage_count;
-    const at = document.createElement("td");
-    at.textContent = p.registered_at;
-
-    const cell = document.createElement("td");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "btn btn--find rowdel";
-    button.textContent = "読込";
-    button.dataset.pattern = p.id;
-    cell.appendChild(button);
-    // 削除(VBA `frmPatterns.btnDelete_Click`)。**認証したときだけ出す**
-    // ── 押せないボタンを並べても操作が増えるだけ。
-    //
-    // 見るのは `can_save` ではなく `authenticated`。`can_save` は
-    // 「認証してある**かつ**配置してある」で、消すのに配置は要らない
-    // (消したい実績は、たいてい今の作業とは別物)
-    if (admin.authenticated) {
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "btn btn--danger rowdel";
-      del.textContent = "削除";
-      del.dataset.deletePattern = p.id;
-      del.dataset.label = `No.${p.id}  ${p.product}  ${p.boards}`;
-      cell.appendChild(del);
-    }
-    tr.append(count, at, cell);
-    return tr;
-  }));
-
-  el.usageRows.replaceChildren(...admin.usage.map((u) => {
-    const tr = document.createElement("tr");
-    const type = document.createElement("td");
-    type.textContent = u.board_type;
-    tr.appendChild(type);
-    for (const value of [u.width, u.length, u.usage_count]) {
-      const td = document.createElement("td");
-      td.className = "n";
-      td.textContent = value;
-      tr.appendChild(td);
-    }
-    const at = document.createElement("td");
-    at.textContent = u.last_used_at;
-    tr.appendChild(at);
-    return tr;
-  }));
-}
 
 /* ================================================================
    ボード
@@ -660,50 +595,6 @@ function setLink(key, reveal) {
    アングル
    ================================================================ */
 /** 候補アングルの1行。選んでから「アングル追加」で選択側へ移す。 */
-function angleRow(length, index) {
-  const tr = document.createElement("tr");
-  tr.dataset.length = length;
-  tr.dataset.index = index;
-  tr.dataset.key = String(length);
-  const td = document.createElement("td");
-  td.className = "n";
-  td.textContent = length;
-  tr.appendChild(td);
-  return tr;
-}
-
-/** 選択済みアングルの1行。削除はボードと同じく行の右端に置く。 */
-function angleSelectedRow(length, index) {
-  const tr = angleRow(length, index);
-  const cell = document.createElement("td");
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "btn btn--danger rowdel";
-  button.textContent = "削除";
-  button.dataset.index = index;
-  cell.appendChild(button);
-  tr.appendChild(cell);
-  return tr;
-}
-
-function renderAngles(angles) {
-  if (!angles) return;
-
-  // 保護材がアングル以外に確定していれば、この欄は使わない
-  el.angleCard.hidden = !angles.show;
-  el.hosozaiLabel.hidden = !angles.hosozai_label;
-  el.hosozaiLabel.textContent = angles.hosozai_label;
-  if (!angles.show) return;
-
-  replaceKeepingPick(el.angleRows, angles.candidates.map(angleRow));
-  // 選択側は選ばせない(削除は行のボタンで押す)ので、そのまま入れ替える
-  el.angleSelected.replaceChildren(...angles.selected.map(angleSelectedRow));
-  el.angleNeedCut.hidden = !angles.need_cut;
-  el.autoAngle.disabled = !angles.can_auto;
-  el.drawAngle.disabled = !angles.can_draw;
-  // 押せない理由はサーバがまとめてある(同じ文を2つ出さない)
-  why(el.angleWhy, (angles.why || []).join("　"));
-}
 
 /** 一覧の中で1行だけを選んだ状態にする。選び直しは押した行に移る。 */
 function pick(tbody, tr) {
@@ -846,6 +737,15 @@ export function start(initial) {
   // 並びを2か所に書かない(サーバの `PALLET_COLUMNS` が唯一の出どころ)
   NUMERIC = [...document.querySelectorAll("#sizeCard thead th")]
     .map((th) => th.classList.contains("n"));
+
+  // --- 段ごとの受け持ちを組み立てる ------------------------------
+  // 渡すのは**押されたことの投げ返しと行の選び方だけ**。描くのも配線も
+  // それぞれの段が持つ。
+  //
+  // **最初に描く前に組み立てる。** あとに回すと、その段の欄がまだ
+  // 見つかっていないまま `render` が走り、画面が静かに欠ける
+  angles.mount({ send, pick, picked, why, replaceKeepingPick });
+  admin.mount({ send, showAsk, why });
 
   render(initial);
 
@@ -992,32 +892,6 @@ export function start(initial) {
     });
   }
 
-  // --- アングル -------------------------------------------------
-  el.angleRows.addEventListener("click", (event) => {
-    const tr = event.target.closest("tr");
-    if (tr) pick(el.angleRows, tr);
-  });
-
-  el.addAngle.addEventListener("click", () => {
-    const tr = picked(el.angleRows);
-    if (!tr) {
-      toast("追加するアングルを候補から選んでください。", "warn");
-      return;
-    }
-    send("/api/selection/angles/add", { length: tr.dataset.length });
-  });
-
-  el.angleSelected.addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-index]");
-    if (!button) return;
-    send("/api/selection/angles/remove", { index: button.dataset.index });
-  });
-
-  el.autoAngle.addEventListener("click", () =>
-    send("/api/selection/angles/auto"));
-  el.drawAngle.addEventListener("click", () =>
-    send("/api/selection/angles/draw"));
-
   // --- 1P0113 -----------------------------------------------------
   el.force1p.addEventListener("click", () => send("/api/selection/1p0113/force"));
   el.p1Qty.addEventListener("change", () =>
@@ -1060,29 +934,4 @@ export function start(initial) {
     if (next && next.next_url) nav.go(next.next_url);
   });
 
-  // --- 管理者 -------------------------------------------------------
-  // 認証の入力欄は「設定」画面に移した。ここは結果を
-  // 映すだけ(プロセスに1つの状態なので、どちらで通しても同じ)
-  el.savePattern.addEventListener("click", () =>
-    send("/api/selection/pattern/save"));
-  el.patternRows.addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-pattern]");
-    if (button) {
-      send("/api/selection/pattern/load", { id: button.dataset.pattern });
-      return;
-    }
-    // 削除は取り消せない。**何を消すのかを見せてから訊く**
-    // (VBA も 管理番号 を出して Yes/No、既定は「いいえ」だった)
-    const del = event.target.closest("button[data-delete-pattern]");
-    if (!del) return;
-    showAsk({
-      title: "この実績パターンを削除しますか？",
-      body: `${del.dataset.label}\n削除すると元に戻せません。`,
-      choices: [{ key: "cancel", label: "やめる" },
-                { key: "delete", label: "削除する", note: "元に戻せません" }],
-    }, (key) => {
-      if (key !== "delete") return;
-      send("/api/selection/pattern/delete", { id: del.dataset.deletePattern });
-    });
-  });
 }

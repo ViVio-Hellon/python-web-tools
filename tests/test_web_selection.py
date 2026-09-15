@@ -2055,8 +2055,9 @@ class AdminTests(BoardTestCase):
     def test_削除は認証したときだけ画面に出す(self) -> None:
         """押せないボタンを並べても操作が増えるだけ。保存と同じ条件。"""
         from pathlib import Path
+        # 実績パターンの段は `selection_admin.js` が持つ(段ごとに完結)
         js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-              / "views" / "selection.js").read_text(encoding="utf-8")
+              / "views" / "selection_admin.js").read_text(encoding="utf-8")
         head = js[js.index("admin.patterns.map"):]
         body = head[:head.index("}));")]
         self.assertIn("deletePattern", body)
