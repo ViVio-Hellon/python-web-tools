@@ -26,6 +26,11 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from packaging_tool import data_sync  # noqa: E402
+# 差し替えの当て先は**持ち主のモジュール**。ハブ(`data_sync`)へ
+# 当てても、持ち主から呼んでいる側には効かない
+from packaging_tool import sync_import as imports
+from packaging_tool import sync_sources as sources
+from packaging_tool import sync_writeback as writeback
 from tests import _web  # noqa: E402
 
 try:
@@ -136,8 +141,8 @@ class DiagnoseTests(unittest.TestCase):
 
     def test_1つも見つからなければ探した場所を書く(self):
         """「見つかりません」だけでは、どこを見ればよいのか分からない。"""
-        with mock.patch.object(data_sync, "find_material_db", return_value=None), \
-             mock.patch.object(data_sync, "find_lot_dbs", return_value={}):
+        with mock.patch.object(sources, "find_material_db", return_value=None), \
+             mock.patch.object(sources, "find_lot_dbs", return_value={}):
             self.start_app._diagnose_sources()
         self.assertTrue(self.logger.warning.called)
         self.assertIn("取り込み元が1つも見つかりません", self.messages())
@@ -147,8 +152,8 @@ class DiagnoseTests(unittest.TestCase):
         from packaging_tool import source_db
 
         path = Path(self.make_db())
-        with mock.patch.object(data_sync, "find_material_db", return_value=path), \
-             mock.patch.object(data_sync, "find_lot_dbs", return_value={}):
+        with mock.patch.object(sources, "find_material_db", return_value=path), \
+             mock.patch.object(sources, "find_lot_dbs", return_value={}):
             self.start_app._diagnose_sources()
         text = self.messages()
         self.assertIn("開けました", text)
@@ -157,15 +162,15 @@ class DiagnoseTests(unittest.TestCase):
     def test_開けないものは理由まで残す(self):
         """「読めません」だけでは端末に行くことになる。"""
         broken = Path(self.make_broken())
-        with mock.patch.object(data_sync, "find_material_db", return_value=broken), \
-             mock.patch.object(data_sync, "find_lot_dbs", return_value={}):
+        with mock.patch.object(sources, "find_material_db", return_value=broken), \
+             mock.patch.object(sources, "find_lot_dbs", return_value={}):
             self.start_app._diagnose_sources()
         self.assertTrue(self.logger.warning.called)
         self.assertIn("開けません", self.messages())
 
     def test_診断で起動を止めない(self):
         """読めないことと、アプリが使えないことは別。"""
-        with mock.patch.object(data_sync, "find_material_db",
+        with mock.patch.object(sources, "find_material_db",
                                side_effect=OSError("共有フォルダに届かない")):
             self.start_app._diagnose_sources()      # 例外が出なければよい
 

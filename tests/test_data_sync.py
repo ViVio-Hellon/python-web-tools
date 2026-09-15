@@ -16,6 +16,11 @@ from pathlib import Path
 from unittest import mock
 
 from packaging_tool import config, data_sync, db, import_specs, outbox_sync
+# 差し替えの当て先は**持ち主のモジュール**。ハブ(`data_sync`)へ
+# 当てても、持ち主から呼んでいる側には効かない
+from packaging_tool import sync_import as imports
+from packaging_tool import sync_sources as sources
+from packaging_tool import sync_writeback as writeback
 from packaging_tool import warehouse_service as svc
 
 
@@ -289,7 +294,7 @@ class ImportTests(unittest.TestCase):
         self.conn.close()
 
     def _import(self, rows, table="BoardMaster"):
-        with mock.patch.object(data_sync, "read_table", return_value=rows):
+        with mock.patch.object(sources, "read_table", return_value=rows):
             return data_sync.import_tables(
                 self.conn, Path("dummy.sqlite3"),
                 {table: import_specs.IMPORT_SPECS[table]},
@@ -319,7 +324,7 @@ class ImportTests(unittest.TestCase):
 
     def test_missing_key_columns_are_skipped(self):
         """PalletMasterは幅・丈が必須。欠けた行は0で埋めずに飛ばす。"""
-        with mock.patch.object(data_sync, "read_table", return_value=[
+        with mock.patch.object(sources, "read_table", return_value=[
                 {"幅": "1150", "丈": "2500"}, {"幅": "", "丈": ""}]):
             result = data_sync.import_tables(
                 self.conn, Path("d.sqlite3"),
@@ -331,7 +336,7 @@ class ImportTests(unittest.TestCase):
 
     def test_blank_values_use_the_column_default(self):
         """NOT NULL列に空欄が来ても落ちない(NULLではなく既定値を入れる)。"""
-        with mock.patch.object(data_sync, "read_table", return_value=[
+        with mock.patch.object(sources, "read_table", return_value=[
                 {"ﾛｯﾄ番号": "A123456", "BOX実績_板厚": "", "製造板幅": ""}]):
             result = data_sync.import_tables(
                 self.conn, Path("d.sqlite3"),
@@ -353,7 +358,7 @@ class ImportTests(unittest.TestCase):
                 raise data_sync.SyncError("読めません")
             return [{"アングル丈": "2000", "データラベル": ""}]
 
-        with mock.patch.object(data_sync, "read_table", side_effect=flaky):
+        with mock.patch.object(sources, "read_table", side_effect=flaky):
             result = data_sync.import_tables(
                 self.conn, Path("d.sqlite3"),
                 {"BoardMaster": import_specs.IMPORT_SPECS["BoardMaster"],
@@ -414,7 +419,7 @@ class WriteBackTests(unittest.TestCase):
 
     def test_write_back_is_skipped_without_the_source_file(self):
         """送り先に届かない端末では何もせず、理由だけ返す(現場を止めない)。"""
-        with mock.patch.object(data_sync, "find_material_db", return_value=None):
+        with mock.patch.object(sources, "find_material_db", return_value=None):
             result = data_sync.write_back(self.conn)
         self.assertFalse(result.ok)
         self.assertIn("見つかりません", result.skipped_reason)
@@ -422,10 +427,10 @@ class WriteBackTests(unittest.TestCase):
 
     def test_write_back_is_skipped_when_the_file_cannot_be_opened(self):
         """開けなかった理由をそのまま出す。手元の登録は残っている。"""
-        with mock.patch.object(data_sync, "find_material_db",
+        with mock.patch.object(sources, "find_material_db",
                                return_value=Path("m.sqlite3")), \
-             mock.patch.object(data_sync.source_db, "connect",
-                               side_effect=data_sync.source_db.SourceError("閉じています")):
+             mock.patch.object(sources.source_db, "connect",
+                               side_effect=sources.source_db.SourceError("閉じています")):
             result = data_sync.write_back(self.conn)
         self.assertIn("閉じています", result.skipped_reason)
         self.assertEqual(result.total, 0)
@@ -446,9 +451,9 @@ class WriteBackTests(unittest.TestCase):
             def close(self):
                 pass
 
-        with mock.patch.object(data_sync.source_db, "connect",
+        with mock.patch.object(sources.source_db, "connect",
                                return_value=FakeSource()), \
-             mock.patch.object(data_sync, "find_material_db",
+             mock.patch.object(sources, "find_material_db",
                                return_value=Path("m.sqlite3")):
             result = data_sync.write_back(self.conn)
 
@@ -459,9 +464,9 @@ class WriteBackTests(unittest.TestCase):
         # 主キーは送らない(Access側で採番されるため)
         self.assertNotIn("管理番号", sent[0][1])
         # 2回目は送るものが無い
-        with mock.patch.object(data_sync.source_db, "connect",
+        with mock.patch.object(sources.source_db, "connect",
                                return_value=FakeSource()), \
-             mock.patch.object(data_sync, "find_material_db", return_value=Path("m.sqlite3")):
+             mock.patch.object(sources, "find_material_db", return_value=Path("m.sqlite3")):
             again = data_sync.write_back(self.conn)
         self.assertEqual(again.total, 0)
 
@@ -477,15 +482,15 @@ class WriteBackTests(unittest.TestCase):
             def insert(self, table, values):
                 calls["n"] += 1
                 if calls["n"] == 1:
-                    raise data_sync.source_db.SourceError("型が合いません")
+                    raise sources.source_db.SourceError("型が合いません")
                 return 1
 
             def close(self):
                 pass
 
-        with mock.patch.object(data_sync.source_db, "connect",
+        with mock.patch.object(sources.source_db, "connect",
                                return_value=FlakySource()), \
-             mock.patch.object(data_sync, "find_material_db",
+             mock.patch.object(sources, "find_material_db",
                                return_value=Path("m.sqlite3")):
             result = data_sync.write_back(self.conn)
 
@@ -531,7 +536,7 @@ class AutoImportTests(unittest.TestCase):
         self.assertFalse(data_sync.needs_import(self.conn, self._tmp / "none.sqlite3"))
 
     def test_auto_import_does_nothing_without_a_backend(self):
-        with mock.patch.object(data_sync, "backend_name", return_value="なし"):
+        with mock.patch.object(sources, "backend_name", return_value="なし"):
             result = data_sync.auto_import(self.conn)
         self.assertEqual(result.total, 0)
         self.assertTrue(result.ok)
@@ -568,9 +573,9 @@ class UnsentGuardTests(unittest.TestCase):
             seen["tables"] = set(specs)
             return kw.get("result") or data_sync.ImportResult()
 
-        with mock.patch.object(data_sync, "find_material_db", return_value=None), \
-             mock.patch.object(data_sync, "find_material_db", return_value=Path("m.sqlite3")), \
-             mock.patch.object(data_sync, "import_tables", side_effect=fake_import):
+        with mock.patch.object(sources, "find_material_db", return_value=None), \
+             mock.patch.object(sources, "find_material_db", return_value=Path("m.sqlite3")), \
+             mock.patch.object(imports, "import_tables", side_effect=fake_import):
             result = data_sync.import_master(self.conn)
 
         self.assertNotIn(config.TBL_WAREHOUSE_ORDER, seen["tables"])
@@ -794,9 +799,9 @@ class ConcurrentWriteBackTests(unittest.TestCase):
             finally:
                 conn.close()
 
-        with mock.patch.object(data_sync.source_db, "connect",
+        with mock.patch.object(sources.source_db, "connect",
                                return_value=FakeSource()), \
-             mock.patch.object(data_sync, "find_material_db", return_value=Path("m.sqlite3")):
+             mock.patch.object(sources, "find_material_db", return_value=Path("m.sqlite3")):
             threads = [threading.Thread(target=run) for _ in range(3)]
             for t in threads:
                 t.start()
@@ -906,7 +911,7 @@ class KanbanImportTests(unittest.TestCase):
         別の状況なので、ここで確かめるのは前者(`find_kanban_db` が
         自動探索で見つけられない場合)。
         """
-        with mock.patch.object(data_sync, "find_kanban_db", return_value=None):
+        with mock.patch.object(sources, "find_kanban_db", return_value=None):
             result = data_sync.import_master(self.conn, self.master_src)
         self.assertTrue(result.ok, result.errors)
         self.assertEqual(result.imported["BoardMaster"], 1)
@@ -1202,8 +1207,8 @@ class RefreshOrdersTests(unittest.TestCase):
         self.add_order("L1")
         self.conn = make_conn()
         self.addCleanup(self.conn.close)
-        data_sync._last_stamp.clear()
-        self.addCleanup(data_sync._last_stamp.clear)
+        sources._last_stamp.clear()
+        self.addCleanup(sources._last_stamp.clear)
 
     def add_order(self, lot: str) -> None:
         """現場が発注を1件出した(共有のファイルに行が増える)。"""
@@ -1289,8 +1294,8 @@ class RefreshOrdersTests(unittest.TestCase):
 
     def test_何も読めなければ次にやり直す(self) -> None:
         """1つも読めなかったのは「読んだ」ではない。"""
-        data_sync._last_stamp.clear()
-        with mock.patch.object(data_sync, "import_tables") as fake:
+        sources._last_stamp.clear()
+        with mock.patch.object(imports, "import_tables") as fake:
             fake.return_value = data_sync.ImportResult(
                 errors=["資材パレット注文管理: 読めませんでした"])
             got = data_sync.refresh_orders(self.conn, self.src)

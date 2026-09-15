@@ -18,6 +18,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packaging_tool import data_sync  # noqa: E402
+# 差し替えの当て先は**持ち主のモジュール**。ハブ(`data_sync`)へ
+# 当てても、持ち主から呼んでいる側には効かない
+from packaging_tool import sync_import as imports
+from packaging_tool import sync_sources as sources
+from packaging_tool import sync_writeback as writeback
 
 
 class ProgressCallbackTests(unittest.TestCase):
@@ -38,7 +43,7 @@ class ProgressCallbackTests(unittest.TestCase):
 
     def _import(self, **kwargs):
         seen: list[tuple[int, str]] = []
-        with mock.patch.object(data_sync, "read_table",
+        with mock.patch.object(sources, "read_table",
                                return_value=[{"名前": "あ"}]):
             data_sync.import_tables(
                 self.conn, Path("dummy.sqlite3"), self.specs,
@@ -75,7 +80,7 @@ class ProgressCallbackTests(unittest.TestCase):
                 raise data_sync.SyncError("読めません")
             return [{"名前": "あ"}]
 
-        with mock.patch.object(data_sync, "read_table", side_effect=fake_read_table):
+        with mock.patch.object(sources, "read_table", side_effect=fake_read_table):
             data_sync.import_tables(
                 self.conn, Path("dummy.sqlite3"), self.specs,
                 progress=lambda pct, message, ok=True: seen.append((pct, message, ok)))
@@ -87,7 +92,7 @@ class ProgressCallbackTests(unittest.TestCase):
 
     def test_it_still_works_without_a_listener(self):
         """進捗の受け取り手がいなくても落ちない(スクリプトからの利用)。"""
-        with mock.patch.object(data_sync, "read_table",
+        with mock.patch.object(sources, "read_table",
                                return_value=[{"名前": "あ"}]):
             result = data_sync.import_tables(
                 self.conn, Path("dummy.sqlite3"), self.specs)
