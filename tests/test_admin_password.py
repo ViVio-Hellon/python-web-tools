@@ -150,13 +150,24 @@ class LogMaskTests(unittest.TestCase):
 class AuthenticateTests(unittest.TestCase):
     """資材選択の管理者認証がここを通っているか。"""
 
-    def test_選定側は自前で照合しない(self):
-        """照合が2か所にあると、変えても片方だけ効く状態が作れる。"""
-        source = Path(__file__).resolve().parent.parent / \
-            "packaging_tool" / "selection_session.py"
-        text = source.read_text(encoding="utf-8")
-        self.assertIn("admin_password.verify", text)
-        self.assertNotIn("config.ADMIN_PASSWORD", text)
+    def test_照合は1か所だけ(self):
+        """照合が2か所にあると、変えても片方だけ効く状態が作れる。
+
+        **どのファイルにあるかは問わない。** 認証がどこに引っ越しても
+        「`admin_password.verify` を通す」「`config.ADMIN_PASSWORD` を
+        自分で読まない」の2つが守られていればよい。
+        """
+        pkg = Path(__file__).resolve().parent.parent / "packaging_tool"
+        verifies, reads = [], []
+        for source in pkg.rglob("*.py"):
+            text = source.read_text(encoding="utf-8")
+            if "admin_password.verify" in text:
+                verifies.append(source.name)
+            # 出どころ(`admin_password` 自身)は読んでよい
+            if "config.ADMIN_PASSWORD" in text and source.name != "admin_password.py":
+                reads.append(source.name)
+        self.assertTrue(verifies, "admin_password.verify を通す所が無い")
+        self.assertEqual(reads, [], f"自前で照合している: {reads}")
 
 
 if __name__ == "__main__":                        # pragma: no cover

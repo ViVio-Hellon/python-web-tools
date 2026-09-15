@@ -22,6 +22,18 @@
 
 【保存しない】
 落ちたら消える。作業中の候補を持ち越す意味は無い。
+
+【段ごとに分けてある】
+1つの画面の状態なので**同じオブジェクト**だが、読むときに全部を
+たどらなくてよいよう、まとまった段は mixin に分けてある。
+
+    selection_common   断りの種別・区分・上限・`BoardOpResult`
+    selection_tiling   候補変更(敷き詰め方式)
+    selection_angle    アングルの候補・追加・自動選定・図
+    selection_records  実績パターン・ボード使用実績・管理者認証
+    ここ               寸法・モード・1P0113・ボード選定・配置・ロット確定
+
+どの段が本体の何を読むかは、それぞれの mixin の説明に書いてある。
 """
 from __future__ import annotations
 
@@ -30,11 +42,10 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from . import angle_service
 from . import board_scoring
 from . import board_selection_algorithm as alg
 from . import board_selection_service as svc
-from . import location_service, material_service, pattern_service
+from . import location_service, material_service
 from . import placement_algorithm as place
 from . import tiling_algorithm as tiling
 from . import user_log as user_log_mod
@@ -47,6 +58,8 @@ from .selection_common import (  # noqa: F401 - ここから外へも公開す�
     REFUSE_BAD_INPUT, REFUSE_DENIED, REFUSE_FAILED, REFUSE_NEEDS_SIZES,
     REFUSE_NOT_FOUND, REFUSE_NOT_LISTED, REFUSE_NO_CANDIDATES, TOGGLES,
     log_placed)
+from .selection_angle import AngleMixin
+from .selection_records import RecordsMixin
 from .selection_tiling import (  # noqa: F401 - ここから外へも公開する
     TilingMixin, TilingState, tiling_note)
 from .user_log import get_user_log
@@ -55,7 +68,7 @@ log = get_logger("selection_session")
 
 
 @dataclass
-class SelectionSession(TilingMixin):
+class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
     """資材選択画面で決まっていること。"""
 
     presenter: SelectionPresenter
@@ -751,21 +764,6 @@ class SelectionSession(TilingMixin):
         return {"width": int(self.palette.width),
                 "length": int(self.palette.length)}
 
-    def draw_angles(self) -> BoardOpResult:
-        """「アングル配置」(VBA `btnAngleDraw_Click`)。
-
-        図を描くだけで、選んだ本数は変えない。製品丈が要るのは、
-        アングルが何をカバーするのかが決まらないと図にならないため。
-        """
-        if not self.product.is_set:
-            return BoardOpResult(False, "先に製品サイズを設定してください。",
-                                 REFUSE_NEEDS_SIZES)
-        if not self.selected_angles:
-            return BoardOpResult(False, "先にアングルを選んでください。",
-                                 REFUSE_NO_CANDIDATES)
-        self.angle_drawn = True
-        return BoardOpResult(True, f"アングルを配置しました({len(self.selected_angles)}本)")
-
     def clear_boards(self) -> BoardOpResult:
         """「クリア」(VBA `btnClearAll_Click` / tkinter `do_clear_selection`)。
 
@@ -780,315 +778,6 @@ class SelectionSession(TilingMixin):
         self.tiling = None
         self.invalidate_placement()
         return BoardOpResult(True, "選定したボードをクリアしました")
-
-    # ------------------------------------------------------------------
-    # アングル
-    # ------------------------------------------------------------------
-    def angle_candidates(self) -> list[int]:
-        """候補アングル丈。`load_all_angle_lengths` は未登録でも `[0]` を返すので落とす。"""
-        return [length for length
-                in angle_service.load_all_angle_lengths(self.presenter.conn)
-                if length]
-
-    def add_angle(self, length: int) -> BoardOpResult:
-        """アングル追加(VBA `btnAngleAdd_Click`)。候補にある丈だけ受け付ける。
-
-        **本数の上限は自動選定と同じ**(`angle_service.max_pieces`)。
-        手で足すときだけ無制限だと、自動では出せない本数の選定結果が
-        でき上がり、あとから「なぜこうなったか」を説明できない。
-        """
-        if length not in self.angle_candidates():
-            return BoardOpResult(
-                False, f"アングル丈 {length} は候補一覧にありません。一覧から選んでください。",
-                REFUSE_NOT_LISTED)
-        limit = angle_service.max_pieces(self.product.length)
-        if len(self.selected_angles) >= limit:
-            # 上限そのものが製品丈で変わるので、いまの丈も添える
-            return BoardOpResult(
-                False,
-                f"アングルは最大{limit}本までです"
-                f"(製品丈 {self.product.length}mm のとき)。"
-                "外してから足してください。",
-                REFUSE_BAD_INPUT)
-        self.selected_angles.append(length)
-        # 手動追加はカット前提の情報を持たない(tkinter版 `do_add_angle`)
-        self.angle_need_cut = False
-        self.invalidate_angle_plan()
-        return BoardOpResult(True, f"アングル {length} を追加しました")
-
-    def remove_angle(self, index: int) -> BoardOpResult:
-        """アングル削除(VBA `btnAngleRemove_Click`)。"""
-        if not 0 <= index < len(self.selected_angles):
-            return BoardOpResult(False, "その行はもうありません。表示を取り直してください。",
-                                 REFUSE_BAD_INPUT)
-        removed = self.selected_angles.pop(index)
-        self.angle_need_cut = False
-        self.invalidate_angle_plan()
-        return BoardOpResult(True, f"アングル {removed} を外しました")
-
-    def auto_select_angles(self) -> BoardOpResult:
-        """アングル自動選定(VBA `btnAngleAuto_Click`)。
-
-        パレットが未設定でも動く(その場合は脚数を考慮しない)。
-        製品丈だけは要る ── 何をカバーするのかが決まらないため。
-        """
-        ulog = self.presenter.user_log
-        ulog.log("アングル自動選定を開始します", emphasis=True)
-
-        if not self.product.is_set:
-            ulog.log("  → 中止: 製品サイズが未設定です", emphasis=True)
-            return BoardOpResult(False, "先に製品サイズを設定してください。",
-                                 REFUSE_NEEDS_SIZES)
-
-        conn = self.presenter.conn
-        angles = self.angle_candidates()
-        if not angles:
-            ulog.log("  → 中止: アングルデータが0件です", emphasis=True)
-            return BoardOpResult(False, "アングルデータがありません。",
-                                 REFUSE_NO_CANDIDATES)
-        ulog.log(f"  製品丈: {self.product.length} / 候補: {len(angles)}件")
-
-        pallet_len = leg_count = 0
-        if self.palette.is_set:
-            pallet_len = self.palette.length
-            leg_count = angle_service.get_leg_count(
-                conn, self.palette.width, self.palette.length)
-            ulog.log(f"  パレット丈: {pallet_len} / 脚数: {leg_count}")
-        else:
-            # 脚数を見ずに選んだことを残す。**同じ製品でも本数が変わる**
-            ulog.log("  パレット未設定のため、脚数を考慮せずに選定します")
-
-        notes: list[str] = []
-        fat_map = None
-        if self.fatigue:
-            try:
-                fat_map = location_service.build_angle_fatigue_map(
-                    conn, angles, user_settings.get_position())
-            except Exception as exc:                  # noqa: BLE001 - 補助情報
-                # 棚データが未登録でもアングル選定自体は続けられる
-                log.warning("アングル疲労度の算出に失敗: %s", exc)
-            if not fat_map:
-                message = "[疲労度優先] アングルの棚が引けないため通常の優先順位で選定します"
-                self.presenter.user_log.log(message)
-                notes.append(message)
-
-        result = angle_service.select_angles(
-            self.product.length, angles, pallet_len, leg_count,
-            fatigue_mode=bool(fat_map), fat_map=fat_map)
-        self.angle_need_cut = result.need_cut
-        # 選び直した時点で、いま出ている図は別の組み合わせのもの
-        self.invalidate_angle_plan()
-
-        if result.count == 0:
-            self.selected_angles = []
-            ulog.log("  → 適合するアングルがありませんでした", emphasis=True)
-            return BoardOpResult(False, "適合するアングルが見つかりませんでした。",
-                                 REFUSE_NOT_FOUND, notes=notes)
-
-        if result.count <= 2:
-            self.selected_angles = [result.angle1]
-            if result.count == 2:
-                self.selected_angles.append(result.angle2)
-        else:
-            self.selected_angles = list(result.angles)
-
-        # **選ばれた1本ずつを残す。** 「3本」とだけでは、あとから
-        # 現物と突き合わせられない
-        for length in self.selected_angles:
-            ulog.log(f"  アングル: {length}mm")
-        if result.need_cut:
-            ulog.log("  ※切断が必要です")
-        self.presenter.user_log.log(
-            f"アングル選定完了: {result.count}本 {result.info}"
-            " → アングル配置ボタンで描画してください", emphasis=True)
-        return BoardOpResult(True, f"アングルを{result.count}本 選定しました: {result.info}",
-                             notes=notes)
-
-    # ------------------------------------------------------------------
-    # 管理者と実績パターン
-    # ------------------------------------------------------------------
-    def authenticate(self, password: str) -> BoardOpResult:
-        """管理者認証(VBA `btnAuth_Click`)。
-
-        **照合はサーバでしか行わない。** パスワードは応答に載せないし、
-        画面へ渡すのは「認証したか」の1ビットだけ(設計書 §3.6)。
-        """
-        # 照合の出どころは `admin_password` ただ1つ。設定画面から
-        # 変えられるようになったので、ここで `config` を直接読まない
-        from . import admin_password
-        ok = admin_password.verify(password)
-        self.admin = ok
-        if not ok:
-            log.warning("管理者認証に失敗しました")
-            return BoardOpResult(False, "パスワードが正しくありません。",
-                                 REFUSE_DENIED)
-        log.info("管理者認証に成功しました")
-        return BoardOpResult(True, "認証しました")
-
-    def save_pattern(self) -> BoardOpResult:
-        """実績パターンの保存(VBA `btnSavePattern_Click`)。
-
-        **認証していなければ保存できない。** tkinter版は保存ボタンを
-        無効にしてこれを保っていたが、Web版は要求がそのまま届くので
-        経路の側で断る(倉庫連携の確認と同じ考え方)。
-        """
-        if not self.admin:
-            return BoardOpResult(False, "管理者認証が必要です。", REFUSE_DENIED)
-        if self.placement is None or not self.placement.placed:
-            return BoardOpResult(False, "先に配置を実行してください。",
-                                 REFUSE_NO_CANDIDATES)
-
-        def rows(boards: list, usage: str) -> list:
-            # VBA同様、保存されるのは 幅/丈/枚数/用途 のみ(選定タグは保存しない)
-            return [pattern_service.PatternBoard(
-                width=b.width, length=b.length, count=b.count, usage=usage)
-                for b in boards]
-
-        try:
-            pattern_id = pattern_service.save_new_pattern(
-                self.presenter.conn,
-                pallet_width=self.palette.width, pallet_length=self.palette.length,
-                boards_lower=rows(self.selected.lower, pattern_service.USAGE_LOWER),
-                boards_upper=rows(self.selected.upper, pattern_service.USAGE_UPPER),
-                product_width=self.product.width,
-                product_length=self.product.length)
-        except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
-            log.exception("パターン保存エラー")
-            return BoardOpResult(False, f"保存エラー: {exc}", REFUSE_FAILED)
-
-        log.info("実績パターンを保存しました: No.%s", pattern_id)
-        return BoardOpResult(True, f"実績パターンを保存しました(No.{pattern_id})")
-
-    # ------------------------------------------------------------------
-    # ボード使用実績
-    # ------------------------------------------------------------------
-    def _usage_key(self) -> str:
-        """いまの配置の見分け。同じものを二度積まないためだけに使う。
-
-        **寸法の並びまで含める。** ロットとパレットだけで見分けると、
-        同じロットで候補を替えて置き直したときに「もう積んである」と
-        断ってしまう ── 実際に使ったのは置き直したあとのほうです。
-        """
-        if self.placement is None or not self.placement.placed:
-            return ""
-        boards = sorted((b.width, b.length) for b in self.placement.placed)
-        return "|".join([
-            self.presenter.lot_no or "",
-            self.board_type,
-            f"{self.palette.width}x{self.palette.length}",
-            f"{self.product.width}x{self.product.length}",
-            ";".join(f"{w}x{l}" for w, l in boards),
-        ])
-
-    def usage_refusal(self) -> str:
-        """「使用する」が押せない理由。押せるなら空。
-
-        条件は**配置してあること**だけです(現場の指示:
-        配置済み かつ ボタン押し)。ロットや製品寸法が無くても、
-        置いたものを使ったという事実は記録できます ── 分からない値は
-        0で残るので、後から「このぶんは寸法が分からない」と読めます。
-        """
-        if self.placement is None or not self.placement.placed:
-            return "先にボードを配置してください。"
-        return ""
-
-    @property
-    def usage_done(self) -> bool:
-        """いまの配置をもう記録してあるか。"""
-        key = self._usage_key()
-        return bool(key) and key == self.usage_recorded_key
-
-    def record_usage(self) -> BoardOpResult:
-        """配置したボードを「使った」として記録する。
-
-        数える入口は**ここだけ**です。以前は配置図を印刷したときに
-        積んでいましたが、確かめるために印刷しても積まれ、印刷せずに
-        使えば積まれないので、押した人の意図と一致しませんでした。
-        """
-        why = self.usage_refusal()
-        if why:
-            return BoardOpResult(False, why, REFUSE_NO_CANDIDATES)
-        if self.usage_done:
-            # **断るが、失敗ではない。** すでに望んだ状態になっている
-            return BoardOpResult(
-                True, "この配置はもう記録してあります(二重には積みません)。")
-
-        from . import board_usage
-        sheets = board_usage.record_usage(
-            self.presenter.conn, self.placement.placed, self.board_type,
-            product=(self.product.width, self.product.length),
-            palette=(self.palette.width, self.palette.length),
-            lot=self.presenter.lot_no or "")
-        self.usage_recorded_key = self._usage_key()
-        self.presenter.user_log.log(
-            f"[使用実績] {self.board_type} {sheets}枚を記録しました",
-            emphasis=True)
-        return BoardOpResult(True, f"使用実績に{sheets}枚を記録しました。")
-
-    def patterns(self) -> list[Any]:
-        """いまのパレット寸法で登録されている実績(VBA `btnLoadPattern_Click`)。"""
-        if not self.palette.is_set:
-            return []
-        return pattern_service.get_pattern_list(
-            self.presenter.conn, self.palette.width, self.palette.length)
-
-    def delete_pattern(self, pattern_id: int) -> BoardOpResult:
-        """実績パターンの削除(VBA `frmPatterns.btnDelete_Click`)。
-
-        **保存と同じで認証が要る。** 実績は端末をまたいで共有するもので、
-        消えたことに気づけるのは次に使おうとした人だけ ── 保存に認証が
-        要るなら、消すのにも要る。VBA側は消すほうに認証が無かったが、
-        保存側だけ守っても意味がない。
-
-        取り消せないので、訊くのは画面の役目(`ask` の窓)。ここは
-        「消えたかどうか」だけを返す。
-        """
-        if not self.admin:
-            return BoardOpResult(False, "管理者認証が必要です。", REFUSE_DENIED)
-        if not pattern_service.delete_pattern_by_id(
-                self.presenter.conn, pattern_id):
-            # すでに誰かが消したか、番号が違う。どちらも「もう無い」
-            return BoardOpResult(False, "そのパターンは見つかりませんでした。",
-                                 REFUSE_NOT_FOUND)
-        log.info("実績パターンを削除しました: No.%s", pattern_id)
-        self.presenter.user_log.log(
-            f"[実績パターン] No.{pattern_id} を削除しました", emphasis=True)
-        return BoardOpResult(True, f"実績パターン No.{pattern_id} を削除しました")
-
-    def load_pattern(self, pattern_id: int) -> BoardOpResult:
-        """実績パターンの読み込み(VBA `LoadSinglePattern`)。"""
-        if not self.palette.is_set:
-            return BoardOpResult(False, "先にパレットサイズを適用してください。",
-                                 REFUSE_NEEDS_SIZES)
-        detail = pattern_service.load_pattern_by_id(
-            self.presenter.conn, pattern_id)
-        if detail is None:
-            return BoardOpResult(False, "そのパターンは見つかりませんでした。",
-                                 REFUSE_NOT_FOUND)
-
-        self.palette = svc.Palette(
-            width=detail.pallet_width, length=detail.pallet_length,
-            overhang_ratio=svc.PALETTE_OVERHANG_RATIO,
-            max_width=detail.pallet_width * svc.PALETTE_OVERHANG_RATIO,
-            max_length=detail.pallet_length * svc.PALETTE_OVERHANG_RATIO,
-        )
-        if detail.product_width > 0 and detail.product_length > 0:
-            self.product = svc.ProductSize(
-                width=detail.product_width, length=detail.product_length)
-
-        # 保存時にタグは失われている。配置側の `GetEffectiveTag` が推測する
-        self.selected.lower = [
-            svc.SelectedBoard(width=b.width, length=b.length, count=b.count)
-            for b in detail.boards_lower]
-        self.selected.upper = [
-            svc.SelectedBoard(width=b.width, length=b.length, count=b.count)
-            for b in detail.boards_upper]
-        self.select_result = None
-        self.invalidate_placement()
-        self._sync_ribbon()
-        log.info("実績パターンを読み込みました: No.%s", pattern_id)
-        return BoardOpResult(
-            True, f"実績パターン No.{pattern_id} を読み込みました")
 
     # ------------------------------------------------------------------
     # ロット確定 (VBA `SearchAndDisplay` 末尾)
