@@ -12,9 +12,13 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packaging_tool import board_selection_algorithm as alg
-# カット前提の内側(`_wide_cut_length_fill`)はここが持つ。
-# ハブ(`alg`)は外向けの名前だけを公開するので、内側は持ち主から引く
+# **内側(下線で始まる名前)は持ち主のモジュールから引く。**
+# ハブ(`alg`)が公開するのは外向けの名前だけで、段の内側は出さない
+from packaging_tool import board_selection_common as bs_common
+from packaging_tool import board_selection_fill as bs_fill
+from packaging_tool import board_selection_lower as bs_lower
 from packaging_tool import board_selection_narrow as narrow
+from packaging_tool import board_selection_upper as bs_upper
 from packaging_tool import reports
 from packaging_tool.board_scoring import FatigueEntry
 from packaging_tool.board_selection_service import Palette, ProductSize, SelectedBoard
@@ -74,24 +78,24 @@ class ForceShortSideIfOvershootTests(unittest.TestCase):
     def test_within_20_percent_allowance_keeps_the_chosen_orientation(self):
         # pallet_w=1000, fit_limit=1200。eff_w=1150は旧閾値(1003)は超えるが
         # 新閾値(1200)以内 → 短辺へ強制されず、選ばれた向きのまま
-        rot, w, l = alg._force_short_side_if_overshoot(
+        rot, w, l = bs_common._force_short_side_if_overshoot(
             board_w=1150, board_l=950, pallet_w=1000, rot=False, eff_w=1150, eff_l=950)
         self.assertEqual((rot, w, l), (False, 1150, 950))
 
     def test_beyond_20_percent_allowance_still_forces_the_short_side(self):
         # eff_w=1250は新閾値(1200)も超える → 短辺(900)へ強制
-        rot, w, l = alg._force_short_side_if_overshoot(
+        rot, w, l = bs_common._force_short_side_if_overshoot(
             board_w=1250, board_l=900, pallet_w=1000, rot=False, eff_w=1250, eff_l=900)
         self.assertEqual((rot, w, l), (True, 900, 1250))
 
     def test_within_the_old_3mm_threshold_is_unaffected(self):
-        rot, w, l = alg._force_short_side_if_overshoot(
+        rot, w, l = bs_common._force_short_side_if_overshoot(
             board_w=1002, board_l=900, pallet_w=1000, rot=False, eff_w=1002, eff_l=900)
         self.assertEqual((rot, w, l), (False, 1002, 900))
 
     def test_no_flip_possible_when_the_short_side_also_exceeds_pallet_width(self):
         # 短辺もパレット幅を超えるなら、どちらの閾値でも変更しない
-        rot, w, l = alg._force_short_side_if_overshoot(
+        rot, w, l = bs_common._force_short_side_if_overshoot(
             board_w=1250, board_l=1100, pallet_w=1000, rot=False, eff_w=1250, eff_l=1100)
         self.assertEqual((rot, w, l), (False, 1250, 1100))
 
@@ -108,7 +112,7 @@ class ForceShortSideIfOvershootTests(unittest.TestCase):
         """
         palette = make_palette(1000, 3000)
         product = ProductSize(width=900, length=1300)
-        rot, eff_w, eff_l = alg._orient_lower(1180, 700, palette, product)
+        rot, eff_w, eff_l = bs_common._orient_lower(1180, 700, palette, product)
         self.assertEqual((rot, eff_w, eff_l), (False, 1180, 700))
 
 
@@ -201,7 +205,10 @@ class SinglePieceTests(unittest.TestCase):
         # 1枚物優先では拾われないが、ガードが無ければPASS1で拾われてしまう候補
         extra_board = board(1000, 400)
 
-        with mock.patch.object(alg, "_current_covered_length", return_value=0):
+        # **差し替えは呼ぶ側の名前に当てる。** 下用は共通から名前を
+        # 取り込んでいるので、当て先は下用のモジュール(共通側に当てても
+        # 下用がすでに持っている名前は変わらない)
+        with mock.patch.object(bs_lower, "_current_covered_length", return_value=0):
             result = alg.select_lower_boards(
                 [single_piece_board, extra_board], palette, product)
 
@@ -318,7 +325,7 @@ class MeasureSelectionTests(unittest.TestCase):
         # 除外するので、200を幅方向として正しく選ぶ。
         palette = make_palette(1000, 3000)
         boards = [SelectedBoard(width=200, length=1400, count=1, tag=alg.TAG_MAIN)]
-        sel_max_w, sel_min_w, sel_total_l = alg._measure_selection(boards, palette, self.product)
+        sel_max_w, sel_min_w, sel_total_l = bs_common._measure_selection(boards, palette, self.product)
         self.assertEqual(sel_max_w, 200)
         self.assertEqual(sel_min_w, 200)
         self.assertEqual(sel_total_l, 1400)
@@ -327,10 +334,10 @@ class MeasureSelectionTests(unittest.TestCase):
         """選定時(_orient_lower)と補填計算(_measure_selection)の向きが
         一致すること(食い違いの回帰防止)。"""
         palette = make_palette(1000, 3000)
-        selected_rot, selected_eff_w, selected_eff_l = alg._orient_lower(
+        selected_rot, selected_eff_w, selected_eff_l = bs_common._orient_lower(
             200, 1400, palette, self.product)
         boards = [SelectedBoard(width=200, length=1400, count=1, tag=alg.TAG_MAIN)]
-        sel_max_w, _, sel_total_l = alg._measure_selection(boards, palette, self.product)
+        sel_max_w, _, sel_total_l = bs_common._measure_selection(boards, palette, self.product)
         self.assertEqual(sel_max_w, selected_eff_w)
         self.assertEqual(sel_total_l, selected_eff_l)
 
@@ -350,13 +357,13 @@ class MeasureSelectionTests(unittest.TestCase):
         palette = make_palette(1000, 3000)
         product = ProductSize(width=900, length=1000)
         boards = [SelectedBoard(width=1180, length=700, count=1, tag=alg.TAG_MAIN)]
-        sel_max_w, sel_min_w, sel_total_l = alg._measure_selection(boards, palette, product)
+        sel_max_w, sel_min_w, sel_total_l = bs_common._measure_selection(boards, palette, product)
         self.assertEqual(sel_max_w, 700)
         self.assertEqual(sel_min_w, 700)
         self.assertEqual(sel_total_l, 1180)
 
         # 選定本体(_orient_lower)と一致すること
-        _, selected_eff_w, selected_eff_l = alg._orient_lower(1180, 700, palette, product)
+        _, selected_eff_w, selected_eff_l = bs_common._orient_lower(1180, 700, palette, product)
         self.assertEqual(sel_max_w, selected_eff_w)
         self.assertEqual(sel_total_l, selected_eff_l)
 
@@ -569,7 +576,7 @@ class FixedLengthFill100mmTests(unittest.TestCase):
     def test_400_or_less_fills_with_100mm_boards(self):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._apply_fixed_length_fill_100mm(
+        bs_fill._apply_fixed_length_fill_100mm(
             boards, 350, available=[board(100, 100)], category="下用")
         self.assertEqual(main.count, 1)  # 主ボードは増えない
         fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
@@ -580,7 +587,7 @@ class FixedLengthFill100mmTests(unittest.TestCase):
     def test_100mm_fill_count_is_capped_at_4(self):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._apply_fixed_length_fill_100mm(
+        bs_fill._apply_fixed_length_fill_100mm(
             boards, 400, available=[board(100, 100)], category="下用")
         fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(fill_rows[0].count, alg.LENGTH_FILL_COUNT_CAP)
@@ -590,14 +597,14 @@ class FixedLengthFill100mmTests(unittest.TestCase):
         # 丈不足強制追加と二重取りになるため)
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._apply_fixed_length_fill_100mm(
+        bs_fill._apply_fixed_length_fill_100mm(
             boards, 500, available=[board(100, 100)], category="下用")
         self.assertEqual(len(boards), 1)
 
     def test_no_100mm_stock_defers_without_crashing(self):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._apply_fixed_length_fill_100mm(
+        bs_fill._apply_fixed_length_fill_100mm(
             boards, 200, available=[board(250, 250)], category="下用")
         self.assertEqual(len(boards), 1)  # 100mm在庫が無ければ何も足さない
 
@@ -605,7 +612,7 @@ class FixedLengthFill100mmTests(unittest.TestCase):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         existing = SelectedBoard(100, 100, 1, alg.TAG_LENGTH_FILL)
         boards = [main, existing]
-        alg._apply_fixed_length_fill_100mm(
+        bs_fill._apply_fixed_length_fill_100mm(
             boards, 200, available=[board(100, 100)], category="下用")
         fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(len(fill_rows), 1)
@@ -614,7 +621,7 @@ class FixedLengthFill100mmTests(unittest.TestCase):
     def test_works_the_same_way_for_upper_category(self):
         main = SelectedBoard(300, 1000, 1, alg.TAG_MAIN)
         boards = [main]
-        alg._apply_fixed_length_fill_100mm(
+        bs_fill._apply_fixed_length_fill_100mm(
             boards, 350, available=[board(100, 100)], category="上用")
         fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
         self.assertEqual(fill_rows[0].count, 4)
@@ -633,7 +640,7 @@ class LowerLengthFillLoopSameWidthTests(unittest.TestCase):
         # 主の実効幅(sel_max_w)=1250。500x1250は長辺1250で主と同幅
         sorted_boards = [board(500, 1250), board(1200, 1250)]
         boards = [SelectedBoard(1250, 2500, 1, alg.TAG_MAIN)]
-        remaining = alg._run_length_fill_loop(
+        remaining = bs_fill._run_length_fill_loop(
             boards, sorted_boards, l_gap=600, sel_max_w=1250,
             fatigue_map=None, fatigue_mode=False)
         fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
@@ -646,7 +653,7 @@ class LowerLengthFillLoopSameWidthTests(unittest.TestCase):
         # 拾えていたが、いまは完全一致のみなので対象外
         sorted_boards = [board(600, 1300)]
         boards = [SelectedBoard(1250, 2500, 1, alg.TAG_MAIN)]
-        remaining = alg._run_length_fill_loop(
+        remaining = bs_fill._run_length_fill_loop(
             boards, sorted_boards, l_gap=600, sel_max_w=1250,
             fatigue_map=None, fatigue_mode=False)
         self.assertEqual(boards, [SelectedBoard(1250, 2500, 1, alg.TAG_MAIN)])
@@ -662,7 +669,7 @@ class DropLengthFillTests(unittest.TestCase):
             SelectedBoard(width=300, length=800, count=1, tag=alg.TAG_LENGTH_FILL),
             SelectedBoard(width=50, length=800, count=1, tag=alg.TAG_WIDTH_FILL),
         ]
-        alg._drop_length_fill_when_covered(boards, palette, product)
+        bs_fill._drop_length_fill_when_covered(boards, palette, product)
         tags = [b.tag for b in boards]
         self.assertIn(alg.TAG_MAIN, tags)
         self.assertIn(alg.TAG_WIDTH_FILL, tags)   # 幅補填は残る
@@ -675,7 +682,7 @@ class DropLengthFillTests(unittest.TestCase):
             SelectedBoard(width=1000, length=600, count=1, tag=alg.TAG_MAIN),
             SelectedBoard(width=300, length=800, count=1, tag=alg.TAG_LENGTH_FILL),
         ]
-        alg._drop_length_fill_when_covered(boards, palette, product)
+        bs_fill._drop_length_fill_when_covered(boards, palette, product)
         self.assertEqual(len(boards), 2)
 
 
@@ -687,7 +694,7 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
     def test_adds_length_fill_board_within_3x_gap(self):
         # ギャップ300mm、短辺400mm(<=900=300*3)の在庫あり → 丈補填として追加
         boards = [SelectedBoard(width=1000, length=1600, count=1, tag=alg.TAG_MAIN)]
-        alg._force_add_for_length_shortage(
+        bs_fill._force_add_for_length_shortage(
             boards, self.palette, self.product, [board(400, 1000)], None, sel_max_w=1000,
         )
         self.assertEqual(len(boards), 2)
@@ -696,7 +703,7 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
     def test_tops_up_main_when_no_candidate(self):
         # 在庫が主ボードのみ(短辺1600 > 300*3=900)で候補なし → 主ボードを増やす
         boards = [SelectedBoard(width=1000, length=1600, count=1, tag=alg.TAG_MAIN)]
-        alg._force_add_for_length_shortage(
+        bs_fill._force_add_for_length_shortage(
             boards, self.palette, self.product, [board(1000, 1600)], None, sel_max_w=1000,
         )
         self.assertEqual(len(boards), 1)
@@ -704,7 +711,7 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
 
     def test_no_change_when_gap_within_3mm(self):
         boards = [SelectedBoard(width=1000, length=1900, count=1, tag=alg.TAG_MAIN)]
-        alg._force_add_for_length_shortage(
+        bs_fill._force_add_for_length_shortage(
             boards, self.palette, self.product, [board(400, 1000)], None, sel_max_w=1000,
         )
         self.assertEqual(len(boards), 1)
@@ -726,7 +733,7 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
                                        tag=alg.TAG_MAIN)
         boards = [main, wrong_tag_row]
         product = ProductSize(width=900, length=3500)
-        alg._force_add_for_length_shortage(
+        bs_fill._force_add_for_length_shortage(
             boards, self.palette, product, [board(400, 1000)], None, sel_max_w=1000,
         )
         self.assertEqual(main.count, 1)  # フォールバック(主+1枚)は発動しない
@@ -741,7 +748,7 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
         なり、主ボードを増やすフォールバックへ回る。
         """
         boards = [SelectedBoard(width=1000, length=1600, count=1, tag=alg.TAG_MAIN)]
-        alg._force_add_for_length_shortage(
+        bs_fill._force_add_for_length_shortage(
             boards, self.palette, self.product, [board(400, 1050)], None, sel_max_w=1000,
         )
         self.assertEqual(len(boards), 1)
@@ -754,7 +761,7 @@ class ForceAddForLengthShortageTests(unittest.TestCase):
         なり、主ボードを増やすフォールバックへ回る。
         """
         boards = [SelectedBoard(width=1000, length=1600, count=1, tag=alg.TAG_MAIN)]
-        alg._force_add_for_length_shortage(
+        bs_fill._force_add_for_length_shortage(
             boards, self.palette, self.product, [board(100, 1000)], None, sel_max_w=1000,
         )
         self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
@@ -1215,7 +1222,7 @@ class IndustryStandardShortcutTests(unittest.TestCase):
         available = [board(1000, 2000)]
 
         with mock.patch.object(
-            alg, "select_protec_lower_boards",
+            bs_lower, "select_protec_lower_boards",
             return_value=([], alg.ProtecCutResult(valid=False)),
         ):
             r = alg.select_lower_boards(
@@ -1502,7 +1509,7 @@ class UpperLengthFillFixedCalcTests(unittest.TestCase):
         # 丈残100mm → Ceiling(100/100)=1枚
         boards = [self.main]
         available = [board(100, 800)]
-        alg._run_upper_length_fill(boards, self.product, available)
+        bs_upper._run_upper_length_fill(boards, self.product, available)
 
         length_fill = next(b for b in boards if b.tag == alg.TAG_LENGTH_FILL)
         self.assertEqual((length_fill.width, length_fill.length), (100, 800))
@@ -1516,7 +1523,7 @@ class UpperLengthFillFixedCalcTests(unittest.TestCase):
         product = ProductSize(width=900, length=2390)
         boards = [SelectedBoard(900, 190, 9, alg.TAG_MAIN)]
         available = [board(100, 800), board(500, 900)]
-        alg._run_upper_length_fill(boards, product, available)
+        bs_upper._run_upper_length_fill(boards, product, available)
 
         self.assertEqual(boards[0].count, 9)  # 主ボードは増えない
         same_width_row = next(b for b in boards if (b.width, b.length) == (500, 900))
@@ -1536,7 +1543,7 @@ class UpperLengthFillFixedCalcTests(unittest.TestCase):
         product = ProductSize(width=900, length=2390)
         boards = [SelectedBoard(900, 190, 9, alg.TAG_MAIN)]  # 丈カバー1710、丈残680
         available = [board(50, 900)]
-        alg._run_upper_length_fill(boards, product, available)
+        bs_upper._run_upper_length_fill(boards, product, available)
 
         self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
 
@@ -1547,7 +1554,7 @@ class UpperLengthFillFixedCalcTests(unittest.TestCase):
         existing = SelectedBoard(100, 800, 1, alg.TAG_LENGTH_FILL)
         boards = [main, existing]
         available = [board(100, 800)]
-        alg._run_upper_length_fill(boards, self.product, available)
+        bs_upper._run_upper_length_fill(boards, self.product, available)
 
         # 別行を新規に作らず、既存の"丈補填"行にneeded(=2)を積む
         length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
@@ -1559,7 +1566,7 @@ class UpperLengthFillFixedCalcTests(unittest.TestCase):
         # (後続の「丈不足強制追加」ブロックに委ねる)
         boards = [self.main]
         available = [board(30, 1600), board(900, 300)]
-        alg._run_upper_length_fill(boards, self.product, available)
+        bs_upper._run_upper_length_fill(boards, self.product, available)
 
         self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
 
@@ -1584,7 +1591,7 @@ class ForceAddForUpperLengthShortageTests(unittest.TestCase):
         """
         decoy = SelectedBoard(150, 900, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_WIDTH_FILL)
         boards = [self.main, decoy]
-        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 900)], None)
+        bs_upper._force_add_for_upper_length_shortage(boards, self.product, [board(150, 900)], None)
 
         self.assertEqual(self.main.count, 10)  # フォールバック(主+1枚)は発動しない
         self.assertEqual(decoy.count, alg.LENGTH_FILL_COUNT_CAP)  # 汚染されない
@@ -1595,7 +1602,7 @@ class ForceAddForUpperLengthShortageTests(unittest.TestCase):
         """マージ(sfExists)も"丈補填"タグの行だけを対象にする。"""
         decoy = SelectedBoard(150, 900, 1, alg.TAG_WIDTH_FILL)
         boards = [self.main, decoy]
-        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 900)], None)
+        bs_upper._force_add_for_upper_length_shortage(boards, self.product, [board(150, 900)], None)
 
         self.assertEqual(decoy.count, 1)  # "幅補填"行は汚染されない
         length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
@@ -1609,7 +1616,7 @@ class ForceAddForUpperLengthShortageTests(unittest.TestCase):
         主ボードを増やすフォールバックへ回る。
         """
         boards = [self.main]
-        alg._force_add_for_upper_length_shortage(boards, self.product, [board(150, 1600)], None)
+        bs_upper._force_add_for_upper_length_shortage(boards, self.product, [board(150, 1600)], None)
 
         self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
         self.assertEqual(self.main.count, 11)  # フォールバック(主+1枚)が発動する
@@ -1621,7 +1628,7 @@ class ForceAddForUpperLengthShortageTests(unittest.TestCase):
         主ボードを増やすフォールバックへ回る。
         """
         boards = [self.main]
-        alg._force_add_for_upper_length_shortage(boards, self.product, [board(100, 900)], None)
+        bs_upper._force_add_for_upper_length_shortage(boards, self.product, [board(100, 900)], None)
 
         self.assertFalse(any(b.tag == alg.TAG_LENGTH_FILL for b in boards))
         self.assertEqual(self.main.count, 11)
@@ -2053,7 +2060,7 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
             SelectedBoard(900, 1000, 2, alg.TAG_MAIN),
             SelectedBoard(50, 1000, 1, alg.TAG_WIDTH_FILL),
         ]
-        alg._recheck_width_fill_length(
+        bs_fill._recheck_width_fill_length(
             boards, 1, 900, self.palette, self.product, [board(50, 1000)])
         self.assertEqual(boards[1].count, 1)  # 幅補填行そのものは汚染されない
         length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
@@ -2066,7 +2073,7 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
             SelectedBoard(900, 1000, 2, alg.TAG_MAIN),
             SelectedBoard(900, 1000, 1, alg.TAG_MAIN),
         ]
-        alg._recheck_width_fill_length(
+        bs_fill._recheck_width_fill_length(
             boards, 1, 900, self.palette, self.product, [board(50, 1000)])
         self.assertEqual(boards[1].count, 1)
 
@@ -2075,7 +2082,7 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
             SelectedBoard(900, 1000, 2, alg.TAG_MAIN),
             SelectedBoard(50, 1000, 2, alg.TAG_WIDTH_FILL),
         ]
-        alg._recheck_width_fill_length(
+        bs_fill._recheck_width_fill_length(
             boards, 1, 900, self.palette, self.product, [board(50, 1000)])
         self.assertEqual(boards[1].count, 2)
 
@@ -2085,7 +2092,7 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
             SelectedBoard(900, 1000, 3, alg.TAG_MAIN),
             SelectedBoard(50, 100, 1, alg.TAG_WIDTH_FILL),
         ]
-        alg._recheck_width_fill_length(
+        bs_fill._recheck_width_fill_length(
             boards, 1, 900, self.palette, self.product, [])
         self.assertLessEqual(boards[1].count, 1 + alg.LENGTH_FILL_COUNT_CAP)
 
@@ -2096,13 +2103,13 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
             SelectedBoard(900, 1000, 3, alg.TAG_MAIN),   # カバー3000
             SelectedBoard(50, 1500, 1, alg.TAG_WIDTH_FILL),
         ]
-        alg._recheck_width_fill_length(
+        bs_fill._recheck_width_fill_length(
             boards, 1, 900, self.palette, product, [])
         self.assertEqual(boards[1].count, 1)   # 1500で製品丈を満たすので増えない
 
     def test_no_boards_is_safe(self):
         boards: list[SelectedBoard] = []
-        alg._recheck_width_fill_length(boards, 0, 900, self.palette, self.product, [])
+        bs_fill._recheck_width_fill_length(boards, 0, 900, self.palette, self.product, [])
         self.assertEqual(boards, [])
 
     def test_length_fill_row_is_excluded(self):
@@ -2121,7 +2128,7 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
             SelectedBoard(900, 1000, 2, alg.TAG_MAIN),
             SelectedBoard(30, 800, 1, alg.TAG_LENGTH_FILL),
         ]
-        alg._recheck_width_fill_length(
+        bs_fill._recheck_width_fill_length(
             boards, 1, 900, self.palette, self.product, [board(30, 800)])
         self.assertEqual(boards[1].count, 1)
 
@@ -2141,7 +2148,7 @@ class WidthFillLengthRecheckTests(unittest.TestCase):
         decoy = SelectedBoard(150, 900, 1, alg.TAG_MAIN)
         width_fill = SelectedBoard(50, 1700, 1, alg.TAG_WIDTH_FILL)
         boards = [main, decoy, width_fill]
-        alg._recheck_width_fill_length(
+        bs_fill._recheck_width_fill_length(
             boards, 2, 900, self.palette, self.product, [board(150, 900)])
         self.assertEqual(decoy.count, 1)  # "主"行は汚染されない
         length_fill_rows = [b for b in boards if b.tag == alg.TAG_LENGTH_FILL]
@@ -2158,32 +2165,32 @@ class PickGapFillerTagTests(unittest.TestCase):
     def test_capped_wrong_tag_row_does_not_block_candidate(self):
         # 同サイズの"主"行が上限(4枚)でも、丈補填の候補選定には無関係
         boards = [SelectedBoard(50, 1000, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_MAIN)]
-        best = alg._pick_gap_filler(boards, [board(50, 1000)], gap_x=500, sel_max_w=900)
+        best = bs_common._pick_gap_filler(boards, [board(50, 1000)], gap_x=500, sel_max_w=900)
         self.assertIsNotNone(best)
         self.assertEqual((best.width, best.length), (50, 1000))
 
     def test_capped_length_fill_row_is_excluded(self):
         boards = [SelectedBoard(50, 1000, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_LENGTH_FILL)]
-        best = alg._pick_gap_filler(boards, [board(50, 1000)], gap_x=500, sel_max_w=900)
+        best = bs_common._pick_gap_filler(boards, [board(50, 1000)], gap_x=500, sel_max_w=900)
         self.assertIsNone(best)
 
 
 class AddOrIncrementTests(unittest.TestCase):
     def test_new_size_is_appended(self):
         boards: list[SelectedBoard] = []
-        alg._add_or_increment(boards, 50, 1000, alg.TAG_LENGTH_FILL)
+        bs_common._add_or_increment(boards, 50, 1000, alg.TAG_LENGTH_FILL)
         self.assertEqual((boards[0].width, boards[0].count, boards[0].tag),
                          (50, 1, alg.TAG_LENGTH_FILL))
 
     def test_existing_size_is_incremented(self):
         boards = [SelectedBoard(50, 1000, 1, alg.TAG_LENGTH_FILL)]
-        alg._add_or_increment(boards, 50, 1000, alg.TAG_LENGTH_FILL)
+        bs_common._add_or_increment(boards, 50, 1000, alg.TAG_LENGTH_FILL)
         self.assertEqual(len(boards), 1)
         self.assertEqual(boards[0].count, 2)
 
     def test_count_is_capped(self):
         boards = [SelectedBoard(50, 1000, alg.LENGTH_FILL_COUNT_CAP, alg.TAG_LENGTH_FILL)]
-        alg._add_or_increment(boards, 50, 1000, alg.TAG_LENGTH_FILL)
+        bs_common._add_or_increment(boards, 50, 1000, alg.TAG_LENGTH_FILL)
         self.assertEqual(boards[0].count, alg.LENGTH_FILL_COUNT_CAP)
 
 
@@ -2198,7 +2205,7 @@ class UpperFillWidthCorrectionTests(unittest.TestCase):
             SelectedBoard(900, 600, 3, ""),
             SelectedBoard(850, 300, 1, alg.TAG_LENGTH_FILL),   # 幅50mm不足
         ]
-        alg._apply_upper_fill_width_correction(boards, self.product, [board(50, 600)])
+        bs_upper._apply_upper_fill_width_correction(boards, self.product, [board(50, 600)])
         self.assertTrue(any(b.width == 50 and b.tag == alg.TAG_WIDTH_FILL for b in boards))
 
     def test_row_is_dropped_when_no_small_board(self):
@@ -2206,7 +2213,7 @@ class UpperFillWidthCorrectionTests(unittest.TestCase):
             SelectedBoard(900, 600, 3, ""),
             SelectedBoard(850, 300, 1, alg.TAG_LENGTH_FILL),
         ]
-        alg._apply_upper_fill_width_correction(boards, self.product, [])
+        bs_upper._apply_upper_fill_width_correction(boards, self.product, [])
         self.assertEqual(len(boards), 1)
         self.assertEqual(boards[0].count, 4)   # 主ボードが1枚増える
 
@@ -2215,7 +2222,7 @@ class UpperFillWidthCorrectionTests(unittest.TestCase):
             SelectedBoard(900, 600, 3, ""),
             SelectedBoard(900, 300, 1, alg.TAG_LENGTH_FILL),
         ]
-        alg._apply_upper_fill_width_correction(boards, self.product, [board(50, 600)])
+        bs_upper._apply_upper_fill_width_correction(boards, self.product, [board(50, 600)])
         self.assertEqual(len(boards), 2)
         self.assertEqual(boards[1].count, 1)
 
@@ -2224,7 +2231,7 @@ class UpperFillWidthCorrectionTests(unittest.TestCase):
             SelectedBoard(900, 600, 3, ""),
             SelectedBoard(50, 600, 1, alg.TAG_WIDTH_FILL),
         ]
-        alg._apply_upper_fill_width_correction(boards, self.product, [board(50, 600)])
+        bs_upper._apply_upper_fill_width_correction(boards, self.product, [board(50, 600)])
         self.assertEqual(boards[1].count, 1)
 
 
@@ -2233,17 +2240,17 @@ class FindSmallBoardTests(unittest.TestCase):
 
     def test_picks_the_smallest_that_covers_the_gap(self):
         avail = [board(30, 600), board(50, 600), board(100, 600)]
-        got = alg._find_small_board(avail, self.SIZES, 40)
+        got = bs_common._find_small_board(avail, self.SIZES, 40)
         self.assertEqual(min(got.width, got.length), 50)
 
     def test_uses_30_when_the_gap_is_tiny(self):
         avail = [board(30, 600), board(50, 600), board(100, 600)]
-        got = alg._find_small_board(avail, self.SIZES, 20)
+        got = bs_common._find_small_board(avail, self.SIZES, 20)
         self.assertEqual(min(got.width, got.length), 30)
 
     def test_returns_none_when_gap_exceeds_every_size(self):
         avail = [board(30, 600), board(50, 600), board(100, 600)]
-        self.assertIsNone(alg._find_small_board(avail, self.SIZES, 200))
+        self.assertIsNone(bs_common._find_small_board(avail, self.SIZES, 200))
 
     def test_returns_none_when_not_in_stock(self):
-        self.assertIsNone(alg._find_small_board([], self.SIZES, 40))
+        self.assertIsNone(bs_common._find_small_board([], self.SIZES, 40))

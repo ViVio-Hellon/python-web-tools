@@ -23,7 +23,7 @@ from .board_selection_service import Palette, ProductSize, SelectedBoard
 from .logging_utils import get_logger
 from .models import BoardModel
 
-log = get_logger("board_selection_common")
+log = get_logger("board_selection.common")
 
 
 FILL_SIZE_100 = 100

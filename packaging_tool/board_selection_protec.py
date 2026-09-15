@@ -26,7 +26,7 @@ from .board_selection_types import ProtecCutResult, ProtecLengthCut
 from .logging_utils import get_logger
 from .models import BoardModel
 
-log = get_logger("board_selection_protec")
+log = get_logger("board_selection.protec")
 
 # にも同じ値を使う ── 在庫を候補にするかどうかの判定と、カット後の
 # 仕上がりサイズは、同じ「製品幅からどれだけマイナスまで許すか」

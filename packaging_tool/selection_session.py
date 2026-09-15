@@ -573,8 +573,12 @@ class SelectionSession:
         try:
             # **却下と補正の理由をそのまま流す**(`user_log.bridge_from`)。
             # 現場が要るのは決まったことではなく、そこへ至った経緯
+            # `packaging_tool.board_selection` は段ごとのロガーの**親**。
+            # 親に付けると子(下用・上用・補填・プロテック・狭幅)の行も
+            # 受け取れるので、段を増やしてもここは増やさなくてよい
             with user_log_mod.bridge_from(
                     ulog, "packaging_tool.board_selection_algorithm",
+                    "packaging_tool.board_selection",
                     "packaging_tool.board_scoring"):
                 result = alg.auto_select_boards(
                     available, self.palette, self.product,

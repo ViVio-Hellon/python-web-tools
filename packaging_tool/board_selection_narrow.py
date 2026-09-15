@@ -29,7 +29,7 @@ from .board_selection_types import (LowerSelectionResult, PassState,
 from .logging_utils import get_logger
 from .models import BoardModel
 
-log = get_logger("board_selection_narrow")
+log = get_logger("board_selection.narrow")
 
 
 # ==================================================================
