@@ -12,6 +12,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packaging_tool import placement_algorithm as pl
+# 内側(下線で始まる名前)は持ち主のモジュールから引く。
+# ハブ(`pl`)が公開するのは外向けの名前だけ
+from packaging_tool import placement_fill as pfill
 from packaging_tool.board_selection_service import Palette, ProductSize, SelectedBoard
 from packaging_tool.models import BoardModel, PlacedBoardModel
 
@@ -44,7 +47,7 @@ def placed(x: int, y: int, w: int, l: int, category: str = LOWER,
 
 
 def _check(ctx: pl.PlacementContext, place_x: int, b_short: int, limit_w: int) -> bool:
-    return pl._check_length_fill_overlap(ctx, LOWER, place_x, b_short, limit_w)
+    return pfill._check_length_fill_overlap(ctx, LOWER, place_x, b_short, limit_w)
 
 
 class EvaluatePlacementTests(unittest.TestCase):
