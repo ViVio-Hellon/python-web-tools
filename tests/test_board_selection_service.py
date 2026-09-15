@@ -9,6 +9,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packaging_tool import board_selection_service as svc
+# 内側(下線で始まる名前)は持ち主のモジュールから引く。
+# ハブ(`svc`)が公開するのは外向けの名前だけ
+from packaging_tool import pallet_common as pcommon
 from packaging_tool import db
 from packaging_tool.user_log import UserLog
 
@@ -323,7 +326,7 @@ class AutoSelectPalletTests(BoardSelectionTestCase):
 
     def test_rows_without_a_physical_size_are_left_to_the_fit_range(self):
         """現物サイズが未入力の行は判定できないので従来どおり適合範囲で見る。"""
-        self.assertTrue(svc._physically_fits(
+        self.assertTrue(pcommon._physically_fits(
             {"幅": 0, "丈": 0}, 1528, 3053))
 
     def test_fallback_used_when_no_pass_matches(self):
