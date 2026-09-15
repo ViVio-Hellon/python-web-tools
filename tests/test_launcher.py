@@ -178,6 +178,102 @@ class GuardDecisionTests(LocalAreaTestCase):
         self.assertTrue(result.should_start)
 
 
+class AcquireLockTests(LocalAreaTestCase):
+    """**多重起動を本当に止める。**
+
+    以前は「ロックがあるか見る」→(ポートを決める・待ち受けを確かめる:
+    最大15秒)→「ロックを書く」の順だった。そのあいだに始まった2つ目は
+    「ロックなし」を見て一緒に立ち上がる ── 現場から届いた多重起動は
+    これで、その日の最初なら取り込みも走るので、利用者が「反応が無い」と
+    もう一度押す時間は十分にあった。
+
+    直したあとは、**作れたかどうか**でロックを取る(`O_CREAT | O_EXCL`)。
+    見てから作るのではないので、2つ目は必ず外れる。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        import launch_guard
+        self.guard = launch_guard
+
+    def test_取れるのは1つだけ(self) -> None:
+        self.assertTrue(self.guard.try_acquire("field"))
+        self.assertFalse(self.guard.try_acquire("field"))
+
+    def test_ポートを決める前でも2つ目は入れない(self) -> None:
+        """**隙間そのものを塞ぐ。** 取った直後はまだポートも決まって
+        いないが、その状態でも2つ目は取れない。"""
+        self.assertTrue(self.guard.try_acquire("field"))
+        self.assertEqual(self.guard.read_lock("field").port,
+                         self.guard.STARTING_PORT)
+        self.assertFalse(self.guard.try_acquire("field"))
+
+    def test_手放せば取り直せる(self) -> None:
+        self.guard.try_acquire("field")
+        self.guard.remove_lock("field")
+        self.assertTrue(self.guard.try_acquire("field"))
+
+    def test_モードが違えば両方取れる(self) -> None:
+        """現場と資材は同時に起動してよい。"""
+        self.assertTrue(self.guard.try_acquire("field"))
+        self.assertTrue(self.guard.try_acquire("material"))
+
+    def test_同時に走らせても1つだけ(self) -> None:
+        """**本当に競争させて確かめる。** 順番に呼ぶだけでは、
+        たまたま通っているのか防いでいるのか分からない。"""
+        import multiprocessing
+
+        with multiprocessing.Pool(16) as pool:
+            got = pool.map(_try_acquire_field, range(16))
+        self.assertEqual(sum(got), 1, f"取れた数={sum(got)}")
+
+
+class StartingLockTests(LocalAreaTestCase):
+    """立ち上がり中のロックを見たときの振る舞い。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        import launch_guard
+        self.guard = launch_guard
+
+    def test_立ち上がったら合流する(self) -> None:
+        """**待って同じ画面へ入れる。** 起動には時間がかかるので、
+        もう一度押した人を追い返さない。"""
+        import threading
+
+        self.guard.try_acquire("field")
+
+        def finish():
+            time.sleep(0.5)
+            self.guard.write_lock(
+                self.guard.build_lock_info("field", 8713, "tok"))
+
+        thread = threading.Thread(target=finish, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join)
+
+        result = self.guard.check_existing("field")
+        self.assertFalse(result.should_start)
+        self.assertIn("8713", result.url)
+
+    def test_立ち上がらないまま居なくなったら引き継ぐ(self) -> None:
+        """失敗したロックが残るかぎり二度と起動できない、を作らない。"""
+        self.guard.try_acquire("field")
+        info = self.guard.read_lock("field")
+        info.pid = 4_000_001                      # 居ないPID
+        self.guard.write_lock(info)
+
+        result = self.guard.check_existing("field")
+        self.assertTrue(result.should_start)
+        self.assertIsNone(self.guard.read_lock("field"))
+
+
+def _try_acquire_field(_n):
+    """別プロセスから呼ぶので、モジュールの外に置く。"""
+    import launch_guard
+    return launch_guard.try_acquire("field")
+
+
 class AppIdMatchTests(unittest.TestCase):
     """`app_id` の照合(基盤仕様書 2.3)。
 

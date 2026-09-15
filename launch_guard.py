@@ -118,6 +118,51 @@ def remove_lock(mode: str) -> None:
         log.warning("ロックを消せませんでした: %s", exc)
 
 
+# 起動中(まだポートが決まっていない)ロックの `port`
+STARTING_PORT = 0
+
+# 起動中のロックを見つけたとき、ポートが入るのを待つ上限(秒)。
+# 待ち受けの確認(`start_app.LISTEN_TIMEOUT_SEC`)より長くしておく ──
+# 短いと、立ち上がりかけの1つ目を「死んでいる」と誤って追い出す
+STARTING_WAIT_SEC = 20.0
+
+
+def try_acquire(mode: str) -> bool:
+    """**割り込まれない形で**ロックを取る。取れたら `True`。
+
+    起動の判定とロックの書き込みが離れていると、そのあいだに始まった
+    2つ目が「ロックなし」を見て一緒に立ち上がる ── 実際に起きていた
+    多重起動はこれで、待ち受けの確認に最大15秒かかるあいだ、窓が
+    開きっぱなしだった。
+
+    ここでは `O_CREAT | O_EXCL` で作る。**あるかどうかを見てから作る**
+    のではなく、作れたかどうかで決めるので、2つ目は必ず失敗する
+    (OSがひとつの操作として面倒を見る。Windowsでも同じ)。
+
+    この時点ではポートも token もまだ無いので `port=0` で書いておく。
+    決まったら `write_lock` が同じファイルを上書きする。
+    """
+    path = lock_path(mode)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    info = LockInfo(
+        app_id=app_config.app_id(), mode=mode, pid=os.getpid(),
+        port=STARTING_PORT, url="", started_at=time.time(),
+        python=sys.executable, app_root=str(app_config.APP_ROOT))
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return False
+    except OSError as exc:                        # noqa: BLE001
+        # 作れない事情(権限など)で起動そのものを止めない。
+        # 多重起動の守りは弱まるが、動かないよりはよい
+        log.warning("ロックを作れませんでした (%s): %s", path, exc)
+        return True
+    with os.fdopen(fd, "w", encoding="utf-8") as fp:
+        json.dump(asdict(info), fp, ensure_ascii=False, indent=2)
+    log.info("ロックを取りました: %s (pid=%s 起動中)", path, info.pid)
+    return True
+
+
 # ------------------------------------------------------------------
 # プロセスの生死
 # ------------------------------------------------------------------
@@ -297,6 +342,9 @@ def check_existing(mode: str) -> GuardResult:
         remove_lock(mode)
         return GuardResult(True, reason=f"ロックは残っていたがpid {info.pid} は不在")
 
+    if info.port == STARTING_PORT:
+        return _wait_for_starting(mode, info)
+
     health = probe_health(info.port)
     if not is_our_app(health, mode):
         # プロセスは居るがアプリではない(PIDの使い回し、または
@@ -315,6 +363,38 @@ def check_existing(mode: str) -> GuardResult:
              mode, info.pid, info.port, running or "(不明)")
     return GuardResult(False, url=info.url, existing=info,
                        reason="同じアプリが起動中")
+
+
+def _wait_for_starting(mode: str, info: "LockInfo") -> GuardResult:
+    """1つ目がまだ立ち上がっている途中。**待ってから合流する。**
+
+    起動には時間がかかる(その日の最初なら取り込みも走る)ので、
+    利用者は「反応が無い」と思ってもう一度押す ── 多重起動のいちばん
+    多い入口がこれ。ここで待って同じ画面へ合流させる。
+
+    立ち上がりきらないまま `STARTING_WAIT_SEC` を過ぎたら、1つ目は
+    立ち上がりに失敗したものとして掃除する(そうしないと、失敗した
+    ロックが残るかぎり二度と起動できなくなる)。
+    """
+    log.info("1つ目が起動中です (pid=%s)。ポートが決まるのを待ちます", info.pid)
+    deadline = time.monotonic() + STARTING_WAIT_SEC
+    while time.monotonic() < deadline:
+        time.sleep(0.3)
+        now = read_lock(mode)
+        if now is None:
+            return GuardResult(True, reason="起動中だったロックが消えました")
+        if now.port != STARTING_PORT:
+            log.info("1つ目が立ち上がりました。合流します: %s", now.url)
+            return GuardResult(False, url=now.url, existing=now,
+                               reason="起動中だった1つ目に合流します")
+        if not is_process_alive(now.pid):
+            remove_lock(mode)
+            return GuardResult(True, reason="起動中のプロセスが居なくなりました")
+
+    log.warning("1つ目が %.0f秒 で立ち上がりませんでした。掃除して起動します",
+                STARTING_WAIT_SEC)
+    remove_lock(mode)
+    return GuardResult(True, reason="起動中のまま応答がないので引き継ぎます")
 
 
 def _replace_stale(mode: str, info: "LockInfo",

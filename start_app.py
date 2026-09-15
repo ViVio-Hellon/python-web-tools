@@ -261,33 +261,48 @@ def start(mode: str, *, open_browser: bool = True) -> int:
     log_environment(mode)
 
     # --- 多重起動の判定 (基盤仕様書 2.4) ---
-    guard = launch_guard.check_existing(mode)
-    if not guard.should_start:
-        log().info("既存のインスタンスに合流します: %s", guard.url)
-        print(f"すでに起動しています。ブラウザを開きます: {guard.url}")
-        if open_browser:
-            webbrowser.open(guard.url)
-        return 0
-    log().info("多重起動の判定: %s", guard.reason)
+    #
+    # **まずロックを取る。** 判定してから書くまでのあいだに始まった
+    # 2つ目は「ロックなし」を見て一緒に立ち上がってしまう ── 待ち受けの
+    # 確認だけで最大15秒あり、その日の最初なら取り込みも走るので、
+    # 利用者が「反応が無い」ともう一度押す時間は十分にある。
+    # `try_acquire` は作れたかどうかで決めるので、2つ目は必ず外れる。
+    while not launch_guard.try_acquire(mode):
+        guard = launch_guard.check_existing(mode)
+        if not guard.should_start:
+            log().info("既存のインスタンスに合流します: %s", guard.url)
+            print(f"すでに起動しています。ブラウザを開きます: {guard.url}")
+            if open_browser:
+                webbrowser.open(guard.url)
+            return 0
+        # 掃除できた(死んでいた・古い版だった)ので取り直す。
+        # それでも取れなければ、掃除した隙に別の1つ目が入っている
+        log().info("多重起動の判定: %s", guard.reason)
 
-    # --- ポート選び ---
-    port = launch_guard.pick_port(mode)
-    if port is None:
-        candidates = app_config.port_candidates(mode)
-        raise StartupError(
-            f"使えるポートがありません(試した番号: {candidates})",
-            "他のアプリが使っている可能性があります。"
-            "config/app.json の port を変えるか、そのアプリを終了してください。")
+    # ここから先の失敗は**必ずロックを手放してから**投げる。
+    # 残すと、次の起動が「起動中のまま応答がない」を待つことになる
+    try:
+        # --- ポート選び ---
+        port = launch_guard.pick_port(mode)
+        if port is None:
+            candidates = app_config.port_candidates(mode)
+            raise StartupError(
+                f"使えるポートがありません(試した番号: {candidates})",
+                "他のアプリが使っている可能性があります。"
+                "config/app.json の port を変えるか、そのアプリを終了してください。")
 
-    # --- 待ち受けを始める(この時点ではまだ待機画面だけ) ---
-    srv = server_module.AppServer(mode, port)
-    thread = server_module.run_in_background(srv)
+        # --- 待ち受けを始める(この時点ではまだ待機画面だけ) ---
+        srv = server_module.AppServer(mode, port)
+        thread = server_module.run_in_background(srv)
 
-    check = server_module.diagnose_listening(port, timeout=LISTEN_TIMEOUT_SEC)
-    if should_abort(check):
-        raise StartupError(
-            "サーバを起動できませんでした",
-            f"{check.hint}\n\nログ: {app_config.local_dir('logs')}")
+        check = server_module.diagnose_listening(port, timeout=LISTEN_TIMEOUT_SEC)
+        if should_abort(check):
+            raise StartupError(
+                "サーバを起動できませんでした",
+                f"{check.hint}\n\nログ: {app_config.local_dir('logs')}")
+    except BaseException:
+        launch_guard.remove_lock(mode)
+        raise
     if not check.ok:
         log().warning("起動確認の応答を取れませんでしたが、待ち受けは"
                       "できているので続行します:\n%s", check.hint)
