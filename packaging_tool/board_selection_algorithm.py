@@ -54,6 +54,9 @@ from .board_scoring import (
     total_fatigue,
 )
 from .board_selection_service import Palette, ProductSize, SelectedBoard
+from .board_selection_types import (AutoSelectResult, LowerSelectionResult,
+                                    PassState, ProtecCutResult, ProtecLengthCut,
+                                    UpperSelectionResult, WideCutResult)
 from .logging_utils import get_logger
 from .models import BoardModel
 
@@ -95,34 +98,6 @@ TAG_MAIN = "主"
 TAG_WIDTH_FILL = "幅補填"
 TAG_LENGTH_FILL = "丈補填"
 
-
-@dataclass
-class PassState:
-    """選定パス間で受け渡す可変状態(VBA のByRef引数群 + モジュール変数)。"""
-
-    remaining_len: int
-    selected_count: int = 0
-    pass1_done: bool = False
-    pass15_used: bool = False  # 上記のとおりVBAでは常にFalse
-    narrow_pallet: bool = False
-    cut_info: dict[str, int] = field(default_factory=dict)
-
-
-@dataclass
-class LowerSelectionResult:
-    boards: list[SelectedBoard]
-    state: PassState
-    post_fill_max_w: int = 0
-    needs_wide_cut: bool = False   # カット前提選定(SelectBoardsForWideLower)が必要
-    needs_narrow: bool = False     # 狭幅パレット選定が必要
-    # カット前提選定(`select_boards_for_wide_lower`)が記録した丈カット情報。
-    # `recalc_length_cut_info` は「カット前提」タグのボードを判定対象外に
-    # するので(通常モードの再判定と二重に扱わないため)、その代わりに
-    # ここへ記録された情報をそのまま結果へマージする
-    length_cut_info: dict[str, int] = field(default_factory=dict)
-    # プロテック確定値(唯一の正解)。プロテックでない、またはプロテック
-    # 選定が使える在庫を見つけられなかったときは valid=False のまま
-    protec_result: "ProtecCutResult" = field(default_factory=lambda: ProtecCutResult())
 
 
 # ------------------------------------------------------------------
@@ -1265,21 +1240,6 @@ def decide_length_count_with_cut(
 # ------------------------------------------------------------------
 # プロテック専用の丈カット判定 (VBA `ComputeProtecLengthCut`)
 # ------------------------------------------------------------------
-@dataclass
-class ProtecLengthCut:
-    """プロテックの丈方向をどう作るか。`ProtecCutResult` に写して使う。"""
-
-    count: int = 1
-    need_cut: bool = False
-    normal_cnt: int = 0
-    cut_cnt: int = 0
-    cut_eff: int = 0
-    # 「切らなくてもパレットには収まるが、製品丈は超えている」
-    optional: bool = False
-    opt_normal_cnt: int = 0
-    opt_cut_cnt: int = 0
-    opt_cut_eff: int = 0
-
 
 def compute_protec_length_cut(
     eff_length: int, product_length: int, palette_max_length: int,
@@ -1838,48 +1798,6 @@ PROTEC_1P1216_TOLERANCE = 10
 PROTEC_OTHER_TOLERANCE = 80
 
 
-@dataclass
-class ProtecCutResult:
-    """プロテック専用の選定確定値(VBA `ProtecCutResult` / `mProtecCutResult`)。
-
-    選定(`select_protec_lower_boards`)が決めた**唯一の正解**を保持する。
-    後続の処理(丈カット判定・配置・カット依頼書)はここに書かれた値を
-    そのまま使い、再計算しない ── 以前は配置やカット依頼書がそれぞれ
-    独自に「製品幅を超えてよいか」を判定し直しており、選定結果と
-    食い違うことがあった(プロテックの上用ボードが製品幅を超過すると
-    配置段階が静かに弾いてしまい、`placedBoards` に一切登録されない
-    という不具合の原因)。この型が「唯一の正解」の置き場になることで、
-    再計算そのものを起こさせない。
-
-    `valid` が False のときは他フィールドを見ない(まだプロテック確定
-    値が無い、または通常選定にフォールバックした状態)。
-    """
-
-    valid: bool = False
-    orig_width: int = 0     # 元の在庫サイズ(幅)
-    orig_length: int = 0    # 元の在庫サイズ(丈)
-    is_rotated: bool = False
-    eff_width_before_cut: int = 0  # 向きを決めた後、カットする前の実効幅
-    cut_eff_width: int = 0  # 幅カット後の実効幅(カット不要ならeff_width_before_cutと同じ)
-    eff_length: int = 0     # 丈方向の実効サイズ(フルサイズ側の1枚あたりの丈)
-    need_cut: bool = False  # 幅カットが必要か
-    need_length_cut: bool = False   # 丈カットが必要か(最後の1枚だけ)
-    length_cut_eff: int = 0         # 丈カット後の、最後の1枚の丈
-    count: int = 1          # 枚数(丈カットする最後の1枚も含む)
-    len_normal_cnt: int = 0  # 丈カットしない枚数
-    len_cut_cnt: int = 0     # 丈カットする枚数(0か1)
-
-    # 「パレット丈には収まるが製品丈は超えている」状態。
-    # **カットは必須ではないが、切る余地はある。** 切断依頼書で
-    # 押した人に訊く(`reports.protec_cut_size_info`)。
-    # `need_length_cut=False` のままここが立つので、配置図にカット線は
-    # 出ない ── 図は「切らない」姿を描き、依頼書だけが「もし切るなら」の
-    # 内訳を出す
-    len_cut_optional: bool = False
-    len_opt_normal_cnt: int = 0  # 切る場合の通常枚数
-    len_opt_cut_cnt: int = 0     # 切る場合の丈カット枚数
-    len_opt_cut_eff: int = 0     # 切る場合の丈カット後サイズ
-
 
 def decide_protec_orientation(
     board_width: int, board_length: int, product_width: int, *, is_1p1216: bool,
@@ -1945,18 +1863,6 @@ def decide_protec_orientation(
              rotated, cut_eff_w, eff_l, need_cut)
     return result
 
-
-@dataclass
-class UpperSelectionResult:
-    boards: list[SelectedBoard]
-    mode: str = "normal"           # "normal"/"共用"/"プロテック"
-    narrow_pallet: bool = False
-    needs_wide_cut: bool = False   # SelectUpperBoardsWideCut が必要
-    cut_info: dict[str, int] = field(default_factory=dict)
-    length_cut_info: dict[str, int] = field(default_factory=dict)
-    # プロテック確定値(下用選定と共有する「唯一の正解」)。mode="プロテック"
-    # のときだけ valid=True になる
-    protec_result: ProtecCutResult = field(default_factory=lambda: ProtecCutResult())
 
 
 def _copy_lower_main_to_upper(lower: list[SelectedBoard]) -> list[SelectedBoard]:
@@ -2609,14 +2515,6 @@ TAG_CUT_PREMISE = "カット前提"
 CUT_FAT_MULT = 233.0
 
 
-@dataclass
-class WideCutResult:
-    boards: list[SelectedBoard]
-    cut_info: dict[str, int] = field(default_factory=dict)
-    # 丈カット(VBA `mLengthCutInfo`)。キーは "U_幅x丈"
-    length_cut_info: dict[str, int] = field(default_factory=dict)
-    used_fallback: bool = False
-
 
 def _pick_wide_cut_board(
     available: list[BoardModel], target_width: int, product_length: int,
@@ -2966,15 +2864,6 @@ def recalc_length_cut_info(
 # ==================================================================
 # ハブ (VBA `AutoSelectBoards` の移植)
 # ==================================================================
-@dataclass
-class AutoSelectResult:
-    lower: list[SelectedBoard]
-    upper: list[SelectedBoard]
-    lower_result: LowerSelectionResult
-    upper_result: UpperSelectionResult
-    cut_info: dict[str, int] = field(default_factory=dict)
-    length_cut_info: dict[str, int] = field(default_factory=dict)
-    length_cut_count: dict[str, int] = field(default_factory=dict)
 
 
 def auto_select_boards(
