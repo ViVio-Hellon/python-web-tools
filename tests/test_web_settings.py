@@ -235,6 +235,90 @@ class KanbanSectionTests(PresenterTestCase):
         self.assertIn("看板_AIM", table_check.detail)
 
 
+class OpeningWayTests(PresenterTestCase):
+    """「開き方」の judgement。**できているのにできていないと出さない。**
+
+    現場の声:「取り込めているはずなのに要確認になる/いや・・・取り込めて
+    ないの?/でもマスタで見れるよ?」。27テーブル 26,115件を取り込んだ
+    直後に、梱包資材マスタ・看板マスタ・パレット閾値マスタの3つが
+    そろって「要確認」でした。
+
+    原因は判断の仕方です。VER2.23.1 の時点では読むときの1手目が URI で、
+    手元への写しは**開けなかったときの最後の手**だったので、
+    `opened_by != WAY_URI` で「回り道した」と言えました。VER2.76.1 で
+    `.pending_` を止めるために順番を入れ替え(読むときは最初から写す)、
+    こちらを直し忘れたので、**ふつうの経路が毎回「要確認」**になりました。
+
+    できているのにできていないと出すのがいちばん高くつきます ──
+    本当の問題が同じ顔で並ぶので、次からは誰も読まなくなります。
+    """
+
+    def _make_master(self) -> None:
+        conn = sqlite3.connect(self.dir / config.MATERIAL_DB_NAME)
+        conn.execute("CREATE TABLE BoardMaster (ボード幅 INTEGER)")
+        conn.commit()
+        conn.close()
+
+    def _opening(self, title: str = "梱包資材マスタ"):
+        section = next(s for s in presenter.build().sections
+                       if s.title == title)
+        return next((c for c in section.checks if c.label == "開き方"), None)
+
+    def test_ふつうに読めていれば要確認にしない(self) -> None:
+        self._make_master()
+        check = self._opening()
+        self.assertIsNotNone(check, "開き方が出ていません")
+        self.assertEqual(check.level, presenter.OK)
+
+    def test_空の括弧を出さない(self) -> None:
+        """「ふだんの開き方は通りませんでした()。」が現場に出ていた。
+
+        試していない手の失敗理由を取りに行っていたので、括弧の中が
+        空でした。**理由が書けないなら、そもそも断る理由が無い。**
+        """
+        self._make_master()
+        self.assertNotIn("()", self._opening().detail)
+
+    def test_なぜ写すのかが読める(self) -> None:
+        """遅くなる経路を通っているので、理由は出す(良し悪しとは別)。"""
+        self._make_master()
+        self.assertIn(".pending_", self._opening().detail)
+
+    def test_本当に折れた手があれば要確認にする(self) -> None:
+        """**黙らせたのではない。** 手当てが要るときは今までどおり言う。"""
+        from unittest import mock
+
+        from packaging_tool import source_db
+        self._make_master()
+        with mock.patch.object(source_db, "_try_copy",
+                               side_effect=OSError("写せません")):
+            check = self._opening()
+        self.assertEqual(check.level, presenter.WARN)
+        self.assertIn("写せません", check.detail)
+
+    def test_3つの面すべてで同じ判断(self) -> None:
+        """梱包資材マスタだけ直して、看板と閾値を忘れない。"""
+        from packaging_tool import import_specs
+        self._make_master()
+        for name, tables in (
+                (config.KANBAN_DB_NAME, import_specs.KANBAN_TABLES),
+                (config.THRESHOLD_DB_NAME, import_specs.THRESHOLD_TABLES)):
+            conn = sqlite3.connect(self.dir / name)
+            for table in tables:
+                conn.execute(f'CREATE TABLE "{table}" (dummy TEXT)')
+            conn.commit()
+            conn.close()
+        from packaging_tool import user_settings
+        user_settings.save(config.KEY_THRESHOLD_DB_DIR, str(self.dir))
+        self.addCleanup(user_settings.save, config.KEY_THRESHOLD_DB_DIR, "")
+
+        for title in ("梱包資材マスタ", "看板マスタ", "パレット閾値マスタ"):
+            with self.subTest(title=title):
+                check = self._opening(title)
+                self.assertIsNotNone(check, f"{title} に開き方が出ていません")
+                self.assertEqual(check.level, presenter.OK)
+
+
 class SettingsTests(PresenterTestCase):
     def test_保存すると次から使われる(self) -> None:
         other = Path(tempfile.mkdtemp(prefix="data_test2_"))

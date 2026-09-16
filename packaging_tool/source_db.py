@@ -387,7 +387,11 @@ def _try_plain(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
 
 
 def _try_copy(resolved: Path) -> sqlite3.Connection:
-    """手元に写してから開く。**共有の上で開けないときの最後の手。**
+    """手元に写してから開く。**読むときの、これがふだんの手。**
+
+    以前は「共有の上で開けないときの最後の手」でしたが、順番を
+    入れ替えました(`_open` の説明)── 共有のファイルを開いたままに
+    すると上流が差し替えられず、`.pending_` が溜まるためです。
 
     WAL のファイルは共有フォルダの上では開けません(共有メモリが
     要るため)。手元のディスクなら開けるので、写して読みます。
@@ -438,7 +442,10 @@ def _copy_of(resolved: Path) -> Path:
             shutil.copyfile(side, target)
     shutil.copyfile(resolved, copy)
     _COPIES[key] = (stamp, copy)
-    log.info("共有の上で開けないので手元へ写しました: %s → %s", resolved, copy)
+    # **「開けないので」とは言わない。** 読むときは最初から写します
+    # (`_open`)。失敗したように読める行がログに並ぶと、うまくいって
+    # いるのに原因を探すことになります
+    log.info("読むために手元へ写しました: %s → %s", resolved, copy)
     return copy
 
 
@@ -485,6 +492,24 @@ class Probe:
     @property
     def ok(self) -> bool:
         return bool(self.opened_by)
+
+    @property
+    def failures(self) -> list[tuple[str, str]]:
+        """**実際に折れた手**だけ。試さなかった手はここに入らない。"""
+        return [(name, why) for name, why in self.attempts if why]
+
+    @property
+    def normal(self) -> bool:
+        """ふだんどおりに開けたか。
+
+        **「どの手で開けたか」では判断しない。** 読むときの1手目は
+        手元への写しなので(`_open`)、`opened_by` を `WAY_URI` と
+        比べると**うまくいっている状態が毎回「要確認」になります** ──
+        現場の「取り込めているはずなのに要確認になる」がこれでした。
+
+        普通かどうかを決めるのは**折れた手があったかどうか**だけです。
+        """
+        return self.ok and not self.failures
 
 
 # sqlite3 のファイルの先頭にある印

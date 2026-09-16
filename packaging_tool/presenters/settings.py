@@ -426,11 +426,7 @@ def _material_section(material: Optional[Path], conn=None) -> Section:
                                     _why_unreadable(found)))
         section.action = FIX_SOURCE
         return section
-    if found.opened_by != source_db.WAY_URI:
-        # ふだんの開き方では通らなかった。動いてはいるが、置かれ方に
-        # 手当てが要る(WAL のまま共有に置かれている等)
-        section.checks.append(Check(
-            "開き方", found.opened_by, WARN, _why_detoured(found)))
+    _opening_check(section, found)
     _encoding_check(section, found)
 
     names = found.tables
@@ -524,9 +520,7 @@ def _kanban_section(kanban: Optional[Path]) -> Section:
                                     _why_unreadable(found)))
         section.action = FIX_SOURCE
         return section
-    if found.opened_by != source_db.WAY_URI:
-        section.checks.append(Check(
-            "開き方", found.opened_by, WARN, _why_detoured(found)))
+    _opening_check(section, found)
 
     names = found.tables
     missing = [t for t in import_specs.KANBAN_TABLES if t not in names]
@@ -570,9 +564,7 @@ def _threshold_section(threshold: Optional[Path]) -> Section:
                                     _why_unreadable(found)))
         section.action = FIX_SOURCE
         return section
-    if found.opened_by != source_db.WAY_URI:
-        section.checks.append(Check(
-            "開き方", found.opened_by, WARN, _why_detoured(found)))
+    _opening_check(section, found)
 
     names = found.tables
     missing = [t for t in import_specs.THRESHOLD_TABLES if t not in names]
@@ -630,19 +622,70 @@ def _why_unreadable(found: "source_db.Probe") -> str:
             "確かめてください。試した順: " + tried)
 
 
+def _opening_check(section: Section, found: "source_db.Probe") -> None:
+    """どうやって開いたか。**うまくいっているなら「要確認」にしない。**
+
+    【毎回「要確認」になっていた】
+    以前はここが `opened_by != WAY_URI` で判断していました。VER2.23.1
+    に書いた時点では、それで正しかったのです ── 読むときの1手目は
+    URI で、手元への写しは**開けなかったときの最後の手**でした。
+
+    VER2.76.1 で順番を入れ替えました。共有のファイルを開いたままに
+    すると上流が差し替えられず、`SIKALOT.pending_...` が共有に溜まる
+    ためで、**読むときは最初から手元へ写します**(`source_db._open`)。
+    ところがこちらの判断を直し忘れたので、
+
+        開き方  手元への写し  要確認
+        ふだんの開き方は通りませんでした()。
+
+    が毎回出るようになりました。括弧が空なのは、URI の失敗理由を
+    取りに行ったのに**そもそも試していないので理由が無い**からです。
+    現場の「取り込めているはずなのに要確認になる」がこれでした。
+
+    **できているのにできていないと出す**のがいちばん高くつきます。
+    本当の問題が同じ顔で並ぶので、次からは誰も読まなくなります。
+
+    【いまの決め方】
+    「どの手で開けたか」ではなく、**折れた手があったかどうか**
+    (`Probe.normal`)。折れていなければ、写して読むのはふだんの経路
+    なので問題なしとして、なぜ写すのかだけを添えます。
+    """
+    if found.normal:
+        section.checks.append(Check("開き方", found.opened_by, OK,
+                                    _why_normal(found)))
+        return
+    section.checks.append(Check("開き方", found.opened_by, WARN,
+                                _why_detoured(found)))
+
+
+def _why_normal(found: "source_db.Probe") -> str:
+    """ふだんどおりに開けたときの一言。**良し悪しではなく事実。**"""
+    if found.opened_by != source_db.WAY_COPY:
+        return "共有の上から直接読めています。"
+    note = ("読むたびに手元へ写してから読んでいます。共有のファイルを"
+            "開いたままにすると、変換する側が新しいファイルに置き換え"
+            "られず、共有に `.pending_…` が溜まるためです"
+            "(中身が変わったときだけ写し直します)。")
+    if found.journal.lower() == "wal":
+        # 写しているので困りはしない。**速くなる余地**として伝える
+        note += ("なおこのファイルは WAL です。変換したPCで "
+                 "`PRAGMA journal_mode=DELETE;` を実行して置き直すと、"
+                 "共有の上でも開けるようになります(必須ではありません)。")
+    return note
+
+
 def _why_detoured(found: "source_db.Probe") -> str:
-    """ふだんの開き方では通らなかったときの言い分。**動いていても言う。**"""
-    first = next((why for name, why in found.attempts
-                  if name == source_db.WAY_URI and why), "")
+    """**実際に折れた手があった**ときの言い分。動いていても言う。"""
+    broke = " / ".join(f"{name}: {why}" for name, why in found.failures)
     tail = ""
     if found.opened_by == source_db.WAY_COPY:
-        tail = ("共有の上では開けないので、読むたびに手元へ写しています"
-                "(そのぶん遅くなります)。")
+        tail = ("いまは手元へ写して読んでいるので動いていますが、"
+                "置かれ方に手当てが要ります。")
         if found.journal.lower() == "wal":
             tail += ("元が WAL です。変換したPCで "
-                     "`PRAGMA journal_mode=DELETE;` を実行して置き直すと、"
-                     "写さずに読めるようになります。")
-    return f"ふだんの開き方は通りませんでした({first})。{tail}"
+                     "`PRAGMA journal_mode=DELETE;` を実行して置き直して"
+                     "ください。")
+    return f"通らなかった開き方があります({broke})。{tail}"
 
 
 def _check_local_master(section: Section, conn) -> None:

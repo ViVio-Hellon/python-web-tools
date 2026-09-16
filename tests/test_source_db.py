@@ -467,6 +467,30 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(found.attempts[0][0], source_db.WAY_COPY)
         self.assertIn("写せません", found.attempts[0][1])
 
+    def test_1手目で開けたならふつう(self) -> None:
+        """**「どの手で開けたか」で良し悪しを決めない。**
+
+        読むときの1手目は手元への写し。`WAY_URI` と比べて判断すると、
+        **うまくいっている状態が毎回「要確認」になる**(現場の
+        「取り込めているはずなのに要確認になる」)。
+        """
+        found = source_db.probe(self.make("ふつう.sqlite3"))
+        self.assertEqual(found.opened_by, source_db.WAY_COPY)
+        self.assertEqual(found.failures, [])
+        self.assertTrue(found.normal)
+
+    def test_折れた手があればふつうではない(self) -> None:
+        with mock.patch.object(source_db, "_try_copy",
+                               side_effect=OSError("写せません")):
+            found = source_db.probe(self.make("ふつう.sqlite3"))
+        self.assertFalse(found.normal)
+        self.assertEqual([n for n, _ in found.failures], [source_db.WAY_COPY])
+
+    def test_開けなければふつうではない(self) -> None:
+        bogus = self.dir / "偽物.sqlite3"
+        bogus.write_text("sqlite3 ではありません", encoding="utf-8")
+        self.assertFalse(source_db.probe(bogus).normal)
+
 
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
