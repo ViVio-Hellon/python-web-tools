@@ -28,7 +28,7 @@ from typing import Optional
 
 from flask import Flask, g, jsonify, request
 
-from packaging_tool import access_control, app_config, db, modes
+from packaging_tool import access_control, app_config, db, idle_exit, modes
 from packaging_tool.logging_utils import get_logger
 
 # **起動時の権限で登録するかどうかが決まるモード。**
@@ -368,6 +368,36 @@ def _register_db(app: Flask) -> None:
 
     加えて、**書く要求は1つずつ通す**(上の `_WRITE_LOCK`)。
     """
+
+    @app.before_request
+    def _note_someone_is_here():                # noqa: ANN202 - Flaskのフック
+        """**要求が来ている = 誰かが見ている。**
+
+        自動終了は心拍(`/api/alive`)だけを見ていた。ところが画面を
+        移ると、古いページの `pagehide` が「閉じました」を送り、新しい
+        ページの最初の心拍が届くまでのあいだ**猶予の8秒が走り続ける**。
+        頁の読み込みと ES モジュールの取得が続けば、そのあいだに猶予が
+        切れる ── 現場で実際に起きた「使っている最中にフリーズして
+        閉じた」がこれで、ログには
+
+            08:41:15 画面が閉じました。8秒 待って終了します
+            08:41:20 資材選択のセッションを開始しました   ← 使っている
+            08:41:25 誰も見ていないので終了します
+
+        と残っていた。真ん中の行が「見ている」証拠なのに、心拍だけを
+        見ていたので届かなかった。
+
+        心拍の届き方(`sendBeacon` は順番も時刻も保証しない)に頼らず、
+        **要求そのものを在席の合図にする。**
+
+        `/api/alive` だけは除く ── あちらは「閉じました」も同じ口で
+        受けるので、ここで先に取り消すと閉じたことが伝わらない。
+        """
+        if request.path == "/api/alive":
+            return
+        watch = idle_exit.get()
+        if watch is not None:
+            watch.beat()
 
     @app.before_request
     def _take_write_lock():                     # noqa: ANN202 - Flaskのフック

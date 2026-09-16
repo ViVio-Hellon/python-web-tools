@@ -157,7 +157,8 @@ class DiagnoseTests(unittest.TestCase):
             self.start_app._diagnose_sources()
         text = self.messages()
         self.assertIn("開けました", text)
-        self.assertIn(source_db.WAY_URI, text)
+        # 読むときは手元への写しが先(共有を開いたままにしない)
+        self.assertIn(source_db.WAY_COPY, text)
 
     def test_開けないものは理由まで残す(self):
         """「読めません」だけでは端末に行くことになる。"""

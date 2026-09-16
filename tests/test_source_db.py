@@ -351,26 +351,27 @@ class ConnectTests(unittest.TestCase):
         # 断り文に**試した手と理由**が入っている
         self.assertIn("not a database", str(caught.exception))
 
-    def test_その場で開けなければ手元へ写して読む(self) -> None:
-        """共有の上の WAL は読むだけでも開けない。写せば読める。"""
-        with mock.patch.object(source_db, "_try_uri",
-                               side_effect=sqlite3.OperationalError("shm 不可")), \
-             mock.patch.object(source_db, "_try_plain",
-                               side_effect=sqlite3.OperationalError("shm 不可")):
-            attempts: list = []
-            conn, way = source_db._open(self.path, read_only=True,
-                                        attempts=attempts)
-            with conn:
-                self.assertEqual(
-                    conn.execute("SELECT 名前 FROM 表").fetchone()[0], "あ")
-                # 写しでも読み取り専用は譲らない
-                with self.assertRaises(sqlite3.Error):
-                    conn.execute("INSERT INTO 表 VALUES ('い')")
+    def test_読むときはまず手元へ写す(self) -> None:
+        """**共有を開いたままにしない。**
+
+        開いたままだと上流がファイルを差し替えられず、新しいほうを
+        `SIKALOT.pending_20260914_091528.sqlite3` のような名前で置いたまま
+        去る(現場の共有に溜まっていた)。写してしまえば共有を触るのは
+        一瞬で済む。共有の上の WAL が読めない問題もこれで一緒に片付く。
+        """
+        attempts: list = []
+        conn, way = source_db._open(self.path, read_only=True,
+                                    attempts=attempts)
         self.assertEqual(way, source_db.WAY_COPY)
-        # **試した順が残る。** どこで折れたかを画面に出せる
-        self.assertEqual([n for n, _why in attempts],
-                         [source_db.WAY_URI, source_db.WAY_PLAIN,
-                          source_db.WAY_COPY])
+        with conn:
+            self.assertEqual(
+                conn.execute("SELECT 名前 FROM 表").fetchone()[0], "あ")
+            # 写しでも読み取り専用は譲らない
+            with self.assertRaises(sqlite3.Error):
+                conn.execute("INSERT INTO 表 VALUES ('い')")
+        # **試した順が残る。** どこで折れたかを画面に出せる。
+        # 読むときは写しが先で、1手目で足りるのでそこで止まる
+        self.assertEqual([n for n, _why in attempts], [source_db.WAY_COPY])
 
     def test_書くときは写しへ逃がさない(self) -> None:
         """写しへ書くと、書いたものがどこにも残らない。"""
@@ -430,7 +431,8 @@ class ProbeTests(unittest.TestCase):
     def test_読めたときは中身まで分かる(self) -> None:
         found = source_db.probe(self.make("ふつう.sqlite3"))
         self.assertTrue(found.ok)
-        self.assertEqual(found.opened_by, source_db.WAY_URI)
+        # 読むときは手元への写しが先(共有を開いたままにしない)
+        self.assertEqual(found.opened_by, source_db.WAY_COPY)
         self.assertEqual(found.tables, ["表"])
         self.assertTrue(found.is_sqlite)
         self.assertGreater(found.size, 0)
@@ -456,13 +458,14 @@ class ProbeTests(unittest.TestCase):
         self.assertFalse(found.exists)
 
     def test_試した手が全部残る(self) -> None:
-        with mock.patch.object(source_db, "_try_uri",
-                               side_effect=sqlite3.OperationalError("だめ")):
+        """写せなくても、次の手へ移って読めることまで残す。"""
+        with mock.patch.object(source_db, "_try_copy",
+                               side_effect=OSError("写せません")):
             found = source_db.probe(self.make("ふつう.sqlite3"))
         self.assertTrue(found.ok)
-        self.assertEqual(found.opened_by, source_db.WAY_PLAIN)
-        self.assertEqual(found.attempts[0][0], source_db.WAY_URI)
-        self.assertIn("だめ", found.attempts[0][1])
+        self.assertEqual(found.opened_by, source_db.WAY_URI)
+        self.assertEqual(found.attempts[0][0], source_db.WAY_COPY)
+        self.assertIn("写せません", found.attempts[0][1])
 
 
 if __name__ == "__main__":                       # pragma: no cover

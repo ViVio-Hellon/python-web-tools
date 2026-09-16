@@ -306,12 +306,25 @@ def _open(path: Path, *, read_only: bool,
     resolved = Path(os.path.abspath(path))
     log_to = attempts if attempts is not None else []
 
-    ways = [(WAY_URI, lambda: _try_uri(resolved, read_only=read_only)),
-            (WAY_PLAIN, lambda: _try_plain(resolved, read_only=read_only))]
+    ways = []
     if read_only:
+        # **読むときは、まず手元へ写す。**
+        #
+        # 共有のファイルを開いたままにすると、**上流が置き換えられない**。
+        # Windows は開いているファイルの差し替えを拒むので、変換する側は
+        # 新しいほうを `SIKALOT.pending_20260914_091528.sqlite3` のような
+        # 名前で置いたまま去る ── 現場の共有に溜まっていたのはこれ。
+        # 写してしまえば共有を触るのは数ミリ秒で済み、上流は自由に
+        # 差し替えられる。
+        #
+        # 写しは中身が変わったときだけ作り直す(`_copy_of`)ので、
+        # 19表の取り込みでも共有への往復は1回。
+        #
         # 写しは**読むときだけ**。書き戻しを写しへ向けたら、書いたものが
         # どこにも残らない ── 開けないなら開けないと言うほうがまし
         ways.append((WAY_COPY, lambda: _try_copy(resolved)))
+    ways += [(WAY_URI, lambda: _try_uri(resolved, read_only=read_only)),
+             (WAY_PLAIN, lambda: _try_plain(resolved, read_only=read_only))]
 
     for name, attempt in ways:
         try:
@@ -320,9 +333,12 @@ def _open(path: Path, *, read_only: bool,
             log_to.append((name, str(exc)))
             continue
         log_to.append((name, ""))
-        if name != WAY_URI:
+        # **1手目で開けたなら普通のこと。** 折れた手があったときだけ言う
+        # (読むときの1手目は手元への写しで、それが当たり前の経路)
+        failed = [(n, why) for n, why in log_to if why]
+        if failed:
             log.warning("%s は %s で開きました(%s)", path.name, name,
-                        log_to[0][1] if log_to else "")
+                        " / ".join(f"{n}: {why}" for n, why in failed))
         return conn, name
 
     reasons = " / ".join(f"{n}: {why}" for n, why in log_to if why)

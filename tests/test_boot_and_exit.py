@@ -329,6 +329,50 @@ class HardExitTests(unittest.TestCase):
 # ==================================================================
 # タブを閉じたら終わる
 # ==================================================================
+class RequestIsPresenceTests(unittest.TestCase):
+    """**要求が来ている = 誰かが見ている。**
+
+    心拍(`/api/alive`)だけを見ていると、画面を移ったあと新しいページの
+    心拍が届くまでのあいだ、猶予が走り続けて落ちる(現場で実際に起きた)。
+    要求そのものを在席の合図にして塞ぐ。
+    """
+
+    def setUp(self) -> None:
+        from app import create_app
+
+        idle_exit.reset()
+        self.addCleanup(idle_exit.reset)
+        self.stopped = []
+        self.watch = idle_exit.install(lambda: self.stopped.append(1),
+                                       lambda: False)
+        app = create_app("field", token="t", port=8715)
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_画面を開くと在席の合図になる(self) -> None:
+        self.watch.beat()
+        self.watch.leaving()                  # 画面を移った
+        self.assertIsNotNone(self.watch._leaving_at)
+
+        self.client.get("/selection")         # 移った先が読み込まれた
+        self.assertIsNone(self.watch._leaving_at,
+                          "画面を読み込んだのに「閉じた」が残っています")
+
+    def test_APIでも在席の合図になる(self) -> None:
+        self.watch.beat()
+        self.watch.leaving()
+        self.client.get("/api/health")
+        self.assertIsNone(self.watch._leaving_at)
+
+    def test_心拍の口だけは取り消さない(self) -> None:
+        """`/api/alive` は「閉じました」も同じ口で受ける。
+        ここで先に取り消すと、閉じたことが伝わらなくなる。"""
+        self.watch.beat()
+        self.client.post("/api/alive", json={"leaving": True})
+        self.assertIsNotNone(self.watch._leaving_at,
+                             "閉じた合図が取り消されています")
+
+
 class IdleWatchTests(unittest.TestCase):
     """`packaging_tool/idle_exit.py` — 見張りの判断だけを見る。"""
 
@@ -356,6 +400,30 @@ class IdleWatchTests(unittest.TestCase):
         w = self.watch(idle_sec=0.0)
         w.beat()
         self.assertIsNotNone(w.overdue())
+
+    def test_画面を移っただけで落とさない(self):
+        """**現場で実際に起きた「使っている最中に閉じた」の再現。**
+
+        画面を移ると、古いページの `pagehide` が「閉じました」を送る。
+        新しいページの最初の心拍が届くまでのあいだ猶予が走り続けるので、
+        頁とESモジュールの読み込みが続くと、そのあいだに切れる。
+
+            08:41:15 画面が閉じました。8秒 待って終了します
+            08:41:20 資材選択のセッションを開始しました   ← 使っている
+            08:41:25 誰も見ていないので終了します
+
+        真ん中の行が「見ている」証拠なのに、心拍だけを見ていたので
+        届かなかった。**要求そのものを在席の合図にする**(`app/__init__`
+        の `_note_someone_is_here`)ので、新しいページを読み込んだ時点で
+        取り消される。
+        """
+        w = self.watch(idle_sec=90.0, grace_sec=0.0)
+        w.beat()              # 開いている
+        w.leaving()           # 画面を移った(古いページの pagehide)
+        self.assertIsNotNone(w.overdue(), "前提: このままだと落ちる")
+
+        w.beat()              # 新しいページの要求が届いた
+        self.assertIsNone(w.overdue(), "移っただけで落としてはいけない")
 
     def test_閉じたら猶予のあとで落とす(self):
         w = self.watch(idle_sec=999.0, grace_sec=0.0)
