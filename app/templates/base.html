@@ -139,6 +139,11 @@
   // サーバから渡す起動時の値。JSはここ以外から設定を読まない
   window.APP = {
     token: {{ token | tojson }},
+    // このタブの番号。要求のたびに付けて送り、サーバは**最後に開いた
+    // タブからのものだけ**を通す(`packaging_tool/screen_lock.py`)。
+    // この <script> は nav.js の差し替え対象ではないので、同じタブで
+    // 画面を移っても番号は変わらない
+    screenId: {{ screen_id | tojson }},
     mode: {{ mode | tojson }},
     healthPollMs: {{ health_poll_ms }},
     logPollMs: {{ log_poll_ms }},

@@ -7,6 +7,7 @@
 */
 
 import * as busy from "./busy.js";
+import * as screen from "./screen.js";
 
 const TOKEN = window.APP.token;
 
@@ -57,6 +58,9 @@ async function request(path, options = {}) {
       cache: "no-store",
       headers: {
         "X-Tool-Token": TOKEN,
+        // どのタブからの要求か。サーバは**最後に開いたタブ**からの
+        // ものだけを通す(`packaging_tool/screen_lock.py`)
+        [screen.HEADER]: screen.id(),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...(options.headers || {}),
       },
@@ -67,7 +71,13 @@ async function request(path, options = {}) {
     if (type.includes("application/json")) {
       body = await res.json();
     }
-    if (!res.ok) throw new ApiError(res.status, body);
+    if (!res.ok) {
+      const err = new ApiError(res.status, body);
+      // **譲ったことは、押した本人に見せる。** トーストだけだと数秒で
+      // 消えて、そのあとは「押しても何も起きない画面」になる
+      if (err.code === screen.TAKEN) screen.showTaken(err.message);
+      throw err;
+    }
     return body;
   } finally {
     done();

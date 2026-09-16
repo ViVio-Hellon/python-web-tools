@@ -7,6 +7,7 @@
 */
 
 import { api } from "./api.js";
+import * as screen from "./screen.js";
 
 // 何回続けて失敗したら「切れた」と見なすか。
 // 1回の取りこぼしで赤帯を出すと、かえって信用されなくなる
@@ -22,9 +23,22 @@ function setOffline(offline) {
 
 async function beat() {
   try {
-    await api.get("/api/health");
+    const body = await api.get("/api/health");
     if (misses >= MISSES_BEFORE_OFFLINE) setOffline(false);
     misses = 0;
+    /*
+      **押す前に、譲ったことを見せる。**
+
+      2枚目のタブを開くと、こちらは操作できなくなる
+      (`packaging_tool/screen_lock.py`)。押したときにも断りは返るが、
+      それだけでは**押すまで分からない** ── 古いLotを出したまま待って
+      いて、押した1回目が空振りになる。
+
+      向こうのタブが閉じれば戻ってくる(閉じるとき番号を手放す)ので、
+      そのときは覆いを引っ込める。
+    */
+    if (body && body.screen_ok === false) screen.showTaken();
+    else if (body && body.screen_ok === true) screen.clearTaken();
   } catch {
     if (++misses === MISSES_BEFORE_OFFLINE) setOffline(true);
   }
@@ -42,7 +56,10 @@ async function beat() {
    `sendBeacon` はブラウザが送りきってくれる。
    ================================================================ */
 function alive(body) {
-  const payload = JSON.stringify(body || {});
+  // **閉じたことと一緒に、このタブの番号も渡す。** 受け取った側は
+  // 「いま使っている画面」を手放すので、残ったタブが読み込み直さずに
+  // 操作へ戻れる。`sendBeacon` はヘッダを付けられないので本文に入れる
+  const payload = JSON.stringify({ ...(body || {}), screen_id: screen.id() });
   // 閉じる瞬間は `sendBeacon`。**それ以外も同じ口**へ送る
   if (body && body.leaving && navigator.sendBeacon) {
     navigator.sendBeacon("/api/alive",

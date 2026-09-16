@@ -430,6 +430,40 @@ select.input { cursor: pointer; }
 .offline[hidden] { display: none; }
 
 /* ================================================================
+   このタブは操作を譲った、という覆い (`js/screen.js`)
+
+   **画面ぜんぶを覆う。** 帯やトーストにすると、その下の入力欄は
+   触れたままで、押せるように見えるものが押せない画面になる。
+   覆ってしまえば「ここでは操作しない」が一目で決まる。
+
+   トースト(z-index 50)より上に出す ── 断りのトーストが同時に
+   出ることがあり、覆いの上に文字だけが浮くと読みにくい
+   ================================================================ */
+.taken {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgb(14 37 53 / 55%);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.taken__card {
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--rule); border-top: 3px solid var(--state-warn);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop);
+  padding: 22px 24px; max-width: 520px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.taken__title { font-size: var(--fs-xl); }
+.taken__note { font-size: var(--fs-md); line-height: 1.6; margin: 0; }
+/* 理由。**押す前に読めるところに置く** ── 何が起きたのか分からない
+   まま「続ける」を押させない */
+.taken__why {
+  font-size: var(--fs-sm); line-height: 1.65; color: var(--muted);
+  background: var(--sunken); border-radius: var(--radius-xs);
+  padding: 10px 12px; margin: 0;
+}
+.taken__acts { display: flex; gap: 10px; margin-top: 4px; }
+
+/* ================================================================
    絞り込みバー(仕掛一覧)
 
    条件は「チップ1つ = 条件1つ」。**×で外せることが見えている**のが

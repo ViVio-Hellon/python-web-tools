@@ -14,7 +14,7 @@ from typing import Optional
 
 from flask import Blueprint, current_app, jsonify, redirect, request
 
-from packaging_tool import app_config, modes
+from packaging_tool import app_config, modes, screen_lock
 from packaging_tool.logging_utils import get_logger
 
 from .. import shell
@@ -101,6 +101,18 @@ def health():
         "stage_key": config.get("STAGE_KEY", "prepare"),
         "startup_error": config["STARTUP_ERROR"],
         "uptime_sec": round(time.time() - config["STARTED_AT"], 1),
+        # **そのタブがまだ操作できるか。**
+        #
+        # 譲ったことを古いタブへ伝える口がここです(`screen_lock`)。
+        # 断りは押したときにも返りますが、それだけだと**押すまで
+        # 分かりません** ── 古いタブは古いLotを出したまま待っていて、
+        # 押した1回目が「効かない操作」になります。心拍は15秒ごとに
+        # 来るので、押す前に覆いが出せます。
+        #
+        # ここ自体は素通し(`SCREEN_EXEMPT_PATHS`)。断ってしまうと
+        # この知らせが届きません。
+        "screen_ok": screen_lock.is_active(
+            request.headers.get(screen_lock.HEADER, "")),
         # いま走っているものの一言。**起動待機画面はこれを読む** ──
         # 取り込みが終わるまで待たせるので、何をどこまでやっているかを
         # 出さないと「止まっている」と受け取られる
@@ -175,14 +187,21 @@ def alive():
 
     `leaving=true` はタブを閉じた合図(`sendBeacon`)。猶予のあとで
     終わりますが、そのあいだに心拍が戻れば取り消されます。
+
+    **閉じたタブは「いま使っている画面」も手放します。** 番号は本文で
+    受け取ります ── `sendBeacon` にはヘッダを付けられないからです。
+    手放すことで、残ったタブが読み込み直さずに操作へ戻れます。
     """
     from packaging_tool import idle_exit
+
+    body = request.get_json(silent=True) or {}
+    if body.get("leaving"):
+        screen_lock.release(str(body.get("screen_id") or ""))
 
     watch = idle_exit.get()
     if watch is None:
         return jsonify({"ok": True, "watching": False})
 
-    body = request.get_json(silent=True) or {}
     if body.get("leaving"):
         watch.leaving()
     else:

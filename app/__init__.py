@@ -28,7 +28,8 @@ from typing import Optional
 
 from flask import Flask, g, jsonify, request
 
-from packaging_tool import access_control, app_config, db, idle_exit, modes
+from packaging_tool import (access_control, app_config, db, idle_exit, modes,
+                            screen_lock)
 from packaging_tool.logging_utils import get_logger
 
 # **起動時の権限で登録するかどうかが決まるモード。**
@@ -69,6 +70,14 @@ TOKEN_REQUIRED_PREFIXES = ("/api/", "/report/")
 # 業務データを含みません。トークンを要求すると、**トークンが切れた
 # 画面が黙って死んだ扱いになり**、開いているのに終了してしまいます。
 TOKEN_EXEMPT_PATHS = frozenset({"/api/health", "/api/alive"})
+
+# 「いま使っているタブ」の確認をしない経路(`packaging_tool/screen_lock.py`)。
+#
+# `/api/health` は**譲ったことを古いタブへ伝える口**なので、ここで
+# 断ってしまうと伝わらない(応答の `screen_ok` がその知らせ)。
+# `/api/alive` も同じ理由 ── 心拍を断ると、開いているタブが死んだ扱いに
+# なって自動終了が誤る。どちらも業務データを含まない。
+SCREEN_EXEMPT_PATHS = frozenset({"/api/health", "/api/alive"})
 
 
 def create_app(mode: str = modes.FIELD, *,
@@ -249,6 +258,21 @@ def _register_security(app: Flask) -> None:
             return jsonify(_error(
                 "bad_token",
                 "この画面は無効になりました。アプリを開き直してください")), 401
+
+        # --- いま使っているタブか (`packaging_tool/screen_lock.py`) ---
+        # 同じアドレスを2枚開くと、**どちらも同じ作業状態を触る**。
+        # 操作できるのは最後に開いた1枚だけにする。
+        #
+        # **番号を送ってこない相手は素通しする。** `curl`・試験、そして
+        # ヘッダを付けられない読み込み(`<img>`/`<iframe>` で開く帳票)が
+        # ここに入る ── 守りたいのはタブどうしの取り合いで、それらを
+        # 巻き込む理由は無い。
+        if request.path in SCREEN_EXEMPT_PATHS:
+            return None
+        if not screen_lock.is_active(request.headers.get(screen_lock.HEADER, "")):
+            log.warning("譲ったタブからの要求を拒否: %s", request.path)
+            return jsonify(_error(screen_lock.REFUSE_TAKEN,
+                                  screen_lock.REFUSE_MESSAGE)), 409
         return None
 
     @app.after_request

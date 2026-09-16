@@ -31,6 +31,8 @@
   `location.href` へ落とす。**移れなくなることは無い。**
 */
 
+import * as screen from "./screen.js";
+
 /** 差し替えたい要素。この順に上から入れ替える。 */
 const SWAP = ["header.ribbon", "nav.rail", "main#main"];
 
@@ -114,7 +116,14 @@ export async function go(href, push = true) {
   let html;
   let landed = href;
   try {
-    const res = await fetch(href, { cache: "no-store" });
+    // **このタブの番号を付ける。** 付けないとサーバは「新しいタブが
+    // 開いた」と読み、同じタブの中で画面を移るたびに番号が変わる
+    // (`screen_lock.for_request`)。番号は base.html の <script> に
+    // 入っていて、差し替えの対象ではないので替わらない
+    const res = await fetch(href, {
+      cache: "no-store",
+      headers: { [screen.HEADER]: screen.id() },
+    });
     // 権限が変わった・落ちた等。**普通の遷移に任せる**と、サーバが
     // 用意している案内(401の文言や起動待機画面)がそのまま出る
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

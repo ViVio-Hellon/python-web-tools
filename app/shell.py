@@ -13,10 +13,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from flask import current_app
+from flask import current_app, request
 
 from packaging_tool import (access_control, app_config, idle_exit, modes,
-                            user_settings, work_context)
+                            screen_lock, user_settings, work_context)
 
 
 @dataclass
@@ -192,6 +192,12 @@ def shell_context(active: str, *,
         "version_label": app_config.version_label(),
         "favicon": favicon(mode),
         "token": config["TOKEN"],
+        # このタブの番号。**開いた時点で「いま使っている画面」になる**
+        # (`packaging_tool/screen_lock.py`)。同じアドレスを2枚開くと
+        # どちらも同じ作業状態を触ってしまうので、操作できるのは
+        # 最後に開いた1枚だけにする
+        "screen_id": screen_lock.for_request(
+            request.headers.get(screen_lock.HEADER, "")),
         "base_point": user_settings.get_position_label(),
         # いま何が決まっているか。画面をまたいで持つ(`work_context`)
         "ribbon": work_context.get_context().ribbon(),
