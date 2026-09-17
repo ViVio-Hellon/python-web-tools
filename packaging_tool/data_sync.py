@@ -42,7 +42,7 @@ import sqlite3
 import sys
 from typing import Optional
 
-from . import config, db
+from . import config, db, import_specs
 from .logging_utils import get_logger
 
 # ------------------------------------------------------------------

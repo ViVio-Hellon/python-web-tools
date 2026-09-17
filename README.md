@@ -1,4 +1,4 @@
-# 梱包資材総合ツール (Python / SQLite版) — VER2.77.1
+# 梱包資材総合ツール (Python / SQLite版) — VER2.77.2
 
 Excel VBA + Access で作られていた梱包資材管理ツールの Python 移植版です。
 画面は **Flask + HTML/CSS/JS**、業務ロジックは Python、データは SQLite。
@@ -10,6 +10,7 @@ Excel VBA + Access で作られていた梱包資材管理ツールの Python �
 | [`docs/設計.md`](docs/設計.md) | アーキテクチャ・API・守っている約束 |
 | [`docs/UIUX設計指針.md`](docs/UIUX設計指針.md) | 画面を作るときの判断基準(認知心理学・情報構造・配色) |
 | [`docs/はじめに読む_起動と使い方.md`](docs/はじめに読む_起動と使い方.md) | 現場向けの手順書 |
+| [`docs/モード一覧.md`](docs/モード一覧.md) | モードの一覧(着火条件・効き先・解除)。実装と突き合わせる試験付き |
 | [`docs/変更履歴.md`](docs/変更履歴.md) | 版の上げ方と、版ごとに何が変わったか |
 
 **この README は業務仕様の記録です。** VBA のどの処理をどこへ移したか、
@@ -26,7 +27,7 @@ Excel VBA + Access で作られていた梱包資材管理ツールの Python �
 | 倉庫連携 | `frmWarehouseOrder` / `frmSendConfirm`(発注登録・確認・取消) |
 | 棚検索 | `frmLayout`(資材配置の可視化・最寄り検索) |
 | 選定ログ | `txtUserLog`(パレット検索の除外理由) |
-| 設定 | 取り込み元の置き場所・拠点・自動取り込み・取り込みと書き戻し |
+| 設定 | 取り込みと反映・いまの状態・マスタ管理・取り込み元の置き場所・拠点・パスワード・よく使う条件・ボード人気度 |
 
 移植済みの業務ロジック(選定・配置・疲労度・保護材・特殊モード・帳票)は
 以下の節に範囲を書いてあります。
@@ -495,8 +496,7 @@ VBAはこれを1つのレジストリ値(`GetSetting("梱包資材管理","Confi
 (レジストリの代わりに`data/user_config.json`へ保存)。
 資材選択タブと棚検索タブのどちらで変更しても、もう一方に即座に反映される。
 
-まだボタンを置いていないのは `btnPrint`(Lot印刷) / `btnCutRequest`(切断依頼)。
-どちらも様式(フォーマット)の提供待ち。
+### 選定リストの手入力
 
 手動で候補ボードを選定リストに追加することもできる(その場合は狭幅パレット
 フラグを引き継がないため、通常の配置経路で描画される)。
@@ -510,11 +510,19 @@ VBAはこれを1つのレジストリ値(`GetSetting("梱包資材管理","Confi
 「保存済みパターンでタグが失われた場合の推測復元」という
 `GetEffectiveTag` の存在理由はここに繋がっている。
 
-管理者パスワードは `packaging_tool/config.py` の `ADMIN_PASSWORD` で、
-環境変数 `PACKAGING_TOOL_ADMIN_PASSWORD` で上書きできる。
-これは暗号化もハッシュ化もされない、保存ボタンの誤操作を防ぐための
-UIガードにすぎない(VBA版も `Private Const ADMIN_PASSWORD` の平文比較だった)。
-本番運用では環境変数で差し替えることを推奨する。
+管理者パスワードは `packaging_tool/admin_password.py` が持つ。役目は
+VBA版と同じ**保存ボタンの誤操作を防ぐUIガード**で、誰がその端末を
+使えるかを決めるのは `アクセス権限` マスタのほう(`access_control`)。
+
+- **現場で変えられる。** 設定画面の「パスワード」タブから変更する。
+  変えられないパスワードは実質「変えない」と同じで、人が入れ替わっても
+  直せないままになる
+- **平文では持たない。** 変えた値は PBKDF2 で撹拌して
+  `data/user_config.json` に入る。配布はフォルダごとコピーなので、
+  設定ファイルはそのまま持ち出せる ── UIガードとはいえ平文で置く理由が無い
+- **一度も変えていない端末では、これまでどおり** `config.ADMIN_PASSWORD`
+  (環境変数 `PACKAGING_TOOL_ADMIN_PASSWORD` で上書き可)が通る。
+  入れ替えただけで認証が通らなくなる、を作らない
 
 #### 配置図の描画
 
@@ -652,6 +660,11 @@ python process_manager.py --all          # 現場・資材の両方を止める
 端末で2つのモードを並べて開きたいときは `start.bat --mode material` を使います。
 
 - 同じアプリを二重に起動しようとすると、**新しく起動せず既存の画面を開きます**
+- 同じアプリを**ブラウザのタブで2枚**開いたときは、**操作できるのは最後に
+  開いた1枚だけ**です。作業状態(Lot・パレット・選定)はプロセスに1つしか
+  無いので、2枚から触ると片方の内容でもう片方の操作が通ってしまいます。
+  古いほうには覆いが出て、「このタブで続ける」で取り戻せます
+  (`packaging_tool/screen_lock.py`)
 - ログ・作業ファイルは **`%LOCALAPPDATA%\PackagingTool`** に置かれます
   (アプリ本体を共有フォルダに置いても、端末ごとに分かれます)
 
@@ -665,7 +678,7 @@ python process_manager.py --all          # 現場・資材の両方を止める
 | `/warehouse` | 倉庫連携(現場=発注・取消 / 資材=確認) |
 | `/layout` | 棚検索(配置図・最寄り検索・配置編集) |
 | `/log` | 選定ログ(差分取得・種別で絞り込み) |
-| `/settings` | 設定(取り込み・取り込み元へ反映・置き場所・よく使う条件) |
+| `/settings` | 設定(取り込みと反映・いまの状態・マスタ管理・置き場所・動作・パスワード・よく使う条件・ボード人気度・最近の結果) |
 
 現場モードと資材モードは同じデータベースを見ます。違うのは、
 **資材でしかできない操作(確認・取消)が、権限の無い端末には存在しない**
@@ -698,11 +711,9 @@ python process_manager.py --all          # 現場・資材の両方を止める
 > 一通り書いてあるので、まずはそちらをどうぞ。
 
 初回起動時にDB(`data/packaging_tool.db`)が自動作成されます。
-
-```bash
-python3 -m packaging_tool
-```
-
+起動は `Start.vbs`(コマンドからは `python start_app.py`)です ──
+**`python -m packaging_tool` では起動しません。** tkinter版だったころの
+入口で、Web版には `__main__.py` がありません。
 
 サンプルデータ付きでDBを作り直したい場合:
 
@@ -713,7 +724,7 @@ python3 scripts/init_db.py --seed
 DBファイルの場所は環境変数で変更できます(共有フォルダに置く場合など):
 
 ```bash
-PACKAGING_TOOL_DB_PATH=/path/to/shared/packaging_tool.db python3 -m packaging_tool
+PACKAGING_TOOL_DB_PATH=/path/to/shared/packaging_tool.db python start_app.py
 ```
 
 ### 開発中に取り込み元を別の場所へ向ける
@@ -756,10 +767,23 @@ python3 scripts/import_source.py /path/to/梱包資材マスタ.sqlite3
 python3 scripts/import_source.py --lot-only --lot-dir /path/to/台帳
 ```
 
-**マスタ** (`梱包資材マスタ.sqlite3`) から取り込むのは
-PalletMaster・BoardMaster・CornerboardMaster・PalletPatterns・梱包保護材・
-松板角材・資材パレット注文管理・パレット入出庫履歴・Form状態管理・
-看板_*(6テーブル)です。
+**マスタは3ファイルに分かれています。** 置き場所は設定画面でそれぞれ
+指せます(既定はどれも同じフォルダ)。
+
+| ファイル | 取り込むテーブル |
+|---|---|
+| `梱包資材マスタ.sqlite3` | PalletMaster・BoardMaster・CornerboardMaster・PalletPatterns・梱包保護材・松板角材・資材パレット注文管理・パレット入出庫履歴・**アクセス権限** |
+| `看板マスタ.sqlite3` | Form状態管理・看板_*(7テーブル) |
+| `PalletThresholdMaster.sqlite3` | PalletDakeThreshold・PalletHabaThreshold・PalletAshiThreshold・PalletKetaThreshold・PalletSymbolMaster・PalletIndustryMaster・PalletComboMaster |
+
+`アクセス権限` が取り込み元に無い端末では、**その端末で足した行だけが
+手元に残ります**。モードが切り替えられない・切り替えに開き直しが要る、
+という声の出どころはたいていここなので、設定画面の「いまの状態」で
+確かめてください。
+
+**パレット閾値マスタが見つからなくても止まりません。** 手元に入れてある
+基準表の初期値(`pallet_threshold.SEED`)で動きます ── ただし資材課が
+直した値は届いていないので、設定画面がその旨を出します。
 
 **仕掛台帳**(ロット一覧用)は**マスタとは別の3ファイル**を見ます。
 `SIKALOT.sqlite3` / `SIKAHIKI.sqlite3` / `SIKAODR.sqlite3`
@@ -800,7 +824,8 @@ python3 -m unittest discover -s tests -t . -v
 >
 > 付け忘れても本物を壊さないよう、`tests/_isolation.py` が取り込み時に
 > 向き先を見て直し、`tests/test_isolation.py` が直っていることを確かめます
-> (`data/user_config.json` は**追跡対象**で、現場の拠点設定が入っています)。
+> (`data/user_config.json` は端末ごとの上書きなので**追跡しません**。
+> 上の「開発中に取り込み元を別の場所へ向ける」を参照)。
 > それでもログは `logs/` に毎回8,000行以上が追記されるので、`-t .` を
 > 付けるのが本筋です。
 
@@ -809,7 +834,8 @@ python3 -m unittest discover -s tests -t . -v
 
 ```bash
 python3 scripts/compare_ui.py          # 選定・配置を41通りのゴールデンと突き合わせ
-python3 scripts/check_contrast.py      # 配色のコントラスト比(3テーマ×303組)
+python3 scripts/check_contrast.py      # 配色のコントラスト比(3テーマ / 387組)
+python3 scripts/check_encoding.py      # 文字化けの切り分け(読み方の問題か、元が壊れているか)
 ```
 
 > **`data/packaging_tool.db` は追跡しません。** 取り込みで作り直せる
@@ -835,7 +861,11 @@ app/                        画面
   __init__.py               create_app(mode)。権限で登録するURLを変える
   routes/                   URLの受付(Blueprint)
   templates/                画面の骨格(Jinja2)
+  shell.py                  外枠(レール・リボン)に渡す値
   static/css/tokens.css     色の唯一の出どころ
+  static/js/api.js          サーバとのやりとり。要求に印を付けるのはここ1か所
+  static/js/nav.js          画面を移っても外枠を作り直さない(SPAにはしない)
+  static/js/screen.js       2枚目のタブを開いたときの覆い
   static/js/svgplan.js      描画計画(JSON)から SVG を組み立てる
 
 packaging_tool/             業務ロジック
@@ -844,6 +874,7 @@ packaging_tool/             業務ロジック
   work_context.py           リボンに出る事実と、画面間の受け渡し
   boot_screen.py            起動待機画面の骨格(標準ライブラリだけで組む)
   idle_exit.py              画面が居なくなったら終わる
+  screen_lock.py            操作できるのは最後に開いたタブだけ
   jobs.py                   長時間処理の受け付けと進捗
 
   board_selection_algorithm.py  ボード自動選定(下用の多段階PASS・補填フェーズ)
@@ -865,6 +896,8 @@ packaging_tool/             業務ロジック
   db.py / source_db.py / outbox_sync.py / data_sync.py  データ層
   master_admin.py               梱包資材マスタの確認と修正(書き先は取り込み元)
   access_control.py / modes.py  誰が何をできるか・モードの定義
+  admin_password.py             保存ボタンの誤操作ガード(PBKDF2。画面から変えられる)
+  import_specs.py               どのファイルのどの表を、どの列で取り込むか
   config.py / app_config.py / user_settings.py / user_log.py
   schema.sql                    SQLiteスキーマ定義
 
@@ -874,9 +907,24 @@ scripts/
   import_source.py          取り込み元(sqlite3)からの一括取り込み
   dedupe_writeback.py       取り込み元にできた重複行を数える / 消す
   compare_ui.py             選定・配置をゴールデンと突き合わせる
+  check_contrast.py         配色のコントラスト比を全組み合わせで見る
+  check_encoding.py         文字化けの切り分け(読み方の問題か、元が壊れているか)
 tests/                      `unittest`。golden/ に実データ41通りの期待結果
 requirements.txt            Flask / waitress
 ```
+
+上に挙げたのは**入口になるもの**です。大きくなった処理は
+`<名前>_*.py` の一族に分けてあり、**入口の名前は変えていません**
+(呼ぶ側は今までどおり `board_selection_algorithm` を読めばよい)。
+
+| 入口 | 一族 |
+|---|---|
+| `board_selection_algorithm.py` | `board_selection_{types,common,protec,narrow,fill,lower,upper}.py` |
+| `placement_algorithm.py` | `placement_{types,fit,try,fill}.py` |
+| `selection_session.py` | `selection_{common,tiling,angle,records}.py` |
+| `board_selection_service.py` | `pallet_{common,list,auto_select}.py` |
+| `data_sync.py` | `sync_{sources,writeback,import,refresh,auto}.py` |
+| `master_admin.py` | `master_{common,columns,schema,browse}.py` |
 
 ## VBA版との主な違い(Access → SQLite移植にあたって)
 

@@ -592,6 +592,34 @@ class EnvironmentTests(unittest.TestCase):
         self.assertIn(str(config.master_db_dir()), text)
         self.assertIn("書き戻し", text)
 
+    def test_取り込み元が見つかったときも落ちない(self):
+        """**ファイルが在るときだけ通る道がある。**
+
+        `scripts/import_source.py --check` はここを呼ぶ。開発機にも
+        CI にも取り込み元が無いので、`find_material_db()` が None を
+        返し、表を数える枝は**一度も走っていませんでした** ── 分割
+        (VER2.75.4)で `import_specs` の取り込みが落ちたのに、試験は
+        素通りして、現場で `NameError` として出ます。
+
+        在る側も通しておく。
+        """
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+
+        folder = Path(tempfile.mkdtemp(prefix="describe_"))
+        path = folder / config.MATERIAL_DB_NAME
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE BoardMaster (ボード幅 INTEGER)")
+        conn.commit()
+        conn.close()
+
+        with mock.patch.object(sources, "find_material_db", return_value=path):
+            text = data_sync.describe_environment()
+        self.assertIn("テーブル: 1個", text)
+        # 足りない表はそのまま名前で言う(取り込みが空になる原因の筆頭)
+        self.assertIn("取り込み対象なのに無い", text)
+
 
 
 class OpIdGuardTests(unittest.TestCase):
