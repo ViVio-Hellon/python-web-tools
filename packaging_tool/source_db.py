@@ -419,6 +419,56 @@ _COPY_DIR: Optional[Path] = None
 _COPIES: dict[str, tuple[tuple[int, int], Path]] = {}
 _SIDECARS = ("-wal", "-shm", "-journal")
 
+# 写しの置き場の名前。**掃除するために名前を決めておく**(下記)
+_COPY_PREFIX = "pkgsrc_"
+
+
+def sweep_old_copies(keep_hours: float = 6.0) -> int:
+    r"""前の起動が置いていった写しを掃除する。消したフォルダ数を返す。
+
+    【なぜ要るのか】
+    写しは `atexit` で消す約束になっていますが、**その約束が果たされる
+    のは行儀よく終わったときだけ**です。現場の止め方はそうなりません:
+
+        stop.bat        … `SIGTERM` / `TerminateProcess` で落とす
+        コンソールを×  … 同じく後始末は走らない
+        自動終了・強制終了・電源断
+
+    1起動ぶんの写しは仕掛台帳を含めて **16MB 以上**あり(SIKALOT だけで
+    13.8MB)、`%TEMP%` は Windows が勝手に空けてはくれません。日に数回
+    起動すれば**月に数GB**が静かに積もります。VER2.76.1 で「読むときは
+    まず手元へ写す」に変えてから、これが毎回起きるようになりました。
+
+    【掃除の仕方】
+    自分のフォルダと、**まだ新しいもの**は残します ── 同じPCで
+    現場モードと資材モードを並べて開くことがあり、動いている側のものを
+    消しに行くと読んでいる最中のファイルを抜くことになります。
+    Windows では開かれているファイルは消せずに例外になるので、
+    そこは黙って見送ります(消せないのは使われている証拠)。
+    """
+    import time
+
+    now = time.time()
+    removed = 0
+    try:
+        candidates = list(Path(tempfile.gettempdir()).glob(f"{_COPY_PREFIX}*"))
+    except OSError:
+        return 0
+    for folder in candidates:
+        if folder == _COPY_DIR or not folder.is_dir():
+            continue
+        try:
+            if now - folder.stat().st_mtime < keep_hours * 3600:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(folder, ignore_errors=True)
+        if not folder.exists():
+            removed += 1
+    if removed:
+        log.info("前の起動が残した取り込み元の写しを %d 件片づけました", removed)
+    return removed
+
 
 def _copy_of(resolved: Path) -> Path:
     """手元に写した実体。中身が変わっていなければ写し直さない。"""
@@ -431,7 +481,7 @@ def _copy_of(resolved: Path) -> Path:
         return known[1]
 
     if _COPY_DIR is None:
-        _COPY_DIR = Path(tempfile.mkdtemp(prefix="pkgsrc_"))
+        _COPY_DIR = Path(tempfile.mkdtemp(prefix=_COPY_PREFIX))
         atexit.register(shutil.rmtree, _COPY_DIR, True)
     copy = _COPY_DIR / f"{abs(hash(key)):x}{resolved.suffix}"
     for extra in _SIDECARS:

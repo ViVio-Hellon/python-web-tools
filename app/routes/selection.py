@@ -770,7 +770,7 @@ def _parse_int(value) -> Optional[int]:
 def _to_int(text: str) -> int:
     try:
         return int(float(text))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 

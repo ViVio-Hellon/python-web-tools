@@ -393,7 +393,8 @@ def _initialize(srv) -> None:
     ここで失敗しても**サーバは落とさない**。落とすと利用者のブラウザには
     「接続できません」としか出ず、理由が伝わらない。画面に理由を出す。
     """
-    from packaging_tool import config, db, selection_log_store, user_log
+    from packaging_tool import (config, db, selection_log_store, source_db,
+                                user_log)
 
     try:
         srv.mark_stage("アプリを準備中")
@@ -403,6 +404,11 @@ def _initialize(srv) -> None:
         # 選定ログを日ごとのファイルにも残す。**問い合わせは後日来る**
         user_log.keep_on_disk()
         selection_log_store.prune()
+        # 前の起動が置いていった取り込み元の写しを片づける。
+        # **行儀よく終われなかったぶん**がここに残る(stop.bat は
+        # `SIGTERM` で落とすので `atexit` が走らない)。1起動ぶんが
+        # 16MB を超えるので、放っておくと月に数GBになる
+        source_db.sweep_old_copies()
     except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
         log().exception("初期化に失敗しました")
         srv.mark_error(f"初期化に失敗しました: {exc}")

@@ -222,7 +222,9 @@ def fs_list():
 @bp.post("/api/settings/import")
 def start_import():
     """`{"target": "all" | "master" | "lot"}`。"""
-    target = (request.get_json(silent=True) or {}).get("target", "all")
+    # **文字列にしてから照らす。** 一覧・辞書が来ると `in` が
+    # `TypeError: unhashable type` で落ち、断りの 400 まで届かない
+    target = str((request.get_json(silent=True) or {}).get("target", "all"))
     if target not in settings_presenter.TARGET_KEYS:
         return jsonify(_error("bad_target", "取り込む対象が正しくありません")), 400
 

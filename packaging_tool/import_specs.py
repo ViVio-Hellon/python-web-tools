@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -42,23 +43,48 @@ def _text(value: Any) -> str:
 
 
 def to_int(value: Any) -> Optional[int]:
+    """整数として取り込む。読めない値は `None`(=空)。
+
+    **`OverflowError` も読めない値として扱う。** sqlite3 の REAL 列は
+    無限大を持てて(`9e999` と書けば `inf` が入る)、上流の変換が転ぶと
+    実際に入ってきます。以前は `ValueError` しか捕まえていなかったので、
+
+        OverflowError: cannot convert float infinity to integer
+
+    が `import_tables` を突き抜けていました。**そこが効きました** ──
+    表ごとの受け(`except sqlite3.Error`)は `OverflowError` を捕まえ
+    ないので、**その1セルのために「まとめて取り込み」が丸ごと止まり**、
+    止まった先の表(看板・パレット閾値・仕掛台帳)は一切入りません。
+    手元の中身は巻き戻るので消えはしませんが、現場からは
+    「取り込んだのに今日のぶんが無い」に見えます。
+
+    読めないセルは**空と同じ扱い**にします(`NULL_FALLBACKS` が
+    既定値を入れる)。行ごと捨てないのは、他の列は読めているからです。
+    """
     text = _text(value)
     if text == "":
         return None
     try:
         return int(float(text))
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
 
 
 def to_real(value: Any) -> Optional[float]:
+    """実数として取り込む。読めない値は `None`(=空)。
+
+    **無限大と非数は入れない。** `float("inf")` は例外を出さずに通るので、
+    そのまま手元のDBへ入ります。寸法や比重として使われたときに初めて
+    おかしくなり、原因が取り込み元にあることが分からなくなります。
+    """
     text = _text(value)
     if text == "":
         return None
     try:
-        return float(text)
-    except ValueError:
+        number = float(text)
+    except (ValueError, OverflowError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def to_text(value: Any) -> str:

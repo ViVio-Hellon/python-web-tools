@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Optional
@@ -38,11 +39,25 @@ PALETTE_OVERHANG_RATIO = 1.10
 
 
 def _is_numeric(text: str) -> bool:
+    """**寸法として使える数値か。**
+
+    呼ぶ側はこれが True なら `int(float(text))` してよい、という約束で
+    書かれています。ところが `float()` は `inf` / `nan` / `1e400` も
+    受けるので、以前はそこを通り抜けて
+
+        OverflowError: cannot convert float infinity to integer
+
+    で 500 になっていました。断りの文言は用意してあるのに、そこへ
+    辿り着く前に落ちるので、画面には「通信に失敗しました」としか
+    出ません ── **直しようのない案内**になります。
+
+    無限大も非数も寸法ではないので、ここで数値でないものとして扱います。
+    """
     try:
-        float(text)
-        return True
+        value = float(text)
     except (TypeError, ValueError):
         return False
+    return math.isfinite(value)
 
 
 # ------------------------------------------------------------------

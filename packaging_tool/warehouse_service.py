@@ -97,7 +97,7 @@ def create_order(
         # 呼び出し側はVBA同様の書式済み文字列("1122.0"等)を渡してくることがある。
         # Access版は列型に合わせて暗黙変換していたので、floatを経由して受ける
         atu_v, haba_v, take_v = float(atu), int(float(haba)), int(float(take))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return OrderResult(ok=False, message="厚・幅・丈は数値で入力してください。")
 
     if is_ex_order:

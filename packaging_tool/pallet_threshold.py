@@ -97,7 +97,7 @@ def _int(value: Any) -> int:
         return 0
     try:
         return int(float(str(value).strip() or 0))
-    except ValueError:
+    except (ValueError, OverflowError):
         return 0
 
 

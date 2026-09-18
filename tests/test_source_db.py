@@ -17,14 +17,18 @@ Windows でしか起きない事象ですが、`PureWindowsPath` を使えば
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path, PureWindowsPath
 from unittest import mock
 from urllib.parse import urlsplit
 
 from packaging_tool import source_db
+
+_ROOT = Path(__file__).resolve().parent.parent
 
 # 現場のエラーに出ていた実物(本番の共有・開発の共有・仕掛台帳)
 本番 = PureWindowsPath(
@@ -490,6 +494,63 @@ class ProbeTests(unittest.TestCase):
         bogus = self.dir / "偽物.sqlite3"
         bogus.write_text("sqlite3 ではありません", encoding="utf-8")
         self.assertFalse(source_db.probe(bogus).normal)
+
+
+class SweepCopiesTests(unittest.TestCase):
+    """**前の起動が置いていった写しを片づける。**
+
+    写しは `atexit` で消す約束ですが、その約束が果たされるのは行儀よく
+    終わったときだけです。現場の止め方はそうなりません ── `stop.bat` は
+    `SIGTERM` で落とし、コンソールを×で閉じても後始末は走りません。
+
+    1起動ぶんは仕掛台帳を含めて **16MB 以上**(SIKALOT だけで 13.8MB)。
+    `%TEMP%` は Windows が勝手に空けてはくれないので、日に数回起動すれば
+    月に数GBが静かに積もります。VER2.76.1 で「読むときはまず手元へ写す」に
+    変えてから、これが毎回起きるようになりました。
+    """
+
+    def setUp(self) -> None:
+        self.saved = source_db._COPY_DIR
+        self.addCleanup(setattr, source_db, "_COPY_DIR", self.saved)
+        self.made: list[Path] = []
+
+    def make(self, *, age_hours: float) -> Path:
+        folder = Path(tempfile.mkdtemp(prefix=source_db._COPY_PREFIX))
+        self.made.append(folder)
+        self.addCleanup(shutil.rmtree, folder, True)
+        (folder / "SIKALOT.sqlite3").write_bytes(b"x" * 64)
+        stamp = time.time() - age_hours * 3600
+        os.utime(folder, (stamp, stamp))
+        return folder
+
+    def test_古い写しは消す(self) -> None:
+        old = self.make(age_hours=48)
+        source_db.sweep_old_copies()
+        self.assertFalse(old.exists())
+
+    def test_まだ新しい写しは残す(self) -> None:
+        """同じPCで現場と資材を並べて開くことがある。**読んでいる最中の
+        ファイルを抜かない。**"""
+        fresh = self.make(age_hours=0)
+        source_db.sweep_old_copies()
+        self.assertTrue(fresh.exists())
+
+    def test_自分の写しは消さない(self) -> None:
+        mine = self.make(age_hours=48)
+        source_db._COPY_DIR = mine
+        source_db.sweep_old_copies()
+        self.assertTrue(mine.exists())
+
+    def test_消した数を返す(self) -> None:
+        self.make(age_hours=48)
+        self.make(age_hours=48)
+        self.assertGreaterEqual(source_db.sweep_old_copies(), 2)
+
+    def test_起動が呼んでいる(self) -> None:
+        """**呼ばれていなければ、直っていないのと同じ。**"""
+        text = (_ROOT / "start_app.py").read_text(encoding="utf-8")
+        self.assertIn("sweep_old_copies", text)
+
 
 
 if __name__ == "__main__":                       # pragma: no cover

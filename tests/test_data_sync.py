@@ -1355,3 +1355,220 @@ class RefreshOrdersTests(unittest.TestCase):
             f'SELECT 確認済み FROM "{self.TABLE}" WHERE LotNo = ?',
             ("L1",)).fetchone()
         self.assertEqual(row[0], "1")
+
+
+class BadCellTests(unittest.TestCase):
+    """**壊れた1セルで、取り込み全体を止めない。**
+
+    sqlite3 の REAL 列は無限大を持てます(`9e999` と書けば `inf`)。
+    上流の変換が転ぶと実際に入ってきます。以前は `to_int` が
+    `ValueError` しか捕まえていなかったので、
+
+        OverflowError: cannot convert float infinity to integer
+
+    が `import_tables` を突き抜け、**その1セルのために「まとめて
+    取り込み」が丸ごと止まっていました** ── 止まった先の表(看板・
+    パレット閾値・仕掛台帳)は一切入りません。手元の中身は巻き戻るので
+    消えはしませんが、現場からは「取り込んだのに今日のぶんが無い」に
+    見えます。
+    """
+
+    def setUp(self) -> None:
+        self.dir = Path(tempfile.mkdtemp(prefix="badcell_"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.addCleanup(self.conn.close)
+        db.apply_schema(self.conn)
+
+    def source(self, *rows) -> Path:
+        path = self.dir / config.MATERIAL_DB_NAME
+        path.unlink(missing_ok=True)
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE BoardMaster"
+                     " (ボード幅 REAL, ボード丈 REAL,"
+                     "  ボードタイプ TEXT, データラベル TEXT)")
+        conn.executemany(
+            "INSERT INTO BoardMaster VALUES (?, ?, 'HB', '')", rows)
+        conn.commit()
+        conn.close()
+        return path
+
+    def boards(self) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM BoardMaster").fetchone()[0]
+
+    def test_無限大が混ざっても取り込みは通る(self) -> None:
+        path = self.source((1000, 2000), (9e999, 2100), (1200, 2200))
+        result = imports.import_tables(
+            self.conn, path,
+            {"BoardMaster": import_specs.IMPORT_SPECS["BoardMaster"]},
+            # **本番と同じ渡し方**(`import_master` はこれを渡す)。
+            # 渡さずに書くと、読めなかった列が NULL のまま NOT NULL の
+            # 列に当たり、試験だけが別の落ち方をする
+            fallbacks=import_specs.NULL_FALLBACKS)
+        self.assertFalse(result.errors, f"errors={result.errors}")
+        self.assertEqual(self.boards(), 3, "壊れた1行のせいで表が落ちています")
+        # 読めなかったセルは空の扱い(既定値)。**行ごとは捨てない**
+        widths = [r[0] for r in self.conn.execute(
+            "SELECT ボード幅 FROM BoardMaster ORDER BY ボード幅")]
+        self.assertEqual(widths, [0, 1000, 1200])
+
+    def test_読めない値は空になる(self) -> None:
+        """**行ごと落とさない。** 他の列は読めているので残す。"""
+        self.source((9e999, 2100))
+        self.assertIsNone(import_specs.to_int("inf"))
+        self.assertIsNone(import_specs.to_int("1e400"))
+        self.assertIsNone(import_specs.to_real("inf"))
+        self.assertIsNone(import_specs.to_real("nan"))
+        # ふつうの値は今までどおり
+        self.assertEqual(import_specs.to_int("1200"), 1200)
+        self.assertEqual(import_specs.to_real("12.7"), 12.7)
+
+    def test_あとに続く表が巻き添えにならない(self) -> None:
+        """止まると、その先の表は**一切**入らない。そこが重かった。"""
+        path = self.source((9e999, 2100))
+        conn = sqlite3.connect(path)
+        conn.execute('CREATE TABLE CornerboardMaster (アングル丈 REAL)')
+        conn.execute('INSERT INTO CornerboardMaster VALUES (1500)')
+        conn.commit()
+        conn.close()
+
+        imports.import_tables(self.conn, path, {
+            "BoardMaster": import_specs.IMPORT_SPECS["BoardMaster"],
+            "CornerboardMaster": import_specs.IMPORT_SPECS["CornerboardMaster"],
+        }, fallbacks=import_specs.NULL_FALLBACKS)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM CornerboardMaster").fetchone()[0], 1,
+            "前の表で転んで、あとの表が入っていません")
+
+
+class AutoImportGateTests(unittest.TestCase):
+    """**マスタは3ファイル。3つとも見る。**
+
+    `import_master` が読むのは梱包資材マスタ・看板マスタ・パレット閾値
+    マスタの3ファイル。ところが起動時の自動取り込みは梱包資材マスタの
+    更新時刻だけを見ていたので、
+
+        資材課が看板マスタ(在庫薄)だけを直した
+        資材課がパレット閾値マスタだけを直した
+
+    という**いちばんよくある直し方**では取り込みが走らず、現場からは
+    「マスタは直したのに効かない」に見えていた。
+    """
+
+    def setUp(self) -> None:
+        from packaging_tool import sync_auto
+        self.sync_auto = sync_auto
+        self.dir = Path(tempfile.mkdtemp(prefix="gate_"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.addCleanup(self.conn.close)
+        db.apply_schema(self.conn)
+
+        self.master = self.dir / config.MATERIAL_DB_NAME
+        self.kanban = self.dir / config.KANBAN_DB_NAME
+        self.threshold = self.dir / config.THRESHOLD_DB_NAME
+        for path, tables in (
+                (self.master, ["BoardMaster"]),
+                (self.kanban, list(import_specs.KANBAN_TABLES)),
+                (self.threshold, list(import_specs.THRESHOLD_TABLES))):
+            conn = sqlite3.connect(path)
+            for table in tables:
+                conn.execute(f'CREATE TABLE "{table}" (dummy TEXT)')
+            conn.commit()
+            conn.close()
+
+    def stamp_all(self) -> None:
+        for path in (self.master, self.kanban, self.threshold):
+            self.sync_auto.mark_imported(self.conn, path)
+
+    def touch(self, path: Path) -> None:
+        import os
+        future = time.time() + 10
+        os.utime(path, (future, future))
+
+    def test_看板マスタだけ新しくても取り込む(self) -> None:
+        self.stamp_all()
+        self.touch(self.kanban)
+        seen = []
+        with mock.patch.object(self.sync_auto.sync_sources,
+                               "find_material_db", return_value=self.master), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_kanban_db", return_value=self.kanban), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_threshold_db", return_value=self.threshold), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_lot_dbs", return_value={}), \
+             mock.patch.object(self.sync_auto.sync_import, "import_master",
+                               side_effect=lambda *a, **k: seen.append(1)
+                               or imports.ImportResult()):
+            self.sync_auto.auto_import(self.conn)
+        self.assertEqual(seen, [1], "看板マスタの更新が取り込まれていません")
+
+    def test_パレット閾値マスタだけ新しくても取り込む(self) -> None:
+        self.stamp_all()
+        self.touch(self.threshold)
+        seen = []
+        with mock.patch.object(self.sync_auto.sync_sources,
+                               "find_material_db", return_value=self.master), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_kanban_db", return_value=self.kanban), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_threshold_db", return_value=self.threshold), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_lot_dbs", return_value={}), \
+             mock.patch.object(self.sync_auto.sync_import, "import_master",
+                               side_effect=lambda *a, **k: seen.append(1)
+                               or imports.ImportResult()):
+            self.sync_auto.auto_import(self.conn)
+        self.assertEqual(seen, [1], "閾値マスタの更新が取り込まれていません")
+
+    def test_どれも変わっていなければ読まない(self) -> None:
+        """**毎回1万件を読み直さない。** 直したぶんだけ読む。"""
+        self.stamp_all()
+        seen = []
+        with mock.patch.object(self.sync_auto.sync_sources,
+                               "find_material_db", return_value=self.master), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_kanban_db", return_value=self.kanban), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_threshold_db", return_value=self.threshold), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_lot_dbs", return_value={}), \
+             mock.patch.object(self.sync_auto.sync_import, "import_master",
+                               side_effect=lambda *a, **k: seen.append(1)
+                               or imports.ImportResult()):
+            self.sync_auto.auto_import(self.conn)
+        self.assertEqual(seen, [])
+
+    def test_3つとも印を残す(self) -> None:
+        """印が1つぶんしか残らないと、次の起動でまた読み直す。"""
+        with mock.patch.object(self.sync_auto.sync_sources,
+                               "find_material_db", return_value=self.master), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_kanban_db", return_value=self.kanban), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_threshold_db", return_value=self.threshold), \
+             mock.patch.object(self.sync_auto.sync_sources,
+                               "find_lot_dbs", return_value={}), \
+             mock.patch.object(self.sync_auto.sync_import, "import_master",
+                               return_value=imports.ImportResult()):
+            self.sync_auto.auto_import(self.conn)
+        for path in (self.master, self.kanban, self.threshold):
+            with self.subTest(path=path.name):
+                self.assertFalse(self.sync_auto.needs_import(self.conn, path))
+
+
+class DescribeThresholdTests(unittest.TestCase):
+    """`--check` は**見ている場所を隠さない。**
+
+    閾値マスタを足したときに書き足しそびれていたので、3ファイルのうち
+    1つを黙ったまま答えていた。診断が黙っている場所は探しに行けない。
+    """
+
+    def test_パレット閾値マスタも出す(self) -> None:
+        text = data_sync.describe_environment()
+        self.assertIn("パレット閾値マスタ", text)
+        self.assertIn(str(config.threshold_db_dir()), text)

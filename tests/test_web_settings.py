@@ -1282,3 +1282,82 @@ class BrowserDialogPlacementTests(unittest.TestCase):
             if "data-browse=" in line:
                 tabs.add(panel)
         self.assertGreater(len(tabs), 1, tabs)
+
+
+class NoServerErrorTests(unittest.TestCase):
+    """**断り方を用意していない道を残さない。**
+
+    入力の形が違えば 400、業務として通せなければ 422 を返す、と決めて
+    あります(設計書 §6.1)。ところが断りへ辿り着く**前に**落ちる道が
+    あり、そこは 500 になります。画面には
+
+        通信に失敗しました (HTTP 500)
+
+    としか出ません ── 通信は成功しているのに通信の失敗として案内される
+    ので、現場は直しようがありません。
+
+    見つかったのは4つで、どれも「`float()` は通るが `int()` で落ちる」
+    「`in` に一覧を渡す」といった、**型の想定違い**でした。
+    """
+
+    def setUp(self) -> None:
+        from packaging_tool import access_control as ac
+        from app import create_app
+        app = create_app("field", token=TOKEN, port=8794,
+                         grant=ac.grant_of("mode:field", "mode:material"))
+        app.config["TESTING"] = True
+        app.config["READY"] = True
+        self.client = app.test_client()
+
+    def post(self, path: str, body: dict):
+        return self.client.post(path, json=body, headers={"X-Tool-Token": TOKEN})
+
+    def test_無限大の寸法は断る(self) -> None:
+        """`float("1e400")` は `inf`。`_is_numeric` は通していた。"""
+        for path in ("/api/selection/pallet/apply",
+                     "/api/selection/product/apply"):
+            for value in ("1e400", "inf", "nan", "-inf"):
+                with self.subTest(path=path, value=value):
+                    res = self.post(path, {"width": value, "length": value})
+                    self.assertLess(res.status_code, 500)
+
+    def test_取り込む対象に一覧が来ても断る(self) -> None:
+        """`[] in TARGET_KEYS` は `TypeError: unhashable type`。"""
+        for value in ([], {}, ["all"]):
+            with self.subTest(value=value):
+                res = self.post("/api/settings/import", {"target": value})
+                self.assertEqual(res.status_code, 400)
+
+    def test_道として使えない書き出し先は断る(self) -> None:
+        """`\\x00` を含む道は `OSError` ではなく `ValueError` で落ちる。"""
+        res = self.post("/api/settings/board-usage/export", {"dir": "\x00"})
+        self.assertLess(res.status_code, 500)
+
+
+class NumericGuardTests(unittest.TestCase):
+    """`_is_numeric` は「**寸法として使える数値か**」を答える。
+
+    呼ぶ側はこれが True なら `int(float(text))` してよい、という約束で
+    書かれている。`float()` が `inf` / `nan` を受けるので、そこを
+    通り抜けて `OverflowError` で 500 になっていた。
+    """
+
+    def test_無限大と非数は数値として扱わない(self) -> None:
+        from packaging_tool.pallet_common import _is_numeric
+        for text in ("inf", "-inf", "nan", "NaN", "1e400", "infinity"):
+            with self.subTest(text=text):
+                self.assertFalse(_is_numeric(text))
+
+    def test_ふつうの寸法は今までどおり(self) -> None:
+        from packaging_tool.pallet_common import _is_numeric
+        for text in ("1200", "1122.0", "0", "-5", "1e3"):
+            with self.subTest(text=text):
+                self.assertTrue(_is_numeric(text))
+
+    def test_通した値は必ず整数にできる(self) -> None:
+        """**約束そのもの。** これが破れると呼ぶ側が全部落ちる。"""
+        from packaging_tool.pallet_common import _is_numeric
+        for text in ("1200", "1e308", "-0.0", "  50  "):
+            with self.subTest(text=text):
+                if _is_numeric(text):
+                    int(float(text))          # 落ちなければよい

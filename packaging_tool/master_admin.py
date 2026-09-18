@@ -244,7 +244,7 @@ def _clean(conn: sqlite3.Connection, table: str, values: dict[str, Any],
         if column.kind == "int":
             try:
                 out[column.name] = int(float(raw))
-            except ValueError:
+            except (ValueError, OverflowError):
                 return {}, f"「{column.name}」は{KIND_LABEL['int']}で入れてください。"
         elif column.kind == "real":
             try:

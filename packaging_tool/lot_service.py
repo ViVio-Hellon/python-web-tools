@@ -585,7 +585,7 @@ def _calc_total_packages(result: LotSearchResult) -> tuple[int, str]:
         text = text.replace("全量", "0").replace("全", "0")
         try:
             qty = int(float(text))
-        except ValueError:
+        except (ValueError, OverflowError):
             qty = 0
         if qty <= 0:
             qty = remaining          # 全量指定は残り全部

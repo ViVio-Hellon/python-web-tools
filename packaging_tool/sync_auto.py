@@ -76,15 +76,38 @@ def auto_import(conn: sqlite3.Connection, *, force: bool = False,
     見つからないファイルや読めない環境では**黙って何もしない**。
     起動のたびに警告を出しても現場の役に立たないので、状態は
     設定画面で確認してもらう。
+
+    【マスタは3ファイルある ── 3つとも見る】
+    `import_master` が読むのは梱包資材マスタ・看板マスタ・パレット閾値
+    マスタの**3ファイル**です。ところが以前は梱包資材マスタの更新時刻
+    だけを見ていたので、
+
+        資材課が看板マスタ(在庫薄)だけを直した
+        資材課がパレット閾値マスタだけを直した
+
+    という**いちばんよくある直し方**では、梱包資材マスタが動くまで
+    起動時の取り込みが走りませんでした。現場からは「マスタは直したのに
+    効かない」に見え、設定画面から手で「まとめて取り込み」を押すまで
+    古い値で動き続けます。取り込んだ印も1ファイルぶんしか残しておらず、
+    手で押しても次の起動の判定には使えていませんでした。
+
+    どれか1つでも新しければ読み直し、**3つとも印を残します**。
     """
     result = ImportResult()
 
     master = sync_sources.find_material_db()
-    if master is not None and (force or needs_import(conn, master)):
+    # 3ファイルまとめて1回の `import_master` で読むので、判定も印も3つぶん
+    master_group = [p for p in (master,
+                                sync_sources.find_kanban_db(),
+                                sync_sources.find_threshold_db())
+                    if p is not None]
+    if master is not None and (force or any(needs_import(conn, p)
+                                            for p in master_group)):
         log.info("自動取り込み(マスタ): %s", master)
         result.merge(sync_import.import_master(conn, master, progress=progress,
                                    progress_range=(0, 50)))
-        mark_imported(conn, master)
+        for path in master_group:
+            mark_imported(conn, path)
 
     for table, path in sync_sources.find_lot_dbs().items():
         if not force and not needs_import(conn, path):

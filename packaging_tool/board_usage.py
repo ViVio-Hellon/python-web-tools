@@ -336,7 +336,14 @@ def write_csv(conn: sqlite3.Connection, directory: Optional[Path] = None,
     from . import config
 
     folder = Path(directory) if directory is not None else config.export_dir()
-    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except ValueError as exc:
+        # **道として成立しない文字列**(`\x00` を含む等)は `OSError` では
+        # なく `ValueError` で落ちる。呼ぶ側は「そこには書けません」を
+        # `OSError` で受けて案内を出すので、同じ形にそろえる ── でないと
+        # 500 になり、画面には「通信に失敗しました」としか出ない
+        raise OSError(f"書き出し先として使えない道です: {exc}") from exc
     path = folder / datetime.now().strftime(CSV_NAME)
 
     rows = csv_rows(popularity(conn, board_type))

@@ -206,6 +206,27 @@ def describe_environment() -> str:
             if missing:
                 lines.append(f"  ※取り込み対象なのに無い: {', '.join(missing)}")
 
+    # **3ファイルとも出す。** 閾値マスタを足したとき(VER2.6x)ここに
+    # 書き足しそびれていたので、`--check` は「見ている場所」を1つ隠した
+    # まま答えていた ── 診断が黙っている場所は、探しに行けない
+    threshold = sync_sources.find_threshold_db()
+    lines.append(f"パレット閾値マスタ: {threshold or '(見つかりません)'}")
+    lines.append(f"  探した場所: {config.threshold_db_dir()}")
+    if threshold is None:
+        lines.append("  ※手元の基準表の初期値で動きます"
+                     "(資材課が直した値は届きません)")
+    else:
+        try:
+            names = sync_sources.list_tables(threshold)
+        except Exception:                  # noqa: BLE001 - 案内なので握る
+            names = []
+        if names:
+            missing = [t for t in import_specs.THRESHOLD_TABLES
+                       if t not in names]
+            lines.append(f"  テーブル: {len(names)}個")
+            if missing:
+                lines.append(f"  ※取り込み対象なのに無い: {', '.join(missing)}")
+
     lots = sync_sources.find_lot_dbs()
     lines.append(f"仕掛台帳: {len(lots)}/3 ファイル")
     for table, filename in config.LOT_DB_FILES.items():
