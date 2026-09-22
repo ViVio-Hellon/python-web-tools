@@ -135,6 +135,11 @@ def _migrate_before_schema(conn: sqlite3.Connection) -> None:
     _drop_if_old_shape(conn, "仕掛引当",
                        ("引当番号     REAL", "引当番号 REAL"),
                        "引当番号を文字列に")
+    # 一覧に前々工程・前工程の枚本数を出すため列を足した(現場の依頼)。
+    # 既にある端末の表には増えないので、ここで作り直す
+    _drop_if_missing_columns(conn, "仕掛ロット",
+                             ("前々工程実績_枚本数", "前工程実績_枚本数"),
+                             "前々工程・前工程の枚本数")
     _park_old_board_usage(conn)
 
 
@@ -221,6 +226,33 @@ def _move_old_board_usage(conn: sqlite3.Connection) -> None:
     conn.execute(f"DROP TABLE [{_BOARD_USAGE_PARKED}]")
     conn.commit()
     log.info("古いボード使用実績を%s件引き継ぎました", moved)
+
+
+def _drop_if_missing_columns(conn: sqlite3.Connection, table: str,
+                             columns: tuple[str, ...], why: str) -> None:
+    """列が増えた取り込み用テーブルを作り直す。
+
+    `CREATE TABLE IF NOT EXISTS` は**すでにある表には何もしません**。
+    列を足しても、既存の端末では増えないまま ── 一覧に新しい列を出す
+    側だけが先に新しくなり、`no such column` で表が引けなくなります。
+
+    仕掛台帳の表は取り込み元から丸ごと入れ直す**写し**なので、捨てて
+    作り直してよい(利用者が手で入れた値は1つもありません)。次の
+    取り込みで戻ります ── `_drop_if_old_shape` と同じ考え方で、
+    見る向きが逆なだけです(古い印があれば捨てる/新しい列が無ければ捨てる)。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,)).fetchone()
+    if row is None:
+        return
+    ddl = (row[0] if not isinstance(row, sqlite3.Row) else row["sql"]) or ""
+    missing = [c for c in columns if c not in ddl]
+    if missing:
+        log.info("%sに列を足すため作り直します(%s)。再取り込みが必要です",
+                 table, why)
+        conn.execute(f"DROP TABLE [{table}]")
+        conn.commit()
 
 
 def _drop_if_old_shape(conn: sqlite3.Connection, table: str,

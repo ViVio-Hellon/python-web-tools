@@ -332,6 +332,107 @@ class ResyncTests(unittest.TestCase):
         self.assertFalse(ac.resync(self.conn, path=missing))
 
 
+class ScreenResyncTests(unittest.TestCase):
+    """**権限を足したのに切り替えられない、の袋小路。**
+
+    現場の言い方:「一回閉じないと現場資材モード切り替えれません」。
+
+        資材課が取り込み元に `mode:material` の行を足す
+        動いているアプリは手元のDBしか見ない  → 権限は増えない
+        権限が1つしか無いので、帯にモード切替そのものが出ない
+        `set_mode` は断る前に `resync` を呼ぶ ── **が、そこへ行くには
+            その出ていないボタンを押すしかない**
+
+    直す仕組みが、それが開けるはずの扉の向こうにあった。閉じて開き直すと
+    `auto_import` が手元を追いつかせるので直る ── 現場が見つけた唯一の
+    逃げ道がそれだった。
+
+    足りないと分かったその場で一度だけ見に行くようにした。ただし
+    **共有フォルダを毎回は叩かない**(遅いので)。
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self.dir = Path(tempfile.mkdtemp(prefix="screensync_"))
+        self.src = self.dir / "梱包資材マスタ.sqlite3"
+        self.write_source()
+        self.conn = make_db()
+        self.addCleanup(self.conn.close)
+        ac.reset_screen_resync()
+        self.addCleanup(ac.reset_screen_resync)
+
+        from packaging_tool import config, user_settings
+        self.saved = user_settings.get(config.KEY_MASTER_DB_DIR)
+        user_settings.save(config.KEY_MASTER_DB_DIR, str(self.dir))
+        self.addCleanup(user_settings.save, config.KEY_MASTER_DB_DIR,
+                        self.saved or "")
+
+    def write_source(self, *permissions: str) -> None:
+        self.src.unlink(missing_ok=True)
+        src = sqlite3.connect(self.src)
+        src.execute(
+            'CREATE TABLE "アクセス権限" '
+            '("ログインID" TEXT, "PC名" TEXT, "権限" TEXT,'
+            ' "有効" INTEGER, "備考" TEXT)')
+        for permission in permissions:
+            src.execute('INSERT INTO "アクセス権限" VALUES (?,?,?,1,"")',
+                        (YAMADA.login_id, YAMADA.pc_name, permission))
+        src.commit()
+        src.close()
+
+    def modes_for(self, identity):
+        """`resolve_for_screen` は端末の身元で引くので、そこだけ差し替える。"""
+        from unittest import mock
+        with mock.patch.object(ac, "current_identity", return_value=identity):
+            return ac.resolve_for_screen(self.conn).allowed_modes()
+
+    def test_取り込み元にあれば閉じずに増える(self) -> None:
+        """これが本題。**開き直さずに**切替が出るようになる。"""
+        self.write_source("mode:field", "mode:material")
+        self.assertIn(modes.MATERIAL, self.modes_for(YAMADA))
+
+    def test_手元にも取り込み元にも無ければ増やさない(self) -> None:
+        """見に行くだけで、無い権限は作らない。"""
+        self.write_source("mode:field")
+        self.assertNotIn(modes.MATERIAL, self.modes_for(YAMADA))
+
+    def test_足りていれば見に行かない(self) -> None:
+        """**共有フォルダは遅い。** 用が無いのに毎回叩かない。"""
+        from unittest import mock
+
+        self.write_source("mode:field", "mode:material")
+        self.modes_for(YAMADA)                    # 1回目でそろう
+        with mock.patch.object(ac, "resync") as spy:
+            for _ in range(10):
+                self.modes_for(YAMADA)
+        spy.assert_not_called()
+
+    def test_取り込み元が変わらなければ何度も読み直さない(self) -> None:
+        self.write_source("mode:field")           # 足りないまま
+        from unittest import mock
+
+        self.modes_for(YAMADA)                    # 1回目は見に行く
+        with mock.patch.object(ac, "resync", return_value=False) as spy:
+            for _ in range(10):
+                self.modes_for(YAMADA)
+            self.assertEqual(spy.call_count, 0,
+                             "取り込み元が変わっていないのに読み直しています")
+
+    def test_取り込み元が変われば読み直す(self) -> None:
+        """資材課が書いた直後に効く。**そこが効かないと元の木阿弥。**"""
+        self.write_source("mode:field")
+        self.assertNotIn(modes.MATERIAL, self.modes_for(YAMADA))
+
+        self.write_source("mode:field", "mode:material")   # 書き換わった
+        self.assertIn(modes.MATERIAL, self.modes_for(YAMADA))
+
+    def test_取り込み元に届かなくても断らない(self) -> None:
+        """共有に届かない端末でも、手元にある分で仕事は続く。"""
+        self.src.unlink()
+        self.assertEqual(self.modes_for(YAMADA), (modes.FIELD,))
+
+
 class GrantOfTests(unittest.TestCase):
     def test_知らないコードは受け付けない(self) -> None:
         """試験が実在しない権限を仮定していると、直したつもりの

@@ -428,3 +428,89 @@ class MaterialOnlyWithoutRestartTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class SwitchAppearsWithoutRestartTests(unittest.TestCase):
+    """**閉じて開き直さなくても切り替えられること。**
+
+    現場から繰り返し届いていた:「一回閉じないと現場資材モード
+    切り替えれません」。切替ボタンは手元のDBの権限で出す/出さないを
+    決めていたので、資材課が取り込み元へ行を足しても、動いている
+    プロセスには増えなかった。直す仕組み(`resync`)はその出ていない
+    ボタンの向こうにあった。
+    """
+
+    def setUp(self) -> None:
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+
+        from packaging_tool import access_control, config, db, user_settings
+
+        self.ac = access_control
+        self.dir = Path(tempfile.mkdtemp(prefix="switch_"))
+        self.src = self.dir / config.MATERIAL_DB_NAME
+        self.ident = access_control.current_identity()
+
+        self.saved = user_settings.get(config.KEY_MASTER_DB_DIR)
+        user_settings.save(config.KEY_MASTER_DB_DIR, str(self.dir))
+        self.addCleanup(user_settings.save, config.KEY_MASTER_DB_DIR,
+                        self.saved or "")
+        access_control.reset_screen_resync()
+        self.addCleanup(access_control.reset_screen_resync)
+
+        self.conn = db.get_connection()
+        db.apply_schema(self.conn)
+        self.conn.execute("DELETE FROM アクセス権限")   # 手元はまだ追いつかない
+        self.conn.commit()
+        self.addCleanup(self._clear_local)
+        self._sqlite3 = sqlite3
+
+    def _clear_local(self) -> None:
+        self.conn.execute("DELETE FROM アクセス権限")
+        self.conn.commit()
+
+    def write_source(self, *permissions: str) -> None:
+        """取り込み元(共有フォルダ)に資材課が書いた状態を作る。"""
+        self.src.unlink(missing_ok=True)
+        src = self._sqlite3.connect(self.src)
+        src.execute('CREATE TABLE "アクセス権限" ("ログインID" TEXT,'
+                    ' "PC名" TEXT, "権限" TEXT, "有効" INTEGER, "備考" TEXT)')
+        for permission in permissions:
+            src.execute('INSERT INTO "アクセス権限" VALUES (?,?,?,1,"")',
+                        (self.ident.login_id, self.ident.pc_name, permission))
+        src.commit()
+        src.close()
+
+    def open_app(self):
+        from app import create_app
+        app = create_app("field", token=TOKEN, port=8792)
+        app.config["TESTING"] = True
+        app.config["READY"] = True
+        return app.test_client()
+
+    def test_開き直さずに切替が出る(self) -> None:
+        self.write_source("mode:field", "mode:material")
+        client = self.open_app()                 # 起動時、手元は空のまま
+        html = client.get("/lot", headers={"X-Tool-Token": TOKEN}
+                          ).get_data(as_text=True)
+        self.assertIn("modeswitch", html,
+                      "取り込み元に権限があるのに切替が出ていません")
+
+    def test_そのまま切り替えられる(self) -> None:
+        self.write_source("mode:field", "mode:material")
+        client = self.open_app()
+        client.get("/lot", headers={"X-Tool-Token": TOKEN})
+        res = client.post("/api/mode", json={"mode": "material"},
+                          headers={"X-Tool-Token": TOKEN})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["mode"], modes.MATERIAL)
+
+    def test_権限が本当に無ければ出さない(self) -> None:
+        """**出しすぎない。** 権限を設けた意味が消える。"""
+        self.write_source("mode:field")
+        client = self.open_app()
+        html = client.get("/lot", headers={"X-Tool-Token": TOKEN}
+                          ).get_data(as_text=True)
+        self.assertNotIn("modeswitch", html)

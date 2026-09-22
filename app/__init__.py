@@ -182,7 +182,12 @@ def current_grant() -> access_control.Grant:
 
     if "grant" not in g:
         given = current_app.config.get("GIVEN_GRANT")
-        g.grant = given if given is not None else access_control.resolve(get_db())
+        # **足りなければ取り込み元を見に行く。** 権限を足したのに
+        # 切り替えられない、の出どころがここだった ── 直す仕組み
+        # (`resync`)が、出ていないボタンの向こうにあった
+        # (`access_control.resolve_for_screen` の説明)
+        g.grant = (given if given is not None
+                   else access_control.resolve_for_screen(get_db()))
     return g.grant
 
 

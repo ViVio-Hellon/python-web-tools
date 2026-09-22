@@ -329,6 +329,94 @@ def resolve(conn: sqlite3.Connection,
                  matched=matched, has_master=True, reason=reason)
 
 
+# 画面に出す権限を決める前に、取り込み元を見に行った時刻と、そのときの
+# 取り込み元の更新時刻。**共有フォルダを毎回叩かない**ための覚え書き
+_screen_resync_at: float = 0.0
+_screen_resync_stamp: Optional[tuple[int, int]] = None
+
+# 見に行く間隔の下限(秒)。取り込み元が変わっていなくても、これだけ
+# 経てば一度は見る ── 別の端末が書いた直後は mtime しか手がかりが無い
+SCREEN_RESYNC_MIN_SEC = 30.0
+
+
+def resolve_for_screen(conn: sqlite3.Connection) -> Grant:
+    """**画面に出す**権限。足りなければ取り込み元を見に行く。
+
+    【なぜ `resolve` と分けるのか ── 袋小路だった】
+    権限を足したのに切り替えられない、という声が繰り返し届いていました。
+    現場の言い方は「**一回閉じないと現場資材モード切り替えれません**」。
+
+    仕組みを並べると、閉じるしかなかったことが分かります:
+
+        資材課が取り込み元(共有フォルダ)に `mode:material` の行を足す
+        動いているアプリは**手元のDBしか見ない** → 権限は増えない
+        権限が1つしか無いので、帯に**モード切替そのものが出ない**
+        `set_mode` は断る前に `resync`(取り込み元を読み直す)を呼ぶ ──
+            **が、そこへ行くにはその出ていないボタンを押すしかない**
+
+    直す仕組みが、それが開けるはずの扉の向こうにありました。閉じて
+    開き直すと `auto_import` が手元を追いつかせるので直る ── 現場が
+    見つけた唯一の逃げ道がそれです。
+
+    【どう塞ぐか】
+    **権限が足りないと分かったその場で、一度だけ見に行きます。**
+    足りている端末(両方持っている・そもそも1つで足りている)では
+    何もしません。
+
+    共有フォルダは遅いので、叩くのは次のどちらかのときだけ:
+
+        取り込み元の更新時刻が前に見たときと違う … 誰かが書いた
+        まだ一度も見ていない                     … 起動直後の1回
+
+    どちらでもなければ手元の判断をそのまま返します。読みに行けなくても
+    **断りません** ── 手元にある分で続けます(共有に届かない端末でも
+    仕事は続く)。
+    """
+    import time
+
+    from . import modes
+
+    global _screen_resync_at, _screen_resync_stamp
+
+    grant = resolve(conn)
+    if len(grant.allowed_modes()) >= len(modes.KEYS):
+        return grant                            # 足りている。見に行かない
+
+    now = time.time()
+    stamp = _source_stamp()
+    fresh = stamp is not None and stamp != _screen_resync_stamp
+    if not fresh and now - _screen_resync_at < SCREEN_RESYNC_MIN_SEC:
+        return grant
+
+    _screen_resync_at, _screen_resync_stamp = now, stamp
+    if not resync(conn):
+        return grant
+    after = resolve(conn)
+    if after.allowed_modes() != grant.allowed_modes():
+        log.info("取り込み元を読み直して権限が変わりました: %s → %s",
+                 grant.allowed_modes(), after.allowed_modes())
+    return after
+
+
+def _source_stamp() -> Optional[tuple[int, int]]:
+    """取り込み元の大きさと更新時刻。**共有を開かずに**変化だけ見る。"""
+    try:
+        from . import data_sync
+        path = data_sync.find_material_db()
+        if path is None:
+            return None
+        info = path.stat()
+        return (info.st_size, info.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def reset_screen_resync() -> None:
+    """試験用。見に行った覚えを忘れる。"""
+    global _screen_resync_at, _screen_resync_stamp
+    _screen_resync_at, _screen_resync_stamp = 0.0, None
+
+
 def problems(conn: sqlite3.Connection) -> list[str]:
     """マスタの中で、書いた人の意図どおりに効かない行。
 

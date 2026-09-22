@@ -462,6 +462,11 @@ CREATE TABLE IF NOT EXISTS 仕掛ロット (
     BOX実績_板幅      REAL NOT NULL DEFAULT 0,
     BOX実績_板丈      REAL NOT NULL DEFAULT 0,
     BOX実績_枚本数    INTEGER NOT NULL DEFAULT 0,
+    -- ひとつ前・ふたつ前の工程で何枚(何本)流れたか。
+    -- BOX実績と並べて見ると、工程を追うごとに枚数がどう変わったかが
+    -- 一覧のまま読める(現場の依頼で追加)
+    前々工程実績_枚本数  INTEGER NOT NULL DEFAULT 0,
+    前工程実績_枚本数    INTEGER NOT NULL DEFAULT 0,
     -- 試験指示票(先行データ)の要否判定に使う(VBA `AdvanceCheck`)。
     -- 品質グレード_表面処理が"S"/"T"以外で、かつ製造板厚が3mm以下または
     -- 用途コードの先頭が"T"/"D1"/"D2"のいずれかなら要

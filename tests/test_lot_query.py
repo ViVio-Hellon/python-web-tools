@@ -303,3 +303,106 @@ class FormatTests(unittest.TestCase):
 
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
+
+
+class ProcessCountColumnTests(unittest.TestCase):
+    """前々工程・前工程の枚本数(現場の依頼で追加)。
+
+    工程を追うごとに枚数がどう変わったかを、**一覧のまま**読めるように
+    する。1件ずつ詳細を開かせないのがこの一覧の趣旨なので、列を足せば
+    絞り込みと並べ替えにも同時に効く(`COLUMNS` が唯一の出どころ)。
+    """
+
+    KEYS = ("prev2_count", "prev_count")
+    LABELS = ("前々工程実績_枚本数", "前工程実績_枚本数")
+
+    def test_一覧に出る(self) -> None:
+        labels = [c.label for c in q.COLUMNS]
+        for want in self.LABELS:
+            with self.subTest(label=want):
+                self.assertIn(want, labels)
+
+    def test_数値として扱う(self) -> None:
+        """文字として並べると 100 < 99 になる。絞り込みの演算子も変わる。"""
+        for key in self.KEYS:
+            with self.subTest(key=key):
+                self.assertEqual(q.BY_KEY[key].kind, q.TYPE_NUMBER)
+
+    def test_工程の順に並べる(self) -> None:
+        """**前々 → 前 → BOX実績** と左から読めること。
+
+        離して置くと、目を往復させて引き算することになる。
+        """
+        order = [c.key for c in q.COLUMNS]
+        self.assertLess(order.index("prev2_count"), order.index("prev_count"))
+        self.assertLess(order.index("prev_count"), order.index("box_count"))
+
+    def test_取り込みの対象になっている(self) -> None:
+        """一覧に出しても、取り込んでいなければ**ずっと空のまま**。"""
+        from packaging_tool import import_specs
+        names = [local for local, _src, _conv
+                 in import_specs.LOT_IMPORT_SPECS["仕掛ロット"]]
+        for want in self.LABELS:
+            with self.subTest(label=want):
+                self.assertIn(want, names)
+
+    def test_値が引ける(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        conn.execute(
+            "INSERT INTO 仕掛ロット (ロット番号, 前々工程実績_枚本数,"
+            " 前工程実績_枚本数, BOX実績_枚本数) VALUES ('1234567', 140, 120, 100)")
+        conn.commit()
+        rows = q.fetch(conn, [])
+        self.assertEqual(rows[0]["前々工程実績_枚本数"], 140)
+        self.assertEqual(rows[0]["前工程実績_枚本数"], 120)
+        conn.close()
+
+
+class OldDatabaseUpgradeTests(unittest.TestCase):
+    """**すでに動いている端末でも列が増えること。**
+
+    `CREATE TABLE IF NOT EXISTS` はすでにある表に何もしない。列を足しても
+    既存の端末では増えないまま、一覧に出す側だけが新しくなり、
+    `no such column` で表が引けなくなる。仕掛台帳の表は取り込み元から
+    丸ごと入れ直す写しなので、捨てて作り直してよい。
+    """
+
+    OLD_DDL = """CREATE TABLE 仕掛ロット (
+        管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,
+        ロット番号 TEXT NOT NULL, 用途コード TEXT NOT NULL DEFAULT '',
+        用途名 TEXT NOT NULL DEFAULT '', 製造材質 TEXT NOT NULL DEFAULT '',
+        製造調質 TEXT NOT NULL DEFAULT '', 製造板厚 REAL NOT NULL DEFAULT 0,
+        製造板幅 REAL NOT NULL DEFAULT 0, 製造板丈 REAL NOT NULL DEFAULT 0,
+        オーダー板厚 REAL NOT NULL DEFAULT 0, オーダー板幅 REAL NOT NULL DEFAULT 0,
+        オーダー板丈 REAL NOT NULL DEFAULT 0, 設計_設備コース TEXT NOT NULL DEFAULT '',
+        実績_設備コース TEXT NOT NULL DEFAULT '', BOX実績_板厚 REAL NOT NULL DEFAULT 0,
+        BOX実績_板幅 REAL NOT NULL DEFAULT 0, BOX実績_板丈 REAL NOT NULL DEFAULT 0,
+        BOX実績_枚本数 INTEGER NOT NULL DEFAULT 0,
+        品質グレード_表面処理 TEXT NOT NULL DEFAULT '')"""
+
+    def test_古い形の表に列が足される(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(self.OLD_DDL)
+        conn.execute("INSERT INTO 仕掛ロット (ロット番号) VALUES ('1234567')")
+        conn.commit()
+
+        db.apply_schema(conn)
+
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(仕掛ロット)")]
+        for want in ("前々工程実績_枚本数", "前工程実績_枚本数"):
+            with self.subTest(column=want):
+                self.assertIn(want, columns)
+        conn.close()
+
+    def test_一覧の問い合わせが通る(self) -> None:
+        """**列が増えないと、ここが `no such column` で落ちる。**"""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(self.OLD_DDL)
+        conn.commit()
+        db.apply_schema(conn)
+        q.fetch(conn, [])                         # 落ちなければよい
+        conn.close()
