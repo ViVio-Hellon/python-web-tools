@@ -305,6 +305,67 @@ if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
 
 
+class SuggestByColumnNameTests(unittest.TestCase):
+    """**列名を打っても候補が出ること。**
+
+    入力欄は「条件を追加(列名・値・保存した条件)」と案内しているのに、
+    以前は**値しか見ていませんでした** ── どの列名を打っても0件で、
+    案内が嘘になっていました。
+
+    数値の列はさらに厳しく、数字を打ったときしか出ないうえ、候補は
+    12件で打ち切られます。数値列は12あり1列につき3件(= / ≥ / ≤)出すので、
+    **先頭4列で埋まり**、`BOX実績_枚本数` や `前工程実績_枚本数` のような
+    後ろの列はどう打っても一度も出てきませんでした。
+    """
+
+    def setUp(self) -> None:
+        self.conn = make_conn()
+        self.addCleanup(self.conn.close)
+        insert(self.conn, "1111111", zaishitsu="A5052", thickness=3.0)
+        insert(self.conn, "2222222", zaishitsu="A1050", thickness=0.8)
+        self.conn.execute(
+            "UPDATE 仕掛ロット SET 前工程実績_枚本数 = 240,"
+            " 前々工程実績_枚本数 = 56 WHERE ロット番号 = '1111111'")
+        self.conn.execute(
+            "UPDATE 仕掛ロット SET 前工程実績_枚本数 = 1,"
+            " 前々工程実績_枚本数 = 1 WHERE ロット番号 = '2222222'")
+        self.conn.commit()
+
+    def labels(self, text):
+        return [s.label for s in q.suggest(self.conn, text)]
+
+    def test_列名を打つと候補が出る(self) -> None:
+        self.assertTrue([l for l in self.labels("前工程") if l.startswith("前工程実績_枚本数")])
+
+    def test_後ろの数値列にも届く(self) -> None:
+        """**埋もれていた列**。数字を打つ道しか無いと届かなかった。"""
+        for name in ("前々工程実績_枚本数", "BOX実績_枚本数"):
+            with self.subTest(name=name):
+                self.assertTrue([l for l in self.labels(name)
+                                 if l.startswith(name)])
+
+    def test_数値は大きい値から出す(self) -> None:
+        """`= 0` を先頭に出しても押す理由が無い(全行に当たる)。"""
+        first = self.labels("前工程実績_枚本数")[0]
+        self.assertEqual(first, "前工程実績_枚本数 = 240", first)
+
+    def test_文字の列はよくある値から(self) -> None:
+        self.assertTrue(self.labels("製造材質")[0].startswith("製造材質 = "))
+
+    def test_データに無い値は勧めない(self) -> None:
+        """名前で呼ばれても**約束は変えない** ── 0件になる条件は出さない。"""
+        labels = self.labels("製造材質")
+        self.assertTrue(all(l.split(" = ")[1] in ("A5052", "A1050")
+                            for l in labels if l.startswith("製造材質 = ")))
+
+    def test_値で引く道は今までどおり(self) -> None:
+        self.assertIn("製造材質 = A5052", self.labels("A50"))
+        self.assertIn("製造板厚 ≥ 3", self.labels("3"))
+
+    def test_出しすぎない(self) -> None:
+        self.assertLessEqual(len(self.labels("実績")), q.SUGGEST_TOTAL)
+
+
 class ProcessCountColumnTests(unittest.TestCase):
     """前々工程・前工程の枚本数(現場の依頼で追加)。
 

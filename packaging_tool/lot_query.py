@@ -334,8 +334,26 @@ def suggest(conn: sqlite3.Connection, text: str,
     except ValueError:
         pass
 
+    folded = text.casefold()
+
+    def _named(c: Column) -> bool:
+        """打った文字がその列の**名前**を指しているか。
+
+        入力欄は「列名・値・保存した条件」と案内しているのに、以前は
+        **値しか見ていませんでした** ── どの列名を打っても候補は0件で、
+        案内が嘘になっていました。数値の列はさらに厳しく、数字を打った
+        ときしか出ないうえ、12件の打ち切りで先頭4列に埋もれるので、
+        `BOX実績_枚本数` や `前工程実績_枚本数` のような後ろの列は
+        **どう打っても一度も出てきません**でした。
+        """
+        return bool(folded) and folded in c.label.casefold()
+
     def _rank(c: Column) -> int:
-        # 打った文字がその列の取りうる値そのものなら真っ先に出す。
+        # 名前を指されたら真っ先に出す。**探している列がはっきりしている**
+        # ので、他の列の値より優先してよい
+        if _named(c):
+            return -2
+        # 打った文字がその列の取りうる値そのものなら次に出す。
         # 引当有無は値が 0/1 しか無いので、ちょうど「1」と打ったのなら
         # それを探している見込みが高い。候補は12件で打ち切られるため、
         # ここで前に出しておかないと数値列3件×4列に埋もれて一度も出ない
@@ -349,6 +367,34 @@ def suggest(conn: sqlite3.Connection, text: str,
     for col in ordered:
         if len(out) >= SUGGEST_TOTAL:
             break
+        if _named(col):
+            # 列の名前を指された。**その列に実際にある値**を並べる ──
+            # 「候補は実際にある値から作る」の約束はそのまま(0件になる
+            # 条件は勧めない)。数値の列でも、名前で呼ばれたときは
+            # 数字を打たなくても届く
+            # 並べる順は列の性格で変える。
+            #   文字の列 … よくある値から(材質・用途名は「どれが多いか」)
+            #   数値の列 … **大きい値から**。枚本数や寸法を名前で呼ぶ人が
+            #              探しているのは目立つ行で、`= 0`(7千行に当たる)
+            #              を先頭に出しても押す理由が無い
+            order = ("CAST(v AS REAL) DESC" if col.kind == TYPE_NUMBER
+                     else "n DESC, v")
+            rows = db.fetch_all(
+                conn,
+                f"SELECT {col.sql} AS v, COUNT(*) AS n FROM {TABLE} "
+                f"WHERE {_REPRESENTATIVE} AND {col.sql} IS NOT NULL "
+                f"AND {col.sql} <> '' "
+                f"GROUP BY v ORDER BY {order} LIMIT ?",
+                (SUGGEST_PER_COLUMN,),
+                caller_name="lot_query.suggest.named") or []
+            for row in rows:
+                value = format_value(col, row["v"])
+                if value == "":
+                    continue
+                out.append(Suggestion(
+                    kind="condition", column=col.key, op=OP_EQ, value=value,
+                    label=f"{col.label} {OP_EQ} {value}"))
+            continue
         if col.choices:
             # 取りうる値が決まっている列(引当有無の 0/1)。打った文字が
             # その値でなければ勧めない ── 「引当有無 = 3」のような、
