@@ -24,6 +24,12 @@ def insert_lot(conn, lot_no="1234567", **kw) -> None:
         "設計_設備コース": "AAA", "実績_設備コース": "BBB",
         "BOX実績_板厚": 6.75, "BOX実績_板幅": 1200.0, "BOX実績_板丈": 2400.0,
         "BOX実績_枚本数": 42,
+        # **実物に合わせる。** 実データでは寸法3つは BOX実績_* と全行
+        # 一致しており、枚本数だけが食い違う(最終工程の実績なので)。
+        # 既定では同じ値にしておき、食い違いを見たい試験だけが上書きする
+        "BOX最終実績_設備名": "KEN",
+        "BOX最終実績_板厚": 6.75, "BOX最終実績_板幅": 1200.0,
+        "BOX最終実績_板丈": 2400.0, "BOX最終実績_枚本数": 42,
         # "S"/"T"はAdvanceCheckのflag2免除対象なので、既定では
         # 試験指示票が不要になる(製造板厚3.0・用途コードK100は
         # 本来flag1/flag3に該当してしまうため、免除面で打ち消す)
@@ -126,10 +132,10 @@ class LotSearchTests(unittest.TestCase):
                          (3.2, 1010.0, 2010.0))
 
     def test_lot_header_shows_box_marker_and_count(self):
-        insert_lot(self.conn, 設計_設備コース="GCT", BOX実績_枚本数=7)
+        insert_lot(self.conn, 設計_設備コース="GCT", BOX最終実績_枚本数=7)
         result = svc.search_lot(self.conn, "1234567")
         self.assertIn("【BOX実績寸法】", result.lot_header)
-        self.assertIn("前工程実績数: 7枚", result.lot_header)
+        self.assertIn("最終実績数: 7枚", result.lot_header)
 
     def test_lot_header_without_box_marker(self):
         insert_lot(self.conn, 設計_設備コース="AAA")
@@ -464,7 +470,7 @@ class CalcTotalPackagesTests(unittest.TestCase):
     def _result(self, *, rows, gravity=2.7, count=100, thickness=3.0,
                 width=1000.0, length=2000.0, weights=None, counts=None):
         lot = svc.LotInfo(thickness=thickness, width=width, length=length,
-                          prev_process_count=count)
+                          final_process_count=count)
         odr = svc.OdrInfo(specific_gravity=gravity,
                           pack_unit_weight=weights or {}, pack_unit_count=counts or {})
         return svc.LotSearchResult(found=True, lot=lot, hiki=rows, odr=odr)
@@ -541,7 +547,7 @@ class CalcTotalPackagesReasonTests(unittest.TestCase):
     def _result(self, *, rows, gravity=2.7, count=100, thickness=3.0,
                 width=1000.0, length=2000.0, weights=None, counts=None):
         lot = svc.LotInfo(thickness=thickness, width=width, length=length,
-                          prev_process_count=count)
+                          final_process_count=count)
         odr = svc.OdrInfo(specific_gravity=gravity,
                           pack_unit_weight=weights or {}, pack_unit_count=counts or {})
         return svc.LotSearchResult(found=True, lot=lot, hiki=rows, odr=odr)

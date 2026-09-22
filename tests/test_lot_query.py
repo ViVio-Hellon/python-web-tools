@@ -324,30 +324,31 @@ class SuggestByColumnNameTests(unittest.TestCase):
         insert(self.conn, "1111111", zaishitsu="A5052", thickness=3.0)
         insert(self.conn, "2222222", zaishitsu="A1050", thickness=0.8)
         self.conn.execute(
-            "UPDATE 仕掛ロット SET 前工程実績_枚本数 = 240,"
-            " 前々工程実績_枚本数 = 56 WHERE ロット番号 = '1111111'")
+            "UPDATE 仕掛ロット SET BOX最終実績_枚本数 = 240"
+            " WHERE ロット番号 = '1111111'")
         self.conn.execute(
-            "UPDATE 仕掛ロット SET 前工程実績_枚本数 = 1,"
-            " 前々工程実績_枚本数 = 1 WHERE ロット番号 = '2222222'")
+            "UPDATE 仕掛ロット SET BOX最終実績_枚本数 = 1"
+            " WHERE ロット番号 = '2222222'")
         self.conn.commit()
 
     def labels(self, text):
         return [s.label for s in q.suggest(self.conn, text)]
 
     def test_列名を打つと候補が出る(self) -> None:
-        self.assertTrue([l for l in self.labels("前工程") if l.startswith("前工程実績_枚本数")])
+        self.assertTrue([l for l in self.labels("最終実績")
+                         if l.startswith("BOX最終実績_枚本数")])
 
     def test_後ろの数値列にも届く(self) -> None:
         """**埋もれていた列**。数字を打つ道しか無いと届かなかった。"""
-        for name in ("前々工程実績_枚本数", "BOX実績_枚本数"):
+        for name in ("BOX最終実績_板丈", "BOX最終実績_枚本数"):
             with self.subTest(name=name):
                 self.assertTrue([l for l in self.labels(name)
                                  if l.startswith(name)])
 
     def test_数値は大きい値から出す(self) -> None:
         """`= 0` を先頭に出しても押す理由が無い(全行に当たる)。"""
-        first = self.labels("前工程実績_枚本数")[0]
-        self.assertEqual(first, "前工程実績_枚本数 = 240", first)
+        first = self.labels("BOX最終実績_枚本数")[0]
+        self.assertEqual(first, "BOX最終実績_枚本数 = 240", first)
 
     def test_文字の列はよくある値から(self) -> None:
         self.assertTrue(self.labels("製造材質")[0].startswith("製造材質 = "))
@@ -366,44 +367,67 @@ class SuggestByColumnNameTests(unittest.TestCase):
         self.assertLessEqual(len(self.labels("実績")), q.SUGGEST_TOTAL)
 
 
-class ProcessCountColumnTests(unittest.TestCase):
-    """前々工程・前工程の枚本数(現場の依頼で追加)。
+class FinalResultColumnTests(unittest.TestCase):
+    """一覧に出すのは **BOX最終実績_***(現場の判断で入れ替え)。
 
-    工程を追うごとに枚数がどう変わったかを、**一覧のまま**読めるように
-    する。1件ずつ詳細を開かせないのがこの一覧の趣旨なので、列を足せば
-    絞り込みと並べ替えにも同時に効く(`COLUMNS` が唯一の出どころ)。
+    一覧が出すのは**ロットごとに1行**(取り込み順の先頭)だけです。
+    `BOX実績_*` はその行の工程の値なので、先頭行に載るのはたいてい
+    1工程目 ── 「このロットは結局何枚だったのか」は読めません。
+
+        L8061E0  BOX実績 = 1 (HOT)  →  BOX最終実績 = 2874 (KEN)
+
+    `BOX最終実績_*` は最終工程の値がそのロットの全行に配られているので
+    (実データ1,319ロットで確認、不一致0)、先頭行にも正しい値が載ります。
     """
 
-    KEYS = ("prev2_count", "prev_count")
-    LABELS = ("前々工程実績_枚本数", "前工程実績_枚本数")
+    SHOWN = ("BOX最終実績_設備名", "BOX最終実績_板厚", "BOX最終実績_板幅",
+             "BOX最終実績_板丈", "BOX最終実績_枚本数")
+    HIDDEN = ("前々工程実績_枚本数", "前工程実績_枚本数",
+              "BOX実績_板厚", "BOX実績_板幅", "BOX実績_板丈", "BOX実績_枚本数")
 
-    def test_一覧に出る(self) -> None:
+    def test_最終実績を一覧に出す(self) -> None:
         labels = [c.label for c in q.COLUMNS]
-        for want in self.LABELS:
+        for want in self.SHOWN:
             with self.subTest(label=want):
                 self.assertIn(want, labels)
 
+    def test_出さない列は出さない(self) -> None:
+        """**同じ数字が2組並ばない。** 寸法は実データで全行一致していた
+        ので、両方出すと読む人は違いを探して時間を使うことになる。"""
+        labels = [c.label for c in q.COLUMNS]
+        for hidden in self.HIDDEN:
+            with self.subTest(label=hidden):
+                self.assertNotIn(hidden, labels)
+
     def test_数値として扱う(self) -> None:
         """文字として並べると 100 < 99 になる。絞り込みの演算子も変わる。"""
-        for key in self.KEYS:
+        for key in ("final_thickness", "final_width", "final_length",
+                    "final_count"):
             with self.subTest(key=key):
                 self.assertEqual(q.BY_KEY[key].kind, q.TYPE_NUMBER)
 
-    def test_工程の順に並べる(self) -> None:
-        """**前々 → 前 → BOX実績** と左から読めること。
+    def test_設備名は文字として扱う(self) -> None:
+        self.assertEqual(q.BY_KEY["final_equipment"].kind, q.TYPE_TEXT)
 
-        離して置くと、目を往復させて引き算することになる。
-        """
+    def test_設備コースの隣に置く(self) -> None:
+        """どの設備を通ったかの話が続けて読める。"""
         order = [c.key for c in q.COLUMNS]
-        self.assertLess(order.index("prev2_count"), order.index("prev_count"))
-        self.assertLess(order.index("prev_count"), order.index("box_count"))
+        self.assertEqual(order.index("final_equipment"),
+                         order.index("course_actual") + 1)
+
+    def test_寸法は枚本数より前(self) -> None:
+        """厚・幅・丈・枚数、という読む順を崩さない。"""
+        order = [c.key for c in q.COLUMNS]
+        for key in ("final_thickness", "final_width", "final_length"):
+            with self.subTest(key=key):
+                self.assertLess(order.index(key), order.index("final_count"))
 
     def test_取り込みの対象になっている(self) -> None:
         """一覧に出しても、取り込んでいなければ**ずっと空のまま**。"""
         from packaging_tool import import_specs
         names = [local for local, _src, _conv
                  in import_specs.LOT_IMPORT_SPECS["仕掛ロット"]]
-        for want in self.LABELS:
+        for want in self.SHOWN:
             with self.subTest(label=want):
                 self.assertIn(want, names)
 
@@ -412,12 +436,13 @@ class ProcessCountColumnTests(unittest.TestCase):
         conn.row_factory = sqlite3.Row
         db.apply_schema(conn)
         conn.execute(
-            "INSERT INTO 仕掛ロット (ロット番号, 前々工程実績_枚本数,"
-            " 前工程実績_枚本数, BOX実績_枚本数) VALUES ('1234567', 140, 120, 100)")
+            "INSERT INTO 仕掛ロット (ロット番号, BOX実績_枚本数,"
+            " BOX最終実績_設備名, BOX最終実績_枚本数)"
+            " VALUES ('1234567', 1, 'KEN', 2874)")
         conn.commit()
-        rows = q.fetch(conn, [])
-        self.assertEqual(rows[0]["前々工程実績_枚本数"], 140)
-        self.assertEqual(rows[0]["前工程実績_枚本数"], 120)
+        row = q.fetch(conn, [])[0]
+        self.assertEqual(row["BOX最終実績_枚本数"], 2874)
+        self.assertEqual(row["BOX最終実績_設備名"], "KEN")
         conn.close()
 
 

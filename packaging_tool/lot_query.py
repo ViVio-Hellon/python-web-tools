@@ -128,18 +128,29 @@ COLUMNS: tuple[Column, ...] = (
     # どの設備を通る/通ったか
     Column("course_plan", "設計_設備コース", "設計_設備コース"),
     Column("course_actual", "実績_設備コース", "実績_設備コース"),
-    # ひとつ前・ふたつ前の工程で何枚(何本)流れたか(現場の依頼で追加)。
-    # **BOX実績の手前に、古い工程から順に置く** ── 前々 → 前 →
-    # BOX実績 と左から読めば、工程を追うごとに枚数がどう変わったかが
-    # 一覧のまま分かる。離して置くと、目を往復させて引き算することになる
-    Column("prev2_count", "前々工程実績_枚本数", "前々工程実績_枚本数", TYPE_NUMBER),
-    Column("prev_count", "前工程実績_枚本数", "前工程実績_枚本数", TYPE_NUMBER),
-    # BOX工程の実績。ロット番号は工程ごとに行が分かれるので、
-    # ここが違えば「同じロット番号の別の行」だと分かる
-    Column("box_thickness", "BOX実績_板厚", "BOX実績_板厚", TYPE_NUMBER, decimals=3),
-    Column("box_width", "BOX実績_板幅", "BOX実績_板幅", TYPE_NUMBER, decimals=1),
-    Column("box_length", "BOX実績_板丈", "BOX実績_板丈", TYPE_NUMBER, decimals=1),
-    Column("box_count", "BOX実績_枚本数", "BOX実績_枚本数", TYPE_NUMBER),
+    # そのロットの**最終工程**の実績。
+    #
+    # 【なぜ BOX実績_* ではなくこちらを出すのか】
+    # 一覧が出すのは**ロットごとに1行**(取り込み順の先頭)だけです。
+    # `BOX実績_*` はその行の工程の値なので、先頭行に載るのは
+    # たいてい1工程目 ── 「このロットは結局何枚だったのか」は読めません。
+    # 実データでは8,056行中3,100行で両者が食い違い、一覧に出る行だけでも
+    # 448件が違いました(例:あるロットで BOX実績=1 / 最終実績=240)。
+    #
+    # `BOX最終実績_*` は最終工程の値がそのロットの**全行に配られて**
+    # いるので(1,319ロットで確認、不一致0)、先頭行にも正しい値が載ります。
+    #
+    # 前々工程・前工程の枚本数は出しません ── 1工程目の行では必ず空で、
+    # 先頭行はたいてい1工程目なので、ほぼ全部が空欄の列になります
+    # (実データで代表行1,319件中、値が入るのは27件と34件だけでした)。
+    Column("final_equipment", "BOX最終実績_設備名", "BOX最終実績_設備名"),
+    Column("final_thickness", "BOX最終実績_板厚", "BOX最終実績_板厚",
+           TYPE_NUMBER, decimals=3),
+    Column("final_width", "BOX最終実績_板幅", "BOX最終実績_板幅",
+           TYPE_NUMBER, decimals=1),
+    Column("final_length", "BOX最終実績_板丈", "BOX最終実績_板丈",
+           TYPE_NUMBER, decimals=1),
+    Column("final_count", "BOX最終実績_枚本数", "BOX最終実績_枚本数", TYPE_NUMBER),
     # 試験指示票(先行データ)の要否判定に使う値(VBA `AdvanceCheck`)
     Column("grade_surface", "品質グレード_表面処理", "品質グレード_表面処理"),
 )

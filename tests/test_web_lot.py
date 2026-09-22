@@ -242,16 +242,16 @@ class BuildTests(unittest.TestCase):
         self.assertFalse(view.is_box)
         self.assertEqual([f.key for f in view.lot_fields if f.highlight], [])
 
-    def test_見出しにBOX実績寸法と前工程実績数が出る(self) -> None:
+    def test_見出しにBOX実績寸法と最終実績数が出る(self) -> None:
         """VBA は caption 1本に `---` でつないでいた。語はそのまま、
         区切り記号だけ標識に置き換える。"""
-        insert_lot(self.conn, 設計_設備コース="GSS", BOX実績_枚本数=7)
+        insert_lot(self.conn, 設計_設備コース="GSS", BOX最終実績_枚本数=7)
         view = self.view()
         self.assertEqual(view.lot_title, "ロット情報 (SIKALOT)")
         texts = [b.text for b in view.lot_badges]
         self.assertIn("BOX実績寸法", texts)
-        self.assertIn("前工程実績数 7枚", texts)
-        self.assertEqual(view.prev_process_count, 7)
+        self.assertIn("最終実績数 7枚", texts)
+        self.assertEqual(view.final_process_count, 7)
 
     def test_BOXでなければ寸法の標識は出さない(self) -> None:
         insert_lot(self.conn, 設計_設備コース="AAA")
@@ -553,18 +553,48 @@ class LotPageTests(LotWebTestCase):
         self.assertIn(lot_list.ROW_HINT,
                       self.client.get("/lot").get_data(as_text=True))
 
-    def test_取り込んだ列を全部出す(self) -> None:
+    # 取り込んでいるのに一覧に出さない列。**理由を書けるものだけ**。
+    # ここに足すときは、なぜ出さないのかを1行で言えるかを確かめること
+    NOT_SHOWN = {
+        # 1工程目の行では必ず空。一覧が出すのはロットごとの先頭行
+        # (たいてい1工程目)なので、ほぼ全部が空欄の列になる
+        # ── 代わりに BOX最終実績_* を出している
+        "前々工程実績_枚本数": "1工程目の行では必ず空",
+        "前工程実績_枚本数": "1工程目の行では必ず空",
+        # その行の工程の値。ロットとしての答えは BOX最終実績_* のほう
+        # (梱包数の見積りと寸法の差し替えはこちらを使い続ける)
+        "BOX実績_板厚": "行ごとの値。一覧は最終実績を出す",
+        "BOX実績_板幅": "行ごとの値。一覧は最終実績を出す",
+        "BOX実績_板丈": "行ごとの値。一覧は最終実績を出す",
+        "BOX実績_枚本数": "行ごとの値。一覧は最終実績を出す",
+    }
+
+    def test_取り込んだ列は出すか理由があるかのどちらか(self) -> None:
         """一覧に出ていない列は、1件ずつ詳細を開かないと分からない。
 
         取り込みが持っている事実は一覧に出しておいて、**目で探せる**
         ようにする。出す列を増やせば絞り込みと並べ替えにも同時に効く。
+
+        出さない列は**理由が言えるものだけ**にする(`NOT_SHOWN`)。
+        黙って落とすと、次に見た人は落ちていることに気づけない。
         """
         from packaging_tool import import_specs, lot_query
         taken = {local for local, _src, _conv
                  in import_specs.LOT_IMPORT_SPECS["仕掛ロット"]}
         shown = {c.source for c in lot_query.COLUMNS}
-        self.assertEqual(taken - shown, set(),
+        self.assertEqual(taken - shown - set(self.NOT_SHOWN), set(),
                          "取り込んでいるのに一覧に出ていない列があります")
+
+    def test_出さない理由の表が実物とずれていない(self) -> None:
+        """**出すようにしたのに理由だけ残る**、を防ぐ。"""
+        from packaging_tool import import_specs, lot_query
+        taken = {local for local, _src, _conv
+                 in import_specs.LOT_IMPORT_SPECS["仕掛ロット"]}
+        shown = {c.source for c in lot_query.COLUMNS}
+        for column in self.NOT_SHOWN:
+            with self.subTest(column=column):
+                self.assertIn(column, taken, "取り込んでいない列です")
+                self.assertNotIn(column, shown, "もう一覧に出ています")
 
     def test_列は1つも畳まない(self) -> None:
         """全列とも並べ替えに使う。**畳んだ値では見出しを押せない。**"""

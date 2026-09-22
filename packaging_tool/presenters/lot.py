@@ -150,7 +150,7 @@ class LotViewModel:
     # 図面(`spec_sheet`)を出しに行くので、12項目から探させない
     packaging_spec: str = ""
     specific_gravity: str = ""
-    prev_process_count: int = 0
+    final_process_count: int = 0
     # 資材選択へ渡せるか(製造板幅・板丈が取れているか)
     can_expand: bool = False
     expand_reason: str = ""
@@ -212,7 +212,7 @@ def build(result: lot_service.LotSearchResult) -> LotViewModel:
               for row in result.hiki],
         packaging_spec=odr.packaging_spec,
         specific_gravity=f"{odr.specific_gravity:g}",
-        prev_process_count=lot.prev_process_count,
+        final_process_count=lot.final_process_count,
         can_expand=bool(lot.width and lot.length),
         expand_reason=("" if lot.width and lot.length
                        else "製造板幅・板丈が取得できていません"),
@@ -240,7 +240,7 @@ def _lot_badges(lot: lot_service.LotInfo) -> list[Badge]:
     badges = []
     if lot.is_box:
         badges.append(Badge("BOX実績寸法", "alert"))
-    badges.append(Badge(f"前工程実績数 {lot.prev_process_count}枚"))
+    badges.append(Badge(f"最終実績数 {lot.final_process_count}枚"))
     return badges
 
 
@@ -362,7 +362,7 @@ def to_dict(view: LotViewModel) -> dict[str, Any]:
         "hiki": view.hiki,
         "packaging_spec": view.packaging_spec,
         "specific_gravity": view.specific_gravity,
-        "prev_process_count": view.prev_process_count,
+        "final_process_count": view.final_process_count,
         "can_expand": view.can_expand,
         "expand_reason": view.expand_reason,
     }

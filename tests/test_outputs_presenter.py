@@ -22,7 +22,7 @@ from packaging_tool.user_log import UserLog
 def _result(*, rows, gravity=2.7, count=100, thickness=3.0,
            width=1000.0, length=2000.0, weights=None, counts=None):
     lot = svc.LotInfo(thickness=thickness, width=width, length=length,
-                      prev_process_count=count)
+                      final_process_count=count)
     odr = svc.OdrInfo(specific_gravity=gravity,
                       pack_unit_weight=weights or {}, pack_unit_count=counts or {})
     return svc.LotSearchResult(found=True, lot=lot, hiki=rows, odr=odr)

@@ -105,7 +105,20 @@ class LotInfo:
     actual_course: str = ""      # lblLot(11) 実績_設備コース
     is_box: bool = False         # 設計_設備コースがBOX_COURSESを含む
     box_course: str = ""         # 一致したコース名(VBA `m_gCourse`)
-    prev_process_count: int = 0  # BOX実績_枚本数(前工程実績数)
+    # 梱包数の見積りが食い潰す「いま何枚あるか」。
+    #
+    # **BOX最終実績_枚本数(そのロットの最終工程の実績)を使う。**
+    # 以前は `BOX実績_枚本数` を読んでいたが、1件検索が読むのは
+    # ロットの**先頭行**で、そこはたいてい1工程目(HOT)── 鋳塊1本の
+    # 「1」だった。実データ1,319ロットのうち448件で食い違い、
+    #
+    #     L8061E0  BOX実績 = 1 (HOT) → 最終実績 = 2874 (KEN)
+    #
+    # のように桁が変わる。梱包数はここから積み上げるので、発注数が
+    # そのぶん小さく出ていた(10倍以上ずれるロットが181件)。
+    # 最終実績が0のとき(最終工程がまだ記録されていない2件)は
+    # 今までどおり BOX実績 を使う ── 悪くしないため
+    final_process_count: int = 0
     quality_surface: str = ""    # 品質グレード_表面処理(試験指示票の要否判定に使う)
     # 包装仕様NOの書き換え判定(flag4)、試験指示票の要否判定
     # (AdvanceCheck flag1)のどちらも BOX実績に差し替える前の「製造板厚」を
@@ -234,7 +247,7 @@ class LotSearchResult:
             base += "---【BOX実績寸法】---"
         else:
             base += "-----------"
-        return f"{base}前工程実績数: {self.lot.prev_process_count}枚"
+        return f"{base}最終実績数: {self.lot.final_process_count}枚"
 
     @property
     def odr_header(self) -> str:
@@ -298,10 +311,17 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str) -> Optional[LotInfo]:
         yoto_name=row["用途名"] or "",
         zaishitsu=row["製造材質"] or "",
         choshitsu=row["製造調質"] or "",
-        # BOXコースのときは寸法をBOX実績に差し替える(VBA踏襲)
-        thickness=row["BOX実績_板厚"] if is_box else row["製造板厚"],
-        width=row["BOX実績_板幅"] if is_box else row["製造板幅"],
-        length=row["BOX実績_板丈"] if is_box else row["製造板丈"],
+        # BOXコース(設計_設備コースに GFS / GCT / GSS を含む)のときは
+        # 寸法を実績に差し替える(VBA踏襲)。
+        #
+        # **差し替え先は BOX最終実績_*。** 枚本数を最終実績に替えたのと
+        # 同じ理由で、読むのはロットの先頭行だからそろえておく。
+        # 実データでは寸法3つは BOX実績_* と全8,056行で一致していたので、
+        # 見える値は変わらない ── 変わるのは「どの工程の寸法か」という
+        # 意味のほうで、今後ずれたときに正しいほうを指す
+        thickness=row["BOX最終実績_板厚"] if is_box else row["製造板厚"],
+        width=row["BOX最終実績_板幅"] if is_box else row["製造板幅"],
+        length=row["BOX最終実績_板丈"] if is_box else row["製造板丈"],
         order_thickness=row["オーダー板厚"],
         order_width=row["オーダー板幅"],
         order_length=row["オーダー板丈"],
@@ -309,7 +329,8 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str) -> Optional[LotInfo]:
         actual_course=row["実績_設備コース"] or "",
         is_box=is_box,
         box_course=box_course,
-        prev_process_count=int(row["BOX実績_枚本数"] or 0),
+        final_process_count=(int(row["BOX最終実績_枚本数"] or 0)
+                             or int(row["BOX実績_枚本数"] or 0)),
         quality_surface=str(row["品質グレード_表面処理"] or ""),
         manufactured_thickness=row["製造板厚"],
     )
@@ -554,7 +575,7 @@ def calc_total_packages_reason(result: LotSearchResult) -> str:
 def _calc_total_packages(result: LotSearchResult) -> tuple[int, str]:
     """`calc_total_packages` / `calc_total_packages_reason` の共通実装。
 
-    引当行を引当番号順に処理し、前工程実績数(BOX実績_枚本数)を
+    引当行を引当番号順に処理し、最終実績数(BOX最終実績_枚本数)を
     上から食い潰しながら梱包数を積み上げる。
     次の場合は計算不可として `(PACKAGES_UNKNOWN, 理由)` を返す:
         - 引当調整NOを持つ行が1件でも混ざる
@@ -572,7 +593,7 @@ def _calc_total_packages(result: LotSearchResult) -> tuple[int, str]:
                 log.debug("calc_total_packages: 1枚重量0かつkg種別混在のため計算不可")
                 return PACKAGES_UNKNOWN, REASON_WEIGHT_UNKNOWN
 
-    remaining = result.lot.prev_process_count
+    remaining = result.lot.final_process_count
     total = 0
     for row in result.hiki:
         if remaining <= 0:
