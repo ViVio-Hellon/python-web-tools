@@ -23,6 +23,8 @@
   文言はサーバから来たものを優先します(設計書 §1)。
 */
 
+import * as unsaved from "./unsaved.js";
+
 const ID = "screen-taken";
 
 /** このタブの番号。サーバが画面を組み立てるときに振った(base.html)。 */
@@ -76,8 +78,10 @@ export function showTaken(message) {
 
   // 読み込み直せば新しい番号が振られ、**このタブが最後に開いた画面に
   // なる**。取り戻す手を別に作らないのは、道が1本なら食い違わないから
-  box.querySelector("#taken-use")
-     .addEventListener("click", () => location.reload());
+  box.querySelector("#taken-use").addEventListener("click", () => {
+    unsaved.allowLeave();       // 図の編集はサーバにあるので消えない
+    location.reload();
+  });
   // 閉じるのはブラウザの仕事。こちらから閉じられないことがあるので、
   // 押せなかったときのために案内へ切り替える
   box.querySelector("#taken-close").addEventListener("click", () => {

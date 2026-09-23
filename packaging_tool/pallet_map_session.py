@@ -240,6 +240,20 @@ def get_session() -> PalletMapSession:
         return _session
 
 
+def has_unsaved() -> bool:
+    """保存していない編集があるか。**作業状態を作らずに**答える。
+
+    見張り(`/api/health`)と「終了」が聞く。画面を一度も開いていなければ
+    作業状態そのものが無いので「無い」── ここで作ってしまうと、聞いた
+    だけで図のファイルを読みに行くことになる。
+    """
+    return bool(_session is not None and _session.dirty)
+
+
+# 未保存を知らせるときの呼び名
+UNSAVED_LABEL = "簡易在庫の保管位置マップ"
+
+
 def reset_session() -> None:
     """テスト用。プロセスに1つという前提を壊さずに作り直す。"""
     global _session

@@ -15,6 +15,7 @@ import { api, tokenUrl } from "../api.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
+import * as unsaved from "../unsaved.js";
 // `mapedit.js` は動的に読み込む(理由は `settings.js` が `master.js` を
 // 動的に読み込んでいるのと同じ ── このファイル自身と版クエリを合わせ、
 // 入れ替えたときに中身も必ず一緒に入れ替わるようにするため)。
@@ -105,6 +106,8 @@ function renderMap(next) {
   // 複数選択(Shift+クリック)の見た目を付け直す。図はまるごと
   // 作り直されるので、毎回付け直さないと消えたままになる
   dragger?.reapplySelection();
+  // 保存していない図があれば、タブを閉じるときに聞く(`unsaved.js`)
+  unsaved.mark("layout", Boolean(next.dirty));
 
   // 凡例。色の意味を figure の外に書く(色だけで伝えない)
   el.mapLegend.replaceChildren(...[

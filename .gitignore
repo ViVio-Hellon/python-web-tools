@@ -32,6 +32,12 @@ data/*.db-shm
 # 書き戻し(`write_back`)もそちらへ行くので、実害が出る。
 data/user_config.json
 
+# 配置編集で「配置を保存」したときの図。**現場ごとの配置**で、ソースでは
+# ない。出荷時の配置は `packaging_tool/*_default.json` が持つ。
+# 追跡すると、開発で動かした配置が配布に混ざり、現場の配置を上書きする
+data/floor_plan.json
+data/pallet_map.json
+
 # CSVなどの書き出し先(既定)。出したものは端末ごとの成果物で、
 # 配るものではない
 export/

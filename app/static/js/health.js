@@ -9,6 +9,7 @@
 import { api } from "./api.js";
 import * as nav from "./nav.js";
 import * as screen from "./screen.js";
+import * as unsaved from "./unsaved.js";
 
 // 何回続けて失敗したら「切れた」と見なすか。
 // 1回の取りこぼしで赤帯を出すと、かえって信用されなくなる
@@ -69,6 +70,10 @@ async function beat() {
     if (body && body.screen_ok === false) screen.showTaken();
     else if (body && body.screen_ok === true) screen.clearTaken();
     if (body && Array.isArray(body.modes)) followModes(body.modes);
+    // 保存していない図。タブを閉じるときに聞くため(`unsaved.js`)
+    if (body && body.unsaved && typeof body.unsaved === "object") {
+      unsaved.fromServer(body.unsaved);
+    }
   } catch {
     if (++misses === MISSES_BEFORE_OFFLINE) setOffline(true);
   }

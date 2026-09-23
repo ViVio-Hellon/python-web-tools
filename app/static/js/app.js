@@ -10,6 +10,7 @@ import { toast, toastError } from "./toast.js";
 import * as busy from "./busy.js";
 import * as nav from "./nav.js";
 import * as running from "./running.js";
+import * as unsaved from "./unsaved.js";
 
 // **押されたボタンを覚えておく。** `api.js` が送信を始めるときに、
 // そのボタンを待機の姿にする(無言で待たせない)
@@ -54,8 +55,11 @@ function wireQuit(button) {
       }, 700);
     } catch (err) {
       if (err.status === 409) {
-        // 中断してよいかは利用者が決める
-        if (confirm("実行中の処理があります。中断して終了しますか?")) {
+        // 中断してよいか・保存せずに終えてよいかは利用者が決める。
+        // **聞く文はサーバが持つ**(実行中の処理か、保存していない図か)
+        if (confirm(err.message || "終了しますか?")) {
+          // 捨ててよいと答えたので、閉じるときにもう一度は聞かない
+          unsaved.allowLeave();
           try {
             await api.post("/api/shutdown", { force: true });
             toast("終了します", "ok");
@@ -78,6 +82,8 @@ function wireMode(btn) {
       const body = await api.post("/api/mode", { mode: btn.dataset.mode });
       // **ここは読み込み直す。** 出せる画面そのものが入れ替わるので、
       // レールも権限も作り直させる(資材モードに資材選択は無い)
+      // アプリの中の移動。図の編集はサーバが持っているので消えない
+      unsaved.allowLeave();
       location.href = body.next || location.pathname;
     } catch (err) { toastError(err); }
   });

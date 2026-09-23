@@ -120,6 +120,12 @@ def health():
         # 帯だけ描き直す。画面からの問い合わせにだけ答える ── 起動の
         # 判定や待機画面は権限を要らないので、DBを開かせない
         "modes": _screen_modes(),
+        # **保存していない図。** 画面がこれを覚えておき、タブを閉じる
+        # ときに「保存していない変更があります」を出す。閉じると8秒で
+        # 自動終了し、そこで**未保存の配置編集は消える**ので、黙って
+        # 閉じさせない(現場の声:「配置編集保存されてないよ」)。
+        # どの画面にいても分かるよう、棚検索・簡易在庫の両方を返す
+        "unsaved": _screen_unsaved(),
         # いま走っているものの一言。**起動待機画面はこれを読む** ──
         # 取り込みが終わるまで待たせるので、何をどこまでやっているかを
         # 出さないと「止まっている」と受け取られる
@@ -150,6 +156,28 @@ def _screen_modes() -> Optional[list[str]]:
         log.debug("モードを引けませんでした(次の問い合わせで試します)",
                   exc_info=True)
         return None
+
+
+def unsaved_edits() -> dict[str, str]:
+    """保存していない図 {鍵: 呼び名}。**作業状態を作らずに**調べる。
+
+    見張りと「終了」の2か所が聞くので、ここ1か所で持つ。
+    """
+    from packaging_tool import layout_session, pallet_map_session
+
+    out = {}
+    if layout_session.has_unsaved():
+        out["layout"] = layout_session.UNSAVED_LABEL
+    if pallet_map_session.has_unsaved():
+        out["inventory"] = pallet_map_session.UNSAVED_LABEL
+    return out
+
+
+def _screen_unsaved() -> Optional[dict[str, str]]:
+    """画面からの問い合わせにだけ答える(`_screen_modes` と同じ理由)。"""
+    if not request.headers.get(screen_lock.HEADER):
+        return None
+    return unsaved_edits()
 
 
 def _running_note() -> Optional[dict]:
@@ -250,7 +278,27 @@ def shutdown():
     `force=true` を付けて呼び直すと中断して落とす。
     """
     force = bool((request.get_json(silent=True) or {}).get("force"))
+    # **保存していない図があれば、捨てる前に聞く。** 以前は何も言わずに
+    # 終わり、配置編集が消えていた。勝手に保存はしない ── 「保存を押す
+    # まで書かない。間違えても開き直せば元に戻る」という約束があるので
+    unsaved = unsaved_edits()
     running = _running_jobs()
+    if unsaved and not force:
+        # 実行中の処理もあれば**同じ1問で**聞く。「はい」は force で
+        # 呼び直すので、別々に聞くと2つ目を聞かずに中断してしまう
+        names = "・".join(unsaved.values())
+        message = f"保存していない変更があります({names})。"
+        if running:
+            message += "実行中の処理もあります。"
+        return jsonify({
+            "stopped": False,
+            "reason": "unsaved",
+            "unsaved": unsaved,
+            "running": running,
+            "message": message + (
+                "保存せず、処理も中断して終了しますか?" if running
+                else "保存せずに終了しますか?"),
+        }), 409
     if running and not force:
         return jsonify({
             "stopped": False,
