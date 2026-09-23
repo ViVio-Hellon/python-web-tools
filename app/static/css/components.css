@@ -943,3 +943,20 @@ tr[data-row-action] td:last-child > .elapsed {
   }
   .st--run::after { animation: none; }
 }
+
+/* ================================================================
+   配置編集の「そろえる・隙間をなくす」(`_arrange.html`)
+
+   押す回数が多い道具なので**小さく横に並べる**。見出し(そろえる /
+   隙間をなくす)を左に置き、同じ種類の操作が1行にまとまるようにする
+   ================================================================ */
+.arrange {
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 10px;
+  align-items: center;
+}
+.arrange__k { font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; }
+.arrange__row { display: flex; flex-wrap: wrap; gap: 6px; }
+.arrange__why { grid-column: 1 / -1; margin: 0; }
+/* 横に8つ並ぶので**幅だけ**詰める。高さは縮めない ── ボタンは最小44px
+   (指で押すため。上の「ボタン」の約束) */
+.btn--sm { padding: 8px 11px; font-size: var(--fs-sm); }

@@ -257,7 +257,58 @@ export function attach(svg, opts) {
      * の強調表示のままになっている」)。
      */
     clearSelection() { selected.clear(); markSelected(); },
+    /** いまShift+クリックで選んでいる箱の名前(そろえる・詰めるに渡す)。 */
+    selectedNames() { return [...selected]; },
   };
+}
+
+/*
+  そろえる・隙間をなくす(`_arrange.html` のボタンを配線する)
+
+  **計算はサーバ**(`map_data.arrange`)。ここは「どの箱を・どう並べるか」
+  を送るだけ。送ったあとも**選んだままにする** ── 「上をそろえる →
+  横に詰める」のように続けて押すのがふつうの使い方で、1回ごとに
+  選び直させない。
+
+  opts:
+    box      `_arrange.html` の外枠(`[data-arrange-box]`)
+    dragger  `attach` の戻り(選んでいる名前を聞く)
+    send(names, op)  サーバへ送る(画面ごとに宛先が違う)
+  戻り: { update(count) } ── 選んだ件数が変わるたびに呼ぶ
+*/
+export function attachArrange(opts) {
+  const buttons = [...opts.box.querySelectorAll("[data-arrange]")];
+  const why = opts.box.querySelector("[data-arrange-why]");
+  let busy = false;
+
+  function update(count) {
+    const ready = count >= 2;
+    for (const button of buttons) button.disabled = !ready || busy;
+    // **押せない理由は文字で言う。** 灰色のボタンだけ置くと、
+    // 壊れているのか条件が足りないのかが分からない
+    if (why) {
+      why.textContent = ready
+        ? `${count}件を並べ直します。`
+        : "Shift+クリックで2つ以上選ぶと押せます。";
+    }
+  }
+
+  for (const button of buttons) {
+    button.addEventListener("click", async () => {
+      const names = opts.dragger.selectedNames();
+      if (names.length < 2 || busy) return;
+      busy = true;
+      update(names.length);
+      try {
+        await opts.send(names, button.dataset.arrange);
+      } finally {
+        busy = false;
+        update(opts.dragger.selectedNames().length);
+      }
+    });
+  }
+  update(0);
+  return { update };
 }
 
 /*

@@ -139,6 +139,23 @@ def move():
     return _apply(session, session.move(str(body.get("name", "")), x, y))
 
 
+@bp.post("/api/layout/arrange")
+def arrange():
+    """選んだ置き場をそろえる/詰める。`{"names": [...], "op": "top"}`。
+
+    並べ方(`op`)と言葉は `packaging_tool/map_data.py` の
+    `ARRANGE_LABELS` が持つ。
+    """
+    body = request.get_json(silent=True) or {}
+    names = body.get("names")
+    # **名前は文字の一覧でだけ受ける。** 一覧でないもの(文字1つ・数)を
+    # 受けると、1文字ずつ名前として読まれて「A は図にありません」になる
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        return jsonify(_error("bad_names", "並べる置き場を選んでください。")), 400
+    session = _session()
+    return _apply(session, session.arrange(names, str(body.get("op", ""))))
+
+
 @bp.post("/api/layout/resize")
 def resize():
     """置き場の大きさを変える(背景の写真に合わせこむため)。"""

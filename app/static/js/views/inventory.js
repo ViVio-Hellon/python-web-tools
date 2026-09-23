@@ -30,6 +30,7 @@ let selected = null;      // 払い出す対象の行
 let lastQuery = null;     // 「最新にする」で同じ表示を取り直すため
 let dragger = null;       // 掴む手(`mapedit.js`)
 let zoomer = null;        // 拡大縮小(`mapedit.js`)
+let arranger = null;      // そろえる・隙間をなくす(`mapedit.js`)
 let lastMap = null;       // いまの図。掴んだ箱の元の大きさを引くのに要る
 let picked = "";          // 配置編集で選んでいる位置(消すときの対象)
 
@@ -299,8 +300,15 @@ function startDragging() {
       if (el.mapMultiNote) {
         el.mapMultiNote.textContent = count ? `${count}件選択中` : "選択なし";
       }
+      arranger?.update(count);
     },
   });
+  // そろえる・隙間をなくす。計算はサーバ(`map_data.arrange`)
+  const box = document.querySelector("#mapEditBox [data-arrange-box]");
+  arranger = box ? mapedit.attachArrange({
+    box, dragger,
+    send: (names, op) => sendMap("/api/inventory/map/arrange", { names, op }),
+  }) : null;
 }
 
 /** 図を触る操作。**返ってくるのは画面ぜんぶ**なので、そのまま描き直す。 */

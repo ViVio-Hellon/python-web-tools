@@ -160,6 +160,41 @@ class PalletMapSession:
         return MapOpResult(True, "背景画像を差し替えました" if image
                            else "背景画像を外しました")
 
+    def arrange(self, names: list[str], op: str) -> MapOpResult:
+        """選んだ保管位置をそろえる/詰める(`map_data.arrange`)。
+
+        棚検索の `LayoutSession.arrange` と同じ決まり:1つでも図に無い
+        名前があれば何も動かさずに断る。動かすのは今までの `resize` /
+        `move` と同じ道(枠に収める・保存するまで書かない)。
+        """
+        refused = self._require_editing()
+        if refused:
+            return refused
+        if op not in map_data.ARRANGE_OPS:
+            return MapOpResult(False, "その並べ方はありません。", REFUSE_BAD_INPUT)
+        names = list(dict.fromkeys(str(n) for n in names))    # 重複を落とす
+        if len(names) < 2:
+            return MapOpResult(
+                False, "Shift+クリックで2つ以上選んでから押してください。",
+                REFUSE_BAD_INPUT)
+        boxes = {}
+        for name in names:
+            item = self.plan.position(name)
+            if item is None:
+                return MapOpResult(False, f"{name} は保管位置マップにありません。",
+                                   REFUSE_NOT_LISTED)
+            boxes[name] = (item.x, item.y, item.w, item.h)
+        for name, (x, y, w, h) in map_data.arrange(boxes, op).items():
+            if (w, h) != boxes[name][2:]:
+                done = self.resize(name, w, h)
+                if not done.ok:
+                    return done
+            done = self.move(name, x, y)
+            if not done.ok:
+                return done
+        return MapOpResult(
+            True, f"{map_data.ARRANGE_LABELS[op]}({len(names)}件)")
+
     def place_background(self, x: float, y: float,
                          scale: float) -> MapOpResult:
         """背景の写真そのものをずらす・拡げ縮めする。"""

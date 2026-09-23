@@ -244,6 +244,8 @@ async function onTapShelf(name) {
 // `mapedit.attachZoom` が持つ(簡易在庫と共通の作法・共通の実装)
 let dragger = null;
 let zoomer = null;
+// そろえる・隙間をなくすのボタン(`mapedit.attachArrange`)
+let arranger = null;
 
 /** 掴む手は `mapedit.js` が持つ。ここは**何を送るか**だけを決める。
 
@@ -267,8 +269,15 @@ function startDragging() {
       if (el.multiNote) {
         el.multiNote.textContent = count ? `${count}件選択中` : "選択なし";
       }
+      arranger?.update(count);
     },
   });
+  // そろえる・隙間をなくす。計算はサーバ(`map_data.arrange`)
+  const box = document.querySelector("#editBox [data-arrange-box]");
+  arranger = box ? mapedit.attachArrange({
+    box, dragger,
+    send: (names, op) => send("/api/layout/arrange", { names, op }),
+  }) : null;
 }
 
 /* ================================================================ */

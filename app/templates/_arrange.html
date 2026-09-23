@@ -1,0 +1,46 @@
+{#
+  そろえる・隙間をなくす(配置編集の道具。棚検索・簡易在庫で共通)
+
+  現場の声:「配置編集でコントロールをきれいに並べれない」。1つずつ
+  ドラッグで合わせると、1ドットずつずれた段々や、重なり・隙間が残る。
+
+  **Shift+クリックで2つ以上選んだときだけ押せる。** 押せない理由は
+  下の一行が言う(押せないボタンを黙って置かない)。
+  並べ方の意味と言葉はサーバが持つ(`packaging_tool/map_data.py`)。
+  配線は `mapedit.attachArrange`。
+#}
+<div class="field arrange" data-arrange-box>
+  <span class="arrange__k">そろえる</span>
+  <span class="arrange__row">
+    <button class="btn btn--sm" type="button" data-arrange="left"
+            title="いちばん左の箱に、左の端をそろえます">
+      <span class="gl" aria-hidden="true">⇤</span>左</button>
+    <button class="btn btn--sm" type="button" data-arrange="right"
+            title="いちばん右の箱に、右の端をそろえます">
+      <span class="gl" aria-hidden="true">⇥</span>右</button>
+    <button class="btn btn--sm" type="button" data-arrange="top"
+            title="いちばん上の箱に、上の端をそろえます">
+      <span class="gl" aria-hidden="true">⤒</span>上</button>
+    <button class="btn btn--sm" type="button" data-arrange="bottom"
+            title="いちばん下の箱に、下の端をそろえます">
+      <span class="gl" aria-hidden="true">⤓</span>下</button>
+    <button class="btn btn--sm" type="button" data-arrange="same_width"
+            title="選んだ箱のまん中の幅にそろえます(1つだけ外れた箱に引っ張られません)">
+      <span class="gl" aria-hidden="true">↔</span>幅</button>
+    <button class="btn btn--sm" type="button" data-arrange="same_height"
+            title="選んだ箱のまん中の高さにそろえます(1つだけ外れた箱に引っ張られません)">
+      <span class="gl" aria-hidden="true">↕</span>高さ</button>
+  </span>
+  <span class="arrange__k">隙間をなくす</span>
+  <span class="arrange__row">
+    <button class="btn btn--sm" type="button" data-arrange="pack_row"
+            title="左から順に、いちばん左の箱を起点に詰めます(上下は動かしません)">
+      <span class="gl" aria-hidden="true">⇆</span>横に詰める</button>
+    <button class="btn btn--sm" type="button" data-arrange="pack_column"
+            title="上から順に、いちばん上の箱を起点に詰めます(左右は動かしません)">
+      <span class="gl" aria-hidden="true">⇅</span>縦に詰める</button>
+  </span>
+  <p class="why arrange__why" data-arrange-why>
+    Shift+クリックで2つ以上選ぶと押せます。
+  </p>
+</div>

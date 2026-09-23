@@ -666,3 +666,45 @@ _PNG = ("data:image/png;base64,"
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MapArrangeTests(InventoryWebTestCase):
+    """簡易在庫の「そろえる・隙間をなくす」。棚検索と同じ計算を使う。"""
+
+    # 図の読み書きは `MapEditTests` と同じ道具を使う(試験そのものは継がない)
+    state = MapEditTests.state
+    edit = MapEditTests.edit
+    find = MapEditTests.find
+
+    def names(self, n=3) -> list[str]:
+        return [p["name"] for p in self.state()["positions"]][:n]
+
+    def test_編集をONにするまで並べられない(self) -> None:
+        self.edit("arrange", {"names": self.names(), "op": "top"}, expect=400)
+
+    def test_上をそろえて横に詰める(self) -> None:
+        """現場の並べ方そのもの:上をそろえる → 隙間をなくす。"""
+        names = self.names()
+        self.edit("edit", {"on": True})
+        top = min(self.find(self.state(), n)["y"] for n in names)
+        self.edit("arrange", {"names": names, "op": "top"})
+        state = self.edit("arrange", {"names": names, "op": "pack_row"})
+        boxes = {n: self.find(state, n) for n in names}
+        order = sorted(names, key=lambda n: boxes[n]["x"])
+        for n in names:
+            with self.subTest(name=n, check="上"):
+                self.assertAlmostEqual(boxes[n]["y"], top)
+        for left, right in zip(order, order[1:]):
+            with self.subTest(pair=(left, right), check="隙間"):
+                self.assertAlmostEqual(boxes[right]["x"],
+                                       boxes[left]["x"] + boxes[left]["w"])
+
+    def test_1つだけでは並べない(self) -> None:
+        self.edit("edit", {"on": True})
+        self.edit("arrange", {"names": self.names(1), "op": "top"}, expect=400)
+
+    def test_名前は文字の一覧でだけ受ける(self) -> None:
+        self.edit("edit", {"on": True})
+        for bad in ("A1", 3, None, [1, 2]):
+            with self.subTest(names=bad):
+                self.edit("arrange", {"names": bad, "op": "top"}, expect=400)

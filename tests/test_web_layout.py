@@ -778,3 +778,100 @@ class BackgroundPlaceTests(LayoutWebTestCase):
 
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
+
+
+class ArrangeTests(LayoutWebTestCase):
+    """棚検索の「そろえる・隙間をなくす」。計算は `map_data.arrange`。"""
+
+    def shelves(self, state=None) -> dict:
+        state = state or self.get()
+        return {s["name"]: s for s in state["shelves"]}
+
+    def names(self, n=3) -> list[str]:
+        return list(self.shelves())[:n]
+
+    def test_編集をONにするまで並べられない(self) -> None:
+        body = self.post("/api/layout/arrange",
+                         {"names": self.names(), "op": "top"}, expect=400)
+        self.assertIn("配置編集", body["error"]["message"])
+
+    def test_上をそろえる(self) -> None:
+        names = self.names()
+        self.post("/api/layout/edit", {"on": True})
+        before = self.shelves()
+        top = min(before[n]["y"] for n in names)
+        after = self.shelves(self.post("/api/layout/arrange",
+                                       {"names": names, "op": "top"}))
+        for n in names:
+            with self.subTest(name=n):
+                self.assertAlmostEqual(after[n]["y"], top)
+
+    def test_横に詰めると隙間が無くなる(self) -> None:
+        names = self.names()
+        self.post("/api/layout/edit", {"on": True})
+        after = self.shelves(self.post("/api/layout/arrange",
+                                       {"names": names, "op": "pack_row"}))
+        order = sorted(names, key=lambda n: after[n]["x"])
+        for left, right in zip(order, order[1:]):
+            with self.subTest(pair=(left, right)):
+                self.assertAlmostEqual(after[right]["x"],
+                                       after[left]["x"] + after[left]["w"])
+
+    def test_何をしたか言う(self) -> None:
+        self.post("/api/layout/edit", {"on": True})
+        body = self.post("/api/layout/arrange",
+                         {"names": self.names(), "op": "top"})
+        self.assertIn("上をそろえました", body["message"])
+        self.assertIn("3件", body["message"])
+
+    def test_保存するまでファイルに書かない(self) -> None:
+        """**動かす・大きさを変えると同じ約束。** 並べ直しただけで
+        ファイルが書き換わると、試しに押したのが残ってしまう。"""
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/arrange", {"names": self.names(), "op": "top"})
+        self.assertTrue(self.session().dirty)
+        self.assertFalse(floor_plan.USER_PATH.exists())
+
+    def test_1つだけでは並べない(self) -> None:
+        self.post("/api/layout/edit", {"on": True})
+        body = self.post("/api/layout/arrange",
+                         {"names": self.names(1), "op": "top"}, expect=400)
+        self.assertIn("2つ以上", body["error"]["message"])
+
+    def test_知らない名前が混ざったら1つも動かさない(self) -> None:
+        """**途中まで動いた状態で止めない。** どこまで直ったのかが
+        画面から読めなくなる。"""
+        names = self.names()
+        self.post("/api/layout/edit", {"on": True})
+        before = self.shelves()
+        self.post("/api/layout/arrange",
+                  {"names": names + ["無い棚"], "op": "left"}, expect=400)
+        after = self.shelves()
+        for n in names:
+            with self.subTest(name=n):
+                self.assertEqual((after[n]["x"], after[n]["y"]),
+                                 (before[n]["x"], before[n]["y"]))
+
+    def test_名前は文字の一覧でだけ受ける(self) -> None:
+        self.post("/api/layout/edit", {"on": True})
+        for bad in ("lblItem1", 3, None, [1, 2], {"a": 1}):
+            with self.subTest(names=bad):
+                self.post("/api/layout/arrange", {"names": bad, "op": "top"},
+                          expect=400)
+
+    def test_知らない並べ方は断る(self) -> None:
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/arrange", {"names": self.names(), "op": "center"},
+                  expect=400)
+
+    def test_図からはみ出さない(self) -> None:
+        """枠に収めるのは**動かすときと同じ道**。右に詰めても外へ出ない。"""
+        state = self.get()
+        self.post("/api/layout/edit", {"on": True})
+        names = [s["name"] for s in state["shelves"]]      # 全部を1列に
+        after = self.post("/api/layout/arrange", {"names": names, "op": "pack_row"})
+        width = after["width"]              # 無ければここで落ちる(素通りさせない)
+        for s in after["shelves"]:
+            with self.subTest(name=s["name"]):
+                self.assertGreaterEqual(s["x"], 0)
+                self.assertLessEqual(s["x"] + s["w"], width + 1e-6)

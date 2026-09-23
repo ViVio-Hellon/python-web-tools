@@ -168,6 +168,18 @@ def move_position():
     return _map_apply(_map_session().move(str(body.get("name", "")), x, y))
 
 
+@bp.post("/api/inventory/map/arrange")
+def arrange_positions():
+    """選んだ保管位置をそろえる/詰める。`{"names": [...], "op": "top"}`。"""
+    body = request.get_json(silent=True) or {}
+    names = body.get("names")
+    # **名前は文字の一覧でだけ受ける。** 一覧でないもの(文字1つ・数)を
+    # 受けると、1文字ずつ名前として読まれて「A は図にありません」になる
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        return jsonify(_error("bad_names", "並べる保管位置を選んでください。")), 400
+    return _map_apply(_map_session().arrange(names, str(body.get("op", ""))))
+
+
 @bp.post("/api/inventory/map/resize")
 def resize_position():
     """保管位置の大きさを変える(背景の写真に合わせこむため)。"""

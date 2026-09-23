@@ -150,6 +150,112 @@ def clamp_point(x: float, y: float, item_w: float, item_h: float,
 
 
 # ------------------------------------------------------------------
+# そろえる・詰める(複数選んだ箱をまとめて並べ直す)
+#
+# 現場の声:「配置編集でコントロールをきれいに並べれない」。1つずつ
+# ドラッグで合わせると、1ドットずつずれた段々や、重なり・隙間が残る。
+# 目で合わせる作業を、**そろえる/詰める**の1押しに置き換える。
+#
+# ここは**計算だけ**します(どこへ動かすかを返す)。枠に収める・
+# 保存しないで残す、は呼ぶ側のセッションが今までの「動かす」
+# 「大きさを変える」と同じ道で行います ── 2通りの道を作ると、
+# 片方だけ枠からはみ出す、が起きます。
+# ------------------------------------------------------------------
+ALIGN_LEFT = "left"
+ALIGN_RIGHT = "right"
+ALIGN_TOP = "top"
+ALIGN_BOTTOM = "bottom"
+SAME_WIDTH = "same_width"
+SAME_HEIGHT = "same_height"
+PACK_ROW = "pack_row"        # 横に並べて隙間をなくす
+PACK_COLUMN = "pack_column"  # 縦に並べて隙間をなくす
+
+# 画面に出す言葉。**言葉はサーバが持つ**(設計書 §1)
+ARRANGE_LABELS = {
+    ALIGN_LEFT: "左をそろえました",
+    ALIGN_RIGHT: "右をそろえました",
+    ALIGN_TOP: "上をそろえました",
+    ALIGN_BOTTOM: "下をそろえました",
+    SAME_WIDTH: "幅をそろえました",
+    SAME_HEIGHT: "高さをそろえました",
+    PACK_ROW: "横の隙間をなくしました",
+    PACK_COLUMN: "縦の隙間をなくしました",
+}
+ARRANGE_OPS = frozenset(ARRANGE_LABELS)
+
+Box = tuple[float, float, float, float]      # x, y, w, h
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def arrange(boxes: dict[str, Box], op: str) -> dict[str, Box]:
+    """選んだ箱をそろえる/詰める。**動かした後の** (x, y, w, h) を返す。
+
+    【何に合わせるか】
+    - 左・上   … いちばん左/上の箱に合わせる(選んだ範囲の端)
+    - 右・下   … いちばん右/下の箱の端に合わせる
+    - 幅・高さ … **選んだ箱のまん中の値(中央値)**。いちばん大きい箱に
+                  合わせると、1つだけ大きく作ってしまった箱に全部が
+                  引っ張られる。最初に選んだ箱に合わせる作りは、どれが
+                  最初だったか画面から分からないので採らない
+    - 横に詰める … 左から順に、**いちばん左の箱を起点に**右の箱を左へ
+                    寄せて隙間をなくす(重なっていれば離す)。上下は触らない
+    - 縦に詰める … 上から順に同じことをする。左右は触らない
+
+    詰めるときの順番は**いまの位置**で決めます(左にあるものが左)。
+    名前順にすると、現場で並べ替えた順番が崩れます。同じ位置の箱は
+    名前で並べます(結果が毎回同じになるように)。
+
+    知らない `op` は `ValueError`。箱が2つ未満なら何もしない(そのまま返す)。
+    """
+    if op not in ARRANGE_OPS:
+        raise ValueError(f"知らない並べ方です: {op}")
+    if len(boxes) < 2:
+        return dict(boxes)
+
+    out: dict[str, Box] = {}
+    if op == ALIGN_LEFT:
+        left = min(x for x, _y, _w, _h in boxes.values())
+        out = {n: (left, y, w, h) for n, (x, y, w, h) in boxes.items()}
+    elif op == ALIGN_RIGHT:
+        right = max(x + w for x, _y, w, _h in boxes.values())
+        out = {n: (right - w, y, w, h) for n, (x, y, w, h) in boxes.items()}
+    elif op == ALIGN_TOP:
+        top = min(y for _x, y, _w, _h in boxes.values())
+        out = {n: (x, top, w, h) for n, (x, y, w, h) in boxes.items()}
+    elif op == ALIGN_BOTTOM:
+        bottom = max(y + h for _x, y, _w, h in boxes.values())
+        out = {n: (x, bottom - h, w, h) for n, (x, y, w, h) in boxes.items()}
+    elif op == SAME_WIDTH:
+        width = _median([w for _x, _y, w, _h in boxes.values()])
+        out = {n: (x, y, width, h) for n, (x, y, w, h) in boxes.items()}
+    elif op == SAME_HEIGHT:
+        height = _median([h for _x, _y, _w, h in boxes.values()])
+        out = {n: (x, y, w, height) for n, (x, y, w, h) in boxes.items()}
+    elif op == PACK_ROW:
+        order = sorted(boxes, key=lambda n: (boxes[n][0], boxes[n][1], n))
+        cursor = boxes[order[0]][0]
+        for n in order:
+            x, y, w, h = boxes[n]
+            out[n] = (cursor, y, w, h)
+            cursor += w
+    elif op == PACK_COLUMN:
+        order = sorted(boxes, key=lambda n: (boxes[n][1], boxes[n][0], n))
+        cursor = boxes[order[0]][1]
+        for n in order:
+            x, y, w, h = boxes[n]
+            out[n] = (x, cursor, w, h)
+            cursor += h
+    return out
+
+
+# ------------------------------------------------------------------
 # ファイルの読み書き(現場で編集したもの → 出荷時の既定値、の順に探す)
 # ------------------------------------------------------------------
 def read_json(path: Path) -> Optional[dict[str, Any]]:

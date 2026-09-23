@@ -335,6 +335,45 @@ class LayoutSession:
         self.dirty = True
         return LayoutOpResult(True, "")
 
+    def arrange(self, names: list[str], op: str) -> LayoutOpResult:
+        """選んだ置き場をそろえる/詰める(`map_data.arrange`)。
+
+        **全部そろってから動かす。** 1つでも図に無い名前があれば、
+        何も動かさずに断ります ── 途中まで動いた状態で止まると、
+        どこまで直ったのかが画面から読めません。
+
+        動かすのは今までの `resize` / `move` と同じ道なので、枠に収める
+        決まりも「保存するまでファイルに書かない」も同じです。
+        """
+        from . import map_data
+        if not self.editing:
+            return LayoutOpResult(False, "先に「配置編集」をONにしてください。",
+                                  REFUSE_BAD_INPUT)
+        if op not in map_data.ARRANGE_OPS:
+            return LayoutOpResult(False, "その並べ方はありません。", REFUSE_BAD_INPUT)
+        names = list(dict.fromkeys(str(n) for n in names))    # 重複を落とす
+        if len(names) < 2:
+            return LayoutOpResult(
+                False, "Shift+クリックで2つ以上選んでから押してください。",
+                REFUSE_BAD_INPUT)
+        boxes = {}
+        for name in names:
+            item = self.plan.item(name)
+            if item is None:
+                return LayoutOpResult(False, f"{name} は配置図にありません。",
+                                      REFUSE_NOT_LISTED)
+            boxes[name] = (item.x, item.y, item.w, item.h)
+        for name, (x, y, w, h) in map_data.arrange(boxes, op).items():
+            if (w, h) != boxes[name][2:]:
+                done = self.resize(name, w, h)
+                if not done.ok:
+                    return done
+            done = self.move(name, x, y)
+            if not done.ok:
+                return done
+        return LayoutOpResult(
+            True, f"{map_data.ARRANGE_LABELS[op]}({len(names)}件)")
+
     def place_background(self, x: float, y: float,
                          scale: float) -> LayoutOpResult:
         """背景の写真そのものをずらす・拡げ縮めする。
