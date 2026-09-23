@@ -380,20 +380,15 @@ class SpecSheetApiTests(SpecSheetTestCase):
         res = self.client.get("/api/spec-sheet/1P0001/image", headers=self.auth())
         self.assertEqual(res.status_code, 404)
 
-    def test_資材だけの権限なら無い(self) -> None:
-        """図面はロット検索の中でしか使わない。
-
-        ロット検索が無い(現場の権限が無い)端末には、このURLも存在しない
-        (隠すのではなく無い ── Phase 5 の役割分けと同じ考え方)。
-        """
+    def test_資材だけの権限でもある(self) -> None:
+        """図面はロット検索の中で使う。ロット検索は資材だけの端末にも
+        ある(VER2.84.0)ので、図面のURLも要る。見つからないときも404を
+        返すので、**登録されているか**で見る。"""
         from app import create_app
         app = create_app("material", token=TOKEN, port=8724,
                          grant=access_control.grant_of("mode:material"))
-        app.config["TESTING"] = True
-        client = app.test_client()
-        for path in ("/api/spec-sheet/1P0001", "/api/spec-sheet/1P0001/image"):
-            res = client.get(path, headers=self.auth())
-            self.assertEqual(res.status_code, 404, path)
+        rules = {r.rule for r in app.url_map.iter_rules()}
+        self.assertTrue(any(r.startswith("/api/spec-sheet/") for r in rules), rules)
 
 
 # ==================================================================

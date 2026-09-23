@@ -199,6 +199,7 @@ function clearSelection() {
   selected = null;
   for (const tr of el.rows.querySelectorAll("tr")) tr.removeAttribute("aria-selected");
   if (el.actTabs) tabs.setBadges(el.actTabs, { issue: { text: "" } });
+  if (!el.issue) return;        // 資材モードには払い出しが無い
   el.picked.hidden = true;
   el.pickWhy.hidden = false;
   el.iqty.value = "";
@@ -210,6 +211,8 @@ function select(tr, row) {
   for (const other of el.rows.querySelectorAll("tr")) other.removeAttribute("aria-selected");
   tr.setAttribute("aria-selected", "true");
   selected = row;
+  // 資材モードには払い出しが無い(受け入れだけ)。行の強調だけで終わる
+  if (!el.issue) return;
 
   // 行を選ぶのは「これを出す」という意思表示。**入力欄が別の面に
   // 隠れていたら開く** ── 選んだのに何も起きないように見せない
@@ -379,7 +382,7 @@ async function doReceive() {
 }
 
 async function doIssue() {
-  if (!selected) return;
+  if (!selected || !el.issue) return;
   const value = el.iqty.value.trim();
   if (!/^\d+$/.test(value)) { el.iqty.focus(); toast("数字で入れてください", "ng"); return; }
 
@@ -523,8 +526,9 @@ export function start(state) {
   });
 
   el.receive.addEventListener("click", doReceive);
-  el.issue.addEventListener("click", doIssue);
-  el.iqty.addEventListener("keydown", (event) => {
+  // 払い出しは現場モードだけ。資材モードでは画面に無い
+  el.issue?.addEventListener("click", doIssue);
+  el.iqty?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); doIssue(); }
   });
 }

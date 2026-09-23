@@ -327,13 +327,40 @@ class MaterialModeTests(unittest.TestCase):
                 self.assertEqual(res.get_json()["error"]["code"], "wrong_mode")
         self.assertFalse(pallet_map_session.get_session().editing)
 
-    def test_資材モードでも見ると受け払いは断らない(self) -> None:
+    def test_資材モードでも見ると受け入れは断らない(self) -> None:
         self.to_material()
         res = self.client.get("/api/inventory/search?w=1100&l=2000",
                               headers=_web.auth())
         self.assertEqual(res.status_code, 200)
-        res = self.post("/api/inventory/receive", {})
-        self.assertNotEqual(res.status_code, 403)
+        res = self.post("/api/inventory/receive", {
+            "width": 1100, "length": 2000, "qty": 3, "position": "A1",
+            "symbol": "", "industry": "", "unit": "", "note": ""})
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+    def test_払い出しは現場だけ(self) -> None:
+        """現場の声:「受け入れは必要かなぁ 払い出しは現場だね」。"""
+        add_stock(self.conn, position="A1", width=1100, length=2000, qty=5)
+        body = {"width": 1100, "length": 2000, "position": "A1", "qty": 1}
+        self.to_material()
+        res = self.post("/api/inventory/issue", body)
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.get_json()["error"]["code"], "wrong_mode")
+        self.assertIn("払い出しは現場モード", res.get_json()["error"]["message"])
+        self.post("/api/mode", {"mode": "field"})
+        self.assertEqual(self.post("/api/inventory/issue", body).status_code, 200)
+
+    def test_資材モードでは払い出しの面を出さない_受け入れが既定(self) -> None:
+        import re
+        field = self.client.get("/inventory").get_data(as_text=True)
+        self.assertIn('id="tab-issue"', field)
+        self.assertIn('id="issue"', field)
+        self.to_material()
+        html = self.client.get("/inventory").get_data(as_text=True)
+        self.assertNotIn('id="tab-issue"', html)
+        self.assertNotIn('id="panel-issue"', html)
+        self.assertNotIn('id="issue"', html)
+        tab = re.search(r'<button[^>]*data-key="receive"[^>]*>', html).group(0)
+        self.assertIn('data-default="1"', tab)
 
     def test_現場で直した配置が資材モードにも出る(self) -> None:
         self.post("/api/inventory/map/edit", {"on": True})

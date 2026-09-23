@@ -228,19 +228,27 @@
        既定は払い出し ── 探して見つけて出す、がこの画面の作業の流れで、
        「上の一覧から選んでください」が次の一手そのものになる #}
     <div class="tabs" data-tabs="inventory-act" id="actTabs">
+      {# **払い出しは現場モードだけ**(現場の声:「受け入れは必要かなぁ
+         払い出しは現場だね」)。資材モードでは面ごと出さず、受け入れを
+         既定にする。押せない面を置かない(`routes/inventory._field_only_writes`
+         が直接送られても断る) #}
+      {% set can_issue = mode == "field" %}
       <div class="tabs__bar" role="tablist" aria-label="登録の種類">
+        {% if can_issue %}
         <button class="tab" type="button" role="tab" data-key="issue" data-default="1"
                 id="tab-issue" aria-controls="panel-issue" aria-selected="false">
           <span class="tab__label">払い出し</span>
           <span class="tab__badge" id="issueTabBadge" hidden></span>
         </button>
-        <button class="tab" type="button" role="tab" data-key="receive"
+        {% endif %}
+        <button class="tab" type="button" role="tab" data-key="receive"{% if not can_issue %} data-default="1"{% endif %}
                 id="tab-receive" aria-controls="panel-receive" aria-selected="false">
           <span class="tab__label">受け入れ</span>
           <span class="tab__badge" hidden></span>
         </button>
       </div>
       <div class="tabs__panels">
+        {% if can_issue %}
         <section class="tabpanel" id="panel-issue" role="tabpanel"
                  aria-labelledby="tab-issue" hidden>
           <section class="card">
@@ -266,6 +274,7 @@
             </div>
           </section>
         </section>
+        {% endif %}
 
         <section class="tabpanel" id="panel-receive" role="tabpanel"
                  aria-labelledby="tab-receive" hidden>

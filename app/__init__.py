@@ -517,16 +517,21 @@ def _register_routes(app: Flask) -> None:
     # (レールに出すかどうかは `shell.nav_items` がモードで決める)
     if grant.allows_mode(modes.FIELD):
         app.register_blueprint(log_routes.bp)
-        app.register_blueprint(lot.bp)
         app.register_blueprint(selection.bp)
-        # 包装仕様書の図面はロット検索の中でしか使わない
-        app.register_blueprint(spec_sheet.bp)
         app.register_blueprint(layout.bp)
     else:
         log.info("現場モードの権限が無いため、現場の画面は登録しません")
+    # ロット検索は**どちらのモードにもある**(資材モードは届いた発注の
+    # Lotを確かめる)。以前は現場の画面と一緒に現場モードの権限でだけ
+    # 登録していたので、資材の権限しか無い端末では、レールに出ている
+    # 「ロット検索」を押すと404だった。資材展開は資材モードでは出さない
+    # (`routes/lot` がモードで決める)
+    app.register_blueprint(lot.bp)
+    # 包装仕様書の図面はロット検索の中でしか使わない
+    app.register_blueprint(spec_sheet.bp)
     # 簡易在庫は**どちらのモードにもある**(資材モードでも在庫を見て、
-    # 受け払いをする)。配置編集だけは現場モードに限る ──
-    # `inventory._map_edit_field_only` が要求のたびに確かめる
+    # 受け入れをする)。配置編集と払い出しは現場モードに限る ──
+    # `inventory._field_only_writes` が要求のたびに確かめる
     app.register_blueprint(inventory.bp)
 
     if grant.allows_mode(modes.MATERIAL):

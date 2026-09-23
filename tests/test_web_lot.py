@@ -790,25 +790,32 @@ class ExpandApiTests(LotWebTestCase):
 
 @unittest.skipUnless(HAS_WEB, _SKIP)
 class AccessTests(unittest.TestCase):
-    """現場の権限が無ければロット検索は無い。隠すのではなく登録しない。"""
+    """**資材の権限しか無い端末でもロット検索は開ける**(VER2.84.0)。
+
+    資材モードのレールに「ロット検索」が出ている(届いた発注のLotを確かめる
+    ため)。以前は現場の画面と一緒に現場の権限でだけ登録していたので、
+    資材だけの端末では押すと404だった。資材展開は `ExpandIsFieldOnlyTests`
+    のとおり出さない・通さない。
+    """
 
     def setUp(self) -> None:
         from app import create_app
         from packaging_tool import access_control
-        app = create_app("material", token=TOKEN, port=8723,
-                         grant=access_control.grant_of("mode:material"))
-        app.config["TESTING"] = True
-        self.client = app.test_client()
+        self.app = create_app("material", token=TOKEN, port=8723,
+                              grant=access_control.grant_of("mode:material"))
+        self.app.config["TESTING"] = True
+        self.app.config["READY"] = True
+        self.client = self.app.test_client()
 
-    def test_画面が無い(self) -> None:
-        self.assertEqual(self.client.get("/lot").status_code, 404)
+    def test_画面がある(self) -> None:
+        self.assertEqual(self.client.get("/lot").status_code, 200)
 
-    def test_APIも無い(self) -> None:
-        for path in ("/api/lot/1234567", "/api/lot?no=1234567"):
+    def test_APIもある(self) -> None:
+        """見つからないときも404を返すので、**登録されているか**で見る。"""
+        rules = {r.rule for r in self.app.url_map.iter_rules()}
+        for path in ("/api/lot/<lot_no>", "/api/lot/list"):
             with self.subTest(path=path):
-                res = self.client.get(path, headers={"X-Tool-Token": TOKEN})
-                self.assertEqual(res.status_code, 404)
-
+                self.assertIn(path, rules)
 
 
 class ExpandIsFieldOnlyTests(unittest.TestCase):

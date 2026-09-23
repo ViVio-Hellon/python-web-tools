@@ -87,13 +87,26 @@ class RegistrationTests(ModeTestCase):
 
     def test_現場の権限が無ければ現場の画面は無い(self) -> None:
         rules = self.rules(self.make("material", *MATERIAL_ONLY))
-        for path in ("/lot", "/selection", "/layout", "/log"):
+        for path in ("/selection", "/layout", "/log"):
             with self.subTest(path=path):
                 self.assertNotIn(path, rules)
 
-    def test_簡易在庫は資材だけの端末にもある(self) -> None:
-        """VER2.83.0。配置編集だけは現場モード(`inventory._map_edit_field_only`)。"""
-        self.assertIn("/inventory", self.rules(self.make("material", *MATERIAL_ONLY)))
+    def test_資材のレールにある画面は資材だけの端末にもある(self) -> None:
+        """**レールに出ている画面は必ず開ける。** 以前は資材だけの端末で
+        「ロット検索」を押すと404だった(現場の画面と一緒に、現場モードの
+        権限でだけ登録していたため)。"""
+        from app import shell
+        rules = self.rules(self.make("material", *MATERIAL_ONLY))
+        for item in shell.nav_items(modes.MATERIAL):
+            with self.subTest(path=item.url):
+                self.assertIn(item.url, rules)
+
+    def test_資材だけの端末でロット検索が開ける(self) -> None:
+        app = self.make("material", *MATERIAL_ONLY)
+        res = app.test_client().get("/lot", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        # 資材展開は出さない(資材モードで資材選択へ行く道は無い)
+        self.assertNotIn('id="expand"', res.get_data(as_text=True))
 
     def test_資材の権限が無ければ確認の操作は404(self) -> None:
         """以前はURLごと登録しなかった(起動時の権限で決めていた)。
