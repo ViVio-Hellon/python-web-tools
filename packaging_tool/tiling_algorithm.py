@@ -735,35 +735,54 @@ def place_tiling_boards(ctx: place.PlacementContext, cand: TileCand,
     流し込むと誤配置になります。
     """
     seq = _Seq()
+    # 中央寄せの基準幅(VBA `ovW`)。上用 = 製品幅 / 下用 = パレット幅。
+    # `limit_width` がちょうどこの定義(`GetBounds` の ovW と同じ考え方)
+    ov_w = ctx.limit_width(category)
     x_pos = 0
     if cand.c1 is not None:
         for _ in range(cand.n1):
-            _place_one_row(ctx, cand.c1, cand.h1, x_pos, category, seq)
+            _place_one_row(ctx, cand.c1, cand.h1, x_pos, category, seq, ov_w)
             x_pos += cand.h1
     if cand.c2 is not None:
         for _ in range(cand.n2):
-            _place_one_row(ctx, cand.c2, cand.h2, x_pos, category, seq)
+            _place_one_row(ctx, cand.c2, cand.h2, x_pos, category, seq, ov_w)
             x_pos += cand.h2
 
-    # 丈補填の行は**行の中の1枚ではない**ので、専用の置き方をする
+    # 丈補填の行は**行の中の1枚ではない**ので、専用の置き方をする。
+    #
+    # **幅方向の位置はメインの行(c1)とそろえる。** 以前は y=0 固定で、
+    # メインの行だけが中央へ寄って段差ができていた(VBA の実例:
+    #   上用 1250x1250 at(0,36)  ← 製品幅1322 に対し (1322-1250)/2 = 36
+    #   上用 1250x100  at(1250,0) ← 丈補填行は 0 のまま
+    # )。寄せ量は `row_center_offset` の**同じ値**を使う ── 計算を
+    # 2か所に分けると、今回のようにどちらかだけ直してズレる
     row_w = cand.c1.width if cand.c1 is not None else 0
+    thin_off = row_center_offset(cand.c1, ov_w) if cand.c1 is not None else 0
     for thickness in cand.thin_rows:
-        _place_thin_row(ctx, thickness, row_w, x_pos, category, seq)
+        _place_thin_row(ctx, thickness, row_w, x_pos, thin_off, category, seq)
         x_pos += thickness
 
-    # **幅方向は中央へ寄せる。** 行はどれも y=0 から積むので、幅が
-    # 足りない行はそのままだと上詰めで出る ── 図を見た人は「この板は
-    # 下にずらして置くのか」と読んでしまうが、実際は上下に等分して
-    # 置くもの(現場の指摘:「ボードを幅方向のセンター配置をしていない」)。
-    #
-    # **現行の配置と同じ規則を使う**(`center_boards_in_width`)。
-    # ここだけ別に書くと、同じ図が経路によって違う位置に出る。
-    # 幅補填を行内で上下に振り分けた行は、その規則が避けてくれる
-    place.center_boards_in_width(ctx, category)
+
+def row_center_offset(comp: TileRowComp, ov_w: int) -> int:
+    """行の中央寄せ量(VBA `RowCenterOffset`)。
+
+    **幅補填が無く、基準幅より狭い行だけ**寄せます。幅補填がある行は、
+    補填で幅を埋めている前提(上下の振り分けで置き場を決めている)なので
+    寄せません(現場の指示:「上下に振り分けているケースはそのままで良い」)。
+
+    端数は幅補填の振り分け(`本数 // 2` が上側)にそろえ、**上側を少なく**
+    します(VBA `Int((ovW - .Width) / 2)`。正の数なので `//` と同じ)。
+
+    `_place_one_row` と丈補填の行(`place_tiling_boards`)の**両方が
+    この値を使う**こと。計算を分けるとズレます。
+    """
+    if sum(comp.thin_qty) == 0 and comp.width < ov_w:
+        return (ov_w - comp.width) // 2
+    return 0
 
 
 def _place_thin_row(ctx: place.PlacementContext, thickness: int, row_w: int,
-                    x_pos: int, category: str, seq: _Seq) -> None:
+                    x_pos: int, y_pos: int, category: str, seq: _Seq) -> None:
     """丈補填の1行を置く(VBA `PlaceThinRow`)。
 
         幅方向(Y) = 行の幅ぶん。細ボードの長辺が余れば切る
@@ -786,13 +805,14 @@ def _place_thin_row(ctx: place.PlacementContext, thickness: int, row_w: int,
                        instance_id=f"{category}_T{number}")
     # 長辺を幅方向へ寝かせるので rotate=True。境界の判定は通さない
     # (収まることは探索の段階で決まっている)
-    place.place_board_at(ctx, x_pos, 0, board, rotate=True,
+    # 幅方向の位置(`y_pos`)はメインの行の寄せ量(`row_center_offset`)
+    place.place_board_at(ctx, x_pos, y_pos, board, rotate=True,
                          bypass_check=True, custom_width=row_w,
                          custom_length=thickness, is_fill=True)
 
 
 def _place_one_row(ctx: place.PlacementContext, comp: TileRowComp, height: int,
-                   x_pos: int, category: str, seq: _Seq) -> None:
+                   x_pos: int, category: str, seq: _Seq, ov_w: int) -> None:
     """1行を置く。幅補填が2枚以上なら**行内の上下に振り分ける**。
 
         1本 → 上0 / 下1        3本 → 上1 / 下2
@@ -802,12 +822,21 @@ def _place_one_row(ctx: place.PlacementContext, comp: TileRowComp, height: int,
     (`count_width_fill_strips` と同じ `本数 // 2` が上側)。
     丈方向の細ボード行は対象外です ── 丈を継ぎ足すものなので、
     上下に振るという概念が成り立ちません。
+
+    幅補填が無く基準幅(`ov_w`)より狭い行は**中央へ寄せて**置きます
+    (`row_center_offset`)。
     """
     limit_w = comp.width
     wf_total = sum(comp.thin_qty)
     wf_upper = wf_total // 2 if wf_total >= 2 else 0
 
-    y_pos = 0
+    # 中央寄せ(判定は `row_center_offset` に集約)。
+    # **`limit_w` にも同じ量を足す** ── 足さないと、寄せた分だけ最後の
+    # 1枚が境界を越えたことになり、カット扱いになる
+    off = row_center_offset(comp, ov_w)
+    limit_w += off
+
+    y_pos = off
     placed_upper = 0
     for i in range(3):
         for _ in range(comp.thin_qty[i]):

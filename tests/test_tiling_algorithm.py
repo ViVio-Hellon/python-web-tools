@@ -491,3 +491,68 @@ class 幅方向のセンタリング(unittest.TestCase):
         ys = [p.y for p in ctx.placed]
         self.assertEqual(ys, sorted(ys))
         self.assertEqual(ys[0], 0, "振り分けた幅補填が動いています")
+
+
+class 丈補填行も同じだけ寄せる(unittest.TestCase):
+    """**丈補填の行は、メインの行(c1)と同じ寄せ量で置く**(VBA `RowCenterOffset`)。
+
+    以前は丈補填の行が y=0 固定で、メインの行だけ中央へ寄って段差が
+    できていた(VBA の実例):
+
+        上用 1250x1250 at(0,36)   ← 製品幅1322 に対し (1322-1250)/2 = 36
+        上用 1250x100  at(1250,0) ← 丈補填行は 0 のまま
+
+    寄せ量は `row_center_offset` の1か所で決め、行と丈補填行の両方が
+    同じ値を使う(計算を分けると、どちらかだけ直してズレる)。
+    """
+
+    def place(self, category, comp, height, thin_rows, pal, prod):
+        cand = T.TileCand(h1=height, n1=1, c1=comp, thin_rows=list(thin_rows))
+        ctx = place.PlacementContext(
+            palette=Palette(width=pal[0], length=pal[1]),
+            product=ProductSize(width=prod[0], length=prod[1]))
+        T.place_tiling_boards(ctx, cand, category)
+        return [(p.x, p.y, p.width, p.is_fill_board) for p in ctx.placed]
+
+    @staticmethod
+    def row(width, height):
+        return T.TileRowComp(height=height, dims=[width], qty=[1],
+                             width=width, boards=1)
+
+    def test_現場の実例_上用(self) -> None:
+        placed = self.place(place.CATEGORY_UPPER, self.row(1250, 1250), 1250,
+                            [100], pal=(1400, 2800), prod=(1322, 2700))
+        self.assertEqual(placed, [(0, 36, 1250, False), (1250, 36, 1250, True)])
+
+    def test_下用はパレット幅が基準(self) -> None:
+        """下用 1310x660 はパレット幅1350 に対し (1350-1310)/2 = 20。"""
+        placed = self.place(place.CATEGORY_LOWER, self.row(1310, 660), 660,
+                            [30], pal=(1350, 2800), prod=(1322, 2700))
+        self.assertEqual([(x, y) for x, y, _w, _f in placed], [(0, 20), (660, 20)])
+
+    def test_端数は上側を少なく(self) -> None:
+        """幅補填の振り分け(`本数 // 2` が上側)にそろえる。"""
+        self.assertEqual(T.row_center_offset(self.row(1250, 1000), 1323), 36)
+
+    def test_幅補填がある行は寄せない_丈補填行もそろって0(self) -> None:
+        """幅補填で幅を埋めている行は、振り分けで置き場を決めている。"""
+        comp = T.TileRowComp(height=1000, dims=[1200], qty=[1], width=1300,
+                             boards=2, thin_th=(50, 0, 0), thin_qty=(1, 0, 0))
+        self.assertEqual(T.row_center_offset(comp, 1322), 0)
+        placed = self.place(place.CATEGORY_UPPER, comp, 1000, [100],
+                            pal=(1400, 2800), prod=(1322, 2700))
+        thin_row = [p for p in placed if p[0] == 1000]
+        self.assertEqual([y for _x, y, _w, _f in thin_row], [0])
+
+    def test_基準幅以上なら寄せない(self) -> None:
+        self.assertEqual(T.row_center_offset(self.row(1322, 1000), 1322), 0)
+        self.assertEqual(T.row_center_offset(self.row(1400, 1000), 1322), 0)
+
+    def test_寄せても最後の1枚をカットしない(self) -> None:
+        """`limit_w` にも寄せ量を足す。足さないと寄せた分だけ最後の1枚が
+        境界を越えた扱いになり、幅が削られる。"""
+        comp = T.TileRowComp(height=1000, dims=[600, 650], qty=[1, 1],
+                             width=1250, boards=2)
+        placed = self.place(place.CATEGORY_UPPER, comp, 1000, [],
+                            pal=(1400, 2800), prod=(1322, 2700))
+        self.assertEqual([(y, w) for _x, y, w, _f in placed], [(36, 600), (636, 650)])
