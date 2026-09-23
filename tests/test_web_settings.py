@@ -1361,3 +1361,75 @@ class NumericGuardTests(unittest.TestCase):
             with self.subTest(text=text):
                 if _is_numeric(text):
                     int(float(text))          # 落ちなければよい
+
+
+class ExportDirTypeTests(unittest.TestCase):
+    """**書き出し先に文字以外が来たら、フォルダを作らずに断る。**
+
+    以前は何でも `str()` していたので、一覧 `[1, 2]` や `None` が
+    そのまま**フォルダ名になって作られて**いた。相対の道はアプリの
+    フォルダ基準なので、アプリの隣に `[1, 2]` `None` `True` `1e400` …
+    が並び、それが配布物にまで入った(現場の指摘:「変な名前のフォルダ
+    とかあるけど」)。
+    """
+
+    def setUp(self) -> None:
+        from packaging_tool import access_control as ac
+        from app import create_app
+        app = create_app("field", token=TOKEN, port=8795,
+                         grant=ac.grant_of("mode:field"))
+        app.config["TESTING"] = True
+        app.config["READY"] = True
+        self.client = app.test_client()
+
+    def test_文字でなければ断ってフォルダを作らない(self) -> None:
+        import shutil
+        for value in ([1, 2], [], {}, True, 1.5, 0):
+            with self.subTest(value=value):
+                before = set(p.name for p in config.BASE_DIR.iterdir())
+                res = self.client.post("/api/settings/board-usage/export",
+                                       json={"dir": value},
+                                       headers={"X-Tool-Token": TOKEN})
+                after = set(p.name for p in config.BASE_DIR.iterdir())
+                made = after - before
+                # **落ちても散らかさない。** 直しが壊れたとき、この試験
+                # 自身がアプリの隣にフォルダを作ってしまう ── 今回の事故と
+                # 同じ形で、`git add -A` すれば配布物に入る
+                for name in made:
+                    shutil.rmtree(config.BASE_DIR / name, ignore_errors=True)
+                self.assertEqual(res.status_code, 400)
+                self.assertEqual(made, set(), f"フォルダができていました: {made}")
+
+
+class RepoRootTests(unittest.TestCase):
+    """**配るフォルダに、配るつもりのないものを入れない。**
+
+    `git add -A` で、試験が作ったフォルダ(`[1, 2]` `あ` `1e400` …)と
+    網羅率の作業ファイル(`.coverage`)が紛れ込み、現場のフォルダに
+    入った。直下に何を置くかはめったに変わらないので、一覧で持つ。
+    **ここに足すときは、それが配るものかを確かめること。**
+    """
+
+    ALLOWED = {
+        ".gitattributes", ".gitignore", "README.md", "requirements.txt",
+        "Start.vbs", "start.bat", "stop.bat",
+        "start_app.py", "server.py", "boot_server.py", "launch_guard.py",
+        "process_manager.py",
+        "app", "config", "docs", "packaging_tool", "scripts", "tests",
+    }
+
+    def test_直下には配るものだけ(self) -> None:
+        import shutil
+        import subprocess
+        if shutil.which("git") is None:
+            self.skipTest("git がありません")
+        root = Path(__file__).resolve().parent.parent
+        try:
+            out = subprocess.run(
+                ["git", "-c", "core.quotepath=false", "ls-files"],
+                cwd=root, capture_output=True, text=True, check=True).stdout
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git の作業フォルダではありません")
+        tracked = {line.split("/")[0] for line in out.splitlines() if line}
+        self.assertEqual(tracked - self.ALLOWED, set(),
+                         "配るつもりのないものが追跡されています")

@@ -78,7 +78,10 @@
     </span>
     <span class="running__track" aria-hidden="true"><i id="rb-run-fill"></i></span>
   </div>
-  <div class="ribbon__end">
+  {# `data-modes` は**この帯を描いたときに使えたモード**。見張り
+     (`health.js`)がサーバの答えと比べ、食い違ったら帯だけ描き直す ──
+     権限が増えても、画面を移るまで「現場?」のまま、を起こさないため #}
+  <div class="ribbon__end" data-modes="{{ mode_options | map(attribute='key') | join(',') }}">
     {# モード。**権限のあるものだけ**が選択肢になる(`アクセス権限` マスタ)。
        1つしか持っていない端末には切替を出さない ── 押せない選択肢を
        並べても、できないことが増えたようにしか見えない。

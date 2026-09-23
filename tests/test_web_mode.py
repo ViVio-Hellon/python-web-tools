@@ -514,3 +514,90 @@ class SwitchAppearsWithoutRestartTests(unittest.TestCase):
         html = client.get("/lot", headers={"X-Tool-Token": TOKEN}
                           ).get_data(as_text=True)
         self.assertNotIn("modeswitch", html)
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class RibbonFollowsModesTests(unittest.TestCase):
+    """**切り替えられるようになったら、触らなくても帯が変わる。**
+
+    帯のモード切替は画面を出すときにしか作られなかった。権限があとから
+    増えても(起動時の取り込みが終わった・資材課が行を足した)、画面を
+    移るまで「現場?」のまま ── 現場の声:「触ることで 現場・資材 に
+    なった」。見張り(`/api/health`)が使えるモードを返し、帯の
+    `data-modes` と食い違ったら帯だけ描き直す。
+    """
+
+    def setUp(self) -> None:
+        from app import create_app
+        from packaging_tool import screen_lock
+        screen_lock.reset()
+        self.addCleanup(screen_lock.reset)
+        self.app = create_app("field", token=TOKEN, port=8793,
+                              grant=ac.grant_of(*BOTH))
+        self.app.config["TESTING"] = True
+        self.app.config["READY"] = True
+        self.client = self.app.test_client()
+
+    def health(self, **headers):
+        return self.client.get("/api/health", headers=headers).get_json()
+
+    def test_画面からの問い合わせには使えるモードを返す(self) -> None:
+        from packaging_tool import screen_lock
+        body = self.health(**{screen_lock.HEADER: "abc"})
+        self.assertEqual(sorted(body["modes"]), sorted([modes.FIELD, modes.MATERIAL]))
+
+    def test_画面以外には返さない(self) -> None:
+        """起動の判定や待機画面は権限を要らない。**DBを開かせない。**"""
+        self.assertIsNone(self.health()["modes"])
+
+    def test_準備中は返さない(self) -> None:
+        """「分からない」を「変わった」と取り違えさせない。"""
+        from packaging_tool import screen_lock
+        self.app.config["READY"] = False
+        self.assertIsNone(self.health(**{screen_lock.HEADER: "abc"})["modes"])
+
+    def test_帯が描いたときのモードを持っている(self) -> None:
+        """見張りが比べる相手。**サーバの答えと同じ作り方**で書く。"""
+        import re
+        html = self.client.get("/warehouse", headers=self.auth()).get_data(as_text=True)
+        found = re.search(r'class="ribbon__end" data-modes="([^"]*)"', html)
+        self.assertIsNotNone(found, "帯に data-modes がありません")
+        self.assertEqual(sorted(found.group(1).split(",")),
+                         sorted([modes.FIELD, modes.MATERIAL]))
+
+    def auth(self) -> dict:
+        return {"X-Tool-Token": TOKEN}
+
+
+class RibbonRedrawWiringTests(unittest.TestCase):
+    """画面の側が繋がっているか。**外すと黙って元に戻る**ところ。"""
+
+    def js(self, name: str) -> str:
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        return (root / "app" / "static" / "js" / name).read_text(encoding="utf-8")
+
+    def test_見張りが食い違いを見て描き直す(self) -> None:
+        src = self.js("health.js")
+        self.assertIn("body.modes", src)
+        self.assertIn("refreshShell", src)
+
+    def test_描き直しはこのタブの番号を付ける(self) -> None:
+        """**付けないと、描き直したタブ自身が締め出される。**
+
+        番号無しで取りに行くと、サーバは「新しいタブが開いた」と読んで
+        新しい番号を振る。VER2.77.0 でタブの取り合いを止めたとき、画面の
+        移動(`go`)には付けたが描き直し(`refreshShell`)に付け忘れ、
+        マスタ管理でアクセス権限を保存した直後に「このタブは操作できません」
+        が出ていた。**自動で描き直すようにしたので、放っておけば15秒ごと
+        に締め出される**ところだった。
+        """
+        src = self.js("nav.js")
+        body = src[src.index("export async function refreshShell"):]
+        body = body[:body.index("\n}\n")]
+        self.assertIn("screen.HEADER", body)
+
+    def test_タブに戻ったらすぐ確かめる(self) -> None:
+        src = self.js("health.js")
+        start = src.index('addEventListener("visibilitychange"')
+        self.assertIn("beat()", src[start:start + 400])

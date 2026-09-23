@@ -7,6 +7,7 @@
 */
 
 import { api } from "./api.js";
+import * as nav from "./nav.js";
 import * as screen from "./screen.js";
 
 // 何回続けて失敗したら「切れた」と見なすか。
@@ -19,6 +20,34 @@ let banner = null;
 function setOffline(offline) {
   if (!banner) banner = document.getElementById("offline");
   if (banner) banner.hidden = !offline;
+}
+
+/*
+  **使えるモードが変わったら、帯を描き直す。**
+
+  帯のモード切替は画面を出すときにしか作られない。権限があとから
+  増えても(起動時の取り込みが終わった・資材課が行を足した)、画面を
+  移るまで「現場?」のまま ── 現場の声:「触ることで 現場・資材 に
+  なった」。切り替えられるようになった時点で、触らなくても出す。
+
+  描き直すのは帯とレールだけで、**画面の中身と打ちかけの入力は
+  触らない**(`nav.refreshShell`)。同じ答えで何度も描き直さないよう、
+  帯に書いてある「描いたときのモード」と比べる。
+*/
+let redrawing = false;
+
+async function followModes(modes) {
+  const end = document.querySelector(".ribbon__end");
+  if (!end || redrawing) return;
+  const drawn = (end.dataset.modes || "").split(",").filter(Boolean).sort().join(",");
+  const now = [...modes].sort().join(",");
+  if (drawn === now) return;
+  redrawing = true;
+  try {
+    await nav.refreshShell();
+  } finally {
+    redrawing = false;
+  }
 }
 
 async function beat() {
@@ -39,6 +68,7 @@ async function beat() {
     */
     if (body && body.screen_ok === false) screen.showTaken();
     else if (body && body.screen_ok === true) screen.clearTaken();
+    if (body && Array.isArray(body.modes)) followModes(body.modes);
   } catch {
     if (++misses === MISSES_BEFORE_OFFLINE) setOffline(true);
   }
@@ -87,7 +117,11 @@ function startAlive() {
   // 次の心拍で取り消される**(サーバ側が猶予を持っている)
   window.addEventListener("pagehide", () => alive({ leaving: true }));
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") alive();
+    if (document.visibilityState !== "visible") return;
+    alive();
+    // **戻ってきたらすぐ確かめる。** 別のタブや窓で権限を直してから
+    // 戻ったとき、15秒の見張りを待たずに帯が追いつく
+    beat();
   });
 }
 

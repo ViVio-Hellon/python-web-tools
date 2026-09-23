@@ -191,8 +191,18 @@ def export_board_usage():
     押せば同じ場所に出る。**書いた場所を必ず返す** ── 書き出しで
     いちばん困るのは「書けたのに、どこにあるか分からない」。
     """
-    directory = str((request.get_json(silent=True) or {}).get("dir", ""))
-    result = settings_presenter.export_board_usage(get_db(), directory)
+    raw = (request.get_json(silent=True) or {}).get("dir", "")
+    # **文字列でなければ断る。** 以前は何でも `str()` していたので、
+    # 一覧 `[1, 2]` や `None` がそのまま**フォルダ名になって作られて**
+    # いた(相対の道はアプリのフォルダ基準なので、アプリの隣に
+    # `[1, 2]` `None` `True` … が並ぶ)。画面は必ず文字列を送るので、
+    # それ以外が来たら誤りとして返す
+    if raw is None:
+        raw = ""
+    if not isinstance(raw, str):
+        return jsonify(_error("bad_dir",
+                              "書き出し先はフォルダの道(文字)で指定してください")), 400
+    result = settings_presenter.export_board_usage(get_db(), raw)
     if not result.ok:
         return jsonify(_error(result.reason, result.message)), 400
     state = settings_presenter.to_dict(

@@ -245,7 +245,15 @@ export function start(hooks = {}) {
 export async function refreshShell() {
   let next;
   try {
-    const res = await fetch(location.href, { cache: "no-store" });
+    // **このタブの番号を付ける。** `go()` と同じ理由で、付けないと
+    // サーバは「新しいタブが開いた」と読み、新しい番号を振ってそちらを
+    // 「いま使っている画面」にする ── **描き直したこのタブ自身が締め
+    // 出され**、次の操作で「このタブは操作できません」が出ていた
+    // (マスタ管理でアクセス権限を保存した直後に踏む)
+    const res = await fetch(location.href, {
+      cache: "no-store",
+      headers: { [screen.HEADER]: screen.id() },
+    });
     if (!res.ok) return false;
     next = new DOMParser().parseFromString(await res.text(), "text/html");
   } catch {

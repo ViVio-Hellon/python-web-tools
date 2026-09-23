@@ -113,11 +113,43 @@ def health():
         # この知らせが届きません。
         "screen_ok": screen_lock.is_active(
             request.headers.get(screen_lock.HEADER, "")),
+        # **その画面がいま使えるモード。** 帯のモード切替は画面を出すとき
+        # にしか作られないので、権限があとから増えても、画面を移るまで
+        # 「現場?」のままだった(現場の声:「触ることで 現場・資材 に
+        # なった」)。見張りがこれと帯の `data-modes` を比べ、食い違ったら
+        # 帯だけ描き直す。画面からの問い合わせにだけ答える ── 起動の
+        # 判定や待機画面は権限を要らないので、DBを開かせない
+        "modes": _screen_modes(),
         # いま走っているものの一言。**起動待機画面はこれを読む** ──
         # 取り込みが終わるまで待たせるので、何をどこまでやっているかを
         # 出さないと「止まっている」と受け取られる
         "job": _running_note(),
     })
+
+
+def _screen_modes() -> Optional[list[str]]:
+    """画面からの問い合わせなら、いま使えるモード。それ以外は `None`。
+
+    **権限の引き方は画面を出すときと同じ**(`current_grant` =
+    `access_control.resolve_for_screen`)。足りなければ取り込み元を
+    見に行くので、資材課が行を足せば、画面に触らなくてもここで拾える。
+    取り込み元を叩く回数は向こうが抑えている(更新時刻が変わったとき
+    と、30秒おき)。
+
+    準備が終わっていない・DBを開けないときは答えない ── 見張りは
+    「分からない」を「変わった」と取り違えないよう、`None` なら何もしない。
+    """
+    if not request.headers.get(screen_lock.HEADER):
+        return None
+    if not current_app.config.get("READY"):
+        return None
+    try:
+        from .. import current_grant
+        return list(current_grant().allowed_modes())
+    except Exception:                       # noqa: BLE001 - 見張りは止めない
+        log.debug("モードを引けませんでした(次の問い合わせで試します)",
+                  exc_info=True)
+        return None
 
 
 def _running_note() -> Optional[dict]:

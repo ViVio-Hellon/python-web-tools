@@ -35,3 +35,10 @@ data/user_config.json
 # CSVなどの書き出し先(既定)。出したものは端末ごとの成果物で、
 # 配るものではない
 export/
+
+# 試験の網羅率を測ったときにできる作業ファイル。**配るものではない**
+# (一度 `git add -A` で紛れ込んで、現場のフォルダに入った)
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
