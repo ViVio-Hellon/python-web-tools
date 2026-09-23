@@ -1,4 +1,4 @@
-# 梱包資材総合ツール (Python / SQLite版) — VER2.85.0
+# 梱包資材総合ツール (Python / SQLite版) — VER2.86.0
 
 Excel VBA + Access で作られていた梱包資材管理ツールの Python 移植版です。
 画面は **Flask + HTML/CSS/JS**、業務ロジックは Python、データは SQLite。
@@ -516,7 +516,9 @@ VBAはこれを1つのレジストリ値(`GetSetting("梱包資材管理","Confi
 - **全端末で共有する。** 保存・読んだ回数・削除は取り込み元(梱包資材マスタ)へ
   書き戻し、取り込みで受け取る(`packaging_tool/pattern_sync.py`)。
   まだ送れていない実績は一覧に「この端末だけ」と出る
-- 表の名前は `config.TBL_PT_*`(**仮の名前**。VBA 側の名前に合わせて直す)
+- 表の名前と保存形式は VBA と同じ(`config.TBL_PT_*` = `パレット実績ヘッダ` /
+  `パレット実績選定` / `パレット実績配置` / `パレット実績カット`、`PT_FORMAT_VER` = 2)。
+  **VBA が保存した実績も一覧に出て、そのまま読み込める**
 
 旧版の実績(`PalletPatterns`)は形が違うので一覧には出ない
 (VBA も `PalletHistoryModule_v2` を削除している)。表そのものは画面比較

@@ -13,6 +13,9 @@ from packaging_tool import config, db  # noqa: E402
 from packaging_tool import pattern_store as ps  # noqa: E402
 from packaging_tool.board_selection_types import ProtecCutResult  # noqa: E402
 
+H, SELT, PLACET, CUTT = (config.TBL_PT_HEADER, config.TBL_PT_SELECT,
+                         config.TBL_PT_PLACE, config.TBL_PT_CUT)
+
 
 def memory() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
@@ -69,7 +72,7 @@ class SaveLoadTests(unittest.TestCase):
     def test_空文字はNULLで書く(self) -> None:
         """VBA `DbValue`。テキスト列の空文字の扱いに依存しない。"""
         pid = ps.save_pattern_snapshot(self.conn, header(保護材=""), SEL, [], [])
-        row = self.conn.execute('SELECT 保護材 FROM "実績ヘッダ" WHERE 実績ID=?',
+        row = self.conn.execute(f'SELECT 保護材 FROM "{H}" WHERE 実績ID=?',
                                 (pid,)).fetchone()
         self.assertIsNone(row[0])
 
@@ -77,7 +80,7 @@ class SaveLoadTests(unittest.TestCase):
         pid = ps.save_pattern_snapshot(self.conn, header(), SEL, PLACE, CUT)
         ps.load_pattern_snapshot(self.conn, pid)
         ps.load_pattern_snapshot(self.conn, pid)
-        row = self.conn.execute('SELECT 使用回数, 使用回数未反映 FROM "実績ヘッダ"'
+        row = self.conn.execute(f'SELECT 使用回数, 使用回数未反映 FROM "{H}"'
                                 ' WHERE 実績ID=?', (pid,)).fetchone()
         self.assertEqual(tuple(row), (2, 2))
 
@@ -87,14 +90,14 @@ class SaveLoadTests(unittest.TestCase):
 
     def test_保存形式が違えば読まない(self) -> None:
         pid = ps.save_pattern_snapshot(self.conn, header(), SEL, PLACE, CUT)
-        self.conn.execute('UPDATE "実績ヘッダ" SET 保存形式=99 WHERE 実績ID=?', (pid,))
+        self.conn.execute(f'UPDATE "{H}" SET 保存形式=99 WHERE 実績ID=?', (pid,))
         with self.assertRaisesRegex(ps.PatternStoreError, "保存形式"):
             ps.load_pattern_snapshot(self.conn, pid)
 
     def test_知らない列は断る_何も書かない(self) -> None:
         with self.assertRaises(ps.PatternStoreError):
             ps.save_pattern_snapshot(self.conn, header(), [{"区分": "下用", "謎": 1}], [], [])
-        self.assertEqual(count(self.conn, "実績ヘッダ"), 0)
+        self.assertEqual(count(self.conn, H), 0)
 
     def test_途中で失敗したら全部戻す(self) -> None:
         """ヘッダだけ残る・明細が半分だけ、を作らない(1トランザクション)。"""
@@ -110,14 +113,14 @@ class SaveLoadTests(unittest.TestCase):
         with mock.patch.object(ps, "_insert", side_effect=flaky):
             with self.assertRaises(ps.PatternStoreError):
                 ps.save_pattern_snapshot(self.conn, header(), SEL, PLACE, CUT)
-        for table in ("実績ヘッダ", "実績選定明細", "実績配置明細", "実績カット明細"):
+        for table in (H, SELT, PLACET, CUTT):
             self.assertEqual(count(self.conn, table), 0, table)
 
     def test_送信IDは保存ごとに違う(self) -> None:
         a = ps.save_pattern_snapshot(self.conn, header(), SEL, [], [])
         b = ps.save_pattern_snapshot(self.conn, header(), SEL, [], [])
         ids = {r[0] for r in self.conn.execute(
-            'SELECT 送信ID FROM "実績ヘッダ" WHERE 実績ID IN (?,?)', (a, b))}
+            f'SELECT 送信ID FROM "{H}" WHERE 実績ID IN (?,?)', (a, b))}
         self.assertEqual(len(ids), 2)
 
 
@@ -137,7 +140,7 @@ class ListTests(unittest.TestCase):
 
     def test_保存形式が違うものは出さない(self) -> None:
         pid = ps.save_pattern_snapshot(self.conn, header(), SEL, [], [])
-        self.conn.execute('UPDATE "実績ヘッダ" SET 保存形式=0 WHERE 実績ID=?', (pid,))
+        self.conn.execute(f'UPDATE "{H}" SET 保存形式=0 WHERE 実績ID=?', (pid,))
         self.assertEqual(ps.get_pattern_list(self.conn), [])
 
     def test_未送信が分かる(self) -> None:
@@ -153,7 +156,7 @@ class DeleteTests(unittest.TestCase):
         pid = ps.save_pattern_snapshot(self.conn, header(), SEL, PLACE, CUT)
         other = ps.save_pattern_snapshot(self.conn, header(), SEL, PLACE, CUT)
         self.assertTrue(ps.delete_pattern_by_id(self.conn, pid))
-        for table in ("実績選定明細", "実績配置明細", "実績カット明細"):
+        for table in (SELT, PLACET, CUTT):
             ids = {r[0] for r in self.conn.execute(f'SELECT 実績ID FROM "{table}"')}
             self.assertEqual(ids, {other}, table)
         self.assertEqual(count(self.conn, ps.TBL_PT_DELETED), 1)

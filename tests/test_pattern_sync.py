@@ -190,9 +190,6 @@ class WriteBackIntegrationTests(SyncTestCase):
         self.assertNotIn(H, sync_writeback._unsent_writeback_tables(self.a))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ImportMasterIntegrationTests(SyncTestCase):
     """取り込み(`import_master`)を通しても、実績が行き来する。"""
@@ -224,3 +221,106 @@ class ImportMasterIntegrationTests(SyncTestCase):
             result = data_sync.import_master(self.a, self.path)
         self.assertTrue(any(H in e and "見送り" in e for e in result.errors))
         self.assertEqual(len(ps.get_pattern_list(self.a)), 1)
+
+
+# 現場の取り込み元にある表の形(VBA / Access から作られたもの)。
+# **型も主キーも自動採番も無い**(実績ID はただの列)、送信ID も無い
+VBA_SCHEMA = [
+    f'CREATE TABLE "{config.TBL_PT_HEADER}" ("実績ID", "保存形式", "登録日時", "更新日時",'
+    ' "使用回数", "パレット幅", "パレット丈", "製品幅", "製品丈", "製品回転",'
+    ' "ボード種別", "配置方式", "狭幅下", "狭幅上", "保護材", "アングル",'
+    ' "プロテック確定値", "LotNo", "拠点")',
+    f'CREATE TABLE "{config.TBL_PT_SELECT}" ("実績ID", "区分", "行順", "幅", "丈", "枚数", "タグ")',
+    f'CREATE TABLE "{config.TBL_PT_PLACE}" ("実績ID", "区分", "順番", "板ID",'
+    ' "インスタンスID", "座標X", "座標Y", "幅", "丈", "元幅", "元丈", "補填")',
+    f'CREATE TABLE "{config.TBL_PT_CUT}" ("実績ID", "種別", "キー", "値")',
+]
+
+
+class VbaSourceTests(SyncTestCase):
+    """VBA が保存した実績が入っている取り込み元と行き来する。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        with sqlite3.connect(self.path) as raw:
+            for sql in VBA_SCHEMA:
+                raw.execute(sql)
+            raw.execute(f'INSERT INTO "{H}" VALUES (1, 2, "2026-09-23T17:54:13",'
+                        ' "2026-09-23T17:54:33", 1, 1350, 1450, 1322, 1342, 0,'
+                        ' "ハードボード", "別案A", 0, 0, "アングル", NULL, NULL,'
+                        ' "H7085M0", "L1")')
+            raw.executemany(f'INSERT INTO "{config.TBL_PT_SELECT}" VALUES (?,?,?,?,?,?,?)',
+                            [(1, "下用", 1, 1000, 1400, 1, "主"),
+                             (1, "上用", 1, 1250, 1250, 1, "主"),
+                             (1, "上用", 2, 100, 2000, 1, "丈補填")])
+            raw.execute(f'INSERT INTO "{config.TBL_PT_PLACE}" VALUES'
+                        ' (1, "上用", 3, 1, "上用_T1_3", 0, 36, 1250, 1250, 1250, 1250, 0)')
+            raw.executemany(f'INSERT INTO "{config.TBL_PT_CUT}" VALUES (?,?,?,?)',
+                            [(1, "幅カット", "100x2000", 100),
+                             (1, "丈カット長", "U_100x2000", 100)])
+
+    def test_VBAが保存した実績を読める(self) -> None:
+        self.assertEqual(sync.import_from(self.a, self.path).imported, 1)
+        [row] = ps.get_pattern_list(self.a, 1350, 1450)
+        self.assertEqual(row.board_summary,
+                         "[別案A] 下:1000x1400(1) / 上:1250x1250(1) 100x2000(1)[丈]")
+        snap = ps.load_pattern_snapshot(self.a, row.id)
+        self.assertEqual((snap.place_rows[0]["座標X"], snap.place_rows[0]["座標Y"]), (0, 36))
+        self.assertEqual({r["キー"] for r in snap.cut_rows}, {"100x2000", "U_100x2000"})
+
+    def test_Pythonで保存した実績に番号を振って送る(self) -> None:
+        """実績ID は自動採番ではない。振らないと空のまま入る。"""
+        sync.import_from(self.a, self.path)
+        save(self.a)
+        pushed = self.push(self.a)
+        self.assertEqual((pushed.sent, pushed.errors), (1, []))
+        self.assertEqual(self.source(f'SELECT 実績ID FROM "{H}" ORDER BY 実績ID'),
+                         [(1,), (2,)])
+        self.assertEqual(self.source(
+            f'SELECT DISTINCT 実績ID FROM "{config.TBL_PT_PLACE}" ORDER BY 実績ID'),
+            [(1,), (2,)])
+        # VBA の表に送信IDの列を足した(二重防止)
+        self.assertEqual(self.source(f'SELECT COUNT(送信ID) FROM "{H}"'), [(1,)])
+
+    def test_VBAの実績を読んだ回数も足す(self) -> None:
+        sync.import_from(self.a, self.path)
+        [row] = ps.get_pattern_list(self.a)
+        ps.load_pattern_snapshot(self.a, row.id)
+        self.push(self.a)
+        self.assertEqual(self.source(f'SELECT 使用回数 FROM "{H}"'), [(2,)])
+
+    def test_VBAの実績を消せる(self) -> None:
+        sync.import_from(self.a, self.path)
+        [row] = ps.get_pattern_list(self.a)
+        ps.delete_pattern_by_id(self.a, row.id)
+        self.assertEqual(self.push(self.a).deleted, 1)
+        for table in (H, config.TBL_PT_SELECT, config.TBL_PT_PLACE, config.TBL_PT_CUT):
+            self.assertEqual(self.source(f'SELECT COUNT(*) FROM "{table}"'), [(0,)], table)
+
+
+class ProvisionalNameTests(unittest.TestCase):
+    def test_仮の名前の表で保存した実績を移す(self) -> None:
+        """VER2.85.0 は VBA の名前が届く前で、仮の名前の表に保存していた。"""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        cols = ps.HEADER_COLUMNS + ps.HEADER_LOCAL_COLUMNS
+        for sql in ps.create_sql("実績ヘッダ", cols, header=True):
+            conn.execute(sql)
+        for name, (_t, columns, _o) in zip(("実績選定明細", "実績配置明細", "実績カット明細"),
+                                          ps.DETAIL_TABLES):
+            for sql in ps.create_sql(name, columns, header=False):
+                conn.execute(sql)
+        conn.execute('INSERT INTO "実績ヘッダ" (保存形式, パレット幅, パレット丈,'
+                     ' 取込元実績ID, 送信ID) VALUES (1, 1150, 2650, 7, "abc")')
+        conn.execute('INSERT INTO "実績選定明細" (実績ID, 区分, 行順, 幅, 丈, 枚数)'
+                     ' VALUES (1, "下用", 1, 1150, 2500, 1)')
+        db.apply_schema(conn)
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        self.assertNotIn("実績ヘッダ", tables)
+        [row] = ps.get_pattern_list(conn)
+        self.assertTrue(row.unsent)             # 正しい表へ送り直す
+        self.assertEqual(row.board_summary, "[] 下:1150x2500(1) / 上:")
+
+
+if __name__ == "__main__":
+    unittest.main()

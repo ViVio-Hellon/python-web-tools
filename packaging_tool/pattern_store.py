@@ -27,8 +27,7 @@
                     最初から入っている)。**空なら未送信**
     使用回数未反映 … 読み込んだ回数のうち、まだ取り込み元へ足していない分
 
-表の名前は `config.TBL_PT_*` だけに書きます(仮の名前。VBA側の名前が
-分かったらそこだけ直す)。
+表の名前は `config.TBL_PT_*` だけに書きます(VBA と同じ名前)。
 """
 from __future__ import annotations
 
@@ -144,6 +143,36 @@ def create_sql(table: str, columns: Iterable[tuple[str, str]], *,
     return sqls
 
 
+# VER2.85.0 で仮に付けていた名前(VBA の名前が届く前)。その版で保存した
+# 実績を、正しい名前の表へ移す
+_PROVISIONAL_NAMES = {
+    "実績ヘッダ": "TBL_PT_HEADER", "実績選定明細": "TBL_PT_SELECT",
+    "実績配置明細": "TBL_PT_PLACE", "実績カット明細": "TBL_PT_CUT",
+}
+
+
+def _move_provisional(conn: sqlite3.Connection) -> None:
+    """仮の名前の表があれば中身を移して消す。
+
+    列の並びは同じ定義から作っているので、そのまま移せる。移した実績は
+    **未送信に戻す**(仮の名前の表へ送っていた分を、正しい表へ送り直す。
+    送信IDがあるので二重にはならない)。保存形式は列が同じなので今の版にする。
+    """
+    existing = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    for old, attr in _PROVISIONAL_NAMES.items():
+        new = getattr(config, attr)
+        if old not in existing or old == new:
+            continue
+        if conn.execute(f"SELECT COUNT(*) FROM {_q(new)}").fetchone()[0] == 0:
+            conn.execute(f"INSERT INTO {_q(new)} SELECT * FROM {_q(old)}")
+        conn.execute(f"DROP TABLE {_q(old)}")
+        if attr == "TBL_PT_HEADER":
+            conn.execute(f"UPDATE {_q(new)} SET 取込元実績ID = NULL, 保存形式 = ?",
+                         (config.PT_FORMAT_VER,))
+        log.info("仮の名前の表 %s を %s へ移しました", old, new)
+
+
 def ensure_tables(conn: sqlite3.Connection) -> None:
     """手元の実績の表を作る(`db.apply_schema` から呼ばれる。冪等)。"""
     sqls = create_sql(config.TBL_PT_HEADER,
@@ -154,6 +183,7 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
                 "取込元実績ID INTEGER, 送信ID TEXT, 登録日時 TEXT)")
     for sql in sqls:
         conn.execute(sql)
+    _move_provisional(conn)
     conn.commit()
 
 

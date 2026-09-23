@@ -133,8 +133,15 @@ def _push_new(conn: sqlite3.Connection, source: source_db.SourceConnection,
                     # 送れていたが、控える前に落ちた。控えるだけ
                     new_id = int(found[0]["実績ID"])
                 else:
-                    new_id = tx.insert(config.TBL_PT_HEADER, {
-                        n: header.get(n) for n in SOURCE_HEADER_NAMES})
+                    # **番号はこちらで振る。** VBA(Access)から作られた取り込み元の
+                    # 表は 実績ID がただの列(自動採番ではない)なので、入れないと
+                    # 空のまま入る。鍵(BEGIN IMMEDIATE)を取ってから数えるので、
+                    # 別の端末と同じ番号にはならない
+                    new_id = int(tx.query(
+                        f"SELECT COALESCE(MAX(実績ID), 0) + 1 AS n FROM {h}")[0]["n"])
+                    tx.insert(config.TBL_PT_HEADER, {
+                        "実績ID": new_id,
+                        **{n: header.get(n) for n in SOURCE_HEADER_NAMES}})
                     for (table, columns, _order), rows_ in zip(store.DETAIL_TABLES, details):
                         names = [n for n, _ in columns]
                         for row in rows_:
