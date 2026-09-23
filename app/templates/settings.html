@@ -470,6 +470,73 @@
     </div>
   </section>
       </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-distribution" role="tabpanel" aria-labelledby="tab-distribution" hidden>
+  {# 配布設定(`packaging_tool/distribution.py`)。1台で決めた設定を、
+     ツールのフォルダごと配った先でそのまま使う。書き出し・読み込み直し・
+     消すは、どれも管理者パスワードが要る #}
+  {% set dist = state.distribution %}
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">配</i>
+      <h3>いま置いてある配布設定</h3>
+      <span class="st st--{{ 'ok' if dist.exists else 'warn' }}" id="distState">{{ "あり" if dist.exists else "なし" }}</span>
+    </header>
+    <div class="pad">
+      <p class="why" id="distMeta">{% if dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成{% if dist.applied_here %} / この端末は読み込み済み{% endif %}{% else %}まだありません。下で書き出すと、ツールのフォルダの中にできます。{% endif %}</p>
+      <div class="tablewrap">
+        <table class="table">
+          <thead><tr><th class="t">項目</th><th class="t">値</th></tr></thead>
+          <tbody id="distRows">
+            {% for c in dist.contents %}<tr><td class="t">{{ c.label }}</td><td class="t">{{ c.value }}</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="why">置き場所: <code id="distPath">{{ dist.path }}</code></p>
+    </div>
+  </section>
+
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">出</i>
+      <h3>この端末の設定を配布設定にする</h3>
+    </header>
+    <div class="pad">
+      <p class="why">
+        いまこの端末に入っている値をそのまま書き出します。書き出したら
+        <b>ツールのフォルダごと</b>配ってください。配った先は、<b>起動したときに
+        読み込みます</b>(同じ配布設定は2度読みません。端末で直した値はそのまま)。
+      </p>
+      <fieldset class="distchecks" id="distItems">
+        <legend>設定</legend>
+        {% for it in dist["items"] %}
+        <label><input type="checkbox" data-dist-item="{{ it.key }}" {% if it.default %}checked{% endif %}> {{ it.label }}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="distchecks" id="distMaps">
+        <legend>配置図(その端末で編集していないときだけ入れます)</legend>
+        {% for m in dist.maps %}
+        <label><input type="checkbox" data-dist-map="{{ m.key }}"> {{ m.label }}</label>
+        {% endfor %}
+      </fieldset>
+      <div class="field" style="margin-top:8px">
+        <label for="distPassword">管理者パスワード</label>
+        <input class="input" id="distPassword" type="password"
+               autocomplete="current-password" style="max-width:16em">
+      </div>
+      <p class="status status--ng" id="distWhy" hidden></p>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn btn--commit" type="button" id="distExport">配布設定を書き出す</button>
+        <button class="btn" type="button" id="distReapply">配布設定を読み込み直す</button>
+        <button class="btn btn--danger" type="button" id="distRemove">配布設定を消す</button>
+      </div>
+      <p class="why">
+        <b>拠点は既定で入れません。</b>ラインごとに違うので、入れたまま配ると
+        全端末が同じ拠点になります。配った先で「動作」の面から選んでください。
+        「読み込み直す」は配置図も上書きします。
+      </p>
+    </div>
+  </section>
+      </section>
       <section class="tabpanel tabpanel--scroll" id="panel-filters" role="tabpanel" aria-labelledby="tab-filters" hidden>
   <!-- 5. よく使う条件 -->
   <section class="card">
@@ -685,6 +752,12 @@
 
 {% block head %}
 <style>
+  /* 配布設定に入れる項目。押しやすいよう1行ずつ・2列に並べる */
+  .distchecks { border:1px solid var(--hairline); border-radius:var(--radius-xs);
+                padding:8px 12px; margin:8px 0 0; display:grid;
+                grid-template-columns:repeat(auto-fill, minmax(16em, 1fr)); gap:6px 16px; }
+  .distchecks legend { font-size:var(--fs-xs); color:var(--muted); padding:0 4px; }
+  .distchecks label { display:flex; align-items:center; gap:6px; min-height:32px; }
   /* 面で分けたので、**画面ごとスクロールさせない**。
      入りきらないぶんは、いま開いている面の中だけが動く */
   .pane--tabbed { display: flex; flex-direction: column; overflow: hidden; }

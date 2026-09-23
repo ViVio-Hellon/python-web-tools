@@ -38,6 +38,11 @@ data/user_config.json
 data/floor_plan.json
 data/pallet_map.json
 
+# 配布設定。**配る人がその場で書き出すもの**で、ソースではない
+# (開発機の置き場所やパスワードの撹拌値が入る)
+config/distribution.json
+config/distribution.tmp
+
 # CSVなどの書き出し先(既定)。出したものは端末ごとの成果物で、
 # 配るものではない
 export/

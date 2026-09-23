@@ -399,6 +399,12 @@ def _initialize(srv) -> None:
     try:
         srv.mark_stage("アプリを準備中")
         config.ensure_dirs()
+        # 配布設定(`config/distribution.json`)があれば、**取り込みより先に**
+        # 読む ── 置き場所が入っているので、読む前に取り込むと既定の場所を見る
+        from packaging_tool import distribution
+        loaded = distribution.apply_on_start()
+        if loaded.applied:
+            log().info("配布設定を読み込みました: %s", ", ".join(loaded.applied))
         with db.connect() as conn:
             db.apply_schema(conn)
         # 選定ログを日ごとのファイルにも残す。**問い合わせは後日来る**

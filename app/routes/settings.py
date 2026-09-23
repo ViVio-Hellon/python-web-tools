@@ -170,6 +170,50 @@ def change_admin_password():
     return jsonify(state)
 
 
+# ------------------------------------------------------------------
+# 配布設定(`packaging_tool/distribution.py`)。どれも管理者パスワードが要る
+# ------------------------------------------------------------------
+def _distribution_reply(result):
+    from packaging_tool import distribution
+    if not result.ok:
+        status = 403 if result.reason == distribution.REFUSE_NEED_PASSWORD else 400
+        if result.reason == distribution.REFUSE_FAILED:
+            status = 500
+        return jsonify(_error(result.reason, result.message)), status
+    state = settings_presenter.to_dict(
+        settings_presenter.build(get_db(), _startup_modes()))
+    state["message"] = result.message
+    return jsonify(state)
+
+
+@bp.post("/api/settings/distribution/export")
+def export_distribution():
+    """この端末のいまの設定を、配布設定として書き出す。"""
+    from packaging_tool import distribution
+    body = request.get_json(silent=True) or {}
+    items, maps = body.get("items"), body.get("maps")
+    if not isinstance(items, list) or not isinstance(maps, list) \
+            or not all(isinstance(x, str) for x in items + maps):
+        return jsonify(_error("bad_input", "入れる項目の形が違います。")), 400
+    return _distribution_reply(distribution.export(
+        str(body.get("password", "")), items, maps))
+
+
+@bp.post("/api/settings/distribution/remove")
+def remove_distribution():
+    from packaging_tool import distribution
+    body = request.get_json(silent=True) or {}
+    return _distribution_reply(distribution.remove(str(body.get("password", ""))))
+
+
+@bp.post("/api/settings/distribution/reapply")
+def reapply_distribution():
+    """置いてある配布設定を読み込み直す(配置図も上書き)。"""
+    from packaging_tool import distribution
+    body = request.get_json(silent=True) or {}
+    return _distribution_reply(distribution.reapply(str(body.get("password", ""))))
+
+
 @bp.post("/api/settings/lot-filter/delete")
 def delete_lot_filter():
     """ロット一覧の「よく使う条件」を消す。"""

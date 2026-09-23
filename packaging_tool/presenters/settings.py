@@ -68,6 +68,8 @@ TABS: tuple[tuple[str, str], ...] = (
     # ── 拠点や自動取り込みは日々の振る舞い、こちらは権限の関門で、
     # 並べて置くと「動作の設定を保存」で一緒に変わるように見える
     ("password", "パスワード"),
+    # 配る前に1回だけ触る面。**日々の設定とは別に置く**(触る人も時も違う)
+    ("distribution", "配布設定"),
     ("filters", "よく使う条件"),
     # どのボードがよく使われているかを見る面。設定を**変える**面では
     # ないが、ボードマスタに何を載せておくかを決める材料なので置く。
@@ -1075,6 +1077,11 @@ def tab_badges(view: SettingsViewModel) -> dict[str, dict[str, str]]:
     return badges
 
 
+def _distribution_summary() -> dict[str, Any]:
+    from .. import distribution
+    return distribution.summary()
+
+
 def to_dict(view: SettingsViewModel) -> dict[str, Any]:
     return {
         "level": view.level,
@@ -1125,6 +1132,8 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         "spec_sheet_placeholder": spec_sheet.PLACEHOLDER,
         # **値は返さない。** 変えてあるかどうかだけ
         "admin_custom": view.admin_custom,
+        # 配布設定(`packaging_tool/distribution.py`)。パスワードの値は出さない
+        "distribution": _distribution_summary(),
         "admin_min_length": view.admin_min_length,
         "admin_authenticated": view.admin_authenticated,
         "lot_filters": view.lot_filters,

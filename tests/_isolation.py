@@ -87,5 +87,12 @@ def ensure_isolated() -> list[str]:
             setattr(config, name, _escape(name.lower()))
             moved.append(name)
 
+    # 配布設定: ツールのフォルダの `config/distribution.json`。
+    # 書き出しの試験を流すと、配るつもりのないファイルができる
+    from packaging_tool import distribution
+    if _under(distribution.PATH, repo):
+        distribution.PATH = _escape("dist") / "distribution.json"
+        moved.append("distribution.PATH")
+
     logging_utils.silence_console()
     return moved

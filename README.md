@@ -1,4 +1,4 @@
-# 梱包資材総合ツール (Python / SQLite版) — VER2.86.0
+# 梱包資材総合ツール (Python / SQLite版) — VER2.87.0
 
 Excel VBA + Access で作られていた梱包資材管理ツールの Python 移植版です。
 画面は **Flask + HTML/CSS/JS**、業務ロジックは Python、データは SQLite。
@@ -913,6 +913,7 @@ packaging_tool/             業務ロジック
   location_service.py           棚検索・疲労度スコアリング(旧frmLayout)
   pattern_store.py              実績(スナップショット)の保存・読込・一覧・削除
   pattern_sync.py               実績を全端末で共有(取り込み元との行き来)
+  distribution.py               配布設定(1台で決めた設定を配った先で読み込む)
   special_packaging.py          1P0113 裸梱包・プロテック
   reports.py / printing.py      帳票の中身と、HTML+印刷用CSSでの出力
   floor_plan.py / pallet_map.py / map_data.py  棚配置図・保管位置マップ

@@ -203,6 +203,7 @@ function sectionCard(section, labels) {
 }
 
 function renderStatus(state) {
+  renderDistribution(state.distribution);
   el.statusGrid.replaceChildren(
     ...state.sections.map((s) => sectionCard(s, LEVEL_LABEL)));
   el.importWhy.hidden = state.can_import;
@@ -416,6 +417,8 @@ export function start(state, jobState, masterFrame) {
                     "usageUnlistedCard", "usageUnlistedRows",
                     "admNow", "admNew", "admConfirm", "admSave", "admReset",
                     "admWhy", "adminState",
+                    "distState", "distMeta", "distRows", "distPath", "distPassword",
+                    "distWhy", "distExport", "distReapply", "distRemove",
                     "masterAuthPass", "masterAuthBtn", "masterAuthWhy", "masterAuthState",
                     "pathAuth", "pathPassword", "pathWhy",
                     "writeBack", "recompute", "savePaths", "refresh",
@@ -497,6 +500,7 @@ export function start(state, jobState, masterFrame) {
   });
 
   startAdminPassword();
+  startDistribution();
   startMasterAuth();
 
   startBrowser();
@@ -548,6 +552,60 @@ function startAdminPassword() {
   el.admReset.addEventListener("click", () => send({
     current: el.admNow.value, reset: true,
   }));
+}
+
+
+/* ================================================================
+   配布設定(`packaging_tool/distribution.py`)
+
+   選んだ項目とパスワードを送り、返ってきた状態を写すだけ。
+   **パスワードの値は画面に残さない。**
+   ================================================================ */
+function renderDistribution(dist) {
+  if (!dist || !el.distRows) return;
+  el.distState.textContent = dist.exists ? "あり" : "なし";
+  el.distState.className = `st st--${dist.exists ? "ok" : "warn"}`;
+  el.distMeta.textContent = dist.exists
+    ? `${dist.created_at} に ${dist.created_on} で作成`
+      + (dist.applied_here ? " / この端末は読み込み済み" : "")
+    : "まだありません。下で書き出すと、ツールのフォルダの中にできます。";
+  el.distRows.replaceChildren(...dist.contents.map((c) => {
+    const tr = document.createElement("tr");
+    for (const text of [c.label, c.value]) {
+      const td = document.createElement("td");
+      td.className = "t";
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    return tr;
+  }));
+  el.distPath.textContent = dist.path;
+}
+
+function startDistribution() {
+  if (!el.distExport) return;
+  const send = async (path, body) => {
+    el.distWhy.hidden = true;
+    try {
+      const state = await api.post(path, { ...body, password: el.distPassword.value });
+      el.distPassword.value = "";
+      renderStatus(state);
+      toast(state.message || "済みました", "ok");
+    } catch (err) {
+      el.distWhy.hidden = false;
+      el.distWhy.textContent = err.message;
+    }
+  };
+  const checked = (attr) => [...document.querySelectorAll(`[${attr}]`)]
+    .filter((box) => box.checked)
+    .map((box) => box.getAttribute(attr));
+  el.distExport.addEventListener("click", () => send(
+    "/api/settings/distribution/export",
+    { items: checked("data-dist-item"), maps: checked("data-dist-map") }));
+  el.distReapply.addEventListener("click", () =>
+    send("/api/settings/distribution/reapply", {}));
+  el.distRemove.addEventListener("click", () =>
+    send("/api/settings/distribution/remove", {}));
 }
 
 
