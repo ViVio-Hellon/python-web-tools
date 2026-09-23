@@ -667,6 +667,10 @@ python process_manager.py --all          # 現場・資材の両方を止める
   (`packaging_tool/screen_lock.py`)
 - ログ・作業ファイルは **`%LOCALAPPDATA%\PackagingTool`** に置かれます
   (アプリ本体を共有フォルダに置いても、端末ごとに分かれます)
+- **DB・設定・配置図はアプリのフォルダの中の `data\`** です
+  (`packaging_tool.db` / `user_config.json` / `floor_plan.json` / `pallet_map.json`)。
+  `%LOCALAPPDATA%\PackagingTool\data` も作られますが、**まだ使っていません**
+  (`app_config.py` の「Phase 0」)。版を入れ替えるときは `data\` を持っていくこと
 
 移行できている画面(**7画面すべて**・Phase 7 まで):
 
