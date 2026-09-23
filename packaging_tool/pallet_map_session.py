@@ -250,6 +250,16 @@ def has_unsaved() -> bool:
     return bool(_session is not None and _session.dirty)
 
 
+def stop_editing() -> None:
+    """配置編集を切る(資材モードへ移ったとき)。**編集した中身は残す。**
+
+    作業状態が無ければ何もしない(聞いただけで図を読みに行かない)。
+    """
+    if _session is not None and _session.editing:
+        _session.editing = False
+        log.info("資材モードへ移ったため、保管位置マップの配置編集を切りました")
+
+
 # 未保存を知らせるときの呼び名
 UNSAVED_LABEL = "簡易在庫の保管位置マップ"
 

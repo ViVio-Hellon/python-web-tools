@@ -221,6 +221,12 @@ def set_mode(mode: str) -> bool:
             return False
     current_app.config["MODE"] = key
     log.info("モードを切り替えました: %s", key)
+    if key != modes.FIELD:
+        # 簡易在庫の配置編集は現場モードだけ。編集をONにしたまま資材へ
+        # 移ると、資材の画面で箱が掴めてしまう。**保存していない変更は
+        # 残す**(現場へ戻れば保存できる。捨てると黙って消える)
+        from packaging_tool import pallet_map_session
+        pallet_map_session.stop_editing()
     return True
 
 
@@ -515,10 +521,13 @@ def _register_routes(app: Flask) -> None:
         app.register_blueprint(selection.bp)
         # 包装仕様書の図面はロット検索の中でしか使わない
         app.register_blueprint(spec_sheet.bp)
-        app.register_blueprint(inventory.bp)
         app.register_blueprint(layout.bp)
     else:
         log.info("現場モードの権限が無いため、現場の画面は登録しません")
+    # 簡易在庫は**どちらのモードにもある**(資材モードでも在庫を見て、
+    # 受け払いをする)。配置編集だけは現場モードに限る ──
+    # `inventory._map_edit_field_only` が要求のたびに確かめる
+    app.register_blueprint(inventory.bp)
 
     if grant.allows_mode(modes.MATERIAL):
         log.info("資材モードの権限あり: 確認のエンドポイントを登録します")

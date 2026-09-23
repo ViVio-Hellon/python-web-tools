@@ -22,6 +22,18 @@ const NS = "http://www.w3.org/2000/svg";
 
 // 角の掴みしろ(図の論理座標)。小さすぎると指で掴めない
 const GRIP = 7;
+// ただし**箱の4割まで**。棚検索の置き場は 12×12 まであり、7 のままだと
+// 細い棚では箱の半分以上が掴みしろになる。押した場所が掴みしろだと
+// 「大きさを変える」に入るので、動かすつもりの操作や Shift+クリックが
+// 狙いどおりに入らなかった(現場の声:「棚検索の配置編集は複数掴みが
+// たまにしかできない」)
+const GRIP_SHARE = 0.4;
+const GRIP_MIN = 3;
+
+/** その箱の掴みしろの一辺。 */
+export function gripSize(w, h) {
+  return Math.max(GRIP_MIN, Math.min(GRIP, Math.min(w, h) * GRIP_SHARE));
+}
 
 /** 画面座標を図の論理座標へ。`viewBox` の縮尺はブラウザに聞く。 */
 export function toPlan(svg, event) {
@@ -40,10 +52,11 @@ export function toPlan(svg, event) {
 export function grip(item) {
   const mark = document.createElementNS(NS, "rect");
   mark.setAttribute("class", "grip");
-  mark.setAttribute("x", item.x + item.w - GRIP);
-  mark.setAttribute("y", item.y + item.h - GRIP);
-  mark.setAttribute("width", GRIP);
-  mark.setAttribute("height", GRIP);
+  const size = gripSize(item.w, item.h);
+  mark.setAttribute("x", item.x + item.w - size);
+  mark.setAttribute("y", item.y + item.h - size);
+  mark.setAttribute("width", size);
+  mark.setAttribute("height", size);
   mark.setAttribute("data-grip", item.name);
   return mark;
 }
@@ -113,8 +126,11 @@ export function attach(svg, opts) {
     }
     const mark = group.querySelector(".grip");
     if (mark) {
-      mark.setAttribute("x", x + w - GRIP);
-      mark.setAttribute("y", y + h - GRIP);
+      const size = gripSize(w, h);
+      mark.setAttribute("x", x + w - size);
+      mark.setAttribute("y", y + h - size);
+      mark.setAttribute("width", size);
+      mark.setAttribute("height", size);
     }
   }
 
@@ -142,8 +158,13 @@ export function attach(svg, opts) {
     if (opts.canDrag && !opts.canDrag(group)) return;
 
     // Shift+クリックは複数選択に足す/外すだけ。掴みには入らない
-    // (掴みと同時にやると、選ぼうとしただけで動いてしまう)
-    if (event.shiftKey && !event.target.classList.contains("grip")) {
+    // (掴みと同時にやると、選ぼうとしただけで動いてしまう)。
+    //
+    // **掴みしろの上でも選ぶ。** 以前は掴みしろを除いていたので、そこを
+    // Shift+クリックすると「1つだけ掴む」に入り、**それまで選んでいた
+    // 箱が全部外れていた**。細い棚では箱の多くが掴みしろなので、選んだ
+    // つもりが外れる、が「たまにできる」の正体だった
+    if (event.shiftKey) {
       if (selected.has(name)) selected.delete(name);
       else selected.add(name);
       markSelected();

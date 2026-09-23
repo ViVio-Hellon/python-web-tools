@@ -285,7 +285,11 @@
      はほぼ見えなかった(現場の声:「シフト+クリックできないよ」──
      実際には選べていたが、見た目に変化がなかった)。色を塗って濃い
      輪郭を足し、誰の目にも「選んだ」と分かるようにする #}
-  .shelf.is-multi rect {
+  {# **`#map` を付けて強くする。** 下の `.map--editing .shelf rect`(破線)と
+     強さが同じで、あとに書いたほうが勝つため、選んでも**点線のまま**
+     だった(現場の声:「簡易在庫は太線になるが、棚検索は点線のまま」)。
+     簡易在庫は `#map` 付きで書いてあったので太線になっていた #}
+  #map .shelf.is-multi rect {
     fill: var(--accent-soft); stroke: var(--accent); stroke-width: 3;
     stroke-dasharray: none;
   }

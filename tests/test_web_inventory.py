@@ -259,13 +259,102 @@ class InventoryPageTests(InventoryWebTestCase):
         self.assertIn('id="mapMultiNote"', html)
         self.assertIn("Shift", html)
 
-    def test_資材だけの権限なら無い(self) -> None:
-        """資材課は在庫を動かさない。現場の権限が無ければ、隠すのではなく無い。"""
-        from app import create_app
-        app = create_app("material", token=TOKEN, port=8723,
-                         grant=access_control.grant_of("mode:material"))
-        app.config["TESTING"] = True
-        self.assertEqual(app.test_client().get("/inventory").status_code, 404)
+    def test_資材だけの権限でも開ける(self) -> None:
+        """現場の声:「倉庫モードに簡易在庫ページも追加したい」(VER2.83.0)。
+
+        以前は「資材課は在庫を動かさない」として資材だけの端末には
+        無かった。**配置編集だけ**を現場モードに残す(`MaterialModeTests`)。
+        """
+        client = _web.make_client("material", port=8723,
+                                  grant=access_control.grant_of("mode:material"))
+        self.assertEqual(client.get("/inventory").status_code, 200)
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class MaterialModeTests(unittest.TestCase):
+    """資材(倉庫)モードの簡易在庫。**見る・受け払いはできる。配置編集は現場だけ。**
+
+    編集した図は同じファイル(`pallet_map.json`)なので、現場で直した配置が
+    資材モードにもそのまま出る。
+    """
+
+    BOTH = ("mode:field", "mode:material")
+
+    def setUp(self) -> None:
+        from app.routes import inventory as routes
+        isolate_map(self)
+        self.conn = _web.bind_db(self, routes)
+        self.client = _web.make_client(
+            "field", port=8724, grant=access_control.grant_of(*self.BOTH))
+
+    def post(self, path: str, body: dict):
+        return self.client.post(path, json=body, headers=_web.auth())
+
+    def to_material(self) -> None:
+        res = self.post("/api/mode", {"mode": "material"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+    def test_レールに出る(self) -> None:
+        from app import shell
+        keys = [item.key for item in shell.nav_items("material")]
+        self.assertIn("inventory", keys)
+
+    def test_資材モードでは配置編集のボタンを出さない(self) -> None:
+        import re
+        field = self.client.get("/inventory").get_data(as_text=True)
+        self.assertRegex(field, r'id="mapEditToggle"\s+aria-pressed="false">')
+        self.to_material()
+        html = self.client.get("/inventory").get_data(as_text=True)
+        tag = re.search(r'<button[^>]*id="mapEditToggle"[^>]*>', html).group(0)
+        self.assertIn("hidden", tag)
+
+    def test_資材モードでは図を変える要求を断る(self) -> None:
+        self.to_material()
+        for path, body in (
+                ("/api/inventory/map/edit", {"on": True}),
+                ("/api/inventory/map/move", {"name": "A1", "x": 10, "y": 10}),
+                ("/api/inventory/map/resize", {"name": "A1", "w": 30, "h": 30}),
+                ("/api/inventory/map/arrange", {"names": ["A1", "A2"], "op": "top"}),
+                ("/api/inventory/map/add", {"name": "Z9"}),
+                ("/api/inventory/map/remove", {"name": "A1"}),
+                ("/api/inventory/map/background", {"image": ""}),
+                ("/api/inventory/map/background/place", {"x": 0, "y": 0, "scale": 1}),
+                ("/api/inventory/map/save", {}),
+                ("/api/inventory/map/reset", {})):
+            with self.subTest(path):
+                res = self.post(path, body)
+                self.assertEqual(res.status_code, 403)
+                self.assertEqual(res.get_json()["error"]["code"], "wrong_mode")
+        self.assertFalse(pallet_map_session.get_session().editing)
+
+    def test_資材モードでも見ると受け払いは断らない(self) -> None:
+        self.to_material()
+        res = self.client.get("/api/inventory/search?w=1100&l=2000",
+                              headers=_web.auth())
+        self.assertEqual(res.status_code, 200)
+        res = self.post("/api/inventory/receive", {})
+        self.assertNotEqual(res.status_code, 403)
+
+    def test_現場で直した配置が資材モードにも出る(self) -> None:
+        self.post("/api/inventory/map/edit", {"on": True})
+        self.post("/api/inventory/map/move", {"name": "A1", "x": 123, "y": 45})
+        self.post("/api/inventory/map/save", {})
+        self.to_material()
+        body = self.client.get("/api/inventory/position/A1",
+                               headers=_web.auth()).get_json()
+        a1 = next(p for p in body["map"]["positions"] if p["name"] == "A1")
+        self.assertEqual((a1["x"], a1["y"]), (123, 45))
+
+    def test_編集中に資材へ移ると編集を切る_未保存は残す(self) -> None:
+        """掴めるまま資材の画面になると、見るつもりで位置がずれる。
+        未保存は捨てない(現場へ戻れば保存できる。閉じるときは聞く)。"""
+        self.post("/api/inventory/map/edit", {"on": True})
+        self.post("/api/inventory/map/move", {"name": "A1", "x": 100, "y": 40})
+        self.to_material()
+        session = pallet_map_session.get_session()
+        self.assertFalse(session.editing)
+        self.assertTrue(session.dirty)
+        self.assertTrue(pallet_map_session.has_unsaved())
 
 
 class SearchApiTests(InventoryWebTestCase):

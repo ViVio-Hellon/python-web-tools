@@ -68,8 +68,11 @@
         {# 位置が増えたり動いたりしたら現場で直せるようにする。
            棚検索の配置編集と同じ約束(保存するまでファイルに触らない) #}
         <span class="st" id="mapEditState"></span>
+        {# 配置編集は**現場モードだけ**。資材モードでは押せないボタンを
+           置かない(押しても断られるだけの道を作らない)。図そのものは
+           同じファイルなので、現場で直した配置がそのまま出る #}
         <button class="btn" type="button" id="mapEditToggle"
-                aria-pressed="false">配置編集</button>
+                aria-pressed="false"{% if mode != "field" %} hidden{% endif %}>配置編集</button>
       </header>
       <div class="pad">
         <div class="mapwrap" id="mapWrap">

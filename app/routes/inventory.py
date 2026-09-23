@@ -147,6 +147,31 @@ _MAP_STATUS = {
 }
 
 
+# 図を**変える**要求の頭。背景画像を読むのは GET なので含まれない
+_MAP_EDIT_PREFIX = "/api/inventory/map/"
+
+
+@bp.before_request
+def _map_edit_field_only():
+    """配置編集は現場モードだけ。資材モードでは見る・受け払いまで。
+
+    **モードで分ける**(権限では分けない)のは `warehouse.field_only` と
+    同じ理由 ── `mode:field` は誰でも持つ既定の権限なので、権限で断っても
+    誰も断れない。編集した図は同じファイル(`pallet_map.json`)なので、
+    資材モードでもそのまま同じ配置が出る。
+    """
+    if request.method != "POST" or not request.path.startswith(_MAP_EDIT_PREFIX):
+        return None
+    from .. import current_mode
+    from packaging_tool import modes
+    if current_mode() == modes.FIELD:
+        return None
+    log.info("現場モードではないため配置編集を断りました: %s", request.path)
+    return jsonify(_error(
+        "wrong_mode",
+        "配置編集は現場モードでのみ行えます。右上でモードを切り替えてください。")), 403
+
+
 @bp.post("/api/inventory/map/edit")
 def set_map_editing():
     """配置編集の入り切り。

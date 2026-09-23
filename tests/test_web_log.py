@@ -266,8 +266,11 @@ class NavTests(unittest.TestCase):
         self.assertEqual(len(nav_items(modes.FIELD)), 7)
 
     def test_資材は絞られる(self) -> None:
-        """資材は現場より狭い。**発注を出す前の段(簡易在庫・棚検索・
-        選定ログ)は持たない。**
+        """資材は現場より狭い。**発注を出す前の段(棚検索・選定ログ)は
+        持たない。**
+
+        簡易在庫は持つ(VER2.83.0、現場の声:「倉庫モードに簡易在庫ページも
+        追加したい」)。配置編集だけは現場モード。
 
         ロット検索は持つ ── 届いた発注のLotを確かめるため(現場の指摘:
         「倉庫モードの時に送られてきたデータに添付しているLOT情報を
@@ -281,8 +284,8 @@ class NavTests(unittest.TestCase):
         from app.shell import nav_items
         keys = [i.key for i in nav_items(modes.MATERIAL)]
         self.assertLess(len(keys), 7)
-        self.assertEqual(keys, ["warehouse", "lot", "settings"])
-        for absent in ("selection", "inventory", "layout", "log"):
+        self.assertEqual(keys, ["warehouse", "lot", "inventory", "settings"])
+        for absent in ("selection", "layout", "log"):
             self.assertNotIn(absent, keys)
 
     def test_モードごとにタブのアイコンが違う(self) -> None:

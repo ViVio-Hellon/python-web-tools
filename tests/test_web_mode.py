@@ -87,9 +87,13 @@ class RegistrationTests(ModeTestCase):
 
     def test_現場の権限が無ければ現場の画面は無い(self) -> None:
         rules = self.rules(self.make("material", *MATERIAL_ONLY))
-        for path in ("/lot", "/selection", "/inventory", "/layout", "/log"):
+        for path in ("/lot", "/selection", "/layout", "/log"):
             with self.subTest(path=path):
                 self.assertNotIn(path, rules)
+
+    def test_簡易在庫は資材だけの端末にもある(self) -> None:
+        """VER2.83.0。配置編集だけは現場モード(`inventory._map_edit_field_only`)。"""
+        self.assertIn("/inventory", self.rules(self.make("material", *MATERIAL_ONLY)))
 
     def test_資材の権限が無ければ確認の操作は404(self) -> None:
         """以前はURLごと登録しなかった(起動時の権限で決めていた)。
