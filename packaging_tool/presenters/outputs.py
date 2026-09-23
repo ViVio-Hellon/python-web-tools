@@ -137,9 +137,10 @@ def _protec_result(session: Any):
     """
     from .. import board_selection_algorithm as alg
 
-    result = session.select_result
-    if result is not None:
-        return result.lower_result.protec_result
+    # 自動選定の結果、または実績から戻した確定値(`session.fixed_protec`)
+    fixed = session.fixed_protec()
+    if fixed is not None:
+        return fixed
     return alg.apply_protec_rules_to_lower_list(
         session.selected.lower, session.product, session.palette,
         is_1p1216=session.presenter.protec.is_1p1216)
@@ -427,10 +428,8 @@ def build_cut_request(session: Any, *, use_len_cut: bool = True) -> tuple[
 
     presenter = session.presenter
     lot = presenter.lot_result.lot
-    result = session.select_result
-    cut_info = result.cut_info if result else {}
-    length_cut_info = result.length_cut_info if result else {}
-    length_cut_count = result.length_cut_count if result else {}
+    # 自動選定の結果、または実績から戻したカット(`session.cut_dicts`)
+    cut_info, length_cut_info, length_cut_count = session.cut_dicts()
 
     if presenter.protec.is_protec:
         # プロテックは上下を分けず、選定(または手動追加後の後付け)が

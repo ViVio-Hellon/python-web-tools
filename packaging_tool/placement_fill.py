@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .board_scoring import (LOWER_OVERHANG_Y, UPPER_WIDTH_TOLERANCE,
-                            get_best_orientation)
+from .board_scoring import (LOWER_OVERHANG_Y, PASS1_TOLERANCE,
+                            UPPER_WIDTH_TOLERANCE, get_best_orientation)
 from .board_selection_algorithm import (TAG_CUT_PREMISE, TAG_LENGTH_FILL,
                                         TAG_WIDTH_FILL)
 from .board_selection_service import Palette, ProductSize, SelectedBoard
@@ -38,9 +38,19 @@ def get_effective_tag(
     """VBA `GetEffectiveTag` の移植。
 
     タグが設定されていればそのまま返す。未設定の場合は短辺100mm以下かつ
-    index>0 のときだけ推測し、主ボード(index=0)が幅をカバー済み(±3mm)なら
-    "丈補填"、幅不足なら "幅補填" とみなす。
-    (保存済みパターンの読込等でタグが失われた場合の復元用)
+    index>0 のときだけ推測する(手動追加だけで配置したとき等)。
+
+    **判定は選定ロジックと同じ許容値で行う。**
+
+        上用 … `SelectUpperBoards` は 製品幅-主ボード幅 が
+               `UPPER_WIDTH_TOLERANCE`(80mm)以内なら幅補填しない
+        下用 … `RunWidthFillPhase` は 製品幅-主ボード幅 が
+               `PASS1_TOLERANCE`(11mm)以内なら幅補填しない
+
+    差が許容以内なら幅は足りている → 残りは "丈補填"。超えていれば
+    "幅補填"。以前は「目標幅と±3mm以内か」で判定していたため、許容内の
+    小さな幅不足でも幅補填と誤判定し、丈方向に置くべき板を幅方向に
+    置いていた(VBA も同じ修正)。
     """
     b = boards[idx]
     tag = b.tag.strip()
@@ -53,7 +63,16 @@ def get_effective_tag(
     main = boards[0]
     main_model = BoardModel(width=main.width, length=main.length, board_category=category)
     _, main_eff_w, _ = get_best_orientation(main_model, limit_w)
-    return TAG_LENGTH_FILL if abs(main_eff_w - limit_w) <= COVERED_TOLERANCE else TAG_WIDTH_FILL
+    # 差は**どちらも製品幅**から取る(VBA `productSize.width - mEW`)。
+    # 下用の選定も製品幅との差で幅補填を決めているため
+    width_gap = ctx.product.width - main_eff_w
+    width_tol = (UPPER_WIDTH_TOLERANCE if category == CATEGORY_UPPER
+                 else PASS1_TOLERANCE)
+    tag = TAG_LENGTH_FILL if width_gap <= width_tol else TAG_WIDTH_FILL
+    log.debug("GetEffectiveTag: %sx%s [%s] 主ボード幅=%s 製品幅=%s 差=%s 許容=%s → %s",
+              b.width, b.length, category, main_eff_w, ctx.product.width,
+              width_gap, width_tol, tag)
+    return tag
 
 
 def count_width_fill_strips(

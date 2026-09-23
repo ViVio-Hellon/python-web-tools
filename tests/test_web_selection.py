@@ -1994,11 +1994,16 @@ class AdminTests(BoardTestCase):
         self.sizes()
         self.assertIn("1100×2000", self.admin()["patterns_note"])
 
-    def test_実績を読み込むと選定に入る(self) -> None:
+    def test_実績を読み込むと保存した画面に戻る(self) -> None:
+        """**計算し直さずに戻す**(VBA `LoadSinglePattern` のスナップショット版)。
+
+        以前は寸法と枚数だけを戻して配置は無し・タグも失われていた。
+        いまは選定リスト(タグ込み)と配置図が、保存したときのまま戻る。
+        """
         self.login()
         self.sizes()
         self.post("/api/selection/boards/auto-select")
-        self.post("/api/selection/boards/place")
+        placed = self.post("/api/selection/boards/place")
         self.post("/api/selection/pattern/save")
         pattern_id = self.admin()["patterns"][0]["id"]
 
@@ -2006,9 +2011,10 @@ class AdminTests(BoardTestCase):
         self.assertEqual(self.get()["boards"]["lower"], [])
 
         state = self.post("/api/selection/pattern/load", {"id": pattern_id})
-        self.assertTrue(state["boards"]["lower"])
-        # 読み込んだ直後は配置していない(タグも保存されていない)
-        self.assertFalse(state["plans"]["placed"])
+        self.assertEqual(state["boards"], placed["boards"])
+        self.assertTrue(state["plans"]["placed"])
+        self.assertEqual(state["plans"], placed["plans"])
+        self.assertIn("配置方式: 通常", state["message"])
 
     def test_無いパターンは422(self) -> None:
         self.sizes()
@@ -2843,3 +2849,156 @@ class ManualAddPlacementTests(SelectionWebTestCase):
 
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
+
+
+# ==================================================================
+# 実績(スナップショット) ── VBA `btnSavePattern_Click` / `LoadSinglePattern`
+# ==================================================================
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class SnapshotTests(AdminTests):
+    """配置を承認した画面の状態を**そのまま**保存し、計算し直さずに戻す。"""
+
+    def placed(self) -> dict:
+        self.login()
+        self.sizes()
+        self.post("/api/selection/boards/auto-select")
+        return self.post("/api/selection/boards/place")
+
+    def header(self) -> dict:
+        from packaging_tool import config
+        row = self.conn.execute(
+            f'SELECT * FROM "{config.TBL_PT_HEADER}" ORDER BY 実績ID DESC').fetchone()
+        return dict(row)
+
+    def test_ボード配置は配置方式_通常(self) -> None:
+        self.placed()
+        self.assertEqual(self.session().placement_method, "通常")
+        self.post("/api/selection/pattern/save")
+        self.assertEqual(self.header()["配置方式"], "通常")
+
+    def test_保存の前に訊く文をサーバが渡す(self) -> None:
+        self.placed()
+        confirm = self.admin()["save_confirm"]
+        self.assertIn("実績を保存", confirm["title"])
+        self.assertIn("パレット: 1100 × 2000", confirm["body"])
+        self.assertIn("配置方式: 通常", confirm["body"])
+
+    def test_配置のあとで変わっていたら保存しない(self) -> None:
+        """VBA:「配置後にパレット・製品サイズまたはボードが変更されています」。"""
+        self.placed()
+        # 配置を捨てずに中身だけ変わった(画面の外から変わった)ことにする
+        self.session().selected.lower[0].count += 1
+        self.assertIn("配置後に", self.admin()["save_why"])
+        self.assertEqual(self.admin()["save_confirm"], {})
+        body = self.post("/api/selection/pattern/save", expect=422)
+        self.assertIn("配置し直して", body["message"])
+
+    def test_ヘッダに画面の状態が入る(self) -> None:
+        from packaging_tool import user_settings
+        from unittest import mock
+        self.placed()
+        self.session().selected_angles = [1550, 1600]
+        with mock.patch.object(user_settings, "get_position", return_value="A"):
+            self.post("/api/selection/pattern/save")
+        h = self.header()
+        self.assertEqual((h["パレット幅"], h["パレット丈"], h["製品幅"], h["製品丈"]),
+                         (1100, 2000, 1000, 1800))
+        self.assertEqual(h["アングル"], "1550,1600")
+        self.assertEqual(h["拠点"], "A")
+        self.assertEqual(h["ボード種別"], self.session().board_type)
+
+    def test_読込は計算し直さない(self) -> None:
+        """保存したあとで配置の計算が変わっても、保存した座標のまま戻る。"""
+        from packaging_tool import placement_algorithm as place
+        from unittest import mock
+        placed = self.placed()
+        self.post("/api/selection/pattern/save")
+        pid = self.admin()["patterns"][0]["id"]
+        self.post("/api/selection/boards/clear")
+        with mock.patch.object(place, "auto_place_boards",
+                               side_effect=AssertionError("計算し直しています")):
+            state = self.post("/api/selection/pattern/load", {"id": pid})
+        self.assertEqual(state["plans"], placed["plans"])
+
+    def test_ロットと食い違えば知らせる_上書きはしない(self) -> None:
+        self.placed()
+        session = self.session()
+        session.presenter.last_hosozai = "ポリ"
+        self.post("/api/selection/pattern/save")
+        pid = self.admin()["patterns"][0]["id"]
+        session.presenter.last_hosozai = "紙"
+        state = self.post("/api/selection/pattern/load", {"id": pid})
+        self.assertIn("保護材が異なります(保存時: ポリ / 現在: 紙)",
+                      " ".join(state.get("notes", [])))
+        self.assertEqual(session.presenter.last_hosozai, "紙")
+
+    def test_別の寸法のパレット行は手放す(self) -> None:
+        """古い行のままだと、別のパレットの発注コードで倉庫へ送れてしまう。"""
+        from packaging_tool import config
+        self.placed()
+        self.post("/api/selection/pattern/save")
+        pid = self.admin()["patterns"][0]["id"]
+        self.conn.execute(f'UPDATE "{config.TBL_PT_HEADER}" SET パレット幅=1200')
+        session = self.session()
+        session.pallet_row = mock_row(1100, 2000)
+        self.post("/api/selection/pattern/load", {"id": pid})
+        self.assertIsNone(session.pallet_row)
+
+    def test_読み込んだ実績は配置し直しても狭幅の前提を引き継ぐ(self) -> None:
+        from packaging_tool import config
+        self.placed()
+        self.post("/api/selection/pattern/save")
+        pid = self.admin()["patterns"][0]["id"]
+        self.conn.execute(f'UPDATE "{config.TBL_PT_HEADER}" SET 狭幅下=1')
+        self.post("/api/selection/pattern/load", {"id": pid})
+        self.assertEqual(self.session().narrow_flags(), (True, False))
+        # 手で足すと前提は捨てる(自動選定の結果と同じ扱い)
+        self.post("/api/selection/boards/add",
+                  {"category": "lower", "width": 500, "length": 1000, "count": 1})
+        self.assertIsNone(self.session().restored)
+
+    def test_カットは保存した値で切断依頼書に出る(self) -> None:
+        self.placed()
+        session = self.session()
+        session.select_result.cut_info["500x1000"] = 450
+        self.post("/api/selection/pattern/save")
+        pid = self.admin()["patterns"][0]["id"]
+        self.post("/api/selection/boards/clear")
+        self.post("/api/selection/pattern/load", {"id": pid})
+        self.assertEqual(session.cut_dicts()[0].get("500x1000"), 450)
+
+    def test_保存_読込_削除は共有へ裏で送る(self) -> None:
+        """送れなくても画面は止めない。送る入口は発注・受払と同じ。
+
+        読込も送る ── 使用回数(+1)を共有へ足すため(VBA は共有を直接 +1)。
+        """
+        from unittest import mock
+        self.placed()
+        with mock.patch("packaging_tool.data_sync.write_back_in_background") as sent:
+            self.post("/api/selection/pattern/save")
+            pid = self.admin()["patterns"][0]["id"]
+            self.post("/api/selection/pattern/load", {"id": pid})
+            self.post("/api/selection/pattern/delete", {"id": pid})
+        self.assertEqual(sent.call_count, 3)
+
+
+def mock_row(width: int, length: int):
+    from types import SimpleNamespace
+    return SimpleNamespace(width=width, length=length, code="X", unit="枚")
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class SnapshotTilingTests(ChangeCandidateTests):
+    def test_候補変更は配置方式_別案(self) -> None:
+        from packaging_tool import config
+        self.post("/api/selection/auth", {"password": config.ADMIN_PASSWORD})
+        self.sizes()
+        self.change()
+        self.assertEqual(self.session().placement_method, "別案A")
+        self.post("/api/selection/pattern/save")
+        row = self.conn.execute(
+            f'SELECT 配置方式 FROM "{config.TBL_PT_HEADER}"').fetchone()
+        self.assertEqual(row[0], "別案A")
+        # 次の軸へ(同じ内容の軸は飛ばすので B とは限らない)
+        self.change()
+        self.assertIn(self.session().placement_method, ("別案B", "別案C"))

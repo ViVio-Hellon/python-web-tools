@@ -181,6 +181,10 @@ def _migrate_after_schema(conn: sqlite3.Connection) -> None:
     """`schema.sql` を当てたあとに片付けること。"""
     _move_old_board_usage(conn)
     _add_order_mark_columns(conn)
+    # 実績(スナップショット)の表。名前が `config.TBL_PT_*` の仮の値なので、
+    # schema.sql に書かずに定数から作る(名前を直すのが1か所で済む)
+    from . import pattern_store
+    pattern_store.ensure_tables(conn)
 
 
 # 発注テーブルにあとから足した列。`CREATE TABLE IF NOT EXISTS` は

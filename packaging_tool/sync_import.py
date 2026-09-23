@@ -203,6 +203,20 @@ def import_tables(
     return result
 
 
+def _import_patterns(conn: sqlite3.Connection, path: Path,
+                     result: ImportResult) -> None:
+    """実績を取り込む。取り込み元に表がまだ無いのは失敗ではない。"""
+    from . import pattern_sync
+    outcome = pattern_sync.import_from(conn, path)
+    if outcome.error:
+        result.errors.append(f"{config.TBL_PT_HEADER}: {outcome.error}")
+    elif outcome.skipped_reason:
+        result.errors.append(
+            f"{config.TBL_PT_HEADER}: 取り込みを見送りました({outcome.skipped_reason})")
+    elif not outcome.missing:
+        result.imported[config.TBL_PT_HEADER] = outcome.imported
+
+
 def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
                   *, kanban_path: Optional[Path] = None,
                   threshold_path: Optional[Path] = None,
@@ -311,6 +325,11 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
             blank_is_missing=import_specs.BLANK_IS_MISSING,
             fallbacks=import_specs.NULL_FALLBACKS, result=result,
             progress=progress, progress_range=(split2_pct, end_pct))
+
+    # 実績(ヘッダ+明細)は専用の取り込み(`pattern_sync`)。送れていない
+    # ものが残っていれば、上の関門と同じく入れ替えない
+    if config.TBL_PT_HEADER not in unsent:
+        _import_patterns(conn, path, result)
 
     # **取り込んだ行は、取り込み元から来た行。** 送り返す必要はない。
     #

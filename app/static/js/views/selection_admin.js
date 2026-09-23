@@ -12,9 +12,12 @@ const el = {};
 let send = null;
 let showAsk = null;   // 取り返しのつかない操作の前に訊く
 let why = null;
+// 保存の前に訊く文。**文はサーバが持つ**(`admin.save_confirm`)
+let saveConfirm = null;
 
 export function render(admin) {
   if (!admin) return;
+  saveConfirm = admin.save_confirm || null;
 
   el.adminState.textContent = admin.authenticated ? "認証済み" : "未認証";
   // 認証が通っていれば、置き場所を案内する文はもう要らない
@@ -41,6 +44,15 @@ export function render(admin) {
     count.textContent = p.usage_count;
     const at = document.createElement("td");
     at.textContent = p.registered_at;
+    // まだ共有(取り込み元)へ届いていない実績。**ほかの端末からは
+    // まだ見えない**ことを、保存した人が分かるようにする
+    if (p.unsent) {
+      const mark = document.createElement("span");
+      mark.className = "st";
+      mark.textContent = " この端末だけ";
+      mark.title = "共有(取り込み元)へまだ送れていません。送れるとほかの端末からも見えます";
+      at.appendChild(mark);
+    }
 
     const cell = document.createElement("td");
     const button = document.createElement("button");
@@ -96,8 +108,21 @@ export function mount(api) {
   // --- 管理者 -------------------------------------------------------
   // 認証の入力欄は「設定」画面に移した。ここは結果を
   // 映すだけ(プロセスに1つの状態なので、どちらで通しても同じ)
-  el.savePattern.addEventListener("click", () =>
-    send("/api/selection/pattern/save"));
+  // 保存の前に、何を保存するのかを見せて訊く(VBA の確認 MsgBox)
+  el.savePattern.addEventListener("click", () => {
+    if (!saveConfirm || !saveConfirm.title) {
+      send("/api/selection/pattern/save");  // 断りの理由はサーバが返す
+      return;
+    }
+    showAsk({
+      title: saveConfirm.title,
+      body: saveConfirm.body,
+      choices: [{ key: "cancel", label: "やめる" },
+                { key: "save", label: "保存する" }],
+    }, (key) => {
+      if (key === "save") send("/api/selection/pattern/save");
+    });
+  });
   el.patternRows.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-pattern]");
     if (button) {
@@ -109,7 +134,7 @@ export function mount(api) {
     const del = event.target.closest("button[data-delete-pattern]");
     if (!del) return;
     showAsk({
-      title: "この実績パターンを削除しますか？",
+      title: "この実績を削除しますか？",
       body: `${del.dataset.label}\n削除すると元に戻せません。`,
       choices: [{ key: "cancel", label: "やめる" },
                 { key: "delete", label: "削除する", note: "元に戻せません" }],

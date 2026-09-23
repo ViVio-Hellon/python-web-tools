@@ -770,6 +770,10 @@ class PatternRow:
     registered_at: str = ""
     usage_count: int = 0
     boards: str = ""
+    # 配置方式(通常 / 別案A〜C)。VBA の一覧に足された列
+    method: str = ""
+    # まだ取り込み元へ届いていない(この端末でしか見えない)
+    unsent: bool = False
 
 
 @dataclass
@@ -799,6 +803,8 @@ class AdminViewModel:
     authenticated: bool = False
     can_save: bool = False
     save_why: str = ""
+    # 保存の前に訊く文(VBA の確認 MsgBox)。**文はサーバが持つ**
+    save_confirm: dict[str, str] = field(default_factory=dict)
     patterns: list[PatternRow] = field(default_factory=list)
     patterns_note: str = ""
     usage: list[BoardUsageRow] = field(default_factory=list)
@@ -1199,12 +1205,11 @@ def build_admin(session: Any) -> AdminViewModel:
     """管理者エリア。**パスワードは1文字も渡さない**(設計書 §3.6)。"""
     view = AdminViewModel(authenticated=session.admin)
 
-    # 保存は「認証してある」かつ「配置してある」とき(VBA と同じ2条件)
-    if not session.admin:
-        view.save_why = "管理者認証が必要です。"
-    elif session.placement is None or not session.placement.placed:
-        view.save_why = "先に配置を実行してください。"
+    # 保存は「認証してある」「配置してある」「配置のあとで変えていない」とき
+    # (VBA `btnSavePattern_Click`。判断は `session.save_refusal` の1か所)
+    view.save_why = session.save_refusal()
     view.can_save = not view.save_why
+    view.save_confirm = session.save_confirm()
 
     from .. import board_usage
     view.usage = [
@@ -1222,7 +1227,7 @@ def build_admin(session: Any) -> AdminViewModel:
                    product=(f"{p.product_width}×{p.product_length}"
                             if p.product_width and p.product_length else "—"),
                    registered_at=p.registered_at, usage_count=p.usage_count,
-                   boards=p.board_summary)
+                   boards=p.board_summary, method=p.method, unsent=p.unsent)
         for p in patterns]
     view.patterns_note = (
         f"{session.palette.width}×{session.palette.length} の実績 "
@@ -1498,10 +1503,8 @@ def build_plans(session: Any) -> PlansViewModel:
     if placement is None:
         return view
 
-    narrow_lower = narrow_upper = False
-    if session.select_result is not None:
-        narrow_lower = session.select_result.lower_result.state.narrow_pallet
-        narrow_upper = session.select_result.upper_result.narrow_pallet
+    # 自動選定の結果、または実績から戻した結果(`session.narrow_flags`)
+    narrow_lower, narrow_upper = session.narrow_flags()
 
     placed = placement.placed
     view.placed = True
@@ -1852,9 +1855,11 @@ def admin_to_dict(view: AdminViewModel) -> dict[str, Any]:
         "authenticated": view.authenticated,
         "can_save": view.can_save,
         "save_why": view.save_why,
+        "save_confirm": view.save_confirm,
         "patterns": [{"id": p.id, "product": p.product,
                       "registered_at": p.registered_at,
-                      "usage_count": p.usage_count, "boards": p.boards}
+                      "usage_count": p.usage_count, "boards": p.boards,
+                      "method": p.method, "unsent": p.unsent}
                      for p in view.patterns],
         "patterns_note": view.patterns_note,
         "usage": [{"width": u.width, "length": u.length, "board_type": u.board_type,

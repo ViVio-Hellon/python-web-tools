@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 from .logging_utils import get_logger
 
@@ -802,6 +802,59 @@ class SourceConnection:
         return self.execute(
             f"DELETE FROM {quote_identifier(table)} WHERE {conds}",
             list(where.values()))
+
+
+
+    @contextmanager
+    def transaction(self) -> Iterator["SourceTransaction"]:
+        """まとめて確定する。途中で失敗したら**全部戻す**。
+
+        書き込みの鍵は最初に取る(`BEGIN IMMEDIATE`)── 読んでから書く間に
+        別の端末が割り込むと、送り済みかどうかの確かめが古くなる。
+        """
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.Error as exc:
+            raise SourceError(str(exc)) from exc
+        try:
+            yield SourceTransaction(self._conn)
+            self._conn.commit()
+        except sqlite3.Error as exc:
+            self._conn.rollback()
+            raise SourceError(str(exc)) from exc
+        except BaseException:
+            self._conn.rollback()
+            raise
+
+
+class SourceTransaction:
+    """`SourceConnection.transaction()` の中で使う手。**途中で確定しない。**
+
+    `SourceConnection.execute` は1文ごとに確定するので、ヘッダと明細を
+    まとめて足す(片方だけ残してはいけない)ときはこちらを使う。
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def query(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
+        cursor = self._conn.execute(sql, tuple(params))
+        names = [d[0] for d in cursor.description or []]
+        return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+    def execute(self, sql: str, params: Iterable[Any] = ()) -> int:
+        return self._conn.execute(sql, tuple(params)).rowcount
+
+    def insert(self, table: str, values: dict[str, Any]) -> int:
+        """1行足して、**付いた番号(rowid)**を返す。"""
+        if not values:
+            raise SourceError("入れる値がありません。")
+        cols = ", ".join(quote_identifier(k) for k in values)
+        marks = ", ".join("?" for _ in values)
+        cursor = self._conn.execute(
+            f"INSERT INTO {quote_identifier(table)} ({cols}) VALUES ({marks})",
+            list(values.values()))
+        return int(cursor.lastrowid or 0)
 
 
 def connect(path: Path) -> SourceConnection:

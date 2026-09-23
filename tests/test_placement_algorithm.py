@@ -413,6 +413,79 @@ class GetEffectiveTagTests(unittest.TestCase):
         self.assertEqual(pl.get_effective_tag(boards, 1, LOWER, ctx), "幅補填")
 
 
+class GetEffectiveTagToleranceTests(unittest.TestCase):
+    """**選定ロジックと同じ許容値で推し量る**(VBA の修正を移植)。
+
+    上用: 製品幅-主ボード幅 が 80mm(`UPPER_WIDTH_TOLERANCE`)以内なら幅補填しない
+    下用: 製品幅-主ボード幅 が 11mm(`PASS1_TOLERANCE`)以内なら幅補填しない
+
+    以前は「目標幅と±3mm以内か」で見ていたので、許容内の小さな幅不足でも
+    幅補填と誤判定し、丈方向に置くべき板を幅方向に置いていた。
+    """
+
+    def tag(self, category, main_w, fill=(100, 2000), prod_w=1122):
+        ctx = make_ctx(pal_w=1150, prod_w=prod_w)
+        boards = [SelectedBoard(main_w, 2400, 1, ""),
+                  SelectedBoard(fill[0], fill[1], 1, "")]
+        return pl.get_effective_tag(boards, 1, category, ctx)
+
+    def test_下用_許容内の幅不足は丈補填(self):
+        """製品幅1122-主1115=7 ≦ 11。以前は |1115-1150|=35 > 3 で幅補填だった。"""
+        self.assertEqual(self.tag(LOWER, 1115), "丈補填")
+
+    def test_下用_許容ちょうどは丈補填(self):
+        self.assertEqual(self.tag(LOWER, 1111), "丈補填")
+
+    def test_下用_許容を超えたら幅補填(self):
+        self.assertEqual(self.tag(LOWER, 1110), "幅補填")
+
+    def test_上用_80mm以内の不足は丈補填(self):
+        """製品幅1122-主1060=62 ≦ 80。以前は幅補填だった。"""
+        self.assertEqual(self.tag(UPPER, 1060), "丈補填")
+
+    def test_上用_80mmちょうどは丈補填(self):
+        self.assertEqual(self.tag(UPPER, 1042), "丈補填")
+
+    def test_上用_80mmを超えたら幅補填(self):
+        self.assertEqual(self.tag(UPPER, 1041), "幅補填")
+
+
+class YStackRescueTests(unittest.TestCase):
+    """手動ボードのY積み救済は**判定後のタグが空で、1パス目**だけ。
+
+    生のタグ(空)で見ていたので、幅補填と判定された板も2パス目で救済の
+    判定に入り、1パス目の古い `eff_l` でY積みに書き換えられることがあった。
+    """
+
+    def test_補填と判定された板は救済にかけない(self):
+        from unittest import mock
+        ctx = make_ctx(pal_w=1150, prod_w=1122)
+        boards = [SelectedBoard(1000, 2502, 1, ""),      # 主(タグ空)
+                  SelectedBoard(50, 2400, 1, "")]        # 1122-1000=122>80 → 幅補填
+        self.assertEqual(pl.get_effective_tag(boards, 1, UPPER, ctx), "幅補填")
+        with mock.patch.object(pl, "_try_convert_to_y_stack",
+                               return_value=False) as rescue:
+            pl.place_boards_from_list(ctx, boards, UPPER)
+        checked = [call.args[1].width for call in rescue.call_args_list]
+        self.assertEqual(checked, [1000], "補填の板まで救済の判定に入っています")
+
+
+class ManualOnlyPlacementTests(unittest.TestCase):
+    """手動追加だけで配置しても止まらない(VBA `btnAutoPlace_Click` の修正)。
+
+    VBA はカット辞書(`mCutInfo`)が未作成のまま丈補填の幅カットを記録
+    しようとして落ちていた。Python版はカット辞書を配置のたびに作るので
+    (`PlacementContext.cut_info`)、ここで起きないことを固定する。
+    """
+
+    def test_丈補填の幅カットを記録できる(self):
+        ctx = pl.auto_place_boards(
+            [SelectedBoard(1150, 2000, 1, ""), SelectedBoard(100, 2500, 1, "丈補填")],
+            [], make_palette(1150, 2650), ProductSize(width=1122, length=2502))
+        self.assertIsInstance(ctx.cut_info, dict)
+        self.assertTrue(ctx.placed)
+
+
 class SortFillBoardsTests(unittest.TestCase):
     def test_width_fills_move_ahead_of_length_fills(self):
         boards = [

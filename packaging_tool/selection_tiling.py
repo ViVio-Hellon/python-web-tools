@@ -23,6 +23,7 @@ from . import placement_algorithm as place
 from . import tiling_algorithm as tiling
 from . import user_log as user_log_mod
 from .logging_utils import get_logger
+from .pattern_store import METHOD_TILING_PREFIX
 from .selection_common import (BoardOpResult, REFUSE_NOT_FOUND,
                                REFUSE_NO_CANDIDATES, log_placed)
 
@@ -323,7 +324,10 @@ class TilingMixin:
         # False に戻す)。敷き詰めは狭幅の専用経路を行構成の数え上げに
         # 吸収しているので、当時の前提を引き継ぐ意味が無い
         self.select_result = None
+        self.restored = None
         self.placement = ctx
+        # 実績保存用: 配置方式「別案A/B/C」と配置時点の内容(VBA `TilePlaceAndDraw`)
+        self.record_placement(f"{METHOD_TILING_PREFIX}{'ABC'[axis]}")
 
         ulog.log(f"[候補変更] 候補{name} に切り替えました", emphasis=True)
         for label, boards in (("上用", self.selected.upper),

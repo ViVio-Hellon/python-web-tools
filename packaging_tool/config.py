@@ -262,6 +262,20 @@ TBL_MATSUZAI_KAKUZAI = "松板角材"
 TABLE_NAME_STATE = "Form状態管理"
 TBL_STOCK_HISTORY = "パレット入出庫履歴"  # UFMAP `TBL_HISTORY` 相当(受入/払出の履歴)
 
+# 実績(スナップショット保存)。VBA `modPatternStore` の TBL_PT_* / PT_FORMAT_VER。
+#
+# **名前は仮です。** 送られてきたVBAに定数の値が入っていなかったので、
+# ここで決めています。VBA側の名前が分かったら**この4行と PT_FORMAT_VER
+# だけ**直せば、手元・取り込み元・書き戻しがそろって追従します
+# (表の名前を他の場所に書かないこと)。手元の表は `schema.sql` ではなく
+# `pattern_store.ensure_tables` が作るのも同じ理由です。
+TBL_PT_HEADER = "実績ヘッダ"
+TBL_PT_SELECT = "実績選定明細"
+TBL_PT_PLACE = "実績配置明細"
+TBL_PT_CUT = "実績カット明細"
+# 保存形式の版。**形が違う実績は読まない**(一覧にも出さない)
+PT_FORMAT_VER = 1
+
 # 看板(在庫薄警告)テーブル一覧。VBA `BoardKanbanTables()` の移植。
 BOARD_KANBAN_TABLES = (
     "看板_大板小板", "看板_AIM", "看板_HVC", "看板_LVC", "看板_L1", "看板_コイル",

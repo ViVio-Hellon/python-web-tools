@@ -100,6 +100,13 @@ def refresh_orders(conn: sqlite3.Connection,
         result.errors.append(
             f"{table}: まだ取り込み元へ送れていないものがあるため、"
             "取り込みを見送りました")
+    # 実績も取り込み直す。**ほかの端末で保存した実績**が、開き直さなくても
+    # 一覧に出るように(VBA は共有を直接読むので、保存すればすぐ見える)
+    if config.TBL_PT_HEADER not in unsent:
+        from . import pattern_sync
+        outcome = pattern_sync.import_from(conn, path)
+        if outcome.error:
+            result.errors.append(f"{config.TBL_PT_HEADER}: {outcome.error}")
     if not specs:
         return result
 

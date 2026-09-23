@@ -59,7 +59,8 @@ from .selection_common import (  # noqa: F401 - ここから外へも公開す�
     REFUSE_NOT_FOUND, REFUSE_NOT_LISTED, REFUSE_NO_CANDIDATES, TOGGLES,
     log_placed)
 from .selection_angle import AngleMixin
-from .selection_records import RecordsMixin
+from .pattern_store import METHOD_NORMAL
+from .selection_records import RecordsMixin, RestoredFacts
 from .selection_tiling import (  # noqa: F401 - ここから外へも公開する
     TilingMixin, TilingState, tiling_note)
 from .user_log import get_user_log
@@ -127,6 +128,18 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
     # 選定内容や寸法が変わったら捨てる。古い図が残ると、いま選んでいる
     # ボードと画面の図が食い違ったまま発注へ進める
     placement: Optional[place.PlacementContext] = None
+
+    # --- 実績保存 (VBA `mPlacementMethod` / `mPlacedSignature`) ---
+    # 配置方式(通常 / 別案A〜C)と、**配置した時点の内容**。保存するときに
+    # 見比べ、配置のあとでパレット・製品・ボードが変わっていたら止める
+    placement_method: str = ""
+    placed_signature: str = ""
+    # 製品を回転させて載せたか(VBA `mProductRotated`)。実績に残す
+    product_rotated: bool = False
+    # 実績から戻した「選定の結果」(狭幅・プロテック確定値・カット)。
+    # 読込は計算し直さないので、自動選定の結果(`select_result`)の代わりに
+    # これを見る。**`select_result` を入れ替える・捨てるときは一緒に捨てる**
+    restored: Optional[RestoredFacts] = None
 
     # --- ボード使用実績 (VBAには無い機能) ---
     # 「使用する」で記録した配置の見分け。**同じ配置を二度積まない**
@@ -287,6 +300,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                 f"[製品サイズ確定] 断りました: {result.message}")
             return result, False
         self.product = product
+        self.product_rotated = bool(rotated)
         # 回転したかどうかは**現物の載せ方が変わる**ので必ず残す
         self.presenter.user_log.log(
             f"[製品サイズ確定] {product.width} x {product.length}"
@@ -544,6 +558,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             return BoardOpResult(False, f"自動選定エラー: {exc}", REFUSE_FAILED)
 
         self.select_result = result
+        self.restored = None
         self.selected.lower = list(result.lower)
         self.selected.upper = list(result.upper)
         # 現行の選定に戻ったのだから、「候補変更」の回り位置も戻す。
@@ -598,6 +613,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         # 手動追加は自動選定の結果ではないので狭幅フラグを引き継がない
         # (tkinter版 `do_add_board` と同じ)
         self.select_result = None
+        self.restored = None
         self.invalidate_placement()
         label = "上用" if category == CATEGORY_UPPER else "下用"
         # 手で足した1枚も残す。**自動と手動の区別が付かないログは、
@@ -655,13 +671,10 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             return BoardOpResult(False, "先にボードを選定してください。",
                                  REFUSE_NO_CANDIDATES)
 
-        narrow_lower = narrow_upper = False
-        protec_result = None
-        if self.select_result is not None:
-            narrow_lower = self.select_result.lower_result.state.narrow_pallet
-            narrow_upper = self.select_result.upper_result.narrow_pallet
-            protec_result = self.select_result.lower_result.protec_result
-        elif self.presenter.protec.is_protec:
+        # 自動選定の結果、または実績から戻した結果(`narrow_flags`)
+        narrow_lower, narrow_upper = self.narrow_flags()
+        protec_result = self.fixed_protec()
+        if protec_result is None and self.presenter.protec.is_protec:
             # 手で増減したあとは `select_result`(ProtecCutResultを含む)を
             # 捨ててあるので、配置直前にここで後付けする(VBA
             # `ApplyProtecRulesToLowerList`)。これをしないと、
@@ -671,8 +684,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             protec_result = alg.apply_protec_rules_to_lower_list(
                 self.selected.lower, self.product, self.palette,
                 is_1p1216=self.presenter.protec.is_1p1216)
-            ulog.log("  ※手で増減したため、狭幅パレットの前提は引き継ぎません")
-        else:
+        if self.select_result is None and self.restored is None:
             # 手で増減したあとは当時の前提を引き継がない。**なぜ配置が
             # 変わったのか**を追えるよう、その事実を残す
             ulog.log("  ※手で増減したため、狭幅パレットの前提は引き継ぎません")
@@ -710,6 +722,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             notes.append(miss.label())
 
         ulog.log(f"ボード配置 完了: {len(placed)}枚", emphasis=True)
+        # 実績保存用: 配置方式と配置時点の内容を控える(VBA `AutoPlaceBoards`)
+        self.record_placement(METHOD_NORMAL)
         if notes and not placed:
             # 1枚も置けていないなら、それは成功ではない
             return BoardOpResult(
@@ -774,6 +788,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         """
         self.selected = svc.SelectedBoards()
         self.select_result = None
+        self.restored = None
         # 「候補変更」の回り位置も戻す。消したあとに押したら**Aから**
         self.tiling = None
         self.invalidate_placement()
@@ -846,6 +861,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self.clear_sizes()
         self.selected = svc.SelectedBoards()
         self.select_result = None
+        self.restored = None
         self.tiling = None
         # 紙面で直した内容も捨てる。**別のロットの帳票に前のロットの
         # 書き込みが残るのがいちばん困る**(担当者名・期日・台数)

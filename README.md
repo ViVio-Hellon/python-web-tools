@@ -1,4 +1,4 @@
-# 梱包資材総合ツール (Python / SQLite版) — VER2.84.1
+# 梱包資材総合ツール (Python / SQLite版) — VER2.85.0
 
 Excel VBA + Access で作られていた梱包資材管理ツールの Python 移植版です。
 画面は **Flask + HTML/CSS/JS**、業務ロジックは Python、データは SQLite。
@@ -502,13 +502,29 @@ VBAはこれを1つのレジストリ値(`GetSetting("梱包資材管理","Confi
 フラグを引き継がないため、通常の配置経路で描画される)。
 選定内容を変更すると配置図は自動的にクリアされ、古い図が残らないようにしている。
 
-#### 実績パターンの保存/読込について
+#### 実績の保存/読込について(スナップショット)
 
-保存されるのは **幅/丈/枚数/用途(下用・上用)** だけで、選定タグ(`[主]`等)は
-保存されない(VBA `SaveNewPattern_v2` と同じ)。そのため読み込んだパターンを
-そのまま配置すると、タグは配置側の `GetEffectiveTag` が推測して補う。
-「保存済みパターンでタグが失われた場合の推測復元」という
-`GetEffectiveTag` の存在理由はここに繋がっている。
+保存するのは**配置を承認した画面の状態そのもの**(VBA `modPatternStore`)。
+ヘッダ(パレット・製品・ボード種別・配置方式・狭幅・保護材・アングル・
+プロテック確定値・LotNo・拠点)と、明細3種(選定リスト**タグ込み**・
+置いたボード1枚ずつの座標・カット)を1組で持つ(`packaging_tool/pattern_store.py`)。
+
+- **読込は計算し直さない。** 保存したときの選定と配置図がそのまま戻る。
+  ロットから決まる状態(プロテックか・保護材)は上書きせず、食い違えば知らせる
+- **配置のあとで変えたら保存しない。** 配置した時点の内容と見比べる
+- 配置方式(通常 / 別案A〜C)も残り、一覧のボード構成に `[通常]` のように出る
+- **全端末で共有する。** 保存・読んだ回数・削除は取り込み元(梱包資材マスタ)へ
+  書き戻し、取り込みで受け取る(`packaging_tool/pattern_sync.py`)。
+  まだ送れていない実績は一覧に「この端末だけ」と出る
+- 表の名前は `config.TBL_PT_*`(**仮の名前**。VBA 側の名前に合わせて直す)
+
+旧版の実績(`PalletPatterns`)は形が違うので一覧には出ない
+(VBA も `PalletHistoryModule_v2` を削除している)。表そのものは画面比較
+(`scripts/compare_ui.py`)の元データとして取り込みを続ける。
+
+タグが空のボード(手動追加だけで配置したとき等)は、配置側の
+`GetEffectiveTag` が推測して補う。推測の基準は**選定ロジックと同じ許容値**
+(上用 80mm / 下用 11mm。製品幅 − 主ボード幅)。
 
 管理者パスワードは `packaging_tool/admin_password.py` が持つ。役目は
 VBA版と同じ**保存ボタンの誤操作を防ぐUIガード**で、誰がその端末を
@@ -893,7 +909,8 @@ packaging_tool/             業務ロジック
   angle_service.py              アングル選定・疲労度計算(旧modAngleSelect)
   material_service.py           保護材選定・看板在庫薄判定
   location_service.py           棚検索・疲労度スコアリング(旧frmLayout)
-  pattern_service.py            実績パターンの保存/読込
+  pattern_store.py              実績(スナップショット)の保存・読込・一覧・削除
+  pattern_sync.py               実績を全端末で共有(取り込み元との行き来)
   special_packaging.py          1P0113 裸梱包・プロテック
   reports.py / printing.py      帳票の中身と、HTML+印刷用CSSでの出力
   floor_plan.py / pallet_map.py / map_data.py  棚配置図・保管位置マップ

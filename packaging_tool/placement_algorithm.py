@@ -263,8 +263,13 @@ def place_boards_from_list(
             if pass_num == 1:
                 rot, eff_w, eff_l = get_best_orientation(model, limit_w - y_off)
 
-            # 手動追加ボード(タグ空)への自動Y積み救済
-            if category == CATEGORY_UPPER and not tag:
+            # 手動追加ボード(タグ空)への自動Y積み救済。
+            # **生のタグではなく判定後のタグ(effective_tag)で見る** ──
+            # 補填と判定された板を横取りしてY積みに書き換えないため。
+            # 判定に使う eff_l は pNum=1 でしか計算しないので pNum=1 に限る
+            # (VBA も同じ修正: `effectiveTag = "" And pNum = 1`)
+            if (category == CATEGORY_UPPER and not effective_tag
+                    and pass_num == 1):
                 if _try_convert_to_y_stack(ctx, model, rot, eff_l):
                     tag = TAG_Y_STACK
 

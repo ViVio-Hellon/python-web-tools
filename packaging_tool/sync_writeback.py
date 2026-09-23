@@ -73,6 +73,12 @@ def _unsent_writeback_tables(conn: sqlite3.Connection) -> dict[str, int]:
     for table, count in outbox_sync.unpushed_mark_tables(
             conn, WRITEBACK_SPECS).items():
         remaining[table] = remaining.get(table, 0) + count
+    # 実績(ヘッダ+明細)は専用の送り方(`pattern_sync`)。まだ送れていない
+    # 実績・読んだ回数・削除も、総入れ替えで消えると取り返せない
+    from . import pattern_sync
+    patterns = pattern_sync.pending_total(conn)
+    if patterns:
+        remaining[config.TBL_PT_HEADER] = patterns
     return remaining
 
 def write_back(conn: sqlite3.Connection,
@@ -100,9 +106,33 @@ def write_back(conn: sqlite3.Connection,
 
     try:
         result = outbox_sync.write_back(conn, source, WRITEBACK_SPECS)
+        _push_patterns(conn, source, result)
     finally:
         source.close()
     return result
+
+
+def _push_patterns(conn: sqlite3.Connection, source: Any,
+                   result: WriteBackResult) -> None:
+    """実績(保存・読んだ回数・削除)も同じ取り込み元へ渡す。
+
+    **発注の書き戻しとは別に失敗させる。** 実績が送れなくても、発注は
+    送れたと数える(逆も同じ)。
+    """
+    from . import pattern_sync
+    try:
+        pushed = pattern_sync.push(conn, source)
+    except Exception as exc:                     # noqa: BLE001 - 発注の結果は残す
+        log.exception("実績の書き戻しで例外")
+        result.errors.append(f"{config.TBL_PT_HEADER}: {exc}")
+        return
+    if pushed.sent:
+        result.sent[config.TBL_PT_HEADER] = pushed.sent
+    # 読んだ回数と削除は「確認・取消の印」とは別物なので、印には数えない
+    if pushed.usage or pushed.deleted:
+        result.sent[f"{config.TBL_PT_HEADER}(使用回数・削除)"] = (
+            pushed.usage + pushed.deleted)
+    result.errors.extend(f"{config.TBL_PT_HEADER}: {e}" for e in pushed.errors)
 
 
 def write_back_in_background(on_done: Optional[Callable[[WriteBackResult], None]] = None) -> None:
