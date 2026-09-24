@@ -51,7 +51,8 @@ class DefaultMapTests(unittest.TestCase):
     def test_the_d_column_is_stacked_vertically(self):
         """D1〜D3は右端に縦積み。横一列のA〜Cとは向きが違う。"""
         ds = [self.plan.position(f"D{i}") for i in range(1, 4)]
-        self.assertEqual(len({d.x for d in ds}), 1)
+        # 現場で手で合わせた配置なので、1pt 程度のずれは同じ列とみなす
+        self.assertLessEqual(max(d.x for d in ds) - min(d.x for d in ds), 2.0)
         self.assertEqual([d.y for d in ds], sorted(d.y for d in ds))
         for d in ds:
             self.assertGreater(d.x, self.plan.position("C7").x)

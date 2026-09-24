@@ -413,7 +413,15 @@ class SearchApiTests(InventoryWebTestCase):
         self.assertEqual(body["found"], 1)
         self.assertEqual(_position_state(body, "A1"), presenter.STATE_ACTIVE)
 
+    def test_出荷時の図には背景写真がある(self) -> None:
+        """現場で仕上げた配置と写真を出荷時の既定にした(VER2.89.0)。"""
+        res = self.client.get("/api/inventory/map/background", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.mimetype, "image/png")
+
     def test_背景が無ければ404(self) -> None:
+        self.post("/api/inventory/map/edit", {"on": True})
+        self.post("/api/inventory/map/background", {"image": ""})
         res = self.client.get("/api/inventory/map/background", headers=self.auth())
         self.assertEqual(res.status_code, 404)
 
@@ -724,11 +732,12 @@ class MapEditTests(InventoryWebTestCase):
 
     def test_背景を出せる(self) -> None:
         """`background.path` を見ていたので、これまで一度も出ていなかった。"""
+        self.edit("edit", {"on": True})
+        self.edit("background", {"image": ""})
         res = self.client.get("/api/inventory/map/background",
                               headers=self.auth())
         self.assertEqual(res.status_code, 404)
 
-        self.edit("edit", {"on": True})
         self.edit("background", {"image": _PNG})
         res = self.client.get("/api/inventory/map/background",
                               headers=self.auth())

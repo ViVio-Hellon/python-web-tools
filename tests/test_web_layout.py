@@ -535,7 +535,13 @@ class BackgroundTests(LayoutWebTestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.mimetype, "image/png")
 
-    def test_設定していなければ404(self) -> None:
+    def test_出荷時の図には背景写真がある(self) -> None:
+        res = self.client.get("/api/layout/map/background", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+
+    def test_外したら404(self) -> None:
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/background", {"image": ""})
         res = self.client.get("/api/layout/map/background", headers=self.auth())
         self.assertEqual(res.status_code, 404)
 

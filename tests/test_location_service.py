@@ -30,8 +30,11 @@ class FloorPlanDataTests(unittest.TestCase):
 
     def test_base_points_match_the_vba_form(self):
         self.assertEqual(set(self.plan.base_point_names), {"L1", "HVC", "LVC"})
-        l1 = self.plan.base_point("L1")
-        self.assertEqual((l1.x, l1.y), (192.0, 186.0))
+        # 座標は現場で配置編集した値(VER2.89.0 から出荷時の既定)。
+        # 値そのものではなく、図の中にあることを確かめる
+        for name in self.plan.base_point_names:
+            p = self.plan.base_point(name)
+            self.assertTrue(0 <= p.x <= self.plan.width and 0 <= p.y <= self.plan.height, name)
 
     def test_every_lblitem_is_present(self):
         names = set(self.plan.item_names)
@@ -41,9 +44,11 @@ class FloorPlanDataTests(unittest.TestCase):
 
     def test_distance_uses_left_top_like_vba(self):
         """VBA CalcDistance は中心ではなく Left/Top の差で測る。"""
-        # lblItem1 (156,162) と L1 (192,186) → dx=-36 dy=-24
+        item, base = self.plan.item("lblItem1"), self.plan.base_point("L1")
+        self.assertNotEqual((item.w, item.h), (base.w, base.h))   # 中心で測ると違う値になる
         self.assertAlmostEqual(self.plan.distance("lblItem1", "L1"),
-                               (36 ** 2 + 24 ** 2) ** 0.5, places=3)
+                               ((item.x - base.x) ** 2 + (item.y - base.y) ** 2) ** 0.5,
+                               places=3)
 
     def test_unknown_names_give_none(self):
         self.assertIsNone(self.plan.distance("lblItemX", "L1"))
@@ -76,7 +81,8 @@ class EditingTests(unittest.TestCase):
 
     def test_moving_a_label_changes_the_distance(self):
         before = self.plan.distance("lblItem1", "L1")
-        self.plan.move_item("lblItem1", 192.0, 186.0)   # 拠点と同じ位置へ
+        base = self.plan.base_point("L1")
+        self.plan.move_item("lblItem1", base.x, base.y)   # 拠点と同じ位置へ
         self.assertEqual(self.plan.distance("lblItem1", "L1"), 0.0)
         self.assertNotEqual(before, 0.0)
 
