@@ -507,6 +507,23 @@ export function start(state, jobState, masterFrame) {
     }
   });
 
+  // 動作(拠点・起動時の自動取り込み・図面URL)。**押しても何も起きなかった**
+  // (押したときの処理がどこにも無かった)。置き場所と同じく、この面の3つだけを送る
+  el.saveBehavior.addEventListener("click", async () => {
+    const body = {
+      auto_import: el.autoImport.checked,
+      spec_sheet_url: el.specUrl.value,
+    };
+    // 拠点は選んだときだけ。「未登録」のまま送ると断られ、ほかの2つも保存されない
+    if (el.position.value) body.position = el.position.value;
+    try {
+      renderStatus(await api.post("/api/settings/save", body));
+      toast("動作の設定を保存しました", "ok");
+    } catch (err) {
+      toastError(err);
+    }
+  });
+
   startAdminPassword();
   startDistribution();
   startMasterAuth();

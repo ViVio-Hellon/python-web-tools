@@ -1828,3 +1828,43 @@ class TableBringAccessTests(TableBringTests):
             content_type="multipart/form-data")
         self.assertEqual(res.status_code, 400)
         self.assertIn("落としてください", res.get_json()["error"]["message"])
+
+
+class BehaviorSaveTests(DataWebTestCase):
+    """「動作の設定を保存」。**押しても何も起きなかった**(押したときの処理が無かった)。
+
+    配った先の端末は拠点を1台ずつ決める(配布設定に入れない項目)ので、ここが
+    動かないと配ったあとに困る。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from packaging_tool import user_settings
+        saved = {k: user_settings.get(k) for k in
+                 (user_settings.KEY_POSITION, config.KEY_SPEC_SHEET_URL)}
+        self.addCleanup(lambda: [user_settings.save(k, v if v is not None else "")
+                                 for k, v in saved.items()])
+
+    def test_ボタンに保存の処理がある(self) -> None:
+        js = (Path(__file__).resolve().parent.parent / "app" / "static" / "js"
+              / "views" / "settings.js").read_text(encoding="utf-8")
+        head = js[js.index("el.saveBehavior.addEventListener"):]
+        body = head[:head.index("});")]
+        self.assertIn("/api/settings/save", body)
+        for key in ("auto_import", "spec_sheet_url", "position"):
+            self.assertIn(key, body)
+
+    def test_拠点が未登録なら未登録と出す(self) -> None:
+        from packaging_tool import user_settings
+        user_settings.save(user_settings.KEY_POSITION, "")
+        state = self.client.get("/api/settings/state", headers=self.auth()).get_json()
+        self.assertEqual(state["position"], "")
+        html = self.client.get("/settings").get_data(as_text=True)
+        self.assertIn('<option value="" selected>未登録</option>', html)
+
+    def test_拠点を選ばずに保存してもほかは保存される(self) -> None:
+        res = self.client.post("/api/settings/save", headers=self.auth(),
+                               json={"auto_import": True,
+                                     "spec_sheet_url": "http://x/{no}"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()["spec_sheet_url"], "http://x/{no}")

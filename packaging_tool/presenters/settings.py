@@ -249,7 +249,9 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
         path_base=str(config.BASE_DIR),
         auto_import=bool(user_settings.get(config.KEY_AUTO_IMPORT,
                                            config.AUTO_IMPORT_DEFAULT)),
-        position=user_settings.get_position(),
+        # 未登録なら空(画面は「未登録」を出す)。既定の L1 を出すと、登録
+        # していないのに L1 に決まっているように見える(配った直後の端末がこれ)
+        position=str(user_settings.get(user_settings.KEY_POSITION) or ""),
         positions=list(floor_plan.base_points()),
         spec_sheet_url=spec_sheet.url_template(),
         spec_sheet_problem=spec_sheet.template_problem(spec_sheet.url_template()),

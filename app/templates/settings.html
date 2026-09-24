@@ -391,6 +391,7 @@
       <div class="field">
         <label for="position">拠点</label>
         <select class="input" id="position" style="width:8em">
+          {% if not view.position %}<option value="" selected>未登録</option>{% endif %}
           {% for name in view.positions %}
           <option value="{{ name }}" {% if name == view.position %}selected{% endif %}>{{ name }}</option>
           {% endfor %}
