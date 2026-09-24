@@ -71,6 +71,7 @@ class Candidate:
     rows: int = 0
     columns: list[str] = field(default_factory=list)
     exists: bool = False          # 梱包資材マスタにもう同じ名前の表がある
+    suspect: int = 0              # 文字化けの疑いがある行(置き換え文字 U+FFFD を含む)
 
     @property
     def can_bring(self) -> bool:
@@ -256,6 +257,27 @@ def _readable(src: Path) -> tuple[Path, str]:
     return src, ""
 
 
+def _suspect_rows(path: Path, table: str, columns: list[str]) -> int:
+    """文字化けの疑いがある行の数。**置き換え文字(U+FFFD)を含む行**を数える。
+
+    読み取りが access_parser のとき、まれに1行まるごと読み違えることがある
+    (実物の梱包資材マスタ.accdb で PalletMaster 4,133行中1行。幅 1310 が
+    「131」、丈 1800 が「Ｐㇾ〸」になった)。読み違えた欄には置き換え文字が
+    混ざるので、それを目印にする。pyodbc で読んだ場合は起きない。
+    """
+    if not columns:
+        return 0
+    cond = " OR ".join(f"instr(CAST({source_db.quote_identifier(c)} AS TEXT),"
+                       " char(65533)) > 0" for c in columns)
+    try:
+        rows = source_db.read_query(
+            path, f"SELECT COUNT(*) AS n FROM {source_db.quote_identifier(table)}"
+                  f" WHERE {cond}")
+    except (source_db.SourceError, sqlite3.Error):
+        return 0
+    return int(rows[0]["n"]) if rows else 0
+
+
 def _dest() -> Optional[Path]:
     return sync_sources.find_material_db()
 
@@ -306,9 +328,13 @@ def plan(source_path: str) -> Plan:
     internal = [n for n in names if is_access_internal(n)]
     names = [n for n in names if not is_access_internal(n)]
     for name in names:
+        columns = source_db.columns(readable, name)
+        exists = name in existing
         out.candidates.append(Candidate(
-            name=name, rows=max(counts.get(name, 0), 0),
-            columns=source_db.columns(readable, name), exists=name in existing))
+            name=name, rows=max(counts.get(name, 0), 0), columns=columns,
+            exists=exists,
+            # 持ってこられる表だけ調べる(もうある表は持ってこないので)
+            suspect=0 if exists else _suspect_rows(readable, name, columns)))
     out.ok = True
     new = len(out.new_tables)
     out.message = (f"{len(names)}表のうち、梱包資材マスタに無い表が {new} 個あります。"
@@ -316,6 +342,15 @@ def plan(source_path: str) -> Plan:
                    f"{len(names)}表とも、梱包資材マスタにもうあります。持ってくる表はありません。")
     if internal:
         out.message += f"(Access の内部の表 {len(internal)} 個は出していません)"
+    suspects = [c for c in out.new_tables if c.suspect]
+    if suspects:
+        out.message += (" ⚠ 文字化けの疑いがある行があります: "
+                        + "、".join(f"{c.name} {c.suspect}行" for c in suspects)
+                        + "。持ってくる前に Access の中身と見比べてください。")
+    if "access_parser" in engine:
+        # 予備の読み方。まれに行を読み違える(上の `_suspect_rows`)
+        out.converted += (" ※ 予備の読み方(access_parser)で読みました。まれに行を"
+                          "読み違えます。Access のドライバ(pyodbc)が使えるPCなら正確です")
     return out
 
 
@@ -444,7 +479,9 @@ def plan_dict(p: Plan) -> dict[str, Any]:
     return {
         "source": p.source, "dest": p.dest, "ok": p.ok, "message": p.message,
         "converted": p.converted, "converter": p.converter,
+        # 持ってこられる表に文字化けの疑いがある(画面は注意の色にする)
+        "warn": any(c.suspect for c in p.new_tables),
         "access": is_access(Path(p.source)) if p.source else False,
         "tables": [{"name": c.name, "rows": c.rows, "columns": c.columns,
-                    "exists": c.exists} for c in p.candidates],
+                    "exists": c.exists, "suspect": c.suspect} for c in p.candidates],
     }

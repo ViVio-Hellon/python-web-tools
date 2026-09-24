@@ -781,7 +781,7 @@ function renderBring(plan) {
   bring.converted.textContent = plan.converted || "";
   bring.note.hidden = !plan.message;
   bring.note.textContent = plan.message || "";
-  bring.note.className = `status status--${plan.ok ? "ok" : "ng"}`;
+  bring.note.className = `status status--${!plan.ok ? "ng" : plan.warn ? "warn" : "ok"}`;
   const rows = (plan.tables || []).map((t) => {
     const tr = document.createElement("tr");
     const pick = document.createElement("td");
@@ -793,7 +793,8 @@ function renderBring(plan) {
       const box = document.createElement("input");
       box.type = "checkbox";
       box.value = t.name;
-      box.checked = true;
+      // 文字化けの疑いがある表は、見比べてから自分で選んでもらう
+      box.checked = !t.suspect;
       box.addEventListener("change", updateBringRun);
       pick.appendChild(box);
     }
@@ -802,6 +803,13 @@ function renderBring(plan) {
     const count = document.createElement("td");
     count.className = "num";
     count.textContent = t.rows.toLocaleString();
+    if (t.suspect) {
+      // 文字化けの疑い。記号と言葉で出す(色だけに頼らない)
+      const warn = document.createElement("div");
+      warn.className = "why";
+      warn.textContent = `⚠ 化けの疑い ${t.suspect}行`;
+      count.appendChild(warn);
+    }
     const cols = document.createElement("td");
     cols.className = "why";
     cols.textContent = t.columns.join(", ");

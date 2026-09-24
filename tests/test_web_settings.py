@@ -1603,10 +1603,15 @@ def read_source(src, prefer="auto"):
     # 呼ばれた回数を数える(同じ Access を2回変換しないことを確かめる)
     with open(os.path.join(os.path.dirname(__file__), "calls.txt"), "a") as fh:
         fh.write("1")
+    desc = ("Access (access_parser (pure python))" if "予備" in os.path.basename(src)
+            else "Access (fake)")
     return ([{"name": "新しい表", "columns": ["ID", "名前"], "rows": [(1, "あ"), (2, "い")]},
              {"name": "BoardMaster", "columns": ["ボード幅"], "rows": [(9,)]},
-             {"name": "MSysObjects", "columns": ["Id"], "rows": [(1,)]}],
-            "Access (fake)")
+             {"name": "MSysObjects", "columns": ["Id"], "rows": [(1,)]},
+             # 実物で起きた読み違え(幅 1310 → 131、丈 1800 → 化けた字)
+             {"name": "化けた表", "columns": ["幅", "丈"],
+              "rows": [(1310, "1800"), (131, "Ｐㇾ\ufffd")]}],
+            desc)
 '''
 _FAKE_WRITERS = '''
 import sqlite3
@@ -1678,6 +1683,26 @@ class TableBringAccessTests(TableBringTests):
         self.session.admin = True
         body = self.bring(["MSysObjects"], expect=400)
         self.assertIn("内部の表は持ってきません", body["error"]["message"])
+
+    def test_文字化けの疑いがある行を数える(self) -> None:
+        """access_parser で読むと、まれに1行まるごと読み違える(実物の
+        梱包資材マスタ.accdb で PalletMaster 4,133行中1行)。読み違えた欄には
+        置き換え文字が混ざるので、それを数えて持ってくる前に知らせる。"""
+        plan = self.plan()
+        by_name = {t["name"]: t for t in plan["tables"]}
+        self.assertEqual(by_name["化けた表"]["suspect"], 1)
+        self.assertEqual(by_name["新しい表"]["suspect"], 0)
+        self.assertIn("文字化けの疑いがある行があります: 化けた表 1行", plan["message"])
+        self.assertTrue(plan["warn"])
+        self.assertNotIn("予備の読み方", plan["converted"])
+
+    def test_予備の読み方で読んだら言う(self) -> None:
+        from packaging_tool import table_bring
+        spare = self.dir / "access" / "予備.accdb"
+        spare.write_bytes(b"x")
+        plan = table_bring.plan(str(spare))
+        self.assertTrue(plan.ok)
+        self.assertIn("予備の読み方(access_parser)で読みました", plan.converted)
 
     def test_変換ツールが見つからなければ場所を訊く(self) -> None:
         from packaging_tool import table_bring, user_settings
