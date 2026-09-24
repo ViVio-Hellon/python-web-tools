@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+r"""配布用フォルダを作る
+
+【なぜ要るのか】
+配るときに手でフォルダをコピーすると、**配ってはいけないもの**が紛れます。
+
+    data\packaging_tool.db   … 端末ごとの手元のDB。別の端末のものを配ると、
+                               その端末の「まだ送っていない発注・実績」まで持ち込む
+    data\user_config.json    … その端末の設定(拠点・よく使う条件)
+    tests\ / logs\ / export\ / __pycache__ / .git …
+
+このスクリプトは**配るものだけ**を新しいフォルダへ写します。設定を一緒に
+配りたいときは、先に設定画面の「配布設定」で書き出しておいてください
+(`config\distribution.json`。配った先が起動時に読み込みます)。
+
+    python scripts\make_dist.py                     # ツールの隣に「梱包資材総合ツール_VERx.y.z」
+    python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定
+    python scripts\make_dist.py --zip               # zip も作る
+    python scripts\make_dist.py --no-settings       # 配布設定を入れない
+
+【作ったあとに確かめること】
+できたフォルダの `配布メモ.txt` に、版・入れた配布設定・配った先ですることを
+書いてあります。
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import fnmatch
+import json
+import shutil
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+# 直下で**配るもの**。`tests/test_web_settings.RepoRootTests.ALLOWED` から、
+# 開発にしか使わないもの(tests・.gitignore・.gitattributes)を除いたもの
+INCLUDE: tuple[str, ...] = (
+    "README.md", "requirements.txt",
+    "Start.vbs", "start.bat", "stop.bat",
+    "start_app.py", "server.py", "boot_server.py", "launch_guard.py",
+    "process_manager.py",
+    "app", "config", "docs", "packaging_tool", "scripts",
+)
+
+# 中にあっても写さないもの(名前で見る。フォルダならその下ごと)
+EXCLUDE_NAMES: tuple[str, ...] = (
+    "__pycache__", "*.pyc", "*.pyo", ".pytest_cache", ".coverage", ".coverage.*",
+    "htmlcov", "*.tmp", "*.bak-*", ".DS_Store", "Thumbs.db",
+)
+
+# 配布設定(`packaging_tool/distribution.py` の置き場所と同じ)
+SETTINGS = Path("config") / "distribution.json"
+
+# できたフォルダに**入っていてはいけない**もの(最後に確かめる)
+FORBIDDEN: tuple[str, ...] = (
+    "data/packaging_tool.db", "data/user_config.json", "tests", ".git",
+)
+
+
+def _version() -> str:
+    try:
+        return json.loads((ROOT / "config" / "app.json").read_text(encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError):
+        return "unknown"
+
+
+def _excluded(name: str) -> bool:
+    return any(fnmatch.fnmatch(name, pattern) for pattern in EXCLUDE_NAMES)
+
+
+def _ignore(directory: str, names: list[str]) -> set[str]:
+    return {n for n in names if _excluded(n)}
+
+
+def _inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _settings_lines(path: Path) -> list[str]:
+    """配布設定の中身を、メモと画面に出す形で(パスワードの値は出さない)。"""
+    from packaging_tool import distribution
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return [f"  (読めませんでした: {exc})"]
+    labels = {key: label for key, label, _ in distribution.ITEMS}
+    lines = []
+    for key, value in (data.get("settings") or {}).items():
+        shown = "(設定済み)" if key == "admin_password" else value
+        if isinstance(value, bool):
+            shown = "する" if value else "しない"
+        lines.append(f"  {labels.get(key, key)}: {shown}")
+    for key, label in distribution.MAPS:
+        if key in (data.get("maps") or {}):
+            lines.append(f"  {label}: 入っています")
+    if data.get("created_at"):
+        lines.append(f"  (作成 {data.get('created_at')} / {data.get('created_on', '')})")
+    return lines or ["  (中身がありません)"]
+
+
+def build(out: Path, *, with_settings: bool = True, force: bool = False,
+          make_zip: bool = False) -> tuple[Path, list[str]]:
+    """配布用フォルダを作る。戻り値は (できたフォルダ, 画面に出す行)。
+
+    断るときは `SystemExit`(理由の文つき)。
+    """
+    out = out.resolve()
+    if _inside(out, ROOT):
+        raise SystemExit(f"ツールのフォルダの中には作れません: {out}\n"
+                         "(次に作るとき、前に作ったものまで写してしまいます)")
+    if out.exists() and any(out.iterdir()):
+        if not force:
+            raise SystemExit(f"{out} はもうあって、中身があります。\n"
+                             "別の場所を --out で指定するか、--force で作り直してください。")
+        shutil.rmtree(out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    missing = []
+    for name in INCLUDE:
+        src = ROOT / name
+        if not src.exists():
+            missing.append(name)
+            continue
+        if src.is_dir():
+            shutil.copytree(src, out / name, ignore=_ignore, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, out / name)
+    if missing:
+        raise SystemExit("配るはずのファイルがありません: " + ", ".join(missing))
+
+    # 配布設定: 入れる/入れないを**はっきり決める**(`config` を丸ごと写すと、
+    # 作った人の手元にあるものが黙って入るため)
+    settings_src = ROOT / SETTINGS
+    settings_dst = out / SETTINGS
+    lines = [f"配布用フォルダを作りました: {out}", f"版: VER{_version()}"]
+    if with_settings and settings_src.exists():
+        lines.append("配布設定を入れました(配った先が起動時に読み込みます):")
+        lines += _settings_lines(settings_src)
+    else:
+        settings_dst.unlink(missing_ok=True)
+        lines.append("配布設定は入れていません。配った先で1台ずつ設定画面から"
+                     "取り込み元を設定してください。")
+        if with_settings:
+            lines.append("  (設定画面の「配布設定」で書き出すと、次からは一緒に配れます)")
+
+    # 入っていてはいけないものが無いか、最後に確かめる
+    leaked = [p for p in FORBIDDEN if (out / p).exists()]
+    leaked += [str(p.relative_to(out)) for p in out.rglob("*") if _excluded(p.name)]
+    if leaked:
+        shutil.rmtree(out)
+        raise SystemExit("配ってはいけないものが入ったため、作るのをやめました: "
+                         + ", ".join(sorted(set(leaked))))
+
+    files = sum(1 for p in out.rglob("*") if p.is_file())
+    lines.append(f"ファイル数: {files}")
+    (out / "配布メモ.txt").write_text(_memo(lines), encoding="utf-8-sig")
+
+    if make_zip:
+        archive = shutil.make_archive(str(out), "zip", root_dir=out.parent,
+                                      base_dir=out.name)
+        lines.append(f"zip も作りました: {archive}")
+    return out, lines
+
+
+def _memo(lines: list[str]) -> str:
+    today = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    return "\n".join([
+        f"梱包資材総合ツール 配布メモ({today})",
+        "",
+        *lines,
+        "",
+        "配った先ですること",
+        "  1. このフォルダを好きな場所に置く(以前の版のフォルダに上書きしない)",
+        "  2. Python 3.9 以降と、Flask・waitress が入っているか確かめる",
+        "     (入っていなければ: python -m pip install -r requirements.txt)",
+        "  3. Start.vbs で起動する。配布設定があれば、このとき読み込みます",
+        "  4. 設定画面の「動作」で拠点を選ぶ(拠点はラインごとに違います)",
+        "  5. 以前の版で配置図を編集していたら、古いフォルダの data の中の",
+        "     floor_plan.json / pallet_map.json を新しいフォルダの data へ写す",
+        "",
+        "入れていないもの: data(端末ごとの中身)・tests・logs・export",
+        "",
+    ])
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="配布用フォルダを作る")
+    parser.add_argument("--out", help="作る場所(既定: ツールの隣に「梱包資材総合ツール_VER版」)")
+    parser.add_argument("--no-settings", action="store_true",
+                        help="配布設定(config/distribution.json)を入れない")
+    parser.add_argument("--force", action="store_true",
+                        help="作る場所に中身があれば消して作り直す")
+    parser.add_argument("--zip", action="store_true", help="zip も作る")
+    args = parser.parse_args(argv)
+
+    out = Path(args.out) if args.out else ROOT.parent / f"梱包資材総合ツール_VER{_version()}"
+    try:
+        _out, lines = build(out, with_settings=not args.no_settings,
+                            force=args.force, make_zip=args.zip)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print("\n".join(lines))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
