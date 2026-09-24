@@ -39,6 +39,13 @@ class ImportResult:
     # 失敗ではないが伝えたいこと(任意テーブルが元に無い、など)。
     # `errors` に混ぜると取り込みが「失敗」と出て、直すべき問題が埋もれる
     notes: list[str] = field(default_factory=list)
+    # **取り込んだが、元のファイルに無い列があった**(その列は空で入っている)。
+    # 以前は `errors` に入れていたので、12,509件入ったのに「失敗」「取り込め
+    # ませんでした」と出て、どれが読めていないのか分からなかった(現場の声:
+    # 「どれがよめてねぇの？」)。取り込み自体は済んでいるので失敗にはせず、
+    # 何が空なのかを別の見出しで言う。鍵の列が無いときは取り込まないので、
+    # そちらはこれまでどおり `errors`
+    warnings: list[str] = field(default_factory=list)
     # 取り込み元に無かった任意テーブル。**1行にまとめて言う**ため
     # `notes` とは別に持つ。閾値マスタを足して8表になり、1表1行だと
     # 案内だけで8行になって、本当に直すべき問題が埋もれた
@@ -57,6 +64,7 @@ class ImportResult:
         self.skipped.update(other.skipped)
         self.errors.extend(other.errors)
         self.notes.extend(other.notes)
+        self.warnings.extend(other.warnings)
         self.missing_optional.extend(other.missing_optional)
         return self
 
@@ -71,6 +79,11 @@ class ImportResult:
             lines.append("")
             lines.append("次のテーブルは取り込めませんでした:")
             lines.extend(f"  {e}" for e in self.errors)
+        if self.warnings:
+            lines.append("")
+            lines.append("取り込みましたが、元のファイルに無い列は空のままです"
+                         "(取り込み元のファイルが古い形式かもしれません):")
+            lines.extend(f"  {w}" for w in self.warnings)
         if self.missing_optional:
             lines.append("")
             lines.append(f"  取り込み元に無かった表({len(self.missing_optional)}件、"
@@ -162,9 +175,8 @@ def import_tables(
                             table, lost_keys)
                 notify(step_pct, step_message, ok=False)
                 continue
-            result.errors.append(note + " ── その列は空で取り込みます")
+            result.warnings.append(note)
             log.warning("%s: 元に無い列: %s", table, missing)
-            notify(step_pct, step_message, ok=False)
 
         columns = [c[0] for c in spec]
         placeholders = ", ".join("?" for _ in columns)

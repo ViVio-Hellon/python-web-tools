@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from . import db
 from .logging_utils import get_logger
@@ -289,6 +289,11 @@ def _needs_spec_override(lot: LotInfo) -> bool:
     return flag1 and flag2 and flag3 and flag4 and flag5
 
 
+def _box_final(row: Any, name: str) -> Any:
+    """BOX最終実績_{name}。空(古い形式の写しで列が無い)なら BOX実績_{name}。"""
+    return row[f"BOX最終実績_{name}"] or row[f"BOX実績_{name}"]
+
+
 def _load_lot_info(conn: sqlite3.Connection, lot_no: str) -> Optional[LotInfo]:
     """VBA `SearchLotInfo` の移植。"""
     # ロット番号はBOX工程ごとに複数行ありうる。VBAは `rs.EOF` 判定で
@@ -319,9 +324,13 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str) -> Optional[LotInfo]:
         # 実データでは寸法3つは BOX実績_* と全8,056行で一致していたので、
         # 見える値は変わらない ── 変わるのは「どの工程の寸法か」という
         # 意味のほうで、今後ずれたときに正しいほうを指す
-        thickness=row["BOX最終実績_板厚"] if is_box else row["製造板厚"],
-        width=row["BOX最終実績_板幅"] if is_box else row["製造板幅"],
-        length=row["BOX最終実績_板丈"] if is_box else row["製造板丈"],
+        #
+        # **BOX最終実績_* が空なら BOX実績_* を使う。** 仕掛台帳の写しが
+        # 古い形式(BOX最終実績_* の列が無い)だと、BOXコースのロットが
+        # 0×0×0 になって使えなくなっていた(枚本数と同じ落とし方)
+        thickness=(_box_final(row, "板厚") if is_box else row["製造板厚"]),
+        width=(_box_final(row, "板幅") if is_box else row["製造板幅"]),
+        length=(_box_final(row, "板丈") if is_box else row["製造板丈"]),
         order_thickness=row["オーダー板厚"],
         order_width=row["オーダー板幅"],
         order_length=row["オーダー板丈"],

@@ -334,6 +334,27 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(result.imported["PalletMaster"], 1)
         self.assertEqual(result.skipped["PalletMaster"], 1)
 
+    def test_元に無い列は失敗にせず空で入ったと言う(self):
+        """取り込めているのに「失敗」「取り込めませんでした」と出ると、
+        どれが読めていないのか分からない(現場の声)。鍵の列は揃っているので
+        取り込みは済んでいる ── 失敗にはせず、空の列を別の見出しで言う。"""
+        with mock.patch.object(sources, "read_table", return_value=[
+                {"ﾛｯﾄ番号": "A123456", "製造板幅": "1000"}]):
+            result = data_sync.import_tables(
+                self.conn, Path("d.sqlite3"),
+                {"仕掛ロット": import_specs.LOT_IMPORT_SPECS["仕掛ロット"]},
+                source_table="仕掛",
+                required=import_specs.REQUIRED_KEY_COLUMNS,
+                fallbacks=import_specs.NULL_FALLBACKS)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.imported["仕掛ロット"], 1)
+        self.assertEqual(result.errors, [])
+        self.assertTrue(result.warnings)
+        self.assertIn("BOX最終実績_板厚", result.warnings[0])
+        summary = result.summary()
+        self.assertNotIn("取り込めませんでした", summary)
+        self.assertIn("元のファイルに無い列は空のままです", summary)
+
     def test_blank_values_use_the_column_default(self):
         """NOT NULL列に空欄が来ても落ちない(NULLではなく既定値を入れる)。"""
         with mock.patch.object(sources, "read_table", return_value=[

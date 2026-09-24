@@ -118,6 +118,16 @@ class LotSearchTests(unittest.TestCase):
         self.assertEqual((lot.thickness, lot.width, lot.length), (6.75, 1200.0, 2400.0))
         self.assertEqual(lot.dimension_source, "BOX実績")
 
+    def test_古い形式の写しでもBOX実績の寸法を使う(self):
+        """仕掛台帳の写しに BOX最終実績_* の列が無い(古い形式)と、取り込みで
+        その列は 0 になる。以前は BOXコースのロットが 0×0×0 になり、資材が
+        選べなくなっていた(現場の声:「読まなくなっちゃった」)。"""
+        insert_lot(self.conn, 設計_設備コース="GFS", BOX最終実績_板厚=0.0,
+                   BOX最終実績_板幅=0.0, BOX最終実績_板丈=0.0, BOX最終実績_枚本数=0)
+        lot = svc.search_lot(self.conn, "1234567").lot
+        self.assertEqual((lot.thickness, lot.width, lot.length), (6.75, 1200.0, 2400.0))
+        self.assertEqual(lot.final_process_count, 42)
+
     def test_manufactured_thickness_is_kept_even_in_box_mode(self):
         # 包装仕様NOの判定は製造板厚を見るので、差し替え後も元の値が要る
         insert_lot(self.conn, 設計_設備コース="GFS", 製造板厚=3.0)
