@@ -60,15 +60,33 @@ def label_refusal(session: Any) -> Optional[Refusal]:
 def cut_request_refusal(session: Any) -> Optional[Refusal]:
     """切断依頼が出せない理由(VBA `btnCutRequest_Click` の冒頭)。
 
-    「カットが要らないので出せない」は**押してみるまで分からない**。
-    選定結果にカットの記録があるかどうかは組み立ててみて初めて決まるので、
-    ここでは前提だけを見る。
+    プロテック以外は**配置してあること**が前提(切断依頼は実際の配置と
+    カット前提タグから集計する。`reports.get_cut_size_info`)。
+    「対象が無いので不要」は押したときに知らせる(`build_cut_request`) ──
+    対象外のはみ出しを選定ログに出すのが押したときだけのため。
     """
     if session.presenter.lot_result is None:
         return Refusal("先にロット検索でロットを確定してください。", NEEDS_LOT)
     if not (session.selected.upper or session.selected.lower):
         return Refusal("先にボードを選定してください。", NEEDS_BOARDS)
+    if not session.presenter.protec.is_protec and (
+            session.placement is None or not session.placement.placed):
+        return Refusal("先に配置を実行してください。", NEEDS_BOARDS)
     return None
+
+
+# 切断対象(カット前提で実際に切る板)が無いときの案内(VBA `btnCutRequest_Click`)
+CUT_NOT_NEEDED = "カット前提のボードがないため、切断依頼は不要です。"
+
+
+def _cut_targets(session: Any) -> tuple[Any, Any]:
+    """上用・下用の切断対象(VBA `CheckCutTargets` を2回)。"""
+    placed = session.placement.placed
+    return (
+        reports.check_cut_targets(session.selected.upper, placed, "上用",
+                                  session.product.width, session.product.length),
+        reports.check_cut_targets(session.selected.lower, placed, "下用",
+                                  session.palette.width, session.palette.length))
 
 
 # 「丈カットを行いますか」の訊き方。**出す場所は1か所**にする ──
@@ -108,6 +126,11 @@ def len_cut_question(session: Any) -> dict:
     """
     presenter = session.presenter
     if not presenter.protec.is_protec:
+        # 対象が無ければ訊かない(押すとすぐ「不要」と案内する)
+        if session.placement is None or not session.placement.placed:
+            return {}
+        if sum(t.count for t in _cut_targets(session)) == 0:
+            return {}
         return _len_cut_ask()
 
     protec_result = _protec_result(session)
@@ -412,24 +435,26 @@ def build_cut_request(session: Any, *, use_len_cut: bool = True) -> tuple[
     カットが1つも無ければ帳票にならない。**それは失敗ではない**ので、
     理由を添えて返す(押した人には「不要だった」と分かる必要がある)。
 
-    切断依頼は配置を実行していなくても押せる(`cut_request_refusal` は
-    配置済みを条件にしない)ため、`session.placement`(配置後にしか
-    存在しない)には頼れない。`place_boards` と同じ手順
-    (`select_result` があればそこから、手動で増減した後なら後付け
-    適用)を、ここでも独立して行い、`ProtecCutResult` を用意する。
+    プロテック以外は配置とカット前提タグから集計する(VBA 側の全面
+    差し替え)。先に対象を数え(`check_cut_targets`)、対象外のはみ出しは
+    選定ログへ、対象が0枚なら「不要」と案内して止める。以前は選定の
+    カット辞書を見ていたので、別案で配置すると直前の通常選定のカットが
+    載っていた。
+
+    プロテックは配置を実行していなくても押せるため `session.placement`
+    には頼れない。`place_boards` と同じ手順(`select_result` があれば
+    そこから、手動で増減した後なら後付け適用)を、ここでも独立して
+    行い、`ProtecCutResult` を用意する。
 
     `use_len_cut`(既定True)は、VBA側で追加された「丈カットを行いますか」
     という確認(押した人が選ぶ)に対応する。Falseなら丈カット分を
     幅カットのみへ合算して出す(`reports.get_cut_size_info`/
     `reports.protec_cut_size_info` の同名パラメータ参照)。
     """
-    from .. import board_selection_algorithm as alg
     from .. import user_settings
 
     presenter = session.presenter
     lot = presenter.lot_result.lot
-    # 自動選定の結果、または実績から戻したカット(`session.cut_dicts`)
-    cut_info, length_cut_info, length_cut_count = session.cut_dicts()
 
     if presenter.protec.is_protec:
         # プロテックは上下を分けず、選定(または手動追加後の後付け)が
@@ -439,14 +464,23 @@ def build_cut_request(session: Any, *, use_len_cut: bool = True) -> tuple[
         upper = reports.protec_cut_size_info(protec_result, use_len_cut=use_len_cut)
         lower = reports.CutSizeInfo()
     else:
+        ulog = presenter.user_log
+        targets = _cut_targets(session)
+        for t in targets:
+            for line in t.others:
+                ulog.log(line)
+        if sum(t.count for t in targets) == 0:
+            ulog.log("[切断依頼] カット前提のボードがないため、切断依頼は不要です")
+            return None, Refusal(CUT_NOT_NEEDED, NOT_FOUND)
+        placed = session.placement.placed
         upper = reports.get_cut_size_info(
-            session.selected.upper, "上用",
+            session.selected.upper, placed, "上用",
             session.product.width, session.product.length,
-            cut_info, length_cut_info, length_cut_count, use_len_cut=use_len_cut)
+            use_len_cut=use_len_cut, warn=ulog.log)
         lower = reports.get_cut_size_info(
-            session.selected.lower, "下用",
+            session.selected.lower, placed, "下用",
             session.palette.width, session.palette.length,
-            cut_info, length_cut_info, length_cut_count, use_len_cut=use_len_cut)
+            use_len_cut=use_len_cut, warn=ulog.log)
 
     if not any((upper.size_width_only, upper.size_both,
                 lower.size_width_only, lower.size_both)):

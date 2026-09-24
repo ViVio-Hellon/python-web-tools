@@ -92,6 +92,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
 from . import placement_algorithm as place
+from .placement_types import CUT_UPPER_MINUS
 from .board_selection_algorithm import (TAG_CUT_PREMISE, TAG_LENGTH_FILL,
                                         TAG_MAIN, TAG_WIDTH_FILL)
 from .board_selection_service import Palette, ProductSize, SelectedBoard
@@ -201,6 +202,9 @@ class TileBounds:
     l_hi: int
     ov_w: int
     ov_l: int
+    # 幅が許容上限(`w_hi`)を超えた行を**切る幅**(切断依頼の定義。VBA `m_cutW`)。
+    # 0 なら従来どおり `w_hi` で切る
+    cut_w: int = 0
 
 
 # ==================================================================
@@ -244,13 +248,17 @@ def get_bounds(is_upper: bool, share_mode: bool,
             w_hi=product.width - 1,
             l_lo=product.length - UPPER_L_MINUS,
             l_hi=product.length + UPPER_L_PLUS,
-            ov_w=product.width, ov_l=product.length)
+            ov_w=product.width, ov_l=product.length,
+            # 切る幅は切断依頼の定義(上用 = 製品幅 − 20)
+            cut_w=product.width - CUT_UPPER_MINUS)
     return TileBounds(
         w_lo=product.width - LOWER_W_MINUS,
         w_hi=palette.width + LOWER_W_PLUS,
         l_lo=product.length - LOWER_L_MINUS,
         l_hi=int(palette.length * LOWER_L_RATIO),
-        ov_w=palette.width, ov_l=palette.length)
+        ov_w=palette.width, ov_l=palette.length,
+        # 下用はパレット幅ぴったりで切る
+        cut_w=palette.width)
 
 
 # ==================================================================
@@ -264,11 +272,13 @@ class _RowBuilder:
     """
 
     def __init__(self, cores: list[int], thicks: list[int], height: int,
-                 w_lo: int, w_hi: int, ov_w: int, limit: int) -> None:
+                 w_lo: int, w_hi: int, ov_w: int, limit: int,
+                 cut_w: int = 0) -> None:
         self.cores = cores
         self.thicks = thicks
         self.height = height
         self.w_lo, self.w_hi, self.ov_w = w_lo, w_hi, ov_w
+        self.cut_w = cut_w
         # コアの合計は許容幅そのものではなく **許容幅+在庫の最大寸法** まで
         # 許す。行の最後の1枚を幅カットして着地させる構成(`w_cut=1`)を
         # 拾うため ── ここで許容幅で切ると、カット前提の解が消える
@@ -285,9 +295,11 @@ class _RowBuilder:
             return
         if i >= len(self.cores):
             if cur > self.w_hi:
-                # 許容幅を超えた ── 最後の1枚を幅カットして着地させる
+                # 許容幅を超えた ── 最後の1枚を幅カットして着地させる。
+                # **切る位置は許容上限ではなく切断依頼の定義の幅**(`cut_w`)。
+                # 未設定(0)のときだけ従来どおり許容上限で切る(VBA `RecComp`)
                 if n >= 1:
-                    self._add(n, 0, 0, 0, self.w_hi, 1)
+                    self._add(n, 0, 0, 0, self.cut_w if self.cut_w > 0 else self.w_hi, 1)
                 return
             self._thin_fills(cur, n)
             return
@@ -364,7 +376,8 @@ def _pareto_filter(comps: list[TileRowComp]) -> list[TileRowComp]:
 
 
 def build_row_comps(stock: Sequence[TileSku], height: int,
-                    w_lo: int, w_hi: int, ov_w: int) -> list[TileRowComp]:
+                    w_lo: int, w_hi: int, ov_w: int,
+                    cut_w: int = 0) -> list[TileRowComp]:
     """行高 `height` の行構成を数え上げる(VBA `BuildRowComps`)。"""
     cores: list[int] = []
     max_dim = 0
@@ -401,7 +414,7 @@ def build_row_comps(stock: Sequence[TileSku], height: int,
             thicks.append(sku.width)
 
     return _RowBuilder(cores, thicks, height, w_lo, w_hi, ov_w,
-                       w_hi + max_dim).run()
+                       w_hi + max_dim, cut_w).run()
 
 
 def _distinct_dims(stock: Sequence[TileSku]) -> list[int]:
@@ -438,7 +451,7 @@ def solve_tiling(stock: Sequence[TileSku], b: TileBounds) -> list[TileCand]:
     for dim in _distinct_dims(stock):
         if dim > b.l_hi:
             continue
-        comps = build_row_comps(stock, dim, b.w_lo, b.w_hi, b.ov_w)
+        comps = build_row_comps(stock, dim, b.w_lo, b.w_hi, b.ov_w, b.cut_w)
         if comps:
             table.append((dim, comps))
     if not table:
@@ -671,17 +684,45 @@ def thin_pair(thickness: int, cover: int) -> tuple[int, int]:
     return (thickness, 2500)
 
 
+def cuts_of(c1: Optional[TileRowComp], n1: int,
+            c2: Optional[TileRowComp], n2: int) -> int:
+    """幅カットの枚数(VBA `CutsOf`)。各行の最後の1枚ずつ。"""
+    return ((c1.w_cut * n1 if c1 is not None else 0)
+            + (c2.w_cut * n2 if c2 is not None else 0))
+
+
+def is_length_cut(cand: TileCand) -> bool:
+    """丈方向で最後の行を切る案か。
+
+    `solve_tiling` はこの種類の案を「幅カット分 + 最後の行の枚数」で
+    数えるので、カット数が幅カット分より多ければ丈カットの案です
+    (VBA `WriteCandToList` と同じ見分け方)。
+    """
+    return cand.cuts > cuts_of(cand.c1, cand.n1, cand.c2, cand.n2)
+
+
 def cand_to_selected(cand: TileCand) -> list[SelectedBoard]:
     """候補を選定リストに直す(VBA `WriteCandToList`)。
 
-    同じ寸法は1行にまとめ、枚数を足します。タグは最初に置いた行の
-    ものが残ります。
+    **切られる板にだけ「カット前提」を付けます。** 同じ寸法でも、切る板と
+    切らない板は別の行にします(タグが違えば合算しない)── 1行にまとめると
+    「どれを切るのか」が消え、切断依頼に全部載る/1枚も載らない、になります。
+
+        幅を切る行    … 切られるのは各行の最後の1枚だけ
+                        → 最後の寸法の板を「主」(枚数−1)と「カット前提」(1枚)に分ける
+        丈を切る案    … 最後の行の板はすべて「カット前提」、それより前の行は通常どおり
     """
     out: list[SelectedBoard] = []
     if cand.c1 is not None:
-        _put_row_comp(out, cand.c1, cand.h1, cand.n1)
+        if is_length_cut(cand):
+            _put_row_comp(out, cand.c1, cand.h1, cand.n1 - 1)
+            _put_row_comp(out, cand.c1, cand.h1, 1, force_cut=True)
+            log.debug("[敷詰]cand_to_selected: 丈カットの案 → 最後の行をカット前提に")
+        else:
+            _put_row_comp(out, cand.c1, cand.h1, cand.n1)
     if cand.c2 is not None:
         _put_row_comp(out, cand.c2, cand.h2, cand.n2)
+    # 丈補填行は幅方向へ寝かせるので、必要な長さは行高ではなく行の幅で決まる
     for thickness in cand.thin_rows:
         width, length = thin_pair(thickness, cand.c1.width if cand.c1 else 0)
         _put_sku(out, width, length, 1, TAG_LENGTH_FILL)
@@ -689,13 +730,22 @@ def cand_to_selected(cand: TileCand) -> list[SelectedBoard]:
 
 
 def _put_row_comp(out: list[SelectedBoard], comp: TileRowComp,
-                  height: int, rows: int) -> None:
+                  height: int, rows: int, *, force_cut: bool = False) -> None:
+    """1種類の行を `rows` 行ぶん書く(VBA `PutRowComp`)。"""
+    if rows <= 0:
+        return
     last = len(comp.dims) - 1
     for i, dim in enumerate(comp.dims):
         width, length = sku_pair(dim, height)
-        # 幅カット前提の行では、着地させる**最後の1枚**を切る
-        tag = TAG_CUT_PREMISE if comp.w_cut > 0 and i == last else TAG_MAIN
-        _put_sku(out, width, length, comp.qty[i] * rows, tag)
+        if force_cut:
+            # 丈方向で切る行。この行の板はすべてカット前提
+            _put_sku(out, width, length, comp.qty[i] * rows, TAG_CUT_PREMISE)
+        elif comp.w_cut > 0 and i == last:
+            # 幅を切る行。切られるのは**各行の最後の1枚だけ**
+            _put_sku(out, width, length, (comp.qty[i] - 1) * rows, TAG_MAIN)
+            _put_sku(out, width, length, rows, TAG_CUT_PREMISE)
+        else:
+            _put_sku(out, width, length, comp.qty[i] * rows, TAG_MAIN)
     for i in range(3):
         if comp.thin_qty[i] > 0:
             width, length = thin_pair(comp.thin_th[i], height)
@@ -704,8 +754,14 @@ def _put_row_comp(out: list[SelectedBoard], comp: TileRowComp,
 
 def _put_sku(out: list[SelectedBoard], width: int, length: int,
              count: int, tag: str) -> None:
+    """1行足す(VBA `PutSku`)。**幅・丈・タグが同じときだけ**合算する。
+
+    枚数0は書かない(「最後の1枚だけ切る」で残りが0枚になる場合)。
+    """
+    if count <= 0:
+        return
     for row in out:
-        if row.width == width and row.length == length:
+        if row.width == width and row.length == length and row.tag == tag:
             row.count += count
             return
     out.append(SelectedBoard(width=width, length=length, count=count, tag=tag))

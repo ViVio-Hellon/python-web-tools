@@ -1133,15 +1133,56 @@ class ChangeCandidateTests(SelectionWebTestCase):
         self.assertIn("パレット", body["message"])
 
     def test_プロテックは対象外(self) -> None:
-        """カット前提の別ロジックで、在庫が少なく敷き詰めが成立しない。"""
+        """プロテックのルール(製品幅基準・マイナス許容)を別案は持たない
+        (VBA `btnChangeCandidate_Click`)。"""
+        from packaging_tool.selection_tiling import PROTEC_TILING_REFUSAL
+        self.assertIn("「ボード選定」「ボード配置」で配置してください",
+                      PROTEC_TILING_REFUSAL)
         self.sizes()
         session = self.session()
         session.presenter.protec.is_protec = True
         boards = self.get()["boards"]
         self.assertFalse(boards["can_change"])
-        self.assertIn("プロテック", boards["change_why"])
+        self.assertEqual(boards["change_why"], PROTEC_TILING_REFUSAL)
         body = self.change(expect=422)
-        self.assertIn("プロテック", body["message"])
+        self.assertEqual(body["message"], PROTEC_TILING_REFUSAL)
+
+    # --- 切断(VBA 側の切断依頼の定義) ------------------------------
+    def _to_axis(self, method: str) -> None:
+        for _ in range(3):
+            self.change()
+            if self.session().placement_method == method:
+                return
+        self.fail(f"{method} に届かない")
+
+    def test_カット辞書は別案の配置から作り直す(self) -> None:
+        """前の選定のカットを残さない(課題表 1。VBA `RebuildCutInfoFromPlacement`)。"""
+        from packaging_tool.selection_records import RestoredFacts
+        self.sizes()
+        self.session().restored = RestoredFacts(cut_info={"999x999": 1})
+        self._to_axis("別案A")
+        # A はカット無し
+        self.assertEqual(self.session().cut_dicts(), ({}, {}, {}))
+        self._to_axis("別案C")
+        # C は 1250×2500 を1枚ずつ幅で切る(切断線=板の丈)
+        self.assertEqual(self.session().cut_dicts(), ({"1250x2500": 2500}, {}, {}))
+
+    def test_別案で切るのは行の最後の1枚だけ(self) -> None:
+        """同じサイズでも主とカット前提を別の行にし、切る1枚だけ依頼に載せる
+        (課題表 3・5)。幅は定義どおり 下用=パレット幅 / 上用=製品幅−20。"""
+        from packaging_tool import reports
+        self.sizes()
+        self._to_axis("別案C")
+        session = self.session()
+        self.assertEqual([(b.width, b.length, b.count, b.tag) for b in session.selected.lower],
+                         [(1250, 2500, 1, "主"), (1250, 2500, 1, "カット前提")])
+        placed = session.placement.placed
+        lower = reports.get_cut_size_info(session.selected.lower, placed, "下用", 1540, 2550)
+        upper = reports.get_cut_size_info(session.selected.upper, placed, "上用", 1505, 2502)
+        # 下用: 1540 − 1250 = 290 / 上用: (1505 − 20) − 1250 = 235
+        self.assertEqual((lower.size_width_only, lower.count_width_only), ("290x2500", 1))
+        self.assertEqual((upper.size_width_only, upper.count_width_only), ("235x2500", 1))
+        self.assertEqual((lower.size_both, upper.size_both), ("", ""))
 
     # --- 何が出るか -----------------------------------------------
     def test_現行では出ない丈カットゼロの解が出る(self) -> None:
@@ -2303,6 +2344,20 @@ class SendTests(SelectionWebTestCase):
         self.assertIn("1234567", body)
         self.assertIn("<style>", body)          # 印刷用CSSごと入っている
 
+    def _cut_scenario(self) -> None:
+        """カット前提の板を実際に切る配置(上用=製品幅−20、下用=パレット幅で切る)。
+
+        1030×1520 を3枚、丈方向に 1030 ずつ並べる。3枚目が
+        製品丈 2502 / パレット丈 2650 をはみ出すので丈カットもある。
+        """
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1150", "length": "2650"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1122", "length": "2502"})
+        insert_board(self.conn, width=1030, length=1520)
+        self.post("/api/selection/boards/auto-select")
+        self.post("/api/selection/boards/place")
+
     def test_カットが無ければ切断依頼は要らないと言う(self) -> None:
         """失敗ではない。押した人に「不要だった」と分かる必要がある。"""
         self.post("/api/selection/pallet/apply",
@@ -2312,21 +2367,52 @@ class SendTests(SelectionWebTestCase):
         insert_board(self.conn, width=1000, length=1800)
         self.post("/api/selection/boards/add",
                   {"category": "lower", "width": 1000, "length": 1800, "count": 1})
+        self.post("/api/selection/boards/place")
 
         res = self.client.get("/report/cut-request", headers=self.auth())
         self.assertEqual(res.status_code, 422)
-        self.assertIn("カットが必要なボードはありません",
+        self.assertIn("カット前提のボードがないため、切断依頼は不要です。",
                       res.get_data(as_text=True))
+        # 訊かずに押させる(押すとすぐ「不要」と分かる)
+        self.assertEqual(self._ask(), {})
 
-    # --- 紙面で直す(VBAはシートを直してから印刷できた) -----------
-    def _cut_sheet(self) -> str:
+    def test_配置していなければ切断依頼は出せない(self) -> None:
+        """切断依頼は実際の配置から集計する(VBA `btnCutRequest_Click`)。"""
+        self.post("/api/selection/pallet/apply",
+                  {"width": "1150", "length": "2650"})
+        self.post("/api/selection/product/apply",
+                  {"width": "1122", "length": "2502"})
+        insert_board(self.conn, width=1030, length=1520)
+        self.post("/api/selection/boards/auto-select")
+
+        report = next(r for r in self.get()["outputs"]["reports"]
+                      if r["key"] == "cut-request")
+        self.assertFalse(report["can"])
+        self.assertEqual(report["why"], "先に配置を実行してください。")
+        res = self.client.get("/report/cut-request", headers=self.auth())
+        self.assertEqual(res.status_code, 422)
+
+    def test_カット前提ではないはみ出しは対象外としてログに出す(self) -> None:
+        """PASS3 で許したはみ出しは切断依頼に載せない(課題表 4)。"""
         self.post("/api/selection/pallet/apply",
                   {"width": "1100", "length": "2000"})
         self.post("/api/selection/product/apply",
                   {"width": "1000", "length": "1800"})
-        insert_board(self.conn, width=1100, length=2000)
-        insert_board(self.conn, width=550, length=1000)
+        insert_board(self.conn, width=1200, length=1900)
         self.post("/api/selection/boards/auto-select")
+        self.post("/api/selection/boards/place")
+        self.assertEqual(self.session().selected.lower[0].tag, "主")
+
+        res = self.client.get("/report/cut-request", headers=self.auth())
+        self.assertEqual(res.status_code, 422)
+        texts = [e.text for e in self.session().presenter.user_log.entries]
+        self.assertTrue(any(t.startswith("[切断依頼対象外] 下用 1200x1900 1枚: 幅はみ出し100mm")
+                            for t in texts), texts[-5:])
+        self.assertIn("[切断依頼] カット前提のボードがないため、切断依頼は不要です", texts)
+
+    # --- 紙面で直す(VBAはシートを直してから印刷できた) -----------
+    def _cut_sheet(self) -> str:
+        self._cut_scenario()
         res = self.client.get("/report/cut-request", headers=self.auth())
         self.assertEqual(res.status_code, 200, res.get_data(as_text=True)[:200])
         return res.get_data(as_text=True)
@@ -2395,13 +2481,7 @@ class SendTests(SelectionWebTestCase):
         (tkinter版と突き合わせていた `test_outputs_parity.py` が
          見ていた経路。tkinter版の撤去にあわせてここへ移した)
         """
-        self.post("/api/selection/pallet/apply",
-                  {"width": "1100", "length": "2000"})
-        self.post("/api/selection/product/apply",
-                  {"width": "1000", "length": "1800"})
-        insert_board(self.conn, width=1100, length=2000)
-        insert_board(self.conn, width=550, length=1000)
-        self.post("/api/selection/boards/auto-select")
+        self._cut_scenario()
 
         res = self.client.get("/report/cut-request", headers=self.auth())
         self.assertEqual(res.status_code, 200, res.get_data(as_text=True)[:300])
@@ -2411,25 +2491,18 @@ class SendTests(SelectionWebTestCase):
     def test_切断依頼の丈カットなし指定はクエリで通る(self) -> None:
         """`?use_len_cut=0`(VBA『丈カットを行いますか』のいいえ)を受け付ける。
 
-        このシナリオは幅カットが無く丈カットのみ記録される(上のテストの
-        ログ参照)。丈カットなし指定では丈カット分を幅カットへ合算するが、
-        合算先の幅カットが無い=カット自体が不要になる(VBA踏襲)ため
-        422になるのが正しい。具体的な計算は
-        `reports.get_cut_size_info`/`protec_cut_size_info` のユニット
-        テストで検証済み。ここでは配線(クエリ→帳票生成)だけ確かめる。
+        丈カットなし指定では丈を切らず、全部が「幅カットのみ」になる。
+        具体的な計算は `reports.get_cut_size_info` のユニットテストで
+        検証済み。ここでは配線(クエリ→帳票生成)だけ確かめる。
         """
-        self.post("/api/selection/pallet/apply",
-                  {"width": "1100", "length": "2000"})
-        self.post("/api/selection/product/apply",
-                  {"width": "1000", "length": "1800"})
-        insert_board(self.conn, width=1100, length=2000)
-        insert_board(self.conn, width=550, length=1000)
-        self.post("/api/selection/boards/auto-select")
+        self._cut_scenario()
 
-        res = self.client.get("/report/cut-request?use_len_cut=0", headers=self.auth())
-        self.assertEqual(res.status_code, 422, res.get_data(as_text=True)[:300])
-        self.assertIn("カットが必要なボードはありません",
-                      res.get_data(as_text=True))
+        yes = self.client.get("/report/cut-request", headers=self.auth())
+        no = self.client.get("/report/cut-request?use_len_cut=0", headers=self.auth())
+        self.assertEqual(no.status_code, 200, no.get_data(as_text=True)[:300])
+        # 丈カットあり: 3枚目(2060〜3090)が製品丈 2502 を 588 はみ出す → 1030−588=442
+        self.assertIn("1102x442", yes.get_data(as_text=True))
+        self.assertNotIn("1102x442", no.get_data(as_text=True))
 
     def _ask(self) -> dict:
         """切断依頼を押す前に訊くこと。空なら訊かない。"""
@@ -2437,15 +2510,10 @@ class SendTests(SelectionWebTestCase):
                       if r["key"] == "cut-request")
         return report["ask"]
 
-    def test_通常モードは必ず訊く(self) -> None:
-        """選定明細を走査しないと分からないので、従来どおり訊く。"""
-        self.post("/api/selection/pallet/apply",
-                  {"width": "1100", "length": "2000"})
-        self.post("/api/selection/product/apply",
-                  {"width": "1000", "length": "1800"})
-        insert_board(self.conn, width=1100, length=2000)
-        insert_board(self.conn, width=550, length=1000)
-        self.post("/api/selection/boards/auto-select")
+    def test_通常モードは切る板があれば訊く(self) -> None:
+        """切る板(カット前提で実際に切る板)があれば訊く。無ければ訊かない
+        (`test_カットが無ければ切断依頼は要らないと言う`)。"""
+        self._cut_scenario()
         self.assertIn("丈カットを行いますか", self._ask()["title"])
 
     def test_訊くときは選択肢を3つ出す(self) -> None:
@@ -2455,13 +2523,7 @@ class SendTests(SelectionWebTestCase):
         OK/キャンセルの2択だと「キャンセル=丈カットなし」に割り当てる
         しかなく、**やめるための行き先が無い**。3つに分ける。
         """
-        self.post("/api/selection/pallet/apply",
-                  {"width": "1100", "length": "2000"})
-        self.post("/api/selection/product/apply",
-                  {"width": "1000", "length": "1800"})
-        insert_board(self.conn, width=1100, length=2000)
-        insert_board(self.conn, width=550, length=1000)
-        self.post("/api/selection/boards/auto-select")
+        self._cut_scenario()
 
         ask = self._ask()
         self.assertEqual([c["key"] for c in ask["choices"]],

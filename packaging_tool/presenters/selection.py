@@ -1380,9 +1380,10 @@ def build_boards(session: Any) -> BoardsViewModel:
     elif not candidates:
         view.change_why = "候補ボードがありません。ボード種別を確認してください。"
     elif presenter.protec.is_protec:
-        # カット前提の別ロジックで、在庫が3種/1種しかなく敷き詰めが
-        # 成立しない。押させておいて断るより、先に理由を出す
-        view.change_why = "プロテックは「候補変更」の対象外です。"
+        # プロテックのルール(製品幅基準・マイナス許容)を別案は持たない。
+        # 押させておいて断るより、先に理由を出す
+        from ..selection_tiling import PROTEC_TILING_REFUSAL
+        view.change_why = PROTEC_TILING_REFUSAL
     view.can_change = not view.change_why
     state = getattr(session, "tiling", None)
     if state is not None and state.axis >= 0:

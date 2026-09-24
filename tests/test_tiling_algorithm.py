@@ -258,16 +258,49 @@ class 行構成(unittest.TestCase):
 
 
 class 選定リスト(unittest.TestCase):
-    def test_同じ寸法は1行にまとまる(self) -> None:
+    def test_同じ寸法でもタグが違えば別の行(self) -> None:
+        """切る板と切らない板の区別を消さない(VBA `PutSku` の変更)。"""
         comp = T.TileRowComp(height=2500, dims=[100], qty=[2],
                              thin_qty=(0, 0, 1), thin_th=(30, 50, 100),
                              thin_count=1, width=300, boards=3)
         cand = T.TileCand(h1=2500, n1=1, c1=comp)
         rows = T.cand_to_selected(cand)
-        # コアの 100×2500 が2枚、幅補填の 100×2500 が1枚 → 1行3枚
-        self.assertEqual([(r.width, r.length, r.count) for r in rows],
-                         [(100, 2500, 3)])
-        self.assertEqual(rows[0].tag, alg.TAG_MAIN, "先に置いたタグが残る")
+        self.assertEqual([(r.width, r.length, r.count, r.tag) for r in rows],
+                         [(100, 2500, 2, alg.TAG_MAIN),
+                          (100, 2500, 1, alg.TAG_WIDTH_FILL)])
+
+    def test_同じ寸法同じタグは1行(self) -> None:
+        comp = T.TileRowComp(height=1000, dims=[500, 400], qty=[1, 1],
+                             width=900, boards=2)
+        c2 = T.TileRowComp(height=1000, dims=[500], qty=[1], width=500, boards=1)
+        rows = T.cand_to_selected(T.TileCand(h1=1000, n1=1, c1=comp,
+                                             h2=1000, n2=1, c2=c2))
+        self.assertEqual([(r.width, r.count) for r in rows if r.width == 500], [(500, 2)])
+
+    def test_幅を切る行は最後の1枚だけカット前提(self) -> None:
+        """同じ寸法でも、切るのは各行の最後の1枚だけ。"""
+        comp = T.TileRowComp(height=2000, dims=[1000], qty=[2], width=1670,
+                             boards=2, w_cut=1)
+        rows = T.cand_to_selected(T.TileCand(h1=2000, n1=3, c1=comp, cuts=3))
+        self.assertEqual([(r.width, r.length, r.count, r.tag) for r in rows],
+                         [(1000, 2000, 3, alg.TAG_MAIN),
+                          (1000, 2000, 3, alg.TAG_CUT_PREMISE)])
+
+    def test_1枚だけの行を幅で切るなら主は書かない(self) -> None:
+        """枚数0の行は書かない(「最後の1枚だけ切る」で残りが0枚)。"""
+        comp = T.TileRowComp(height=2000, dims=[1250], qty=[1], width=1150,
+                             boards=1, w_cut=1)
+        rows = T.cand_to_selected(T.TileCand(h1=2000, n1=1, c1=comp, cuts=1))
+        self.assertEqual([(r.count, r.tag) for r in rows], [(1, alg.TAG_CUT_PREMISE)])
+
+    def test_丈を切る案は最後の行をすべてカット前提(self) -> None:
+        """以前はタグが付かず、切断依頼に載らなかった。"""
+        comp = T.TileRowComp(height=1000, dims=[1250], qty=[1], width=1250, boards=1)
+        cand = T.TileCand(h1=1000, n1=3, c1=comp, cuts=1)   # 幅カット0 + 最後の行1枚
+        self.assertTrue(T.is_length_cut(cand))
+        rows = T.cand_to_selected(cand)
+        self.assertEqual([(r.count, r.tag) for r in rows],
+                         [(2, alg.TAG_MAIN), (1, alg.TAG_CUT_PREMISE)])
 
     def test_行数ぶん掛ける(self) -> None:
         comp = T.TileRowComp(height=1000, dims=[500], qty=[2], width=1000,

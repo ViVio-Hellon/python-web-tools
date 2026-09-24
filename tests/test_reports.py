@@ -7,6 +7,7 @@ from datetime import date
 from packaging_tool import board_selection_algorithm as alg
 from packaging_tool import reports
 from packaging_tool.board_selection_algorithm import SelectedBoard
+from packaging_tool.models import PlacedBoardModel
 
 
 class FormatTests(unittest.TestCase):
@@ -160,102 +161,133 @@ class LabelSheetTests(unittest.TestCase):
         self.assertIn("margin: 0.0mm", css)
 
 
+def _pb(w, l, x=0, y=0, *, ow=None, ol=None, cat="上用", fill=False):
+    """配置された板。`ow`/`ol` は元寸法(省略時は配置寸法=切っていない)。"""
+    return PlacedBoardModel(width=w, length=l, x=x, y=y, board_category=cat,
+                            original_width=w if ow is None else ow,
+                            original_length=l if ol is None else ol,
+                            is_fill_board=fill)
+
+
 class GetCutSizeInfoTests(unittest.TestCase):
-    """VBA `GetCutSizeInfo`。幅カット/丈カットの記録から切断依頼の行を作る。"""
+    """VBA `GetCutSizeInfo`(全面差し替え版)。
+
+    対象はカット前提のサイズだけ、枚数と寸法は**実際の配置**から数える。
+    以前は選定のカット辞書から計算し直していたので、別案で配置すると
+    直前の通常選定のカットが載っていた(課題表 1・2)。
+    """
 
     def setUp(self) -> None:
-        self.board = SelectedBoard(width=1250, length=2500, count=2, tag="")
+        self.cut = SelectedBoard(width=1250, length=2500, count=2, tag="カット前提")
+        self.main = SelectedBoard(width=1000, length=2000, count=1, tag="主")
 
-    def test_no_cut_records_means_nothing_to_request(self):
-        out = reports.get_cut_size_info([self.board], "上用", 1221, 2440, {}, {}, {})
-        self.assertEqual(out.size_width_only, "")
-        self.assertEqual(out.size_both, "")
+    def test_カット前提が無ければ何も載らない(self):
+        placed = [_pb(1201, 2440, ow=1250, ol=2500)]
+        out = reports.get_cut_size_info([self.main], placed, "上用", 1221, 2440)
+        self.assertEqual((out.size_width_only, out.size_both), ("", ""))
 
-    def test_width_cut_only(self):
-        out = reports.get_cut_size_info(
-            [self.board], "上用", 1221, 2440, {"1250x2500": 2500}, {}, {})
-        # 幅は製品幅まで落とす。丈は配置時の有効丈をそのまま使う
-        self.assertEqual(out.size_width_only, "1221x2500")
-        self.assertEqual(out.count_width_only, 2)
-        self.assertEqual(out.orig_width_only, "1250×2500")
-        self.assertEqual(out.size_both, "")
+    def test_幅は配置された板の実幅(self):
+        # 上用の定義は 製品幅−20 = 1201。配置側が切った幅がそのまま載る
+        placed = [_pb(1201, 2440, ow=1250, ol=2440)]
+        cut = SelectedBoard(width=1250, length=2440, count=1, tag="カット前提")
+        out = reports.get_cut_size_info([cut], placed, "上用", 1221, 2440)
+        self.assertEqual(out.size_width_only, "1201x2440")
+        self.assertEqual(out.count_width_only, 1)
+        self.assertEqual(out.orig_width_only, "1250×2440")
 
-    def test_length_cut_only(self):
-        out = reports.get_cut_size_info(
-            [self.board], "上用", 1221, 2440,
-            {}, {"U_1250x2500": 1250}, {"U_1250x2500": 1})
-        # 幅カットが無いので切断幅は有効幅のまま。丈は はみ出し分だけ短く
-        # (2500x2枚=5000 - 製品丈2440 = 2560 はみ出し → 2500-2560 は負なので0)
-        self.assertEqual(out.size_both, "1250x0")
-        self.assertEqual(out.count_both, 1)
-        # 幅カットが無いので「幅カットのみ」枠は空のまま
-        self.assertEqual(out.size_width_only, "")
-
-    def test_both_cuts_split_the_count(self):
-        board = SelectedBoard(width=1250, length=2500, count=1, tag="")
-        out = reports.get_cut_size_info(
-            [board], "上用", 1221, 2440,
-            {"1250x2500": 2500}, {"U_1250x2500": 1250}, {"U_1250x2500": 1})
-        # 1枚しかないので全部が丈カット行、幅カットのみ枠は0枚で出さない
-        self.assertEqual(out.count_both, 1)
-        self.assertEqual(out.count_width_only, 0)
-        self.assertEqual(out.size_both, "1221x2440")
-
-    def test_fill_boards_are_skipped(self):
-        fill = SelectedBoard(width=50, length=2500, count=1, tag="幅補填")
-        out = reports.get_cut_size_info(
-            [fill], "上用", 1221, 2440, {"50x2500": 2500}, {}, {})
-        self.assertEqual(out.size_width_only, "")
-
-    def test_lower_uses_the_l_prefix(self):
-        out = reports.get_cut_size_info(
-            [self.board], "下用", 1265, 2515,
-            {}, {"L_1250x2500": 1250}, {"L_1250x2500": 1})
-        self.assertEqual(out.count_both, 1)
-        # 上用のキーでは引っかからない
-        self.assertEqual(
-            reports.get_cut_size_info([self.board], "下用", 1265, 2515,
-                                      {}, {"U_1250x2500": 1250}, {}).count_both, 0)
-
-    def test_first_match_of_each_kind_wins(self):
-        b1 = SelectedBoard(width=1250, length=2500, count=2, tag="")
-        b2 = SelectedBoard(width=1000, length=2000, count=3, tag="")
-        out = reports.get_cut_size_info(
-            [b1, b2], "上用", 900, 2440,
-            {"1250x2500": 2500, "1000x2000": 2000}, {}, {})
-        self.assertEqual(out.orig_width_only, "1250×2500")
-
-    def test_use_len_cut_false_folds_length_cut_into_width_only(self):
-        # 丈カットなし指定: 丈カットせず全枚数を幅カットのみへ寄せる。
-        # サイズは丈カット前の実効丈(2500)のまま
-        board = SelectedBoard(width=1250, length=2500, count=1, tag="")
-        out = reports.get_cut_size_info(
-            [board], "上用", 1221, 2440,
-            {"1250x2500": 2500}, {"U_1250x2500": 1250}, {"U_1250x2500": 1},
-            use_len_cut=False)
-        self.assertEqual(out.size_both, "")
-        self.assertEqual(out.count_both, 0)
-        self.assertEqual(out.size_width_only, "1221x2500")
+    def test_同じサイズでも切らない板は数えない(self):
+        # 別案では同じサイズでも切るのは行の最後の1枚だけ(課題表 5)
+        placed = [_pb(1000, 2440, ow=1000, ol=2440),
+                  _pb(201, 2440, y=1000, ow=1000, ol=2440)]
+        cut = SelectedBoard(width=1000, length=2440, count=1, tag="カット前提")
+        out = reports.get_cut_size_info([cut], placed, "上用", 1221, 2440)
+        self.assertEqual(out.size_width_only, "201x2440")
         self.assertEqual(out.count_width_only, 1)
 
-    def test_use_len_cut_false_without_width_cut_needs_no_request(self):
-        # 幅カットも無ければ丈カットをしない以上、カット自体が不要
-        board = SelectedBoard(width=1250, length=2500, count=1, tag="")
-        out = reports.get_cut_size_info(
-            [board], "上用", 1221, 2440,
-            {}, {"U_1250x2500": 1250}, {"U_1250x2500": 1}, use_len_cut=False)
-        self.assertEqual(out.size_width_only, "")
-        self.assertEqual(out.count_width_only, 0)
+    def test_丈はみ出しは丈カットあり枠(self):
+        # 2枚目が 2500..5000 に置かれ、基準丈 4000 を 1000 はみ出す
+        placed = [_pb(1201, 2500, ow=1250, ol=2500),
+                  _pb(1201, 2500, x=2500, ow=1250, ol=2500)]
+        out = reports.get_cut_size_info([self.cut], placed, "上用", 1221, 4000)
+        self.assertEqual((out.size_width_only, out.count_width_only), ("1201x2500", 1))
+        self.assertEqual((out.size_both, out.count_both), ("1201x1500", 1))
 
-    def test_use_len_cut_false_merges_matching_sizes_across_boards(self):
-        board1 = SelectedBoard(width=1250, length=2500, count=2, tag="")
-        board2 = SelectedBoard(width=1250, length=2500, count=1, tag="")
-        out = reports.get_cut_size_info(
-            [board1, board2], "上用", 1221, 2440,
-            {"1250x2500": 2500}, {"U_1250x2500": 1250}, {"U_1250x2500": 1},
-            use_len_cut=False)
-        self.assertEqual(out.size_width_only, "1221x2500")
-        self.assertEqual(out.count_width_only, 3)
+    def test_丈カットなし指定は丈を切らず幅カットのみへ(self):
+        placed = [_pb(1201, 2500, ow=1250, ol=2500),
+                  _pb(1201, 2500, x=2500, ow=1250, ol=2500)]
+        out = reports.get_cut_size_info([self.cut], placed, "上用", 1221, 4000,
+                                        use_len_cut=False)
+        self.assertEqual((out.size_width_only, out.count_width_only), ("1201x2500", 2))
+        self.assertEqual(out.size_both, "")
+
+    def test_丈カットなし指定で幅も切らなければ載らない(self):
+        placed = [_pb(1250, 2500, ow=1250, ol=2500),
+                  _pb(1250, 2500, x=2500, ow=1250, ol=2500)]
+        out = reports.get_cut_size_info([self.cut], placed, "上用", 1300, 4000,
+                                        use_len_cut=False)
+        self.assertEqual((out.size_width_only, out.size_both), ("", ""))
+
+    def test_補填ボードと別の区分は数えない(self):
+        placed = [_pb(1201, 2500, ow=1250, ol=2500, fill=True),
+                  _pb(1201, 2500, ow=1250, ol=2500, cat="下用")]
+        out = reports.get_cut_size_info([self.cut], placed, "上用", 1221, 2500)
+        self.assertEqual(out.size_width_only, "")
+
+    def test_向きが違っても同じサイズとして扱う(self):
+        # 選定リストは 1250×2500、配置は回転して置かれている
+        # (元寸法が 2500×1250 の向きで記録されている)
+        placed = [_pb(1201, 2500, ow=2500, ol=1250)]
+        out = reports.get_cut_size_info([self.cut], placed, "上用", 1221, 2500)
+        self.assertEqual(out.size_width_only, "1201x2500")
+        self.assertEqual(out.orig_width_only, "1250×2500")
+
+    def test_枠に別サイズが来たら警告して最初だけ載せる(self):
+        c2 = SelectedBoard(width=1000, length=2500, count=1, tag="カット前提")
+        placed = [_pb(1201, 2500, ow=1250, ol=2500),
+                  _pb(901, 2500, y=1201, ow=1000, ol=2500)]
+        warnings: list[str] = []
+        out = reports.get_cut_size_info([self.cut, c2], placed, "上用", 1221, 2500,
+                                        warn=warnings.append)
+        self.assertEqual((out.size_width_only, out.count_width_only), ("1201x2500", 1))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("幅カットのみに別サイズの板があります", warnings[0])
+        self.assertIn("1201x2500 だけ載ります", warnings[0])
+
+
+class CheckCutTargetsTests(unittest.TestCase):
+    """VBA `CheckCutTargets`。対象を数え、対象外のはみ出しをログ用に並べる(課題表 4)。"""
+
+    def test_カット前提で切る板だけが対象(self):
+        cut = SelectedBoard(width=1250, length=2500, count=1, tag="カット前提")
+        placed = [_pb(1201, 2500, ow=1250, ol=2500)]
+        t = reports.check_cut_targets([cut], placed, "上用", 1221, 2500)
+        self.assertEqual((t.count, t.others), (1, []))
+
+    def test_カット前提でも切らない板は対象外にも入らない(self):
+        cut = SelectedBoard(width=1250, length=2500, count=1, tag="カット前提")
+        placed = [_pb(1250, 2500)]
+        t = reports.check_cut_targets([cut], placed, "上用", 1300, 2500)
+        self.assertEqual((t.count, t.others), (0, []))
+
+    def test_カット前提でないはみ出しは同じ内容ごとにまとめる(self):
+        main = SelectedBoard(width=1300, length=2000, count=2, tag="主")
+        placed = [_pb(1300, 2000), _pb(1300, 2000, x=2000)]
+        t = reports.check_cut_targets([main], placed, "上用", 1221, 4000)
+        self.assertEqual(t.count, 0)
+        self.assertEqual(t.others, [
+            "[切断依頼対象外] 上用 1300x2000 2枚: 幅はみ出し79mm"
+            "(カット前提ではないため依頼しません)"])
+
+    def test_補填ボードは数えない(self):
+        placed = [_pb(1300, 2000, fill=True)]
+        t = reports.check_cut_targets([], placed, "上用", 1221, 1000)
+        self.assertEqual((t.count, t.others), (0, []))
+
+
+class SkuKeyTests(unittest.TestCase):
+    def test_短辺x長辺(self):
+        self.assertEqual(reports.sku_key_min_max(2500, 1250), "1250x2500")
+        self.assertEqual(reports.sku_key_min_max(1250, 2500), "1250x2500")
 
 
 class ProtecCutSizeTests(unittest.TestCase):
@@ -481,3 +513,20 @@ class CutRequestSheetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CutFactsFromPlacementTests(unittest.TestCase):
+    """VBA `AddCutInfoForCategory`。別案の配置からカット辞書を作り直す。"""
+
+    def test_丈カットは区分の接頭辞と枚数を持つ(self):
+        from packaging_tool.selection_records import cut_facts_from_placement
+        upper = [SelectedBoard(width=1250, length=2500, count=2, tag="カット前提")]
+        lower = [SelectedBoard(width=1250, length=2500, count=2, tag="主")]
+        placed = [_pb(1201, 2500, ow=1250, ol=2500),
+                  _pb(1201, 2500, x=2500, ow=1250, ol=2500),
+                  _pb(1250, 2500, x=2500, cat="下用")]      # 主は対象外
+        facts = cut_facts_from_placement(upper, lower, placed, 4000, 4000)
+        self.assertEqual(facts.cut_info, {"1250x2500": 2500})
+        self.assertEqual(facts.length_cut_info, {"U_1250x2500": 1201})
+        self.assertEqual(facts.length_cut_count, {"U_1250x2500": 1})
+        self.assertFalse(facts.narrow_lower or facts.narrow_upper)

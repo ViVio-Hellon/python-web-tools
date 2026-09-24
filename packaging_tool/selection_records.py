@@ -443,6 +443,53 @@ class RestoredFacts:
     length_cut_count: dict[str, int] = field(default_factory=dict)
 
 
+def cut_facts_from_placement(upper: list, lower: list, placed: list,
+                             product_length: int, palette_length: int) -> RestoredFacts:
+    """別案で配置した後、カット辞書を実際の配置から作り直す
+    (VBA `RebuildCutInfoFromPlacement` / `AddCutInfoForCategory`)。
+
+    別案は選定を通らないので `select_result` が無く、以前は**直前の通常
+    選定のカット辞書が残って**いた(課題表 1)。実績保存が見る値なので、
+    別案の配置から作る。切断依頼書は辞書を使わず配置から直接集計する
+    (`reports.get_cut_size_info`)。
+
+    対象はカット前提のサイズで、実際に切られている板だけ。キーはリスト上の
+    「幅x丈」(丈カットは上用 `U_` / 下用 `L_` を付ける)。
+        幅カット … 値は切断線 = 板の丈方向の長さ
+        丈カット … 値は切断線 = 板の幅方向の長さ。切る枚数も数える
+    狭幅パレットの前提とプロテック確定値は持たない(別案には無い)。
+    """
+    from .placement_render import detect_board_cut
+    from .reports import TAG_CUT_PREMISE, sku_key_min_max
+
+    facts = RestoredFacts()
+    for category, boards, base_l, prefix in (
+            (place.CATEGORY_UPPER, upper, product_length, "U_"),
+            (place.CATEGORY_LOWER, lower, palette_length, "L_")):
+        cut_sku = {sku_key_min_max(b.width, b.length): f"{b.width}x{b.length}"
+                   for b in boards if (b.tag or "").strip() == TAG_CUT_PREMISE}
+        if not cut_sku:
+            continue
+        for pb in placed:
+            if pb.board_category != category or pb.is_fill_board:
+                continue
+            list_key = cut_sku.get(sku_key_min_max(pb.original_width, pb.original_length))
+            if list_key is None:
+                continue
+            cut = detect_board_cut(pb.original_width, pb.original_length,
+                                   pb.width, pb.length)
+            over_l = max(0, (pb.x + pb.length) - base_l)
+            if cut.cut_width:
+                facts.cut_info[list_key] = pb.length
+            if over_l > 0 or cut.cut_length:
+                facts.length_cut_info[prefix + list_key] = pb.width
+                facts.length_cut_count[prefix + list_key] = (
+                    facts.length_cut_count.get(prefix + list_key, 0) + 1)
+    log.debug("cut_facts_from_placement: 幅カット=%s 丈カット=%s",
+              len(facts.cut_info), len(facts.length_cut_info))
+    return facts
+
+
 def b2l(flag: bool) -> int:
     return 1 if flag else 0
 

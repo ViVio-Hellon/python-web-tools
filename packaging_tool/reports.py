@@ -17,13 +17,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from . import lot_service, printing
-from .board_scoring import get_best_orientation
 from .board_selection_algorithm import ProtecCutResult
 from .logging_utils import get_logger
-from .models import BoardModel
 
 log = get_logger("reports")
 
@@ -392,100 +390,158 @@ class CutSizeInfo:
     orig_both: str = ""
 
 
+TAG_CUT_PREMISE = "カット前提"
+
+
+def sku_key_min_max(a: int, b: int) -> str:
+    """向きに関係なく同じサイズを同じキーにする(短辺x長辺。VBA `SkuKeyMinMax`)。"""
+    return f"{a}x{b}" if a <= b else f"{b}x{a}"
+
+
+def cut_premise_skus(boards: Sequence[object]) -> dict[str, str]:
+    """選定リストで「カット前提」の付いたサイズ(キー → リスト上の表記 `幅×丈`)。"""
+    out: dict[str, str] = {}
+    for b in boards:
+        if (getattr(b, "tag", "") or "").strip() == TAG_CUT_PREMISE:
+            out.setdefault(sku_key_min_max(b.width, b.length), f"{b.width}×{b.length}")
+    return out
+
+
 def get_cut_size_info(
-    boards: Sequence[object], category: str, target_w: int, target_l: int,
-    cut_info: dict[str, int], length_cut_info: dict[str, int],
-    length_cut_count: dict[str, int],
-    *, use_len_cut: bool = True,
+    boards: Sequence[object], placed: Sequence[object], category: str,
+    target_w: int, target_l: int, *, use_len_cut: bool = True,
+    warn: Optional[Callable[[str], None]] = None,
 ) -> CutSizeInfo:
-    """VBA `GetCutSizeInfo` の移植。
+    """切断依頼の集計(プロテック以外。VBA `GetCutSizeInfo` の全面差し替え版)。
 
-    選定リストを上から見て、幅カット/丈カットが記録されているボードを
-    最大2種類(「幅カットのみ」と「幅+丈カット」)拾う。
-    補填ボード(幅補填・丈補填)は切断対象外なので飛ばす。
+    【切断依頼の定義】
+        対象 … 選定リストで「カット前提」の付いたサイズだけ(補填ボードは対象外)
+        枚数 … 実際の配置で**切られている板だけ**を数える
+               (別案では同じサイズでも、切るのは各行の最後の1枚だけのため)
+        幅   … 配置された板の実際の幅(配置側が定義の幅で切っている。
+               上用 = 製品幅 − 20 / 下用 = パレット幅ぴったり)
+        丈   … 基準の丈(上用 = 製品丈 / 下用 = パレット丈)を超える分を切る。
+               `use_len_cut=False` なら丈は切らない
+        出力 … 「幅カットのみ」「丈カットあり」の2枠(依頼書のレイアウト)
 
-    `target_w`/`target_l` は上用なら製品サイズ、下用ならパレットサイズ。
+    以前は選定のカット辞書と、旧ロジックの向き判定で寸法を計算し直していた
+    ので、別案で配置すると**直前の通常選定のカットが載る・寸法が配置と合わない**
+    ことがあった。
 
-    `use_len_cut`(既定True)がFalseのとき、丈カットが要るボードは
-    丈カットせず、幅カットのみの枠に全枚数を寄せて出す(現場が
-    丈カット済みの端材を用意せず、幅カットだけで済ませたい場合)。
-    サイズ文字列は丈カット前の実効丈(`eff_l`)のまま使う。
+    1枠1サイズなので、枠に別サイズが来たら `warn` で知らせる(2つ目は載らない)。
     """
+    from .placement_render import detect_board_cut
+
     out = CutSizeInfo()
-    if not boards:
+    cut_sku = cut_premise_skus(boards)
+    log.debug("get_cut_size_info[%s]: カット前提サイズ=%s種 基準=%sx%s 丈カット=%s",
+              category, len(cut_sku), target_w, target_l, use_len_cut)
+    if not cut_sku:
         return out
 
-    len_prefix = "U_" if category == "上用" else "L_"
-    found_width_only = False
-    found_both = False
-
-    for b in boards:
-        if getattr(b, "tag", "") in ("幅補填", "丈補填"):
+    for pb in placed:
+        if pb.board_category != category or pb.is_fill_board:
             continue
-        brd_w, brd_l, brd_c = b.width, b.length, b.count
-        cut_key = f"{brd_w}x{brd_l}"
-        has_width_cut = cut_key in cut_info
-
-        len_key = f"{len_prefix}{cut_key}"
-        has_length_cut = len_key in length_cut_info
-        len_cut_cnt = max(1, length_cut_count.get(len_key, 1)) if has_length_cut else 0
-
-        if not has_width_cut and not has_length_cut:
+        key = sku_key_min_max(pb.original_width, pb.original_length)
+        if key not in cut_sku:
             continue
+        # 幅: 配置で元寸法より細く切られているか
+        cut = detect_board_cut(pb.original_width, pb.original_length, pb.width, pb.length)
+        # 丈: 基準の丈をはみ出しているか
+        len_over = max(0, (pb.x + pb.length) - target_l)
+        has_w = cut.cut_width
+        has_l = use_len_cut and (len_over > 0 or cut.cut_length)
+        if not has_w and not has_l:
+            continue                        # 同じサイズでも切らない板
+        final_l = pb.length - len_over if has_l else pb.length
+        # 切断後の幅は**配置された板の実際の幅**。別案では1行に複数枚並び、
+        # 切るのは最後の1枚なので、その幅は「定義の幅 − 同じ行の他の板の幅」
+        size = f"{pb.width}x{final_l}"
+        if has_l:
+            _add_cut_slot(out, "both", size, cut_sku[key], category, "丈カットあり", warn)
+        else:
+            _add_cut_slot(out, "width_only", size, cut_sku[key], category, "幅カットのみ", warn)
 
-        # 配置時の実際の向き(eff_w=幅方向, eff_l=丈方向)で寸法を出す
-        _rot, eff_w, eff_l = get_best_orientation(
-            BoardModel(width=brd_w, length=brd_l, board_category=category),
-            target_w, force_category=category)
-        cut_out_w = target_w if has_width_cut else eff_w
-
-        if has_length_cut:
-            # 丈カットなし指定のときは丈カットせず、全枚数を幅カットのみに寄せる
-            if not use_len_cut:
-                if has_width_cut:
-                    size_no_len = f"{cut_out_w}x{eff_l}"
-                    if not found_width_only:
-                        out.size_width_only = size_no_len
-                        out.count_width_only = brd_c
-                        out.orig_width_only = f"{brd_w}×{brd_l}"
-                        found_width_only = True
-                    elif out.size_width_only == size_no_len:
-                        out.count_width_only += brd_c
-                    # else: 既出と別サイズのため合算せず除外(VBA踏襲)
-                # else: 幅カットも無いためカット不要
-                continue
-            if found_both:
-                continue
-            cnt_both = len_cut_cnt
-            cnt_width_only = max(0, brd_c - len_cut_cnt)
-
-            over_l = max(0, eff_l * brd_c - target_l)
-            short_after = max(0, eff_l - over_l)
-
-            out.size_both = f"{cut_out_w}x{short_after}"
-            out.count_both = cnt_both
-            out.orig_both = f"{brd_w}×{brd_l}"
-            found_both = True
-
-            # 幅カットも実際に起きているときだけ「幅カットのみ」枠に出す
-            if has_width_cut and cnt_width_only > 0 and not found_width_only:
-                out.size_width_only = f"{cut_out_w}x{eff_l}"
-                out.count_width_only = cnt_width_only
-                out.orig_width_only = f"{brd_w}×{brd_l}"
-                found_width_only = True
-        elif has_width_cut and not found_width_only:
-            out.size_width_only = f"{cut_out_w}x{eff_l}"
-            out.count_width_only = brd_c
-            out.orig_width_only = f"{brd_w}×{brd_l}"
-            found_width_only = True
-
-        if found_width_only and found_both:
-            break
-
-    log.debug("get_cut_size_info(%s): 幅のみ=%s×%s 両方=%s×%s",
-              category, out.size_width_only, out.count_width_only,
-              out.size_both, out.count_both)
+    log.debug("get_cut_size_info[%s] 結果: 幅カットのみ=[%s]x%s 元=[%s] 丈カットあり=[%s]x%s 元=[%s]",
+              category, out.size_width_only, out.count_width_only, out.orig_width_only,
+              out.size_both, out.count_both, out.orig_both)
     return out
+
+
+def _add_cut_slot(out: CutSizeInfo, slot: str, size: str, orig: str,
+                  category: str, slot_name: str,
+                  warn: Optional[Callable[[str], None]]) -> None:
+    """切断依頼の1枠に1枚加える(VBA `AddCutSlot`)。
+
+    依頼書は1枠1サイズなので、枠に別サイズが来たら知らせる(2つ目は載らない)。
+    """
+    size_attr, count_attr, orig_attr = f"size_{slot}", f"count_{slot}", f"orig_{slot}"
+    current = getattr(out, size_attr)
+    if not current:
+        setattr(out, size_attr, size)
+        setattr(out, orig_attr, orig)
+        setattr(out, count_attr, 1)
+    elif current == size:
+        setattr(out, count_attr, getattr(out, count_attr) + 1)
+    else:
+        message = (f"[切断依頼][{category}][警告] {slot_name}に別サイズの板があります"
+                   f"({current} と {size})。依頼書には {current} だけ載ります")
+        log.warning(message)
+        if warn is not None:
+            warn(message)
+
+
+@dataclass
+class CutTargets:
+    """切断依頼の対象と対象外(プロテック以外。VBA `CheckCutTargets`)。"""
+
+    count: int = 0                         # 対象の枚数(実際に切るカット前提の板)
+    others: list[str] = field(default_factory=list)   # 対象外(選定ログに出す行)
+
+
+def check_cut_targets(boards: Sequence[object], placed: Sequence[object],
+                      category: str, base_w: int, base_l: int) -> CutTargets:
+    """対象の枚数と、対象外(はみ出し・配置上のカット)を数える。
+
+        対象   … カット前提のサイズで、実際に切られている板(`get_cut_size_info` と同じ判定)
+        対象外 … カット前提ではない板で、はみ出し・配置上のカットがあるもの
+                 (PASS3 で20%まで許したはみ出し、最後の1枚の丈はみ出し等)
+    補填ボードはどちらにも含めない。
+    """
+    from .placement_render import detect_board_cut
+
+    cut_sku = cut_premise_skus(boards)
+    result = CutTargets()
+    others: dict[tuple[str, str], int] = {}
+    for pb in placed:
+        if pb.board_category != category or pb.is_fill_board:
+            continue
+        key = sku_key_min_max(pb.original_width, pb.original_length)
+        cut = detect_board_cut(pb.original_width, pb.original_length, pb.width, pb.length)
+        over_w = max(0, (pb.y + pb.width) - base_w)
+        over_l = max(0, (pb.x + pb.length) - base_l)
+        if key in cut_sku:
+            if cut.cut_width or cut.cut_length or over_l > 0:
+                result.count += 1
+            continue
+        reason = ""
+        if over_w > 0:
+            reason += f" 幅はみ出し{over_w}mm"
+        if over_l > 0:
+            reason += f" 丈はみ出し{over_l}mm"
+        if cut.cut_width:
+            reason += f" 幅カット{cut.amount_width}mm"
+        if cut.cut_length:
+            reason += f" 丈カット{cut.amount_length}mm"
+        if reason:
+            k = (f"{pb.original_width}x{pb.original_length}", reason)
+            others[k] = others.get(k, 0) + 1
+    result.others = [f"[切断依頼対象外] {category} {size} {n}枚:{reason}"
+                     "(カット前提ではないため依頼しません)"
+                     for (size, reason), n in others.items()]
+    log.debug("check_cut_targets[%s]: 対象=%s枚 対象外=%s種", category,
+              result.count, len(others))
+    return result
 
 
 # プロテックは**上用=下用と同サイズを強制コピー**する仕様なので、
@@ -750,6 +806,7 @@ __all__ = [
     "LabelData", "build_label_report", "build_label_sheet", "build_hiki_text",
     "CutRequestData", "CutSizeInfo", "build_cut_request_report",
     "build_cut_request_sheet", "get_cut_size_info", "protec_cut_size_info",
+    "check_cut_targets", "sku_key_min_max", "CutTargets",
     "cut_request_title", "format_position", "product_size_text",
     "format_thickness", "format_side", "hiki_header_for",
 ]

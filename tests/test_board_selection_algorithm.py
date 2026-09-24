@@ -1940,9 +1940,11 @@ class LowerWideCutTests(unittest.TestCase):
         product = ProductSize(width=1122, length=2502)
         available = [board(1030, 1520)]
         r = alg.auto_select_boards(available, palette, product)
+        # 切断依頼は実際の配置から集計する(VBA `GetCutSizeInfo` 全面差し替え)
+        from packaging_tool import placement_algorithm as place
+        ctx = place.auto_place_boards(r.lower, r.upper, palette, product)
         cut_info = reports.get_cut_size_info(
-            r.lower, "下用", palette.width, palette.length,
-            r.cut_info, r.length_cut_info, r.length_cut_count)
+            r.lower, ctx.placed, "下用", palette.width, palette.length)
         # 丈カットが検出されていれば size_both が埋まり、
         # 「幅カットのみ」の1本にまとめられない
         self.assertNotEqual(cut_info.size_both, "")

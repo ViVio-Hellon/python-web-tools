@@ -94,7 +94,7 @@ from .models import BoardModel, PlacedBoardModel
 #                      → 補填の配置(fill) → ここ(並べる順を決める)
 # ------------------------------------------------------------------
 from .placement_types import (  # noqa: F401
-    CATEGORY_LOWER, CATEGORY_UPPER, COVERED_TOLERANCE, FILL_SHORT_SIDE_LIMIT,
+    CATEGORY_LOWER, CATEGORY_UPPER, COVERED_TOLERANCE, CUT_UPPER_MINUS, FILL_SHORT_SIDE_LIMIT,
     FILL_SORT_TOLERANCE, FINE_RANGE, GRID_STEP, SNAP_STEP, TAG_Y_STACK,
     UPPER_SCAN_MARGIN, X_OVERHANG_LIMIT, PlacementContext, RotationState,
     UnplacedBoard, _make_model, evaluate_placement, explain_unplaced)
@@ -140,7 +140,10 @@ def _place_cut_premise(
     else:
         wc_short = min(b.width, b.length)
         b_rot_cut = b.width < b.length          # 長辺をY方向(幅)へ
-        wc_target_w = ctx.limit_width(category)
+        # 切る幅は**切断依頼の定義**(上用 = 製品幅 − 20 / 下用 = パレット幅
+        # ぴったり)。以前は上用を製品幅ちょうどで切っていた(VBA も同じ修正)
+        wc_target_w = ctx.limit_width(category) - (
+            CUT_UPPER_MINUS if category == CATEGORY_UPPER else 0)
 
     xp_cut = 0
     for _ in range(b.count):

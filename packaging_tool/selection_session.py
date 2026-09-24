@@ -758,9 +758,21 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         だからで、種類ごとに分けても現場は結局まとめて回る。
         """
         items: list[dict] = []
-        for board in list(self.selected.lower) + list(self.selected.upper):
-            items.append({"kind": "board", "width": board.width,
-                          "length": board.length, "count": board.count})
+        # **同じ区分・同じサイズの行は合算する**(VBA `AddOrMergeSel`)。
+        # 別案では同じサイズが「主」と「カット前提」の2行に分かれるが、
+        # 取りに行くのは1か所なので、分けたままだと件数も疲労度も二重になる
+        merged: dict[tuple[str, int, int], dict] = {}
+        for category, boards in (("下用", self.selected.lower),
+                                 ("上用", self.selected.upper)):
+            for board in boards:
+                key = (category, board.width, board.length)
+                if key in merged:
+                    merged[key]["count"] += board.count
+                    continue
+                merged[key] = {"kind": "board", "category": category,
+                               "width": board.width, "length": board.length,
+                               "count": board.count}
+                items.append(merged[key])
         for length in self.selected_angles:
             items.append({"kind": "angle", "width": 0,
                           "length": length, "count": 1})

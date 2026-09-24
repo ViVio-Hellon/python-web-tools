@@ -79,12 +79,26 @@ class MapItemsTests(unittest.TestCase):
 
         items = self.session.map_items()
         self.assertEqual(len(items), 3)
-        self.assertEqual(items[0], {"kind": "board", "width": 750,
-                                    "length": 1130, "count": 2})
-        self.assertEqual(items[1], {"kind": "board", "width": 600,
-                                    "length": 900, "count": 1})
+        self.assertEqual(items[0], {"kind": "board", "category": "下用",
+                                    "width": 750, "length": 1130, "count": 2})
+        self.assertEqual(items[1], {"kind": "board", "category": "上用",
+                                    "width": 600, "length": 900, "count": 1})
         self.assertEqual(items[2], {"kind": "angle", "width": 0,
                                     "length": 1200, "count": 1})
+
+    def test_同じ区分で同じサイズの行は合算する(self):
+        """別案では同じサイズが「主」と「カット前提」の2行に分かれる。
+        取りに行くのは1か所なので1件にまとめる(VBA `AddOrMergeSel`)。
+        区分が違えば別の件(上用と下用は別に数える)。"""
+        from packaging_tool import board_selection_service as svc
+
+        self.session.selected.lower += [svc.SelectedBoard(1000, 2000, 2, "主"),
+                                        svc.SelectedBoard(1000, 2000, 1, "カット前提")]
+        self.session.selected.upper.append(svc.SelectedBoard(1000, 2000, 1, "主"))
+
+        items = self.session.map_items()
+        self.assertEqual([(i["category"], i["count"]) for i in items],
+                         [("下用", 3), ("上用", 1)])
 
 
 class StockSizeTests(unittest.TestCase):

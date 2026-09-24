@@ -24,10 +24,17 @@ from . import tiling_algorithm as tiling
 from . import user_log as user_log_mod
 from .logging_utils import get_logger
 from .pattern_store import METHOD_TILING_PREFIX
+from .selection_records import cut_facts_from_placement
 from .selection_common import (BoardOpResult, REFUSE_NOT_FOUND,
                                REFUSE_NO_CANDIDATES, log_placed)
 
 log = get_logger("selection_session.tiling")
+
+# プロテックで「候補変更」を断る文(VBA `btnChangeCandidate_Click`。VBA の
+# ボタン名「別案で配置」はこの画面の「候補変更」)。画面の理由表示と押したときの
+# 断りで同じ文を使う
+PROTEC_TILING_REFUSAL = ("プロテックモードでは「候補変更」は使えません。"
+                         "「ボード選定」「ボード配置」で配置してください。")
 
 
 
@@ -199,10 +206,11 @@ class TilingMixin:
             # カット前提の別ロジックで、在庫が3種/1種しかなく敷き詰めが
             # 成立しない(成立率 上用0.8% / IK 0.1%)。現行のプロテック
             # 選定を使う
-            return BoardOpResult(
-                False, "プロテックは「候補変更」の対象外です。"
-                       "「ボード選定」を使ってください。",
-                REFUSE_NO_CANDIDATES)
+            # プロテックはモードのルール(製品幅基準・マイナス許容)で
+            # 選定・切断するので、そのルールを持たない別案は使わない
+            # (VBA `btnChangeCandidate_Click`。以前はルール外の配置になり、
+            # 切断依頼書はプロテック選定時の値のまま残っていた)
+            return BoardOpResult(False, PROTEC_TILING_REFUSAL, REFUSE_NO_CANDIDATES)
 
         available = self.candidates()
         if not available:
@@ -324,7 +332,11 @@ class TilingMixin:
         # False に戻す)。敷き詰めは狭幅の専用経路を行構成の数え上げに
         # 吸収しているので、当時の前提を引き継ぐ意味が無い
         self.select_result = None
-        self.restored = None
+        # カット辞書は別案の配置から作り直す(前の選定の値を残さない。
+        # VBA `RebuildCutInfoFromPlacement`)
+        self.restored = cut_facts_from_placement(
+            self.selected.upper, self.selected.lower, ctx.placed,
+            self.product.length, self.palette.length)
         self.placement = ctx
         # 実績保存用: 配置方式「別案A/B/C」と配置時点の内容(VBA `TilePlaceAndDraw`)
         self.record_placement(f"{METHOD_TILING_PREFIX}{'ABC'[axis]}")
