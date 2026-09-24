@@ -112,6 +112,46 @@ def write_back(conn: sqlite3.Connection,
     return result
 
 
+def ensure_guards(path: Path) -> list[str]:
+    """取り込み元に二重登録の防止(送信ID列と一意インデックス)を用意する。
+
+    返すのは表ごとの結果の1行(取り込み診断と画面のまとめに出す)。
+
+    【なぜ取り込みのたびに見るのか】
+    以前は書き戻し(`write_back`)のときにしか作っていなかった。取り込み元は
+    Access から**変換し直したファイルに差し替えられ**、そのとき索引は付いて
+    こない。送る行が無ければ書き戻しは走らないので、設定画面に「二重登録の
+    防止: 効いていません」が出たまま、何をしても消えなかった。
+    マスタを取り込むのは、まさにファイルが差し替わったときなので、そこで作る。
+    """
+    lines: list[str] = []
+    try:
+        source = source_db.connect(path)
+    except source_db.SourceError as exc:
+        return [f"二重登録の防止: 取り込み元を開けないので確かめられません({exc})"]
+    try:
+        names = set(source.table_names())
+        for spec in WRITEBACK_SPECS:
+            if not spec.use_op_id_guard or spec.access_table not in names:
+                continue
+            before = outbox_sync.guard_state(source, spec)
+            if before.ok:
+                continue
+            outbox_sync.ensure_op_id_column(source, spec)
+            after = outbox_sync.guard_state(source, spec)
+            if after.ok:
+                lines.append(f"二重登録の防止: {spec.access_table} に送信IDの"
+                             "一意インデックスを作りました")
+            else:
+                lines.append(f"二重登録の防止: {spec.access_table} は用意できません"
+                             f"でした ── {after.why()}")
+    finally:
+        source.close()
+    for line in lines:
+        log.info("%s", line)
+    return lines
+
+
 def _push_patterns(conn: sqlite3.Connection, source: Any,
                    result: WriteBackResult) -> None:
     """実績(保存・読んだ回数・削除)も同じ取り込み元へ渡す。

@@ -388,6 +388,18 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
     if config.TBL_PT_HEADER not in unsent:
         _import_patterns(conn, path, result)
 
+    # 二重登録の防止(送信IDの一意インデックス)。取り込み元が変換し直した
+    # ファイルに差し替わると索引が消えるので、取り込むたびに確かめて作る
+    # (`sync_writeback.ensure_guards`)。作れなくても取り込みは続ける
+    try:
+        guard_lines = sync_writeback.ensure_guards(path)
+    except Exception as exc:                       # noqa: BLE001 - 取り込みは止めない
+        log.exception("二重登録の防止を用意できませんでした")
+        guard_lines = [f"二重登録の防止: 用意できませんでした({exc})"]
+    for line in guard_lines:
+        import_diag.write(f"  {line}")
+        result.notes.append(line)
+
     # **取り込んだ行は、取り込み元から来た行。** 送り返す必要はない。
     #
     # ここを飛ばすと取り込みのたびに倍になる。総入れ替えで管理番号が

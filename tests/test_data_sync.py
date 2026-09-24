@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packaging_tool import config, data_sync, db, import_specs, outbox_sync
+from packaging_tool import config, data_sync, db, import_specs, outbox_sync, source_db
 # 差し替えの当て先は**持ち主のモジュール**。ハブ(`data_sync`)へ
 # 当てても、持ち主から呼んでいる側には効かない
 from packaging_tool import sync_import as imports
@@ -1716,3 +1716,74 @@ class DescribeThresholdTests(unittest.TestCase):
         text = data_sync.describe_environment()
         self.assertIn("パレット閾値マスタ", text)
         self.assertIn(str(config.threshold_db_dir()), text)
+
+
+class GuardRepairTests(unittest.TestCase):
+    """二重登録の防止(送信IDの一意インデックス)を、取り込みのたびに用意する。
+
+    取り込み元は Access から変換し直したファイルに差し替えられ、そのとき
+    索引は付いてこない。以前は書き戻しでしか作らず、送る行が無ければ
+    書き戻しは走らないので、設定画面の「効いていません(2件)」が消えなかった。
+    """
+
+    def setUp(self) -> None:
+        from packaging_tool import sync_writeback
+        self.sync_writeback = sync_writeback
+        outbox_sync._op_id_column_cache.clear()
+        self.addCleanup(outbox_sync._op_id_column_cache.clear)
+        self._dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(self._dir, True))
+        self.path = self._dir / "梱包資材マスタ.sqlite3"
+        self.write_converted(self.path)
+
+    def write_converted(self, path: Path) -> None:
+        """変換し直したファイル: 送信ID列はあるが索引が無い(現場のものと同じ形)。"""
+        path.unlink(missing_ok=True)
+        conn = sqlite3.connect(path)
+        for spec in self.sync_writeback.WRITEBACK_SPECS:
+            conn.execute(f'CREATE TABLE "{spec.access_table}"'
+                         f' (管理番号 INTEGER, "{spec.op_id_column}" TEXT)')
+            conn.executemany(f'INSERT INTO "{spec.access_table}" VALUES (?, NULL)',
+                             [(1,), (2,)])
+        conn.commit()
+        conn.close()
+
+    def guards_ok(self) -> list[bool]:
+        with source_db.connect(self.path) as src:
+            return [outbox_sync.guard_state(src, spec).ok
+                    for spec in self.sync_writeback.WRITEBACK_SPECS
+                    if spec.use_op_id_guard]
+
+    def test_索引が無ければ作る(self):
+        self.assertEqual(self.guards_ok(), [False, False])
+        lines = self.sync_writeback.ensure_guards(self.path)
+        self.assertEqual(self.guards_ok(), [True, True])
+        self.assertTrue(all("作りました" in line for line in lines), lines)
+        # あれば何も言わない
+        self.assertEqual(self.sync_writeback.ensure_guards(self.path), [])
+
+    def test_マスタの取り込みで作る(self):
+        """送る行が無くても、取り込むだけで直る(起動時の自動取り込みも同じ経路)。"""
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        result = data_sync.import_master(conn, self.path)
+        self.assertEqual(self.guards_ok(), [True, True])
+        self.assertTrue(any("一意インデックスを作りました" in n for n in result.notes))
+
+    def test_動いている間にファイルが差し替わっても作り直す(self):
+        """以前はパスだけで「作った」と覚えていたので、差し替え後は作り直さなかった。"""
+        with source_db.connect(self.path) as src:
+            for spec in self.sync_writeback.WRITEBACK_SPECS:
+                self.assertTrue(outbox_sync.ensure_op_id_column(src, spec))
+        self.assertEqual(self.guards_ok(), [True, True])
+
+        self.write_converted(self.path)               # 変換し直したものに差し替え
+        self.assertEqual(self.guards_ok(), [False, False])
+        with source_db.connect(self.path) as src:
+            for spec in self.sync_writeback.WRITEBACK_SPECS:
+                self.assertTrue(outbox_sync.ensure_op_id_column(src, spec))
+        self.assertEqual(self.guards_ok(), [True, True])
+
+    def test_画面の案内は取り込みでも直ると言う(self):
+        state = outbox_sync.GuardState(table="資材パレット注文管理", has_column=True)
+        self.assertIn("次の取り込み", state.why())

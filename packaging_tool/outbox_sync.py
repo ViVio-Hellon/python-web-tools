@@ -32,6 +32,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from . import source_db
@@ -471,7 +472,20 @@ def release_claim(conn: sqlite3.Connection, spec: WriteBackSpec,
 # ------------------------------------------------------------------
 # ensure_op_id_column の結果(使えた/使えなかった)を端末内で使い回す
 # キャッシュ。key: (取り込み元のパス, access_table, op_id_column)
-_op_id_column_cache: dict[tuple[str, str, str], bool] = {}
+# 値: (確かめたときのファイルの姿(大きさ, 更新時刻), 使えたか)
+#
+# **ファイルの姿も覚える。** 以前はパスだけで覚えていたので、取り込み元が
+# 変換し直したファイルに差し替えられ(変換では索引が付いてこない)ても、
+# 動いているツールは「索引はある」と思い込んだまま作り直さなかった
+_op_id_column_cache: dict[tuple[str, str, str], tuple[Optional[tuple[int, int]], bool]] = {}
+
+
+def _file_stamp(path: Path) -> Optional[tuple[int, int]]:
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns)
 
 
 def _try_ddl(source: "source_db.SourceConnection", sql: str,
@@ -513,8 +527,8 @@ def ensure_op_id_column(source: "source_db.SourceConnection",
     """
     cache_key = (str(source.path), spec.access_table, spec.op_id_column)
     cached = _op_id_column_cache.get(cache_key)
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] == _file_stamp(source.path):
+        return cached[1]
 
     column_ok = _try_ddl(
         source,
@@ -529,7 +543,8 @@ def ensure_op_id_column(source: "source_db.SourceConnection",
         return False
 
     ready = column_ok and index_ok
-    _op_id_column_cache[cache_key] = ready
+    # 作った後の姿で覚える(作ったこと自体でファイルの更新時刻が進むため)
+    _op_id_column_cache[cache_key] = (_file_stamp(source.path), ready)
     return ready
 
 
@@ -639,10 +654,11 @@ class GuardState:
         if not self.has_index:
             if self.blanks > 1:
                 return (f"{self.table} の送信IDが空の行が{self.blanks}件あり、"
-                        "一意インデックスを作れません。次の"
+                        "一意インデックスを作れません。次の取り込みか"
                         "「取り込み元へ反映」で空欄を未採番に直して作ります。")
             return (f"{self.table} に送信IDの一意インデックスがありません。"
-                    "次の「取り込み元へ反映」で作ります。")
+                    "次の取り込み(起動時の自動取り込みを含む)か"
+                    "「取り込み元へ反映」で作ります。")
         return ""
 
 
