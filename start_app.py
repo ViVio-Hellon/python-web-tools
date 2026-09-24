@@ -399,7 +399,7 @@ def _initialize(srv) -> None:
     try:
         srv.mark_stage("アプリを準備中")
         config.ensure_dirs()
-        # 配布設定(`config/distribution.json`)があれば、**取り込みより先に**
+        # 配布設定(ツール直下の `配布設定/`)があれば、**取り込みより先に**
         # 読む ── 置き場所が入っているので、読む前に取り込むと既定の場所を見る
         from packaging_tool import distribution
         loaded = distribution.apply_on_start()

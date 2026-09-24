@@ -6,38 +6,46 @@
 開いて打ち直すのは手間で、打ち間違えると**別のファイルを読み書きする**
 端末ができてしまいます(置き場所は取り込みと書き戻しの相手そのもの)。
 
-そこで、設定を決めた端末で「配布設定」を書き出し、ツールのフォルダごと
-配ります。配った先は起動したときにそれを見つけて読み込みます。
+【流れ】
+    1. 1台で起動して設定し、設定画面の「配布設定」で書き出す
+    2. ツールのフォルダの直下に `配布設定\\` ができ、配るものが全部そこに入る
+    3. フォルダごと配る(`scripts\\make_dist.bat` を使うと `data\\` などが紛れない)
+    4. 配った先は起動したとき `配布設定\\` を見つけて読み込む
 
-【どこに置くか】
-`config\\distribution.json`(ツールのフォルダの中)。**`data\\` には置きません**
-── `data\\` は端末ごとの中身(手元のDB・この端末の設定)で、配るものでは
-ないからです。フォルダごと配れば一緒に届きます。
+【`配布設定\\` の中身】**配布先に関わるものはここだけ**に置きます。
 
-【何を入れるか】
-画面で選んだものだけ(`ITEMS`)。**拠点は既定で入れません** ── ラインごとに
-違うので、入れたまま配ると全端末が同じ拠点になります(疲労度・棚検索の
-距離がずれる)。配置図(棚検索・簡易在庫)も選べば入れられます。
+    配布設定\\
+      設定.json            置き場所・図面URL・自動取り込み・書き出し先・
+                           管理者パスワード(撹拌した値)・拠点(選んだときだけ)
+      配置図\\
+        floor_plan.json    棚検索の配置図(選んだときだけ)
+        pallet_map.json    簡易在庫の保管位置マップ(選んだときだけ)
+      はじめに読む.txt     何が入っているか・配った先で何が起きるか
 
-【いつ読むか】
-起動したとき、**まだ読んでいない配布設定**があれば読みます(中身の指紋で
-見分ける)。同じ配布設定は2度読みません ── 読んだあとに端末で直した値を、
-次の起動で配布設定が上書きしてしまわないためです。新しい配布設定を置けば、
-次の起動で読みます。
+配置図は普通のファイルなので、差し替えたいときは置き換えるだけで済みます。
+`data\\` は端末ごとの中身で、ここには混ぜません。出荷時の既定の配置図は
+プログラム側(`packaging_tool\\*_default.json`)にあり、配布設定に配置図が
+無い端末はそれを使います。
 
-配置図は、**その端末で編集した図が無いときだけ**入れます(端末で直した配置を
-黙って消さない)。設定画面の「配布設定を読み込み直す」なら上書きします。
+【読み込むときの決まり】**その端末にすでにあるものは読み込みません。**
 
-【パスワード】書き出す・消す・読み込み直すには管理者パスワードが要ります
-(設定画面の置き場所の変更と同じ関門)。起動時の読み込みには要りません
-── 配布設定を置いたのは、フォルダを配った管理者本人だからです。
+    設定     … その端末で値が入っている項目はそのまま。無い項目だけ埋める
+    配置図   … その端末で配置を保存してあれば(`data\\*.json`)そのまま
+
+起動のたびに見に行きますが、埋まった項目は次から「すでにある」ので、
+端末で直した値が戻されることはありません。狙って揃えたいときは、
+設定画面の「配布設定を読み込み直す」(管理者パスワード)で上書きします。
+
+【パスワード】書き出す・消す・読み込み直すには管理者パスワードが要ります。
+起動時の読み込みには要りません ── `配布設定\\` を置いたのは、フォルダを
+配った管理者本人だからです。
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import platform
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -47,12 +55,16 @@ from .logging_utils import get_logger
 
 log = get_logger("distribution")
 
-PATH = Path(os.environ.get("PACKAGING_TOOL_DISTRIBUTION_PATH",
-                           str(config.BASE_DIR / "config" / "distribution.json")))
+# `配布設定\\` の置き場所(ツールのフォルダの直下)
+DIR = Path(os.environ.get("PACKAGING_TOOL_DISTRIBUTION_DIR",
+                          str(config.BASE_DIR / "配布設定")))
+SETTINGS_NAME = "設定.json"
+MAPS_DIRNAME = "配置図"
+README_NAME = "はじめに読む.txt"
 
 FORMAT = 1
 
-# この端末の設定に「どの配布設定を読んだか」を控える鍵
+# この端末が最後に読み込んだとき(設定画面に出すだけ)
 KEY_APPLIED = "distribution_applied"
 
 # 入れられるもの: (鍵, 画面の名前, 既定で入れるか)
@@ -70,20 +82,31 @@ ITEMS: tuple[tuple[str, str, bool], ...] = (
     (user_settings.KEY_POSITION, "拠点(ラインごとに違う)", False),
 )
 ITEM_KEYS = frozenset(key for key, _, _ in ITEMS)
+ITEM_LABELS = {key: label for key, label, _ in ITEMS}
 
-# 配置図: (鍵, 画面の名前)
+# 配置図: (鍵 = ファイル名の本体, 画面の名前)
 MAPS: tuple[tuple[str, str], ...] = (
     ("floor_plan", "棚検索の配置図"),
     ("pallet_map", "簡易在庫の保管位置マップ"),
 )
 MAP_KEYS = frozenset(key for key, _ in MAPS)
+MAP_LABELS = dict(MAPS)
 
 REFUSE_NEED_PASSWORD = "need_password"
 REFUSE_BAD_INPUT = "bad_input"
 REFUSE_FAILED = "failed"
 
 
-def _map_path(key: str) -> Path:
+def settings_path(base: Optional[Path] = None) -> Path:
+    return (base or DIR) / SETTINGS_NAME
+
+
+def map_file(key: str, base: Optional[Path] = None) -> Path:
+    return (base or DIR) / MAPS_DIRNAME / f"{key}.json"
+
+
+def _terminal_map(key: str) -> Path:
+    """その端末で保存した配置図(`data\\`)。"""
     from . import floor_plan, pallet_map
     return floor_plan.USER_PATH if key == "floor_plan" else pallet_map.USER_PATH
 
@@ -94,71 +117,77 @@ class Result:
     message: str = ""
     reason: str = ""
     applied: list[str] = field(default_factory=list)
+    kept: list[str] = field(default_factory=list)   # すでにあったので読まなかったもの
 
 
 # ------------------------------------------------------------------
 # 読む
 # ------------------------------------------------------------------
-def read() -> Optional[dict[str, Any]]:
-    """置いてある配布設定。無い・読めない・形が違うなら None。"""
-    if not PATH.exists():
+@dataclass
+class Bundle:
+    """置いてある `配布設定\\` の中身。"""
+
+    settings: dict[str, Any]
+    maps: dict[str, Path]              # 鍵 → 配置図のファイル
+    created_at: str = ""
+    created_on: str = ""
+
+
+def read() -> Optional[Bundle]:
+    """置いてある配布設定。無い・読めない・形が違うなら None。
+
+    `設定.json` が無くても、配置図だけ置いてあれば読む(配置図だけ配りたい、
+    に応える)。
+    """
+    if not DIR.is_dir():
         return None
-    try:
-        data = json.loads(PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        log.warning("配布設定を読めませんでした: %s", exc)
+    settings: dict[str, Any] = {}
+    meta: dict[str, Any] = {}
+    path = settings_path()
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as exc:
+            log.warning("配布設定を読めませんでした: %s", exc)
+            return None
+        if not isinstance(data, dict) or data.get("format") != FORMAT:
+            log.warning("配布設定の形が違うため読みません: %s", path)
+            return None
+        raw = data.get("settings") or {}
+        settings = {k: v for k, v in raw.items() if k in ITEM_KEYS}   # 知らない鍵は捨てる
+        meta = data
+    maps = {key: map_file(key) for key in MAP_KEYS if map_file(key).is_file()}
+    if not settings and not maps:
         return None
-    if not isinstance(data, dict) or data.get("format") != FORMAT:
-        log.warning("配布設定の形が違うため読みません: %s", PATH)
-        return None
-    return data
-
-
-def _stamp(data: dict[str, Any]) -> str:
-    """中身の指紋。**同じ配布設定を2度読まない**ための見分け。"""
-    body = {"settings": data.get("settings", {}), "maps": data.get("maps", {})}
-    raw = json.dumps(body, ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-
-def applied_stamp() -> str:
-    value = user_settings.get(KEY_APPLIED)
-    return value.get("stamp", "") if isinstance(value, dict) else ""
+    return Bundle(settings=settings, maps=maps,
+                  created_at=str(meta.get("created_at", "")),
+                  created_on=str(meta.get("created_on", "")))
 
 
 def summary() -> dict[str, Any]:
     """設定画面に出す、配布設定のいま。**パスワードの値は出さない。**"""
-    data = read()
+    bundle = read()
     applied = user_settings.get(KEY_APPLIED)
     out: dict[str, Any] = {
-        "exists": data is not None,
-        "path": str(PATH),
+        "exists": bundle is not None,
+        "path": str(DIR),
         "items": [{"key": k, "label": label, "default": default}
                   for k, label, default in ITEMS],
         "maps": [{"key": k, "label": label} for k, label in MAPS],
         "applied_at": applied.get("at", "") if isinstance(applied, dict) else "",
-        "applied_here": False,
         "contents": [],
         "created_at": "",
         "created_on": "",
     }
-    if data is None:
+    if bundle is None:
         return out
-    labels = dict((k, label) for k, label, _ in ITEMS)
-    settings = data.get("settings", {}) or {}
-    contents = []
-    for key, value in settings.items():
-        if key not in labels:
-            continue
-        shown = "(設定済み)" if key == admin_password.KEY else _show(value)
-        contents.append({"label": labels[key], "value": shown})
-    for key, label in MAPS:
-        if key in (data.get("maps") or {}):
-            contents.append({"label": label, "value": "入っています"})
-    out.update(contents=contents,
-               created_at=str(data.get("created_at", "")),
-               created_on=str(data.get("created_on", "")),
-               applied_here=applied_stamp() == _stamp(data))
+    contents = [{"label": ITEM_LABELS[key],
+                 "value": "(設定済み)" if key == admin_password.KEY else _show(value)}
+                for key, value in bundle.settings.items()]
+    contents += [{"label": MAP_LABELS[key], "value": f"{MAPS_DIRNAME}\\{path.name}"}
+                 for key, path in bundle.maps.items()]
+    out.update(contents=contents, created_at=bundle.created_at,
+               created_on=bundle.created_on)
     return out
 
 
@@ -173,10 +202,11 @@ def _show(value: Any) -> str:
 # 書き出す(配る側)
 # ------------------------------------------------------------------
 def export(password: str, items: list[str], maps: list[str]) -> Result:
-    """**この端末のいまの設定**を配布設定として書き出す。
+    """**この端末のいまの設定**を `配布設定\\` に書き出す(前の中身は置き換える)。
 
-    入っていない項目(この端末で一度も設定していない)は入れない ──
-    配った先の既定値を「空」で上書きしないため。
+    この端末で一度も変えていない項目は入れない ── 配った先も同じ既定で
+    動くので要らない(空で上書きしないためにも入れない)。配置図は、この端末で
+    保存したものがあればそれを、無ければ**出荷時の既定**を入れる。
     """
     if not admin_password.verify(str(password or "")):
         return Result(False, "配布設定を書き出すには管理者パスワードが要ります。",
@@ -191,47 +221,81 @@ def export(password: str, items: list[str], maps: list[str]) -> Result:
 
     current = user_settings.load_all()
     settings = {k: current[k] for k in items if k in current}
-    # この端末で一度も変えていない項目は**既定のまま**。配った先も同じ既定で
-    # 動くので、入れる必要が無い(空で上書きしないためにも入れない)
-    defaults = [dict((k, l) for k, l, _ in ITEMS)[k] for k in items if k not in current]
-    missing: list[str] = []
-    map_data: dict[str, Any] = {}
-    for key in maps:
-        path = _map_path(key)
-        if not path.exists():
-            missing.append(dict(MAPS)[key] + "(この端末で編集していません)")
-            continue
-        try:
-            map_data[key] = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            return Result(False, f"{dict(MAPS)[key]}を読めませんでした: {exc}",
-                          REFUSE_FAILED)
-    if not settings and not map_data:
-        return Result(False, "書き出せる設定がありません(" + "・".join(missing + defaults)
+    defaults = [ITEM_LABELS[k] for k in items if k not in current]
+    map_sources = {key: _map_source(key) for key in maps}
+    if not settings and not map_sources:
+        return Result(False, "書き出せる設定がありません(" + "・".join(defaults)
                       + " はこの端末で変えていないため既定のままです)。",
                       REFUSE_BAD_INPUT)
 
-    data = {"format": FORMAT, "created_at": db.now_db_string(),
-            "created_on": platform.node(), "settings": settings, "maps": map_data}
+    # **作ってから入れ替える。** 途中で失敗して、半分だけ新しい配布設定を
+    # 残さない(配った先がそれを読んでしまう)
+    staging = DIR.with_name(DIR.name + ".作成中")
     try:
-        PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(PATH)
+        shutil.rmtree(staging, ignore_errors=True)
+        (staging / MAPS_DIRNAME).mkdir(parents=True)
+        meta = {"format": FORMAT, "created_at": db.now_db_string(),
+                "created_on": platform.node(), "settings": settings}
+        settings_path(staging).write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        for key, src in map_sources.items():
+            shutil.copyfile(src, map_file(key, staging))
+        (staging / README_NAME).write_text(_readme(meta, list(map_sources)),
+                                           encoding="utf-8-sig")
+        if DIR.exists():
+            shutil.rmtree(DIR)
+        staging.rename(DIR)
     except OSError as exc:
-        return Result(False, f"{PATH} に書けませんでした: {exc}", REFUSE_FAILED)
-    # 書き出した端末は、その中身をもう使っている
-    _mark_applied(data)
-    names = [dict((k, l) for k, l, _ in ITEMS)[k] for k in settings] + \
-            [dict(MAPS)[k] for k in map_data]
-    message = f"配布設定を書き出しました({len(names)}項目)。ツールのフォルダごと配ってください。"
+        shutil.rmtree(staging, ignore_errors=True)
+        return Result(False, f"{DIR} に書けませんでした: {exc}", REFUSE_FAILED)
+    _mark_applied()
+
+    names = [ITEM_LABELS[k] for k in settings] + [MAP_LABELS[k] for k in map_sources]
+    message = (f"配布設定を書き出しました({len(names)}項目)。ツールの直下の「{DIR.name}」"
+               "フォルダに入っています。配るときは scripts\\make_dist.bat で"
+               "配布用フォルダを作ってください(このフォルダも入ります)。")
     if defaults:
         message += (" 既定のままなので入れていないもの(配った先も既定で動きます): "
                     + "・".join(defaults) + "。")
-    if missing:
-        message += " 入れられなかったもの: " + "・".join(missing) + "。"
     log.info("配布設定を書き出しました: %s", ", ".join(names))
     return Result(True, message, applied=names)
+
+
+def _map_source(key: str) -> Path:
+    """配る配置図の元。この端末で保存したもの、無ければ出荷時の既定。"""
+    from . import floor_plan, pallet_map
+    own = _terminal_map(key)
+    if own.exists():
+        return own
+    return floor_plan.DEFAULT_PATH if key == "floor_plan" else pallet_map.DEFAULT_PATH
+
+
+def _readme(meta: dict[str, Any], maps: list[str]) -> str:
+    lines = [
+        "梱包資材総合ツール 配布設定",
+        "",
+        f"作成: {meta['created_at']}({meta['created_on']})",
+        "",
+        "このフォルダに入っているもの",
+    ]
+    for key, value in meta["settings"].items():
+        shown = "(設定済み)" if key == admin_password.KEY else _show(value)
+        lines.append(f"  {ITEM_LABELS[key]}: {shown}")
+    for key in maps:
+        lines.append(f"  {MAP_LABELS[key]}: {MAPS_DIRNAME}\\{key}.json")
+    lines += [
+        "",
+        "配った先で起きること",
+        "  起動したときにこのフォルダを読み込みます。",
+        "  その端末にすでにある設定・保存してある配置図は、読み込みません(上書きしない)。",
+        "  揃えたいときは、設定画面の「配布設定」→「配布設定を読み込み直す」。",
+        "",
+        "配置図を差し替えたいとき",
+        f"  {MAPS_DIRNAME} の中の .json を置き換えてください(配置編集で「配置を保存」した",
+        "  端末の data\\floor_plan.json / pallet_map.json と同じ形です)。",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def remove(password: str) -> Result:
@@ -239,7 +303,8 @@ def remove(password: str) -> Result:
         return Result(False, "配布設定を消すには管理者パスワードが要ります。",
                       REFUSE_NEED_PASSWORD)
     try:
-        PATH.unlink(missing_ok=True)
+        if DIR.exists():
+            shutil.rmtree(DIR)
     except OSError as exc:
         return Result(False, f"消せませんでした: {exc}", REFUSE_FAILED)
     log.info("配布設定を消しました")
@@ -249,56 +314,61 @@ def remove(password: str) -> Result:
 # ------------------------------------------------------------------
 # 読み込む(配られた側)
 # ------------------------------------------------------------------
-def _mark_applied(data: dict[str, Any]) -> None:
-    user_settings.save(KEY_APPLIED, {"stamp": _stamp(data),
-                                     "at": db.now_db_string()})
+def _mark_applied() -> None:
+    user_settings.save(KEY_APPLIED, {"at": db.now_db_string()})
 
 
-def _apply(data: dict[str, Any], *, overwrite_maps: bool) -> list[str]:
-    labels = dict((k, label) for k, label, _ in ITEMS)
-    done = []
-    for key, value in (data.get("settings") or {}).items():
-        if key not in labels:                 # 知らない鍵は入れない
+def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
+    result = Result()
+    current = user_settings.load_all()
+    for key, value in bundle.settings.items():
+        if key in current and not overwrite:
+            result.kept.append(ITEM_LABELS[key])        # すでにある
             continue
         if user_settings.save(key, value):
-            done.append(labels[key])
-    for key, plan in (data.get("maps") or {}).items():
-        if key not in MAP_KEYS or not isinstance(plan, dict):
+            result.applied.append(ITEM_LABELS[key])
+    from . import map_data
+    for key, src in bundle.maps.items():
+        dest = _terminal_map(key)
+        if dest.exists() and not overwrite:
+            result.kept.append(MAP_LABELS[key])
             continue
-        path = _map_path(key)
-        if path.exists() and not overwrite_maps:
-            log.info("%s はこの端末で編集済みのため、配布設定で上書きしません", key)
+        plan = map_data.read_json(src)
+        if not isinstance(plan, dict):
+            log.warning("配布設定の配置図を読めません: %s", src)
             continue
-        from . import map_data
-        if map_data.write_json(path, plan):
-            done.append(dict(MAPS)[key])
-    _mark_applied(data)
-    return done
+        if map_data.write_json(dest, plan):
+            result.applied.append(MAP_LABELS[key])
+    if result.applied:
+        _mark_applied()
+    return result
 
 
 def apply_on_start() -> Result:
-    """起動時に呼ぶ。まだ読んでいない配布設定があれば読む。"""
-    data = read()
-    if data is None:
+    """起動時に呼ぶ。`配布設定\\` があれば、**その端末に無いものだけ**読む。"""
+    bundle = read()
+    if bundle is None:
         return Result(True, "")
-    if applied_stamp() == _stamp(data):
-        return Result(True, "")
-    done = _apply(data, overwrite_maps=False)
-    log.info("配布設定を読み込みました: %s", ", ".join(done) or "(変更なし)")
-    return Result(True, "配布設定を読み込みました", applied=done)
+    result = _apply(bundle, overwrite=False)
+    if result.applied:
+        log.info("配布設定を読み込みました: %s(すでにあったので読まなかったもの: %s)",
+                 ", ".join(result.applied), ", ".join(result.kept) or "なし")
+        result.message = "配布設定を読み込みました"
+    return result
 
 
 def reapply(password: str) -> Result:
-    """設定画面から。**配置図も上書きして**読み込み直す。"""
+    """設定画面から。**すでにあるものも上書きして**読み込み直す。"""
     if not admin_password.verify(str(password or "")):
         return Result(False, "配布設定を読み込み直すには管理者パスワードが要ります。",
                       REFUSE_NEED_PASSWORD)
-    data = read()
-    if data is None:
+    bundle = read()
+    if bundle is None:
         return Result(False, "配布設定が置かれていません。", REFUSE_BAD_INPUT)
-    done = _apply(data, overwrite_maps=True)
+    result = _apply(bundle, overwrite=True)
     _reload_map_sessions()
-    return Result(True, f"配布設定を読み込みました({len(done)}項目)", applied=done)
+    result.message = f"配布設定を読み込みました({len(result.applied)}項目)"
+    return result
 
 
 def _reload_map_sessions() -> None:

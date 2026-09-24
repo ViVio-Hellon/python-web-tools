@@ -482,7 +482,7 @@
       <span class="st st--{{ 'ok' if dist.exists else 'warn' }}" id="distState">{{ "あり" if dist.exists else "なし" }}</span>
     </header>
     <div class="pad">
-      <p class="why" id="distMeta">{% if dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成{% if dist.applied_here %} / この端末は読み込み済み{% endif %}{% else %}まだありません。下で書き出すと、ツールのフォルダの中にできます。{% endif %}</p>
+      <p class="why" id="distMeta">{% if dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成{% else %}まだありません。下で書き出すと、ツールのフォルダの直下に「配布設定」フォルダができます。{% endif %}</p>
       <div class="tablewrap">
         <table class="table">
           <thead><tr><th class="t">項目</th><th class="t">値</th></tr></thead>
@@ -491,7 +491,9 @@
           </tbody>
         </table>
       </div>
-      <p class="why">置き場所: <code id="distPath">{{ dist.path }}</code></p>
+      <p class="why">置き場所: <code id="distPath">{{ dist.path }}</code>
+        ── <b>配布先に関わるものはすべてこのフォルダ</b>に入ります
+        (設定.json・配置図・はじめに読む.txt)。配置図はファイルを置き換えれば差し替えられます。</p>
     </div>
   </section>
 
@@ -502,9 +504,9 @@
     </header>
     <div class="pad">
       <p class="why">
-        いまこの端末に入っている値をそのまま書き出します。書き出したら
-        <b>ツールのフォルダごと</b>配ってください。配った先は、<b>起動したときに
-        読み込みます</b>(同じ配布設定は2度読みません。端末で直した値はそのまま)。
+        いまこの端末に入っている値をそのまま書き出します(前の中身は置き換えます)。
+        配った先は<b>起動したときに読み込みます</b>。ただし<b>その端末にすでにある設定・
+        保存してある配置図は読み込みません</b>(上書きしない)。
       </p>
       <fieldset class="distchecks" id="distItems">
         <legend>設定</legend>
@@ -513,7 +515,7 @@
         {% endfor %}
       </fieldset>
       <fieldset class="distchecks" id="distMaps">
-        <legend>配置図(その端末で編集していないときだけ入れます)</legend>
+        <legend>配置図(この端末で保存した配置、無ければ出荷時の配置を入れます)</legend>
         {% for m in dist.maps %}
         <label><input type="checkbox" data-dist-map="{{ m.key }}"> {{ m.label }}</label>
         {% endfor %}
@@ -532,7 +534,7 @@
       <p class="why">
         <b>拠点は既定で入れません。</b>ラインごとに違うので、入れたまま配ると
         全端末が同じ拠点になります。配った先で「動作」の面から選んでください。
-        「読み込み直す」は配置図も上書きします。
+        「読み込み直す」は、その端末にすでにある設定・配置図も上書きします。
       </p>
     </div>
   </section>

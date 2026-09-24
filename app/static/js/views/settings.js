@@ -567,8 +567,7 @@ function renderDistribution(dist) {
   el.distState.className = `st st--${dist.exists ? "ok" : "warn"}`;
   el.distMeta.textContent = dist.exists
     ? `${dist.created_at} に ${dist.created_on} で作成`
-      + (dist.applied_here ? " / この端末は読み込み済み" : "")
-    : "まだありません。下で書き出すと、ツールのフォルダの中にできます。";
+    : "まだありません。下で書き出すと、ツールのフォルダの直下に「配布設定」フォルダができます。";
   el.distRows.replaceChildren(...dist.contents.map((c) => {
     const tr = document.createElement("tr");
     for (const text of [c.label, c.value]) {

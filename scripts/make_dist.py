@@ -11,7 +11,7 @@ r"""配布用フォルダを作る
 
 このスクリプトは**配るものだけ**を新しいフォルダへ写します。設定を一緒に
 配りたいときは、先に設定画面の「配布設定」で書き出しておいてください
-(`config\distribution.json`。配った先が起動時に読み込みます)。
+(ツールの直下の `配布設定\`。配った先が起動時に読み込みます)。
 
     python scripts\make_dist.py                     # ツールの隣に「梱包資材総合ツール_VERx.y.z」
     python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定
@@ -51,8 +51,9 @@ EXCLUDE_NAMES: tuple[str, ...] = (
     "htmlcov", "*.tmp", "*.bak-*", ".DS_Store", "Thumbs.db",
 )
 
-# 配布設定(`packaging_tool/distribution.py` の置き場所と同じ)
-SETTINGS = Path("config") / "distribution.json"
+# 配布設定のフォルダ(`packaging_tool/distribution.py` の置き場所と同じ)。
+# **INCLUDE には入れない** ── 入れるかどうかは --no-settings で決める
+SETTINGS = Path("配布設定")
 
 # できたフォルダに**入っていてはいけない**もの(最後に確かめる)
 FORBIDDEN: tuple[str, ...] = (
@@ -83,25 +84,26 @@ def _inside(path: Path, parent: Path) -> bool:
     return True
 
 
-def _settings_lines(path: Path) -> list[str]:
+def _settings_lines(folder: Path) -> list[str]:
     """配布設定の中身を、メモと画面に出す形で(パスワードの値は出さない)。"""
     from packaging_tool import distribution
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        return [f"  (読めませんでした: {exc})"]
-    labels = {key: label for key, label, _ in distribution.ITEMS}
     lines = []
-    for key, value in (data.get("settings") or {}).items():
-        shown = "(設定済み)" if key == "admin_password" else value
-        if isinstance(value, bool):
-            shown = "する" if value else "しない"
-        lines.append(f"  {labels.get(key, key)}: {shown}")
+    path = distribution.settings_path(folder)
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as exc:
+            return [f"  (読めませんでした: {exc})"]
+        for key, value in (data.get("settings") or {}).items():
+            shown = "(設定済み)" if key == "admin_password" else value
+            if isinstance(value, bool):
+                shown = "する" if value else "しない"
+            lines.append(f"  {distribution.ITEM_LABELS.get(key, key)}: {shown}")
+        if data.get("created_at"):
+            lines.append(f"  (作成 {data.get('created_at')} / {data.get('created_on', '')})")
     for key, label in distribution.MAPS:
-        if key in (data.get("maps") or {}):
-            lines.append(f"  {label}: 入っています")
-    if data.get("created_at"):
-        lines.append(f"  (作成 {data.get('created_at')} / {data.get('created_on', '')})")
+        if distribution.map_file(key, folder).is_file():
+            lines.append(f"  {label}: {distribution.MAPS_DIRNAME}\\{key}.json")
     return lines or ["  (中身がありません)"]
 
 
@@ -135,16 +137,14 @@ def build(out: Path, *, with_settings: bool = True, force: bool = False,
     if missing:
         raise SystemExit("配るはずのファイルがありません: " + ", ".join(missing))
 
-    # 配布設定: 入れる/入れないを**はっきり決める**(`config` を丸ごと写すと、
-    # 作った人の手元にあるものが黙って入るため)
+    # 配布設定: 入れる/入れないを**はっきり決める**(--no-settings)
     settings_src = ROOT / SETTINGS
-    settings_dst = out / SETTINGS
     lines = [f"配布用フォルダを作りました: {out}", f"版: VER{_version()}"]
-    if with_settings and settings_src.exists():
-        lines.append("配布設定を入れました(配った先が起動時に読み込みます):")
-        lines += _settings_lines(settings_src)
+    if with_settings and settings_src.is_dir():
+        shutil.copytree(settings_src, out / SETTINGS, ignore=_ignore)
+        lines.append(f"{SETTINGS} フォルダを入れました(配った先が起動時に読み込みます):")
+        lines += _settings_lines(out / SETTINGS)
     else:
-        settings_dst.unlink(missing_ok=True)
         lines.append("配布設定は入れていません。配った先で1台ずつ設定画面から"
                      "取り込み元を設定してください。")
         if with_settings:
@@ -194,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="配布用フォルダを作る")
     parser.add_argument("--out", help="作る場所(既定: ツールの隣に「梱包資材総合ツール_VER版」)")
     parser.add_argument("--no-settings", action="store_true",
-                        help="配布設定(config/distribution.json)を入れない")
+                        help="配布設定(ツール直下の 配布設定 フォルダ)を入れない")
     parser.add_argument("--force", action="store_true",
                         help="作る場所に中身があれば消して作り直す")
     parser.add_argument("--zip", action="store_true", help="zip も作る")

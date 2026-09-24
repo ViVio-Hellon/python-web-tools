@@ -34,24 +34,33 @@ class MakeDistTests(unittest.TestCase):
         self.assertTrue((out / "packaging_tool" / "distribution.py").exists())
         self.assertTrue((out / "配布メモ.txt").exists())
 
-    def test_配布設定は入れると決めたときだけ(self) -> None:
-        settings = _ROOT / make_dist.SETTINGS
-        created = not settings.exists()
-        if created:
-            settings.write_text(json.dumps({
-                "format": 1, "settings": {"lot_db_dir": r"\\srv\台帳",
-                                          "admin_password": "pbkdf2$1$x$y"},
-                "maps": {}}, ensure_ascii=False), encoding="utf-8")
-            self.addCleanup(settings.unlink)
-        out, lines = make_dist.build(self.out)
-        self.assertTrue((out / make_dist.SETTINGS).exists())
+    def test_配布設定フォルダは入れると決めたときだけ(self) -> None:
+        from unittest import mock
+        from packaging_tool import distribution
+        src = self.tmp / "tool_settings"
+        (src / distribution.MAPS_DIRNAME).mkdir(parents=True)
+        distribution.settings_path(src).write_text(json.dumps({
+            "format": 1, "settings": {"lot_db_dir": r"\\srv\台帳",
+                                      "admin_password": "pbkdf2$1$x$y"}},
+            ensure_ascii=False), encoding="utf-8")
+        distribution.map_file("floor_plan", src).write_text("{}", encoding="utf-8")
+        with mock.patch.object(make_dist, "SETTINGS", Path("配布設定")), \
+                mock.patch.object(make_dist, "ROOT", make_dist.ROOT):
+            real = make_dist.ROOT / make_dist.SETTINGS
+            if real.exists():
+                self.skipTest("開発機に配布設定があるため")
+            import shutil
+            shutil.copytree(src, real)
+            self.addCleanup(shutil.rmtree, real, True)
+            out, _lines = make_dist.build(self.out)
+            out2, _ = make_dist.build(self.tmp / "dist2", with_settings=False)
+        self.assertTrue(distribution.settings_path(out / "配布設定").exists())
+        self.assertTrue(distribution.map_file("floor_plan", out / "配布設定").exists())
         memo = (out / "配布メモ.txt").read_text(encoding="utf-8-sig")
-        if created:
-            self.assertIn(r"仕掛台帳の置き場所: \\srv\台帳", memo)
-            # パスワードの撹拌値もメモには出さない
-            self.assertNotIn("pbkdf2$1$x$y", memo)
-        out2, _ = make_dist.build(self.tmp / "dist2", with_settings=False)
-        self.assertFalse((out2 / make_dist.SETTINGS).exists())
+        self.assertIn(r"仕掛台帳の置き場所: \\srv\台帳", memo)
+        self.assertIn(r"棚検索の配置図: 配置図\floor_plan.json", memo)
+        self.assertNotIn("pbkdf2$1$x$y", memo)
+        self.assertFalse((out2 / "配布設定").exists())
 
     def test_ツールのフォルダの中には作らない(self) -> None:
         with self.assertRaises(SystemExit):
