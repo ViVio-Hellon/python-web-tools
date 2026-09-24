@@ -1593,3 +1593,129 @@ class TableBringTests(DataWebTestCase):
         for key in ('id="bringOpen"', 'id="bringPath"', 'data-browse-file="1"', 'id="bringLook"',
                     'id="bringRun"'):
             self.assertIn(key, html)
+
+
+_FAKE_ENGINE = '''
+import os
+def read_source(src, prefer="auto"):
+    if "壊れ" in os.path.basename(src):
+        raise RuntimeError("どちらの読み取りエンジンも使用できませんでした。")
+    # 呼ばれた回数を数える(同じ Access を2回変換しないことを確かめる)
+    with open(os.path.join(os.path.dirname(__file__), "calls.txt"), "a") as fh:
+        fh.write("1")
+    return ([{"name": "新しい表", "columns": ["ID", "名前"], "rows": [(1, "あ"), (2, "い")]},
+             {"name": "BoardMaster", "columns": ["ボード幅"], "rows": [(9,)]},
+             {"name": "MSysObjects", "columns": ["Id"], "rows": [(1,)]}],
+            "Access (fake)")
+'''
+_FAKE_WRITERS = '''
+import sqlite3
+def write_sqlite(tables, out_path, report=None):
+    conn = sqlite3.connect(out_path)
+    for t in tables:
+        cols = ", ".join('"%s"' % c for c in t["columns"])
+        conn.execute('CREATE TABLE "%s" (%s)' % (t["name"], cols))
+        marks = ", ".join("?" for _ in t["columns"])
+        conn.executemany('INSERT INTO "%s" VALUES (%s)' % (t["name"], marks), t["rows"])
+    conn.commit()
+    conn.close()
+    return out_path
+'''
+
+
+class TableBringAccessTests(TableBringTests):
+    """Access(.accdb)のまま選べる。いつもの変換ツール(accdb_converter)を中で呼ぶ。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from packaging_tool import table_bring
+        table_bring._converted_cache.clear()
+        self.addCleanup(table_bring._converted_cache.clear)
+        self.conv = self.dir / "accdb_converter"
+        self.conv.mkdir()
+        (self.conv / "engine.py").write_text(_FAKE_ENGINE, encoding="utf-8")
+        (self.conv / "writers.py").write_text(_FAKE_WRITERS, encoding="utf-8")
+        from packaging_tool import user_settings
+        saved = user_settings.get(config.KEY_CONVERTER_DIR, "")
+        self.addCleanup(user_settings.save, config.KEY_CONVERTER_DIR, saved or "")
+        user_settings.save(config.KEY_CONVERTER_DIR, str(self.conv))
+        self.converted = self.dir / "access" / "資材.accdb"
+        self.converted.write_bytes(b"\x00\x01Standard ACE DB")   # 中身は偽の変換ツールが読む
+
+    def calls(self) -> int:
+        path = self.conv / "calls.txt"
+        return len(path.read_text()) if path.exists() else 0
+
+    def test_中を見ると無い表だけ選べる(self) -> None:
+        plan = self.plan()
+        self.assertTrue(plan["ok"], plan["message"])
+        self.assertIn("Access を変換して読みました", plan["converted"])
+        self.assertIn("Access (fake)", plan["converted"])
+        by_name = {t["name"]: t for t in plan["tables"]}
+        self.assertFalse(by_name["新しい表"]["exists"])
+        self.assertTrue(by_name["BoardMaster"]["exists"])
+        # Access の内部の表は出さない
+        self.assertNotIn("MSysObjects", by_name)
+        self.assertIn("内部の表 1 個は出していません", plan["message"])
+
+    def test_無い表だけ写して今ある表には触らない(self) -> None:
+        self.session.admin = True
+        self.plan()
+        body = self.bring(["新しい表"])
+        self.assertTrue(body["ok"], body)
+        self.assertEqual(self.master_rows('SELECT 名前 FROM "新しい表" ORDER BY ID'),
+                         [("あ",), ("い",)])
+        self.assertEqual(self.master_rows("SELECT * FROM BoardMaster"), [(1, 1100)])
+        # 中を見る → 持ってくる で、変換は1回だけ
+        self.assertEqual(self.calls(), 1)
+
+    def test_もうある表は持ってこない(self) -> None:
+        self.session.admin = True
+        body = self.bring(["BoardMaster"], expect=409)
+        self.assertIn("もうある表は持ってきません", body["error"]["message"])
+
+    def test_内部の表は持ってこない(self) -> None:
+        self.session.admin = True
+        body = self.bring(["MSysObjects"], expect=400)
+        self.assertIn("内部の表は持ってきません", body["error"]["message"])
+
+    def test_変換ツールが見つからなければ場所を訊く(self) -> None:
+        from packaging_tool import table_bring, user_settings
+        user_settings.save(config.KEY_CONVERTER_DIR, str(self.dir / "無い"))
+        plan = table_bring.plan(str(self.converted))
+        self.assertFalse(plan.ok)
+        self.assertIn("変換ツール(accdb_converter)の場所が要ります", plan.message)
+
+    def test_場所が違えば覚えない(self) -> None:
+        from urllib.parse import quote
+        res = self.client.get(
+            f"/api/settings/table-bring/plan?path={quote(str(self.converted))}"
+            f"&converter={quote(str(self.dir))}", headers=self.auth())
+        self.assertIn("変換ツールのフォルダではないようです", res.get_json()["message"])
+        from packaging_tool import table_bring
+        self.assertEqual(table_bring.converter_dir(), self.conv)
+
+    def test_読み取り部品が無ければそう言う(self) -> None:
+        from packaging_tool import table_bring
+        broken = self.dir / "access" / "壊れ.accdb"
+        broken.write_bytes(b"x")
+        plan = table_bring.plan(str(broken))
+        self.assertFalse(plan.ok)
+        self.assertIn("Access を読む部品がこのPCの Python に入っていません", plan.message)
+        self.assertIn("start_debug.bat", plan.message)
+
+    def test_参照でAccessのファイルが見える(self) -> None:
+        from urllib.parse import quote
+        folder = quote(str(self.converted.parent))
+        plain = self.client.get(f"/api/fs/list?path={folder}", headers=self.auth()).get_json()
+        access = self.client.get(f"/api/fs/list?path={folder}&access=1",
+                                 headers=self.auth()).get_json()
+        self.assertNotIn("資材.accdb", [f["name"] for f in plain["files"]])
+        self.assertIn("資材.accdb", [f["name"] for f in access["files"]])
+
+    def test_いまの梱包資材マスタそのものは選べない(self) -> None:
+        super().test_いまの梱包資材マスタそのものは選べない()
+
+    def test_画面に段がある(self) -> None:
+        html = self.client.get("/settings").get_data(as_text=True)
+        self.assertIn('id="bringConverter"', html)

@@ -670,7 +670,9 @@ let browseFile = false;
 
 async function browseTo(path) {
   try {
-    const view = await api.get(`/api/fs/list?path=${encodeURIComponent(path || "")}`);
+    // ファイルを選ぶ参照(表を持ってくる)では Access のファイルも出す
+    const view = await api.get(`/api/fs/list?path=${encodeURIComponent(path || "")}`
+                               + (browseFile ? "&access=1" : ""));
     browser.path.value = view.path;
     browser.note.hidden = !view.message;
     browser.note.textContent = view.message;
@@ -755,6 +757,11 @@ function startBrowser() {
     // 選んだだけでは保存しない。「この設定を保存」を押すまで効かない
     if (browseTarget) browseTarget.value = browser.path.value;
     browser.dialog.close();
+    // 「表を持ってくる」の変換ツールは保存ボタンを通さない(中を見るときに覚える)
+    if (browseTarget && browseTarget.id === "bringConverter") {
+      toast("変換ツールの場所を入れました。「中を見る」で使います。", "info");
+      return;
+    }
     toast("フォルダを入れました。「この設定を保存」を押すと効きます。", "info");
   });
 }
@@ -769,6 +776,9 @@ function startBrowser() {
 const bring = {};
 
 function renderBring(plan) {
+  if (plan.converter && !bring.converter.value) bring.converter.value = plan.converter;
+  bring.converted.hidden = !plan.converted;
+  bring.converted.textContent = plan.converted || "";
   bring.note.hidden = !plan.message;
   bring.note.textContent = plan.message || "";
   bring.note.className = `status status--${plan.ok ? "ok" : "ng"}`;
@@ -818,7 +828,10 @@ async function lookBring() {
   const path = bring.path.value.trim();
   if (!path) { renderBring({ ok: false, message: "変換したファイルを選んでください。" }); return; }
   try {
-    renderBring(await api.get(`/api/settings/table-bring/plan?path=${encodeURIComponent(path)}`));
+    // 変換ツールの場所も送る(Access のまま選んだときに使う。サーバが覚える)
+    const conv = bring.converter.value.trim();
+    renderBring(await api.get(`/api/settings/table-bring/plan?path=${encodeURIComponent(path)}`
+                              + (conv ? `&converter=${encodeURIComponent(conv)}` : "")));
   } catch (err) {
     toastError(err);
   }
@@ -845,11 +858,22 @@ function startBring() {
   for (const [key, id] of [["dialog", "bringDialog"], ["open", "bringOpen"],
                            ["path", "bringPath"], ["look", "bringLook"],
                            ["note", "bringNote"], ["list", "bringList"],
-                           ["rows", "bringRows"], ["run", "bringRun"]]) {
+                           ["rows", "bringRows"], ["run", "bringRun"],
+                           ["converter", "bringConverter"],
+                           ["converted", "bringConverted"]]) {
     bring[key] = document.getElementById(id);
   }
   if (!bring.dialog) return;
-  bring.open.addEventListener("click", () => bring.dialog.showModal());
+  bring.open.addEventListener("click", async () => {
+    bring.dialog.showModal();
+    // 開いたら、見つかっている変換ツールの場所を出しておく
+    try {
+      const plan = await api.get("/api/settings/table-bring/plan?path=");
+      if (plan.converter && !bring.converter.value) bring.converter.value = plan.converter;
+    } catch (err) {
+      toastError(err);
+    }
+  });
   bring.look.addEventListener("click", lookBring);
   bring.path.addEventListener("change", lookBring);
   bring.path.addEventListener("keydown", (event) => {

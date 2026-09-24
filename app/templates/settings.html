@@ -766,18 +766,28 @@
     <button class="btn btn--danger" value="cancel">閉じる</button>
   </form>
   <p class="why">
-    Access で表を作ったら、いつもどおり sqlite3 に変換して、そのファイルを選んでください。
+    Access(.accdb)で表を作ったら、そのファイルを選んでください。変換したsqlite3でも選べます。
     <b>梱包資材マスタに無い表だけ</b>を写します。今ある表・行・索引には触りません。
   </p>
   <div class="paths">
-    <label for="bringPath">変換したファイル</label>
+    <label for="bringPath">持ってくるファイル</label>
     <span class="pathrow">
       <input class="input" id="bringPath" spellcheck="false" autocomplete="off">
       <button class="btn btn--find" type="button" data-browse="bringPath"
               data-browse-file="1"><span class="gl">▸</span>参照…</button>
       <button class="btn" type="button" id="bringLook">中を見る</button>
     </span>
+    {# Access のまま選んだときに使う変換ツール(いつもの accdb_converter)。
+       見つかっていれば入っている。無ければ場所を入れる #}
+    <label for="bringConverter">変換ツールの場所</label>
+    <span class="pathrow">
+      <input class="input" id="bringConverter" spellcheck="false" autocomplete="off"
+             placeholder="accdb_converter のフォルダ(Access を選ぶときだけ要ります)">
+      <button class="btn btn--find" type="button" data-browse="bringConverter"
+              data-browse-folder="1"><span class="gl">▸</span>参照…</button>
+    </span>
   </div>
+  <p class="why" id="bringConverted" hidden></p>
   <p class="status" id="bringNote" hidden></p>
   <div class="tablewrap tablewrap--browse" id="bringList" hidden>
     <table class="table">

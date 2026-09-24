@@ -38,6 +38,8 @@ MAX_ENTRIES = 300
 # 探しているファイル。これ以外の名前は出さない。
 # 取り込み元の種類は `source_db` が決めるので、ここで別に持たない
 SOURCE_SUFFIXES = source_db.SUFFIXES
+# 「表を持ってくる」はAccessのままでも選べる(変換ツールで変換してから読む)
+ACCESS_SUFFIXES = (".accdb", ".mdb")
 
 
 @dataclass
@@ -67,8 +69,12 @@ class BrowseView:
     picked: str = ""
 
 
-def browse(path_text: str) -> BrowseView:
-    """`path_text` のフォルダを一覧する。空なら出発点だけを返す。"""
+def browse(path_text: str, *, access: bool = False) -> BrowseView:
+    """`path_text` のフォルダを一覧する。空なら出発点だけを返す。
+
+    `access` なら Access のファイル(.accdb/.mdb)も出す(「表を持ってくる」)。
+    """
+    suffixes = SOURCE_SUFFIXES + (ACCESS_SUFFIXES if access else ())
     view = BrowseView(path=path_text, roots=_roots())
     if not path_text.strip():
         view.message = "フォルダを選んでください。"
@@ -125,7 +131,7 @@ def browse(path_text: str) -> BrowseView:
             continue
         if is_dir:
             view.dirs.append(Entry(name=entry.name, path=str(entry), is_dir=True))
-        elif entry.suffix.lower() in SOURCE_SUFFIXES:
+        elif entry.suffix.lower() in suffixes:
             # 探しているファイルだけ出す。あることが分かれば十分で、
             # 中身を読ませる口はここに作らない
             view.files.append(Entry(name=entry.name, path=str(entry),

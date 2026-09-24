@@ -269,7 +269,8 @@ def fs_list():
     付けない(それでは置き場所を探せない)。守りは `app/__init__.py` の
     127.0.0.1 バインド + 起動トークン + Host検証 + 同一オリジン確認。
     """
-    view = fs_browse.browse(request.args.get("path", ""))
+    view = fs_browse.browse(request.args.get("path", ""),
+                            access=request.args.get("access") == "1")
     return jsonify(fs_browse.to_dict(view))
 
 
@@ -322,6 +323,12 @@ def import_diag_report():
 def table_bring_plan():
     """Access で作った表を持ってくる ── まず中を見る(書かない)。`?path=`"""
     from packaging_tool import table_bring
+    # 変換ツールの場所(Access のまま読むとき)。送られてきたら覚える
+    if "converter" in request.args:
+        why = table_bring.set_converter_dir(request.args.get("converter", ""))
+        if why:
+            return jsonify(table_bring.plan_dict(table_bring.Plan(
+                source=request.args.get("path", ""), message=why)))
     return jsonify(table_bring.plan_dict(
         table_bring.plan(request.args.get("path", ""))))
 

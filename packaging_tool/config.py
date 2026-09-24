@@ -229,6 +229,8 @@ KEY_LOT_DB_DIR = "lot_db_dir"
 KEY_KANBAN_DB_DIR = "kanban_db_dir"
 KEY_THRESHOLD_DB_DIR = "threshold_db_dir"
 KEY_EXPORT_DIR = "export_dir"
+# 「表を持ってくる」で Access を変換するツール(accdb_converter)のフォルダ
+KEY_CONVERTER_DIR = "converter_dir"
 KEY_AUTO_IMPORT = "auto_import_on_start"
 
 # 包装仕様書の図面を返すURLのひな形(`{no}` が包装仕様NOに置き換わる)。
