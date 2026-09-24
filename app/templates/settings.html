@@ -122,6 +122,20 @@
         <p class="why">元のファイルが更新されているものだけを読み直します。</p>
 
         <div class="ops__row">
+          <span class="ops__name">取り込みの記録</span>
+          <div class="btn-row">
+            {# 何を読んで何を見送ったか(`import_diag`)。ログフォルダは隠し
+               フォルダの中で探せないので、ここから開く・保存する #}
+            <button class="btn" type="button" id="importDiag">記録を見る</button>
+            <button class="btn" type="button" id="importDiagSave">記録を保存</button>
+          </div>
+        </div>
+        <p class="why">
+          どのファイルを読んだか・見送ったか(その理由)・表ごとの件数を、取り込みのたびに
+          書いています。「読まない」と思ったら、保存したファイルを送ってください。
+        </p>
+
+        <div class="ops__row">
           <span class="ops__name">手元 → 取り込み元</span>
           <div class="btn-row">
             {# 確定させる操作なので commit の色 #}

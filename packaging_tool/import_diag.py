@@ -47,6 +47,24 @@ def path_for(day: Optional[date] = None) -> Path:
     return config.LOG_DIR / f"取り込み診断_{(day or date.today()):%Y%m%d}.log"
 
 
+def latest_path() -> Optional[Path]:
+    """いちばん新しい記録。今日のが無ければ、前の日のうち最新のもの。
+
+    ログフォルダ(`%LOCALAPPDATA%\\PackagingTool\\logs`)は Windows では
+    隠しフォルダの中にあり、現場からは探せない(「ログフォルダなんてない」)。
+    設定画面のボタンから開けるように、ここで見つける。
+    """
+    today = path_for()
+    if today.exists():
+        return today
+    try:
+        found = sorted(today.parent.glob("取り込み診断*.log"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    return found[0] if found else None
+
+
 def write(text: str) -> None:
     """1行(複数行でもよい)を足す。書けなくても取り込みは止めない。"""
     try:

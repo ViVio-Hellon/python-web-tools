@@ -512,7 +512,9 @@ def _with_diag(label: str, work: Callable[[], ImportResult]) -> ImportResult:
         result = work()
         if outer:
             import_diag.write("  まとめ: " + result.summary().replace("\n", "\n    "))
-            result.notes.append(f"取り込みの記録: {import_diag.path_for()}")
+            # ログフォルダは隠しフォルダの中なので、**画面から開ける道**を言う
+            result.notes.append("取り込みの記録は、この下の「取り込みの記録」の「記録を見る」で"
+                                f"開けます(ファイル: {import_diag.path_for()})")
     return result
 
 

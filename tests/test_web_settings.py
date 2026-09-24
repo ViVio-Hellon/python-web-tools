@@ -1433,3 +1433,41 @@ class RepoRootTests(unittest.TestCase):
         tracked = {line.split("/")[0] for line in out.splitlines() if line}
         self.assertEqual(tracked - self.ALLOWED, set(),
                          "配るつもりのないものが追跡されています")
+
+
+class ImportDiagReportTests(DataWebTestCase):
+    """取り込みの記録を画面から開く・保存する(`/report/import-diag`)。
+
+    ログフォルダは Windows では隠しフォルダ(`%LOCALAPPDATA%`)の中にあり、
+    現場からは探せなかった(「ログフォルダなんてないけど」)。
+    """
+
+    def test_記録が無ければ案内を返す(self) -> None:
+        res = self.client.get("/report/import-diag", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("まだ取り込みの記録がありません", res.get_data(as_text=True))
+
+    def test_記録を開ける_保存もできる(self) -> None:
+        from packaging_tool import import_diag
+        with import_diag.run("試しの取り込み"):
+            import_diag.write("  見送り: SIKALOT.sqlite3 ── 更新時刻が進んでいない")
+        res = self.client.get("/report/import-diag", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.mimetype.startswith("text/plain"))
+        text = res.get_data(as_text=True)
+        self.assertIn("■ 試しの取り込み", text)
+        self.assertIn("更新時刻が進んでいない", text)
+        self.assertNotIn("Content-Disposition", res.headers)
+
+        saved = self.client.get("/report/import-diag?save=1", headers=self.auth())
+        self.assertIn("attachment", saved.headers["Content-Disposition"])
+
+    def test_トークンが無ければ見せない(self) -> None:
+        """記録にはファイルの置き場所やロット番号が入る。"""
+        res = self.client.get("/report/import-diag")
+        self.assertIn(res.status_code, (401, 403))
+
+    def test_設定画面にボタンがある(self) -> None:
+        html = self.client.get("/settings").get_data(as_text=True)
+        self.assertIn('id="importDiag"', html)
+        self.assertIn('id="importDiagSave"', html)

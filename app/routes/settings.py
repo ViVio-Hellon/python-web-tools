@@ -21,7 +21,7 @@
 """
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, render_template, request
 
 from packaging_tool import data_sync, db, jobs, modes, source_db
 from packaging_tool.logging_utils import get_logger
@@ -289,6 +289,33 @@ def start_import():
         "lot": lambda c, p: data_sync.import_lot_ledger(c, progress=p),
     }[target]
     return _start("import", label, lambda p: _with_conn(lambda c: work(c, p)))
+
+
+@bp.get("/report/import-diag")
+def import_diag_report():
+    """取り込みの記録(`import_diag`)を別窓で見る。`?save=1` なら保存させる。
+
+    ログフォルダは Windows では隠しフォルダ(`%LOCALAPPDATA%`)の中にあり、
+    現場からは探せない。**送ってもらうための道**を画面に置く。
+    `/report/` の下なので起動トークンが要る(`app/__init__.py`)。
+    """
+    from packaging_tool import import_diag
+    path = import_diag.latest_path()
+    if path is None:
+        body = ("まだ取り込みの記録がありません。\n"
+                "取り込みを1回実行すると作られます(起動時の自動取り込みでも作られます)。\n")
+        return Response(body, mimetype="text/plain; charset=utf-8")
+    try:
+        body = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return Response(f"記録を読めません: {path}\n{exc}\n", status=500,
+                        mimetype="text/plain; charset=utf-8")
+    response = Response(body, mimetype="text/plain; charset=utf-8")
+    if request.args.get("save") == "1":
+        from urllib.parse import quote
+        response.headers["Content-Disposition"] = (
+            f"attachment; filename*=UTF-8''{quote(path.name)}")
+    return response
 
 
 @bp.post("/api/settings/write-back")

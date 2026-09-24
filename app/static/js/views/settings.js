@@ -9,7 +9,7 @@
   片方だけ古い、が起こる(設計.md §1)。ここは受け取る側に回る。
 */
 
-import { api } from "../api.js";
+import { api, tokenUrl } from "../api.js";
 import { onLeave } from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as jobs from "../jobs.js";
@@ -422,6 +422,7 @@ export function start(state, jobState, masterFrame) {
                     "masterAuthPass", "masterAuthBtn", "masterAuthWhy", "masterAuthState",
                     "pathAuth", "pathPassword", "pathWhy",
                     "writeBack", "recompute", "savePaths", "refresh",
+                    "importDiag", "importDiagSave",
                     "job", "jobLabel", "jobState", "jobPct", "jobBar",
                     "jobMessage", "jobSummary", "jobLanes", "recentRows", "recentEmpty",
                     "settingsTabs"]) {
@@ -440,6 +441,12 @@ export function start(state, jobState, masterFrame) {
   }
   el.writeBack.addEventListener("click", () =>
     startJob("/api/settings/write-back", {}));
+  // 取り込みの記録。ログフォルダは隠しフォルダの中なので、画面から開く
+  el.importDiag.addEventListener("click", () =>
+    window.open(tokenUrl("/report/import-diag"), "_blank", "noopener"));
+  el.importDiagSave.addEventListener("click", () => {
+    window.location.href = tokenUrl("/report/import-diag?save=1");
+  });
   el.recompute.addEventListener("click", () =>
     startJob("/api/settings/recompute", {}));
   el.refresh.addEventListener("click", refreshStatus);
