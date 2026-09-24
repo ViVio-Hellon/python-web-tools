@@ -318,6 +318,48 @@ def import_diag_report():
     return response
 
 
+@bp.get("/api/settings/table-bring/plan")
+def table_bring_plan():
+    """Access で作った表を持ってくる ── まず中を見る(書かない)。`?path=`"""
+    from packaging_tool import table_bring
+    return jsonify(table_bring.plan_dict(
+        table_bring.plan(request.args.get("path", ""))))
+
+
+@bp.post("/api/settings/table-bring")
+def table_bring_run():
+    """選んだ表を梱包資材マスタへ足す。`{"path":…, "tables":[…]}`
+
+    共有のマスタに書くので、マスタ管理と同じ関門(`master_admin.can_edit`
+    ── 管理者パスワード、権限があれば資材モードも)を通す。
+    """
+    from packaging_tool import master_admin, selection_session, table_bring
+    conn = get_db()
+    # **パスワードは必ず。** `can_edit` はアクセス権限がまだ空のとき誰でも
+    # 通す(最初の1行を入れるための逃げ道)が、表を足すのはその用途ではない
+    if not selection_session.get_session(conn).admin:
+        return jsonify(_error("not_allowed", "管理者認証が必要です。"
+                              "「パスワード」の面で認証してください。")), 403
+    allowed, why = master_admin.can_edit(conn, "")
+    if not allowed:
+        return jsonify(_error("not_allowed", why)), 403
+    body = request.get_json(silent=True) or {}
+    tables = body.get("tables")
+    if not isinstance(tables, list):
+        return jsonify(_error("bad_tables", "持ってくる表の指定が正しくありません")), 400
+    result = table_bring.bring(str(body.get("path", "")), [str(t) for t in tables])
+    payload = {"ok": result.ok, "message": result.message,
+               "brought": [{"name": n, "rows": r} for n, r in result.brought],
+               "backup": result.backup,
+               "plan": table_bring.plan_dict(table_bring.plan(str(body.get("path", ""))))}
+    if result.ok:
+        return jsonify(payload)
+    payload["error"] = {"code": result.reason, "message": result.message}
+    status = {table_bring.REFUSE_EXISTS: 409,
+              table_bring.REFUSE_NOTHING: 400}.get(result.reason, 422)
+    return jsonify(payload), status
+
+
 @bp.post("/api/settings/write-back")
 def start_write_back():
     return _start("write_back", "取り込み元へ反映",

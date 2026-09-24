@@ -441,6 +441,7 @@ export function start(state, jobState, masterFrame) {
   }
   el.writeBack.addEventListener("click", () =>
     startJob("/api/settings/write-back", {}));
+  startBring();
   // 取り込みの記録。ログフォルダは隠しフォルダの中なので、画面から開く
   el.importDiag.addEventListener("click", () =>
     window.open(tokenUrl("/report/import-diag"), "_blank", "noopener"));
@@ -664,6 +665,8 @@ function startMasterAuth() {
    ================================================================ */
 const browser = {};
 let browseTarget = null;
+// ファイルを選ぶ参照か(「表を持ってくる」)。置き場所の参照はフォルダを選ぶ
+let browseFile = false;
 
 async function browseTo(path) {
   try {
@@ -719,6 +722,9 @@ function startBrowser() {
   for (const button of document.querySelectorAll("[data-browse]")) {
     button.addEventListener("click", () => {
       browseTarget = document.getElementById(button.dataset.browse);
+      browseFile = button.dataset.browseFile === "1";
+      // ファイルを選ぶときはファイルの行を押して決める。「このフォルダにする」は出さない
+      browser.pick.hidden = browseFile;
       const label = document.querySelector(`label[for="${button.dataset.browse}"]`);
       browser.for.textContent = label ? label.textContent : "";
       browser.dialog.showModal();
@@ -732,6 +738,12 @@ function startBrowser() {
     // ファイルを押したら、その入れ物を開いて印を付ける
     // (置き場所として持つのはフォルダ。ファイル名は `source_db` が探す)
     const file = event.target.closest("tr[data-file]");
+    if (file && browseFile && browseTarget) {
+      browseTarget.value = file.dataset.file;
+      browser.dialog.close();
+      browseTarget.dispatchEvent(new Event("change"));
+      return;
+    }
     if (file) browseTo(file.dataset.file);
   });
   browser.go.addEventListener("click", () => browseTo(browser.path.value));
@@ -745,4 +757,103 @@ function startBrowser() {
     browser.dialog.close();
     toast("フォルダを入れました。「この設定を保存」を押すと効きます。", "info");
   });
+}
+
+
+/* ================================================================
+   Access で作った表を持ってくる(`table_bring`)
+
+   変換したファイルの中を見て、梱包資材マスタに**無い表だけ**を選ばせる。
+   もうある表は選べない(触らない)ことを、行ごとに言う。
+   ================================================================ */
+const bring = {};
+
+function renderBring(plan) {
+  bring.note.hidden = !plan.message;
+  bring.note.textContent = plan.message || "";
+  bring.note.className = `status status--${plan.ok ? "ok" : "ng"}`;
+  const rows = (plan.tables || []).map((t) => {
+    const tr = document.createElement("tr");
+    const pick = document.createElement("td");
+    if (t.exists) {
+      pick.textContent = "もうある";
+      pick.className = "why";
+      tr.title = "梱包資材マスタにもう同じ名前の表があります。触りません";
+    } else {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.value = t.name;
+      box.checked = true;
+      box.addEventListener("change", updateBringRun);
+      pick.appendChild(box);
+    }
+    const name = document.createElement("td");
+    name.textContent = t.name;
+    const count = document.createElement("td");
+    count.className = "num";
+    count.textContent = t.rows.toLocaleString();
+    const cols = document.createElement("td");
+    cols.className = "why";
+    cols.textContent = t.columns.join(", ");
+    tr.append(pick, name, count, cols);
+    // 持ってこられる表を上に並べる。もうある表は見えるだけでよい
+    tr.dataset.exists = t.exists ? "1" : "";
+    return tr;
+  }).sort((a, b) => (a.dataset.exists ? 1 : 0) - (b.dataset.exists ? 1 : 0));
+  bring.rows.replaceChildren(...rows);
+  bring.list.hidden = rows.length === 0;
+  updateBringRun();
+}
+
+function chosenTables() {
+  return [...bring.rows.querySelectorAll("input[type=checkbox]:checked")]
+    .map((box) => box.value);
+}
+
+function updateBringRun() {
+  bring.run.disabled = chosenTables().length === 0;
+}
+
+async function lookBring() {
+  const path = bring.path.value.trim();
+  if (!path) { renderBring({ ok: false, message: "変換したファイルを選んでください。" }); return; }
+  try {
+    renderBring(await api.get(`/api/settings/table-bring/plan?path=${encodeURIComponent(path)}`));
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+async function runBring() {
+  const tables = chosenTables();
+  if (!tables.length) return;
+  try {
+    const result = await api.post("/api/settings/table-bring",
+                                  { path: bring.path.value.trim(), tables });
+    renderBring(result.plan);
+    toast(result.message, "ok");
+    bring.note.hidden = false;
+    bring.note.className = "status status--ok";
+    bring.note.textContent = `${result.message}(控え: ${result.backup})`;
+  } catch (err) {
+    if (err.body && err.body.plan) renderBring(err.body.plan);
+    toastError(err);
+  }
+}
+
+function startBring() {
+  for (const [key, id] of [["dialog", "bringDialog"], ["open", "bringOpen"],
+                           ["path", "bringPath"], ["look", "bringLook"],
+                           ["note", "bringNote"], ["list", "bringList"],
+                           ["rows", "bringRows"], ["run", "bringRun"]]) {
+    bring[key] = document.getElementById(id);
+  }
+  if (!bring.dialog) return;
+  bring.open.addEventListener("click", () => bring.dialog.showModal());
+  bring.look.addEventListener("click", lookBring);
+  bring.path.addEventListener("change", lookBring);
+  bring.path.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); lookBring(); }
+  });
+  bring.run.addEventListener("click", runBring);
 }

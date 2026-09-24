@@ -136,6 +136,17 @@
         </p>
 
         <div class="ops__row">
+          <span class="ops__name">Access で作った表</span>
+          <div class="btn-row">
+            <button class="btn" type="button" id="bringOpen">表を持ってくる…</button>
+          </div>
+        </div>
+        <p class="why">
+          Access で作って変換したファイルから、梱包資材マスタに<b>無い表だけ</b>を足します。
+          丸ごと差し替えると、このツールが書いた発注・入出庫・実績が消えるためです。
+        </p>
+
+        <div class="ops__row">
           <span class="ops__name">手元 → 取り込み元</span>
           <div class="btn-row">
             {# 確定させる操作なので commit の色 #}
@@ -157,6 +168,7 @@
       </div>
     </div>
   </section>
+
       </section>
       <section class="tabpanel tabpanel--scroll" id="panel-status" role="tabpanel" aria-labelledby="tab-status" hidden>
   <!-- 1. いまの状態 -->
@@ -746,6 +758,41 @@
    置き場もどのタブにも属さない場所にする #}
 {# 出すのはフォルダ名と、そこにある取り込み元ファイルの名前だけ ──
    中身を読ませる口はここに作らない #}
+{# Access で作った表を持ってくる(`table_bring`)。**無い表だけ**を写す。
+   参照のダイアログ(#browser)をこの上に重ねて開くので、同じくタブの外に置く #}
+<dialog id="bringDialog" class="browser bring">
+  <form method="dialog" class="browser__head">
+    <b>Access で作った表を持ってくる</b>
+    <button class="btn btn--danger" value="cancel">閉じる</button>
+  </form>
+  <p class="why">
+    Access で表を作ったら、いつもどおり sqlite3 に変換して、そのファイルを選んでください。
+    <b>梱包資材マスタに無い表だけ</b>を写します。今ある表・行・索引には触りません。
+  </p>
+  <div class="paths">
+    <label for="bringPath">変換したファイル</label>
+    <span class="pathrow">
+      <input class="input" id="bringPath" spellcheck="false" autocomplete="off">
+      <button class="btn btn--find" type="button" data-browse="bringPath"
+              data-browse-file="1"><span class="gl">▸</span>参照…</button>
+      <button class="btn" type="button" id="bringLook">中を見る</button>
+    </span>
+  </div>
+  <p class="status" id="bringNote" hidden></p>
+  <div class="tablewrap tablewrap--browse" id="bringList" hidden>
+    <table class="table">
+      <thead><tr><th></th><th>表</th><th class="num">行</th><th>列</th></tr></thead>
+      <tbody id="bringRows"></tbody>
+    </table>
+  </div>
+  <div class="btn-row" style="margin-top:8px">
+    <button class="btn btn--commit" type="button" id="bringRun" disabled>選んだ表を持ってくる</button>
+  </div>
+  <p class="why">
+    管理者認証(「パスワード」の面)が要ります。書く前に、梱包資材マスタの控えを
+    この端末の <code>backup</code> フォルダへ取ります。
+  </p>
+</dialog>
 <dialog id="browser" class="browser">
   <form method="dialog" class="browser__head">
     <b id="browseFor"></b>
@@ -768,6 +815,11 @@
 
 {% block head %}
 <style>
+  /* 表を持ってくる。表の名前と列は左に寄せる(数だけ右) */
+  .bring { width:min(980px, 94vw); }
+  .bring #bringRows td, .bring thead th { text-align:left; }
+  .bring #bringRows td.num, .bring thead th.num { text-align:right; }
+  .bring #bringRows td:last-child { font-size:var(--fs-xs); color:var(--muted); }
   /* 配布設定に入れる項目。押しやすいよう1行ずつ・2列に並べる */
   .distchecks { border:1px solid var(--hairline); border-radius:var(--radius-xs);
                 padding:8px 12px; margin:8px 0 0; display:grid;

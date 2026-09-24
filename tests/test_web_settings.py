@@ -1471,3 +1471,125 @@ class ImportDiagReportTests(DataWebTestCase):
         html = self.client.get("/settings").get_data(as_text=True)
         self.assertIn('id="importDiag"', html)
         self.assertIn('id="importDiagSave"', html)
+
+
+class TableBringTests(DataWebTestCase):
+    """Access で作った表を持ってくる(`table_bring`)。
+
+    表を足すたびに sqlite3 を丸ごと差し替えると、ツールが書いた行と
+    送信IDの索引が消える。**無い表だけ**を写し、今ある表には触らない。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        import sqlite3
+        from unittest import mock
+        from packaging_tool import master_admin, selection_session
+        selection_session.reset_session()
+        self.addCleanup(selection_session.reset_session)
+        self.session = selection_session.get_session(sqlite3.connect(":memory:"))
+        patcher = mock.patch.object(master_admin, "can_edit",
+                                    return_value=(True, ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        local = mock.patch.dict("os.environ",
+                                {"PACKAGING_TOOL_LOCAL_DIR": str(self.dir / "local")})
+        local.start()
+        self.addCleanup(local.stop)
+
+        # いまの梱包資材マスタ: ツールが書いた行が入っている
+        self.master = self.dir / config.MATERIAL_DB_NAME
+        conn = sqlite3.connect(self.master)
+        conn.execute("CREATE TABLE BoardMaster (管理番号 INTEGER, ボード幅 INTEGER)")
+        conn.execute("INSERT INTO BoardMaster VALUES (1, 1100)")
+        conn.execute('CREATE TABLE "資材パレット注文管理" (管理番号 INTEGER, 送信ID TEXT)')
+        conn.execute('INSERT INTO "資材パレット注文管理" VALUES (1, "abc")')
+        conn.commit()
+        conn.close()
+        # Access から変換したファイル: 同じ表(中身は古い)+ 新しい表
+        self.converted = self.dir / "access" / "変換.sqlite3"
+        self.converted.parent.mkdir()
+        conn = sqlite3.connect(self.converted)
+        conn.execute("CREATE TABLE BoardMaster (管理番号 INTEGER, ボード幅 INTEGER)")
+        conn.execute('CREATE TABLE "資材パレット注文管理" (管理番号 INTEGER, 送信ID TEXT)')
+        conn.execute('CREATE TABLE "新しい表" (ID INTEGER PRIMARY KEY, 名前 TEXT NOT NULL)')
+        conn.execute('CREATE INDEX "IX_新しい表" ON "新しい表"(名前)')
+        conn.executemany('INSERT INTO "新しい表"(名前) VALUES (?)', [("あ",), ("い",)])
+        conn.commit()
+        conn.close()
+
+    def plan(self) -> dict:
+        from urllib.parse import quote
+        res = self.client.get(f"/api/settings/table-bring/plan?path={quote(str(self.converted))}",
+                              headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        return res.get_json()
+
+    def bring(self, tables, expect=200) -> dict:
+        res = self.client.post("/api/settings/table-bring", headers=self.auth(),
+                               json={"path": str(self.converted), "tables": tables})
+        self.assertEqual(res.status_code, expect, res.get_json())
+        return res.get_json()
+
+    def master_rows(self, sql: str) -> list:
+        import sqlite3
+        conn = sqlite3.connect(self.master)
+        try:
+            return conn.execute(sql).fetchall()
+        finally:
+            conn.close()
+
+    def test_中を見ると無い表だけ選べる(self) -> None:
+        plan = self.plan()
+        self.assertTrue(plan["ok"])
+        by_name = {t["name"]: t for t in plan["tables"]}
+        self.assertFalse(by_name["新しい表"]["exists"])
+        self.assertEqual(by_name["新しい表"]["rows"], 2)
+        self.assertTrue(by_name["BoardMaster"]["exists"])
+        self.assertIn("無い表が 1 個", plan["message"])
+
+    def test_無い表だけ写して今ある表には触らない(self) -> None:
+        self.session.admin = True
+        body = self.bring(["新しい表"])
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["brought"], [{"name": "新しい表", "rows": 2}])
+        # 定義(主キー・NOT NULL)と索引も元のとおり
+        sqls = [r[0] for r in self.master_rows(
+            "SELECT sql FROM sqlite_master WHERE tbl_name = '新しい表'")]
+        self.assertIn("PRIMARY KEY", sqls[0])
+        self.assertTrue(any("IX_新しい表" in s for s in sqls))
+        self.assertEqual(self.master_rows('SELECT 名前 FROM "新しい表" ORDER BY ID'),
+                         [("あ",), ("い",)])
+        # ツールが書いた行はそのまま
+        self.assertEqual(self.master_rows('SELECT 送信ID FROM "資材パレット注文管理"'),
+                         [("abc",)])
+        # 書く前の控えがある
+        self.assertTrue(Path(body["backup"]).is_file())
+        # 持ってきたあとは「もうある」になる
+        self.assertTrue({t["name"]: t for t in body["plan"]["tables"]}["新しい表"]["exists"])
+
+    def test_もうある表は持ってこない(self) -> None:
+        self.session.admin = True
+        body = self.bring(["BoardMaster"], expect=409)
+        self.assertIn("もうある表は持ってきません", body["error"]["message"])
+        self.assertEqual(self.master_rows("SELECT * FROM BoardMaster"), [(1, 1100)])
+
+    def test_管理者認証が無ければ書かない(self) -> None:
+        self.session.admin = False
+        body = self.bring(["新しい表"], expect=403)
+        self.assertIn("管理者認証", body["error"]["message"])
+        self.assertEqual(self.master_rows(
+            "SELECT name FROM sqlite_master WHERE name = '新しい表'"), [])
+
+    def test_いまの梱包資材マスタそのものは選べない(self) -> None:
+        from urllib.parse import quote
+        res = self.client.get(f"/api/settings/table-bring/plan?path={quote(str(self.master))}",
+                              headers=self.auth())
+        self.assertFalse(res.get_json()["ok"])
+        self.assertIn("いま使っている梱包資材マスタそのもの", res.get_json()["message"])
+
+    def test_画面に段がある(self) -> None:
+        html = self.client.get("/settings").get_data(as_text=True)
+        for key in ('id="bringOpen"', 'id="bringPath"', 'data-browse-file="1"', 'id="bringLook"',
+                    'id="bringRun"'):
+            self.assertIn(key, html)
