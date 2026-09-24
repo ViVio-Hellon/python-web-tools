@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import config, db, import_specs, source_db
+from . import config, db, import_diag, import_specs, source_db
 from .logging_utils import get_logger
 # **他の段は名前ではなくモジュールで呼ぶ。** 差し替え(試験の stub)の
 # 当て先が持ち主の1か所で済む
@@ -40,6 +41,11 @@ def _ensure_stamp_table(conn: sqlite3.Connection) -> None:
 
 
 def needs_import(conn: sqlite3.Connection, path: Path) -> bool:
+    """元ファイルが前回の取り込み以降に更新されているか(理由は `import_reason`)。"""
+    return import_reason(conn, path)[0]
+
+
+def import_reason(conn: sqlite3.Connection, path: Path) -> tuple[bool, str]:
     """元ファイルが前回の取り込み以降に更新されているか。
 
     毎回の起動で1万件超を読み直すのは無駄なので、更新されたファイルだけ
@@ -49,12 +55,22 @@ def needs_import(conn: sqlite3.Connection, path: Path) -> bool:
     _ensure_stamp_table(conn)
     try:
         mtime = path.stat().st_mtime
-    except OSError:
-        return False
+    except OSError as exc:
+        return False, f"見に行けません({exc})"
     row = conn.execute(
-        f"SELECT 更新時刻 FROM [{STAMP_TABLE}] WHERE ファイル = ?",
+        f"SELECT 更新時刻, 取込日時 FROM [{STAMP_TABLE}] WHERE ファイル = ?",
         (str(path),)).fetchone()
-    return row is None or mtime > float(row[0]) + 1.0
+    now = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+    if row is None:
+        return True, f"この場所から取り込んだ記録が無い(ファイルの更新 {now})"
+    then = datetime.fromtimestamp(float(row[0])).strftime("%Y-%m-%d %H:%M:%S")
+    if mtime > float(row[0]) + 1.0:
+        return True, f"更新されている(前回取り込んだ時点 {then} → いま {now})"
+    # **いちばん見落としやすい場合。** 中身を差し替えても、更新時刻が
+    # 前回より新しくならない写し方(時刻を保ったコピーなど)だとここに来る
+    return False, (f"前回取り込んだ時点({then}、取り込んだのは {row[1]})から"
+                   f"更新時刻が進んでいない(いま {now})。中身を差し替えたのに"
+                   "読まれないときは、設定画面から手で取り込んでください")
 
 
 def mark_imported(conn: sqlite3.Connection, path: Path) -> None:
@@ -71,6 +87,20 @@ def mark_imported(conn: sqlite3.Connection, path: Path) -> None:
 
 def auto_import(conn: sqlite3.Connection, *, force: bool = False,
                 progress: Optional[Progress] = None) -> ImportResult:
+    """起動時の取り込み(本体は `_auto_import`)。**読んだか見送ったかを
+    診断記録に残す** ── 見送ったときはふだんのログに1行も出ないため。"""
+    with import_diag.run("起動時の自動取り込み"
+                         + ("(強制)" if force else "")) as outer:
+        result = _auto_import(conn, force=force, progress=progress)
+        if outer:
+            import_diag.write("  まとめ: " + (result.summary().replace("\n", "\n    ")
+                                              if (result.imported or result.errors)
+                                              else "読んだ表はありません"))
+    return result
+
+
+def _auto_import(conn: sqlite3.Connection, *, force: bool = False,
+                 progress: Optional[Progress] = None) -> ImportResult:
     """起動時に呼ぶ取り込み。更新されたファイルだけを読む。
 
     見つからないファイルや読めない環境では**黙って何もしない**。
@@ -101,16 +131,25 @@ def auto_import(conn: sqlite3.Connection, *, force: bool = False,
                                 sync_sources.find_kanban_db(),
                                 sync_sources.find_threshold_db())
                     if p is not None]
-    if master is not None and (force or any(needs_import(conn, p)
-                                            for p in master_group)):
+    import_diag.describe_file("梱包資材マスタ", master, [config.master_db_dir()])
+    reasons = {p: import_reason(conn, p) for p in master_group}
+    for p, (read, why) in reasons.items():
+        import_diag.decision(p, read or force, "手で押した(強制)" if force else why)
+    if master is not None and (force or any(r for r, _ in reasons.values())):
         log.info("自動取り込み(マスタ): %s", master)
         result.merge(sync_import.import_master(conn, master, progress=progress,
                                    progress_range=(0, 50)))
         for path in master_group:
             mark_imported(conn, path)
 
-    for table, path in sync_sources.find_lot_dbs().items():
-        if not force and not needs_import(conn, path):
+    found = sync_sources.find_lot_dbs()
+    for table, filename in config.LOT_DB_FILES.items():
+        import_diag.describe_file(f"仕掛台帳 {filename}", found.get(table),
+                                  [config.lot_db_dir(), config.master_db_dir()])
+    for table, path in found.items():
+        read, why = import_reason(conn, path)
+        import_diag.decision(path, read or force, "手で押した(強制)" if force else why)
+        if not force and not read:
             continue
         log.info("自動取り込み(仕掛台帳): %s", path)
         sync_import.import_tables(

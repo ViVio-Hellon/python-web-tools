@@ -14,7 +14,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from . import config, db, import_specs, outbox_sync, source_db
+from . import config, db, import_diag, import_specs, outbox_sync, source_db
 from .logging_utils import get_logger
 # **他の段は名前ではなくモジュールで呼ぶ。** こうしておくと、差し替え
 # (試験の stub)の当て先が持ち主の1か所で済む ── 名前で取り込むと、
@@ -82,7 +82,7 @@ class ImportResult:
         if self.warnings:
             lines.append("")
             lines.append("取り込みましたが、元のファイルに無い列は空のままです"
-                         "(取り込み元のファイルが古い形式かもしれません):")
+                         "(取り込み元の変換で列が変わったのかもしれません):")
             lines.extend(f"  {w}" for w in self.warnings)
         if self.missing_optional:
             lines.append("")
@@ -133,6 +133,10 @@ def import_tables(
         step_message = f"{table} を読み込み中..."
         if specs:
             notify(step_pct, step_message)
+        # 診断記録用に、取り込む前の手元の姿を控える(`import_diag`)
+        before = import_diag.local_count(conn, table)
+        lots_before = (import_diag.lot_numbers(conn, table)
+                       if table in import_specs.LOT_IMPORT_SPECS else None)
         try:
             rows = sync_sources.read_table(source_path, source_table or table)
         except SyncError as exc:
@@ -141,9 +145,14 @@ def import_tables(
                 # 本当に直すべき問題が埋もれる
                 log.info("%s: 取り込み元にありません(任意)", table)
                 result.missing_optional.append(table)
+                import_diag.write(f"  [{table}] 取り込み元にありません(任意)")
                 continue
             log.warning("%s: 読み取り失敗 %s", table, exc)
             result.errors.append(f"{table}: {exc}")
+            import_diag.table_report(
+                table, source_path, source_rows=0, missing=[], lacking_ok=[],
+                extra=[], imported=None, skipped={}, skipped_samples=[],
+                before=before, after=before, error=f"読めません: {exc}")
             # 段の文言(step_message)は変えず、いまの段が失敗したとだけ伝える。
             # そうしないと、レーンの各段は最後の段しか失敗を示せず、
             # 「取り込みは失敗したのに、どの段も完了のまま」に見える
@@ -151,6 +160,9 @@ def import_tables(
             continue
         if not rows:
             result.imported[table] = 0
+            # **0行の表は手元を消さない**(総入れ替えしない)。診断に残す
+            import_diag.write(f"  [{table}] ← {Path(source_path).name}  元が0行"
+                              f"(手元の {before}件はそのまま)")
             continue
 
         # **元に無い列があれば先に言う。**
@@ -159,7 +171,21 @@ def import_tables(
         # 実際、仕掛ロットの列名が半角カナから全角に変わっていた写しで
         # 2,159件が**ロット番号だけ空**のまま入り、一覧が1件になった。
         present = set(rows[0].keys())
-        missing = [src for _col, src, _conv in spec if src not in present]
+        may_lack = import_specs.OPTIONAL_COLUMNS.get(table, frozenset())
+        missing = [src for _col, src, _conv in spec
+                   if src not in present and src not in may_lack]
+        lacking_ok = sorted(src for _col, src, _conv in spec
+                            if src not in present and src in may_lack)
+        if lacking_ok:
+            log.info("%s: 元に無い列(無くても動く): %s", table, lacking_ok)
+        wanted = {src for _col, src, _conv in spec}
+        extra = sorted(present - wanted)
+
+        def report(**kw: Any) -> None:
+            import_diag.table_report(
+                table, source_path, source_rows=len(rows), missing=missing,
+                lacking_ok=lacking_ok, extra=extra, before=before,
+                lots_before=lots_before, **kw)
         if missing:
             key_sources = {src for col, src, _conv in spec
                            if col in required.get(table, ())}
@@ -174,6 +200,8 @@ def import_tables(
                 log.warning("%s: 鍵の列が無いため取り込みを見送りました: %s",
                             table, lost_keys)
                 notify(step_pct, step_message, ok=False)
+                report(imported=None, skipped={}, skipped_samples=[], after=before,
+                       error=f"鍵の列 {', '.join(lost_keys)} が無い(手元はそのまま)")
                 continue
             result.warnings.append(note)
             log.warning("%s: 元に無い列: %s", table, missing)
@@ -185,16 +213,20 @@ def import_tables(
         blanks = blank_is_missing.get(table, ())
 
         imported = skipped = 0
+        why_skipped = {"鍵が無い": 0, "鍵が空欄": 0}
+        samples: list[str] = []
         try:
             with conn:
                 conn.execute(f"DELETE FROM [{table}]")
-                for row in rows:
+                for number, row in enumerate(rows, start=1):
                     values = {col: conv(row.get(src)) for col, src, conv in spec}
-                    if any(values[k] is None for k in keys):
+                    lacking = [k for k in keys if values[k] is None]
+                    blank = [k for k in blanks if str(values[k]).strip() == ""]
+                    if lacking or blank:
                         skipped += 1
-                        continue
-                    if any(str(values[k]).strip() == "" for k in blanks):
-                        skipped += 1
+                        why_skipped["鍵が無い" if lacking else "鍵が空欄"] += 1
+                        if len(samples) < import_diag.SAMPLE:
+                            samples.append(f"{number}行目({','.join(lacking or blank)})")
                         continue
                     conn.execute(
                         f"INSERT INTO [{table}] ({col_list}) VALUES ({placeholders})",
@@ -205,11 +237,18 @@ def import_tables(
             log.exception("%s: 取り込み中にエラー", table)
             result.errors.append(f"{table}: {exc}")
             notify(step_pct, step_message, ok=False)
+            report(imported=None, skipped={}, skipped_samples=[],
+                   after=import_diag.local_count(conn, table),
+                   error=f"書き込み中のエラー: {exc}(手元は元のまま)")
             continue
 
         result.imported[table] = imported
         if skipped:
             result.skipped[table] = skipped
+        report(imported=imported, skipped=why_skipped, skipped_samples=samples,
+               after=import_diag.local_count(conn, table),
+               lots_after=(import_diag.lot_numbers(conn, table)
+                           if lots_before is not None else None))
         log.info("%s: %s件取り込み(%s件スキップ)", table, imported, skipped)
     notify(end_pct, "")
     return result
@@ -229,7 +268,7 @@ def _import_patterns(conn: sqlite3.Connection, path: Path,
         result.imported[config.TBL_PT_HEADER] = outcome.imported
 
 
-def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
+def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
                   *, kanban_path: Optional[Path] = None,
                   threshold_path: Optional[Path] = None,
                   progress: Optional[Progress] = None,
@@ -258,6 +297,9 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
     読み込めていない」)。見つからないときの扱いは看板マスタと同じ。
     """
     path = source_path or sync_sources.find_material_db()
+    import_diag.describe_file("梱包資材マスタ", path, [config.master_db_dir()])
+    if path is not None:
+        import_diag.write("    表と行数: " + _counts_text(path))
     if path is None:
         result = ImportResult()
         result.errors.append(
@@ -304,6 +346,7 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
         progress=progress, progress_range=(start_pct, split_pct))
 
     kanban_source = kanban_path or sync_sources.find_kanban_db()
+    import_diag.describe_file("看板マスタ", kanban_source, [config.kanban_db_dir()])
     if kanban_source is None:
         log.info("看板マスタが見つかりません(%s): %s",
                  config.kanban_db_dir(), config.KANBAN_DB_NAME)
@@ -321,6 +364,8 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
             progress=progress, progress_range=(split_pct, split2_pct))
 
     threshold_source = threshold_path or sync_sources.find_threshold_db()
+    import_diag.describe_file("パレット閾値マスタ", threshold_source,
+                              [config.master_db_dir()])
     if threshold_source is None:
         log.info("パレット閾値マスタが見つかりません(%s): %s",
                  config.threshold_db_dir(), config.THRESHOLD_DB_NAME)
@@ -415,7 +460,7 @@ def duplicate_count(conn: sqlite3.Connection, table: str,
         return 0
     return int(row[0] or 0)
 
-def import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = None,
+def _import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = None,
                       *, progress: Optional[Progress] = None,
                       progress_range: tuple[int, int] = (0, 100)) -> ImportResult:
     """仕掛台帳(SIKALOT/SIKAHIKI/SIKAODR)を取り込む。
@@ -426,6 +471,10 @@ def import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = None
     """
     result = ImportResult()
     found = sync_sources.find_lot_dbs(directory)
+    searched = ([directory] if directory is not None
+                else [config.lot_db_dir(), config.master_db_dir()])
+    for table, filename in config.LOT_DB_FILES.items():
+        import_diag.describe_file(f"仕掛台帳 {filename}", found.get(table), searched)
     if not found:
         result.errors.append(
             f"仕掛台帳が見つかりません。{config.lot_db_dir()} または"
@@ -452,6 +501,35 @@ def import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = None
     return result
 
 
+def _counts_text(path: Path) -> str:
+    counts = source_db.table_counts(path)
+    return ", ".join(f"{k} {v:,}" for k, v in counts.items()) or "(数えられません)"
+
+
+def _with_diag(label: str, work: Callable[[], ImportResult]) -> ImportResult:
+    """診断記録の見出しを付けて取り込む。いちばん外側なら記録の場所を知らせる。"""
+    with import_diag.run(label) as outer:
+        result = work()
+        if outer:
+            import_diag.write("  まとめ: " + result.summary().replace("\n", "\n    "))
+            result.notes.append(f"取り込みの記録: {import_diag.path_for()}")
+    return result
+
+
+def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
+                  **kw: Any) -> ImportResult:
+    """梱包資材マスタを取り込む(本体は `_import_master`。説明もそちら)。"""
+    return _with_diag("マスタの取り込み",
+                      lambda: _import_master(conn, source_path, **kw))
+
+
+def import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = None,
+                      **kw: Any) -> ImportResult:
+    """仕掛台帳を取り込む(本体は `_import_lot_ledger`。説明もそちら)。"""
+    return _with_diag("仕掛台帳の取り込み",
+                      lambda: _import_lot_ledger(conn, directory, **kw))
+
+
 def import_all(conn: sqlite3.Connection,
                *, progress: Optional[Progress] = None) -> ImportResult:
     """マスタと仕掛台帳をまとめて取り込む(画面の「取り込み」ボタン用)。
@@ -459,7 +537,10 @@ def import_all(conn: sqlite3.Connection,
     片方が見つからなくてももう片方は取り込む。どちらが入って
     どちらが入らなかったかは結果のまとめに出る。
     """
-    # マスタは件数が多いので前半、仕掛台帳を後半に割り当てる
-    result = import_master(conn, progress=progress, progress_range=(0, 50))
-    result.merge(import_lot_ledger(conn, progress=progress, progress_range=(50, 100)))
-    return result
+    def work() -> ImportResult:
+        # マスタは件数が多いので前半、仕掛台帳を後半に割り当てる
+        result = import_master(conn, progress=progress, progress_range=(0, 50))
+        result.merge(import_lot_ledger(conn, progress=progress,
+                                       progress_range=(50, 100)))
+        return result
+    return _with_diag("まとめて取り込み", work)

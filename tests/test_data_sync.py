@@ -355,6 +355,26 @@ class ImportTests(unittest.TestCase):
         self.assertNotIn("取り込めませんでした", summary)
         self.assertIn("元のファイルに無い列は空のままです", summary)
 
+    def test_無くてよい列が無いだけなら何も言わない(self):
+        """2026-09-24 の SIKALOT は BOX実績_枚本数・前々/前工程実績_枚本数 が
+        無くなった。どれも画面の判断に効かないので、毎回「無い列があります」と
+        出して本当に困る列を埋もれさせない(`import_specs.OPTIONAL_COLUMNS`)。"""
+        spec = import_specs.LOT_IMPORT_SPECS["仕掛ロット"]
+        optional = import_specs.OPTIONAL_COLUMNS["仕掛ロット"]
+        row = {src: "" for _col, src, _conv in spec if src not in optional}
+        row["ﾛｯﾄ番号"] = "A123456"
+        with mock.patch.object(sources, "read_table", return_value=[row]):
+            result = data_sync.import_tables(
+                self.conn, Path("d.sqlite3"), {"仕掛ロット": spec},
+                source_table="仕掛",
+                required=import_specs.REQUIRED_KEY_COLUMNS,
+                fallbacks=import_specs.NULL_FALLBACKS)
+        self.assertEqual((result.errors, result.warnings), ([], []))
+        self.assertEqual(result.imported["仕掛ロット"], 1)
+        # 鍵や判断に使う列は入れない
+        self.assertNotIn("ﾛｯﾄ番号", optional)
+        self.assertFalse(any(c.startswith("BOX最終実績") for c in optional))
+
     def test_blank_values_use_the_column_default(self):
         """NOT NULL列に空欄が来ても落ちない(NULLではなく既定値を入れる)。"""
         with mock.patch.object(sources, "read_table", return_value=[
@@ -561,6 +581,109 @@ class AutoImportTests(unittest.TestCase):
             result = data_sync.auto_import(self.conn)
         self.assertEqual(result.total, 0)
         self.assertTrue(result.ok)
+
+
+class ImportDiagTests(unittest.TestCase):
+    """取り込み診断(取り込み診断_YYYYMMDD.log)。「読まなくなった」と言われたとき、
+    画面を見に行かずに **何を読んで何を見送ったか** を追えるようにする。"""
+
+    def setUp(self) -> None:
+        import tempfile
+        from packaging_tool import import_diag
+        self.conn = make_conn()
+        self.addCleanup(self.conn.close)
+        self._dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self._dir, True))
+        self.log = self._dir / "diag.log"
+        patcher = mock.patch.object(import_diag, "path_for",
+                                    lambda day=None: self.log)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def text(self) -> str:
+        return self.log.read_text(encoding="utf-8")
+
+    def make_sikalot(self, rows: list[dict]) -> Path:
+        import sqlite3 as sq
+        path = self._dir / "SIKALOT.sqlite3"
+        conn = sq.connect(path)
+        cols = list(rows[0])
+        conn.execute("CREATE TABLE 仕掛 (" + ", ".join(f'"{c}" TEXT' for c in cols) + ")")
+        for row in rows:
+            conn.execute("INSERT INTO 仕掛 VALUES (" + ",".join("?" * len(cols)) + ")",
+                         [row[c] for c in cols])
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_読んだファイルと表ごとの増減を書く(self):
+        self.make_sikalot([{"ﾛｯﾄ番号": "A000001", "製造板幅": "1000", "新しい列": "x"},
+                           {"ﾛｯﾄ番号": "", "製造板幅": "1000", "新しい列": "x"}])
+        result = data_sync.import_lot_ledger(self.conn, self._dir)
+        text = self.text()
+        self.assertIn("■ 仕掛台帳の取り込み", text)
+        self.assertIn("SIKALOT.sqlite3", text)
+        self.assertIn("大きさ", text)
+        self.assertIn("[仕掛台帳 SIKAHIKI.sqlite3] 見つかりません", text)
+        self.assertIn("元の行数 2", text)
+        self.assertIn("元に無い列: ", text)
+        self.assertIn("取り込まない列: 1列 (新しい列)", text)
+        self.assertIn("取り込み 2件", text)
+        self.assertIn("手元の件数 0 → 2", text)
+        self.assertIn("ロット数 0 → 2", text)
+        self.assertIn("■ 終わり", text)
+        # 画面のまとめから記録の場所が分かる
+        self.assertTrue(any("取り込みの記録" in n for n in result.notes))
+
+    def test_入れ子でも見出しは1回(self):
+        self.make_sikalot([{"ﾛｯﾄ番号": "A000001"}])
+        with mock.patch.object(sources, "find_material_db", return_value=None), \
+             mock.patch.object(sources, "find_lot_dbs",
+                               return_value={"仕掛ロット": self._dir / "SIKALOT.sqlite3"}):
+            data_sync.import_all(self.conn)
+        text = self.text()
+        self.assertEqual(text.count("■ まとめて取り込み"), 1)
+        self.assertNotIn("■ 仕掛台帳の取り込み", text)
+        self.assertEqual(text.count("■ 終わり"), 1)
+
+    def test_自動取り込みで見送ったら理由を書く(self):
+        """**見送ったほうこそ書く。** ふだんのログには1行も出ない。"""
+        path = self.make_sikalot([{"ﾛｯﾄ番号": "A000001"}])
+        data_sync.mark_imported(self.conn, path)
+        with mock.patch.object(sources, "find_material_db", return_value=None), \
+             mock.patch.object(sources, "find_kanban_db", return_value=None), \
+             mock.patch.object(sources, "find_threshold_db", return_value=None), \
+             mock.patch.object(sources, "find_lot_dbs",
+                               return_value={"仕掛ロット": path}):
+            data_sync.auto_import(self.conn)
+        text = self.text()
+        self.assertIn("■ 起動時の自動取り込み", text)
+        self.assertIn("見送り: SIKALOT.sqlite3", text)
+        self.assertIn("更新時刻が進んでいない", text)
+        self.assertIn("[梱包資材マスタ] 見つかりません", text)
+
+    def test_鍵の無い行を飛ばしたら数と行を書く(self):
+        with mock.patch.object(sources, "read_table", return_value=[
+                {"幅": "1150", "丈": "2500"}, {"幅": "", "丈": ""}]):
+            data_sync.import_tables(
+                self.conn, Path("d.sqlite3"),
+                {"PalletMaster": import_specs.IMPORT_SPECS["PalletMaster"]},
+                required=import_specs.REQUIRED_KEY_COLUMNS,
+                fallbacks=import_specs.NULL_FALLBACKS)
+        text = self.text()
+        self.assertIn("取り込み 1件  飛ばした 鍵が無い 1件", text)
+        self.assertIn("飛ばした行の例: 2行目(", text)
+
+    def test_書けなくても取り込みは止めない(self):
+        from packaging_tool import import_diag
+        self.make_sikalot([{"ﾛｯﾄ番号": "A000001"}])
+        with mock.patch.object(import_diag, "path_for",
+                               lambda day=None: self._dir / "無い" / "\0bad"):
+            result = data_sync.import_lot_ledger(self.conn, self._dir)
+        self.assertEqual(result.imported["仕掛ロット"], 1)
+        # 書けなかった後も、次の取り込みには見出しが付く(深さが戻っている)
+        data_sync.import_lot_ledger(self.conn, self._dir)
+        self.assertIn("■ 仕掛台帳の取り込み", self.text())
 
 
 class UnsentGuardTests(unittest.TestCase):
