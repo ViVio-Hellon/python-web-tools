@@ -137,8 +137,9 @@
 
         <div class="ops__row">
           <span class="ops__name">Access で作った表</span>
-          <div class="btn-row">
+          <div class="btn-row" id="bringOpenDrop">
             <button class="btn" type="button" id="bringOpen">表を持ってくる…</button>
+            <span class="why">(ファイルをここへドラッグ&ドロップしても開きます)</span>
           </div>
         </div>
         <p class="why">
@@ -765,26 +766,23 @@
     <b>Access で作った表を持ってくる</b>
     <button class="btn btn--danger" value="cancel">閉じる</button>
   </form>
+  {# **落とすだけで読む。** ブラウザはファイルの場所を渡さないので、中身を
+     このPCの作業フォルダへ受け取ってから読む(`table_bring.save_upload`) #}
+  <div class="dropzone" id="bringDrop" tabindex="0">
+    <b>Access(.accdb)のファイルを、ここへドラッグ&ドロップ</b>
+    <span class="why">変換したsqlite3でも構いません。落とすとすぐ中を読みます。</span>
+  </div>
   <p class="why">
-    Access(.accdb)で表を作ったら、そのファイルを選んでください。変換したsqlite3でも選べます。
     <b>梱包資材マスタに無い表だけ</b>を写します。今ある表・行・索引には触りません。
+    足した表はマスタ管理に「足」の印で出て、そのまま直せます。
   </p>
   <div class="paths">
-    <label for="bringPath">持ってくるファイル</label>
+    <label for="bringPath">または場所で選ぶ</label>
     <span class="pathrow">
       <input class="input" id="bringPath" spellcheck="false" autocomplete="off">
       <button class="btn btn--find" type="button" data-browse="bringPath"
               data-browse-file="1"><span class="gl">▸</span>参照…</button>
       <button class="btn" type="button" id="bringLook">中を見る</button>
-    </span>
-    {# Access のまま選んだときに使う変換ツール(いつもの accdb_converter)。
-       見つかっていれば入っている。無ければ場所を入れる #}
-    <label for="bringConverter">変換ツールの場所</label>
-    <span class="pathrow">
-      <input class="input" id="bringConverter" spellcheck="false" autocomplete="off"
-             placeholder="accdb_converter のフォルダ(Access を選ぶときだけ要ります)">
-      <button class="btn btn--find" type="button" data-browse="bringConverter"
-              data-browse-folder="1"><span class="gl">▸</span>参照…</button>
     </span>
   </div>
   <p class="why" id="bringConverted" hidden></p>
@@ -825,6 +823,12 @@
 
 {% block head %}
 <style>
+  /* 表を持ってくる: 落とす場所。重ねている間は色を変える */
+  .dropzone { border:2px dashed var(--hairline); border-radius:var(--radius-xs);
+              padding:18px; margin:8px 0; display:flex; flex-direction:column;
+              align-items:center; gap:4px; text-align:center; }
+  .dropzone.is-over, #bringOpenDrop.is-over { border-color:var(--accent, #2563eb);
+              background:var(--act-idle); }
   /* 表を持ってくる。表の名前と列は左に寄せる(数だけ右) */
   .bring { width:min(980px, 94vw); }
   .bring #bringRows td, .bring thead th { text-align:left; }

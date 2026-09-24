@@ -333,6 +333,23 @@ def table_bring_plan():
         table_bring.plan(request.args.get("path", ""))))
 
 
+@bp.post("/api/settings/table-bring/upload")
+def table_bring_upload():
+    """ドラッグ&ドロップされたファイルを受け取る。返すのは置いた場所。
+
+    ブラウザはファイルの**場所**を教えてくれない(中身だけ渡す)。このツールは
+    同じPCで動いているので、手元の作業フォルダへ置いて、そこから読む。
+    """
+    from packaging_tool import table_bring
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return jsonify(_error("no_file", "ファイルが届きませんでした")), 400
+    saved, why = table_bring.save_upload(upload.filename, upload.stream)
+    if saved is None:
+        return jsonify(_error("bad_file", why)), 400
+    return jsonify({"path": str(saved)})
+
+
 @bp.post("/api/settings/table-bring")
 def table_bring_run():
     """選んだ表を梱包資材マスタへ足す。`{"path":…, "tables":[…]}`

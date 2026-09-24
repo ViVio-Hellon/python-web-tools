@@ -1416,6 +1416,8 @@ class RepoRootTests(unittest.TestCase):
         "start_app.py", "server.py", "boot_server.py", "launch_guard.py",
         "process_manager.py",
         "app", "config", "docs", "packaging_tool", "scripts", "tests",
+        # 同梱した変換ツールの読み取り部品(「表を持ってくる」で Access を読む)
+        "vendor",
     }
 
     def test_直下には配るものだけ(self) -> None:
@@ -1574,6 +1576,47 @@ class TableBringTests(DataWebTestCase):
         self.assertIn("もうある表は持ってきません", body["error"]["message"])
         self.assertEqual(self.master_rows("SELECT * FROM BoardMaster"), [(1, 1100)])
 
+    def test_足した表はマスタ管理でそのまま直せる(self) -> None:
+        """現場の声:「マスタ管理には追加されていないので結局何もできない」。"""
+        self.session.admin = True
+        self.bring(["新しい表"])
+        # 一覧に「足」で出て、直せる
+        browse = self.client.get("/api/master/browse?table=" + "新しい表",
+                                 headers=self.auth()).get_json()
+        info = {t["table"]: t for t in browse["tables"]}
+        self.assertTrue(info["新しい表"]["editable"])
+        self.assertEqual(info["新しい表"]["mark"], "足")
+        # 記録の表そのものは出さない
+        self.assertNotIn("ツールで足した表", info)
+        self.assertTrue(browse["page"]["editable"])
+        self.assertEqual([c["name"] for c in browse["columns"]], ["ID", "名前"])
+        # 1行足す・直す・消す
+        res = self.client.post("/api/master/row/add", headers=self.auth(),
+                               json={"table": "新しい表", "values": {"名前": "う"}})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(self.master_rows('SELECT 名前 FROM "新しい表" ORDER BY rowid'),
+                         [("あ",), ("い",), ("う",)])
+        rowid = self.master_rows('SELECT rowid FROM "新しい表" WHERE 名前 = \'あ\'')[0][0]
+        res = self.client.post("/api/master/row/save", headers=self.auth(),
+                               json={"table": "新しい表", "key": rowid,
+                                     "values": {"名前": "え"}})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        res = self.client.post("/api/master/row/delete", headers=self.auth(),
+                               json={"table": "新しい表", "key": rowid})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(self.master_rows('SELECT 名前 FROM "新しい表" ORDER BY rowid'),
+                         [("い",), ("う",)])
+
+    def test_足していない知らない表は見るだけ(self) -> None:
+        import sqlite3
+        conn = sqlite3.connect(self.master)
+        conn.execute('CREATE TABLE "よその表" (a TEXT)')
+        conn.commit()
+        conn.close()
+        res = self.client.post("/api/master/row/add", headers=self.auth(),
+                               json={"table": "よその表", "values": {"a": "x"}})
+        self.assertEqual(res.status_code, 422)
+
     def test_管理者認証が無ければ書かない(self) -> None:
         self.session.admin = False
         body = self.bring(["新しい表"], expect=403)
@@ -1704,12 +1747,25 @@ class TableBringAccessTests(TableBringTests):
         self.assertTrue(plan.ok)
         self.assertIn("予備の読み方(access_parser)で読みました", plan.converted)
 
-    def test_変換ツールが見つからなければ場所を訊く(self) -> None:
+    def test_変換の部品は同梱のものを使う(self) -> None:
+        """場所を指定させない(現場の声:「使いにくい」)。設定が無ければ同梱のもの。"""
         from packaging_tool import table_bring, user_settings
+        user_settings.save(config.KEY_CONVERTER_DIR, "")
+        self.assertEqual(table_bring.converter_dir(), table_bring.BUNDLED_CONVERTER)
+        for name in ("engine.py", "writers.py", "jet_text_fix.py", "xlsx_writer.py"):
+            self.assertTrue((table_bring.BUNDLED_CONVERTER / name).is_file(), name)
+        # 設定が違っていても同梱のものへ戻る
         user_settings.save(config.KEY_CONVERTER_DIR, str(self.dir / "無い"))
-        plan = table_bring.plan(str(self.converted))
+        self.assertEqual(table_bring.converter_dir(), table_bring.BUNDLED_CONVERTER)
+
+    def test_部品が欠けていたらそう言う(self) -> None:
+        from unittest import mock
+        from packaging_tool import table_bring, user_settings
+        user_settings.save(config.KEY_CONVERTER_DIR, "")
+        with mock.patch.object(table_bring, "BUNDLED_CONVERTER", self.dir / "無い"):
+            plan = table_bring.plan(str(self.converted))
         self.assertFalse(plan.ok)
-        self.assertIn("変換ツール(accdb_converter)の場所が要ります", plan.message)
+        self.assertIn("Access を読む部品(vendor", plan.message)
 
     def test_場所が違えば覚えない(self) -> None:
         from urllib.parse import quote
@@ -1743,4 +1799,32 @@ class TableBringAccessTests(TableBringTests):
 
     def test_画面に段がある(self) -> None:
         html = self.client.get("/settings").get_data(as_text=True)
-        self.assertIn('id="bringConverter"', html)
+        # 変換ツールの場所は訊かない。落とす場所がある
+        self.assertNotIn('id="bringConverter"', html)
+        self.assertIn('id="bringDrop"', html)
+        self.assertIn('id="bringOpenDrop"', html)
+
+    def test_落としたファイルを受け取る(self) -> None:
+        import io
+        res = self.client.post(
+            "/api/settings/table-bring/upload", headers=self.auth(),
+            data={"file": (io.BytesIO(self.converted.read_bytes()), "資材.accdb")},
+            content_type="multipart/form-data")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        saved = Path(res.get_json()["path"])
+        self.assertEqual(saved.name, "資材.accdb")
+        self.assertEqual(saved.read_bytes(), self.converted.read_bytes())
+        # 受け取ったものをそのまま読める
+        from urllib.parse import quote
+        plan = self.client.get(f"/api/settings/table-bring/plan?path={quote(str(saved))}",
+                               headers=self.auth()).get_json()
+        self.assertTrue(plan["ok"], plan["message"])
+
+    def test_知らない種類のファイルは受け取らない(self) -> None:
+        import io
+        res = self.client.post(
+            "/api/settings/table-bring/upload", headers=self.auth(),
+            data={"file": (io.BytesIO(b"x"), "../../悪い.exe")},
+            content_type="multipart/form-data")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("落としてください", res.get_json()["error"]["message"])

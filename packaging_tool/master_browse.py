@@ -94,7 +94,15 @@ def tables(path: Optional[Path],
         out.append(TableInfo(
             table=managed.table, label=managed.table, mark=managed.mark,
             note=managed.note, rows=counts[managed.table], editable=True))
-    for name in sorted(n for n in counts if n not in BY_TABLE):
+    # 「表を持ってくる」で足した表は、直せる表として資材課の表のすぐ後に出す。
+    # 記録の表そのもの(`BROUGHT_REGISTRY`)は出さない(中身は表の名前だけ)
+    brought = master_common.brought_tables(path)
+    for name in sorted(n for n in counts if n in brought and n not in BY_TABLE):
+        out.append(TableInfo(
+            table=name, label=name, mark="足", note="Access から持ってきた表",
+            rows=counts[name], editable=True))
+    for name in sorted(n for n in counts if n not in BY_TABLE and n not in brought
+                       and n != master_common.BROUGHT_REGISTRY):
         out.append(TableInfo(
             table=name, label=name, mark="他", note="", rows=counts[name],
             editable=False, why=view_only_why(name)))
@@ -147,10 +155,11 @@ def page(path: Optional[Path], table: str, *, query: str = "",
     黙って既定(`rowid`)に戻す(拒否すると押しただけで断られる画面になる)。
     """
     managed = BY_TABLE.get(table)
+    brought = table in master_common.brought_tables(path)
     view = Page(table=table,
                 label=table,
-                editable=managed is not None,
-                why=view_only_why(table))
+                editable=managed is not None or brought,
+                why="" if brought else view_only_why(table))
     if path is None:
         view.error = (f"梱包資材マスタが見つかりません。"
                       f"{config.master_db_dir()} を確かめてください。")

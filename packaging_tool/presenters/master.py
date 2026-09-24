@@ -80,7 +80,8 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
                                   sort=sort, sort_dir=sort_dir)
     # 打ち込める欄は、**取り込み元に本当にある列**だけにする。
     # 上流がまだ足していない列を出すと、保存の瞬間に断られる
-    view.columns = master_admin.columns(conn, view.table, view.page.columns)
+    view.columns = master_admin.columns(conn, view.table, view.page.columns,
+                                        source_path=found)
     if (not view.columns and not view.page.missing and not view.page.error
             and view.page.editable):
         # 表はある(missing=False)のに1つも打ち込めない ── たいてい

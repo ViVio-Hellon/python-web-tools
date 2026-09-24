@@ -99,9 +99,29 @@ VIEW_ONLY_WHY: dict[str, str] = {
 DEFAULT_VIEW_ONLY = "このツールが直す表ではありません。中身の確認だけできます。"
 
 
+# 「表を持ってくる」(`table_bring`)で足した表の記録。**梱包資材マスタの中に
+# 置く** ── どの端末のマスタ管理からも「足した表」として直せるようにするため
+# (端末ごとの設定に置くと、足した端末でしか直せない)
+BROUGHT_REGISTRY = "ツールで足した表"
+
+
+def brought_tables(path: Optional[Path]) -> frozenset[str]:
+    """「表を持ってくる」で足した表。マスタ管理で直せる。"""
+    if path is None:
+        return frozenset()
+    try:
+        rows = source_db.read_query(
+            path, f"SELECT 表 FROM {source_db.quote_identifier(BROUGHT_REGISTRY)}")
+    except source_db.SourceError:
+        return frozenset()                      # まだ1つも足していない
+    return frozenset(str(r["表"]) for r in rows if r.get("表"))
+
+
 def view_only_why(table: str) -> str:
     """その表を直せない理由。直せる表なら空。"""
     if table in BY_TABLE:
+        return ""
+    if table in brought_tables(data_sync.find_material_db()):
         return ""
     return VIEW_ONLY_WHY.get(table, DEFAULT_VIEW_ONLY)
 
@@ -251,6 +271,10 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
     ここを飛ばすと、取り込み元は直っているのに画面の動きは変わらない
     ── **直したのに効かない**が一番たちが悪い。
     """
+    if table not in import_specs.IMPORT_SPECS:
+        # 持ってきた表など、このツールが手元へ取り込まない表。取り込み元に
+        # 書けたらそれで終わり(手元に写しは無い)
+        return "。"
     try:
         result = data_sync.import_tables(
             conn, path, {table: import_specs.IMPORT_SPECS[table]},

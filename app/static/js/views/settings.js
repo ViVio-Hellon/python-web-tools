@@ -757,11 +757,6 @@ function startBrowser() {
     // 選んだだけでは保存しない。「この設定を保存」を押すまで効かない
     if (browseTarget) browseTarget.value = browser.path.value;
     browser.dialog.close();
-    // 「表を持ってくる」の変換ツールは保存ボタンを通さない(中を見るときに覚える)
-    if (browseTarget && browseTarget.id === "bringConverter") {
-      toast("変換ツールの場所を入れました。「中を見る」で使います。", "info");
-      return;
-    }
     toast("フォルダを入れました。「この設定を保存」を押すと効きます。", "info");
   });
 }
@@ -776,7 +771,6 @@ function startBrowser() {
 const bring = {};
 
 function renderBring(plan) {
-  if (plan.converter && !bring.converter.value) bring.converter.value = plan.converter;
   bring.converted.hidden = !plan.converted;
   bring.converted.textContent = plan.converted || "";
   bring.note.hidden = !plan.message;
@@ -836,10 +830,7 @@ async function lookBring() {
   const path = bring.path.value.trim();
   if (!path) { renderBring({ ok: false, message: "変換したファイルを選んでください。" }); return; }
   try {
-    // 変換ツールの場所も送る(Access のまま選んだときに使う。サーバが覚える)
-    const conv = bring.converter.value.trim();
-    renderBring(await api.get(`/api/settings/table-bring/plan?path=${encodeURIComponent(path)}`
-                              + (conv ? `&converter=${encodeURIComponent(conv)}` : "")));
+    renderBring(await api.get(`/api/settings/table-bring/plan?path=${encodeURIComponent(path)}`));
   } catch (err) {
     toastError(err);
   }
@@ -853,6 +844,8 @@ async function runBring() {
                                   { path: bring.path.value.trim(), tables });
     renderBring(result.plan);
     toast(result.message, "ok");
+    // **足した表を、そのままマスタ管理で開いておく**(開き直さなくても出る)
+    if (result.brought && result.brought.length) master.show(result.brought[0].name);
     bring.note.hidden = false;
     bring.note.className = "status status--ok";
     bring.note.textContent = `${result.message}(控え: ${result.backup})`;
@@ -867,20 +860,17 @@ function startBring() {
                            ["path", "bringPath"], ["look", "bringLook"],
                            ["note", "bringNote"], ["list", "bringList"],
                            ["rows", "bringRows"], ["run", "bringRun"],
-                           ["converter", "bringConverter"],
-                           ["converted", "bringConverted"]]) {
+                           ["converted", "bringConverted"], ["drop", "bringDrop"],
+                           ["openDrop", "bringOpenDrop"]]) {
     bring[key] = document.getElementById(id);
   }
   if (!bring.dialog) return;
-  bring.open.addEventListener("click", async () => {
-    bring.dialog.showModal();
-    // 開いたら、見つかっている変換ツールの場所を出しておく
-    try {
-      const plan = await api.get("/api/settings/table-bring/plan?path=");
-      if (plan.converter && !bring.converter.value) bring.converter.value = plan.converter;
-    } catch (err) {
-      toastError(err);
-    }
+  bring.open.addEventListener("click", () => bring.dialog.showModal());
+  // **落とすだけで読む。** ダイアログの中の枠にも、設定画面の段にも落とせる
+  // (段に落としたらダイアログを開いてから読む)
+  acceptDrop(bring.drop);
+  acceptDrop(bring.openDrop, () => {
+    if (!bring.dialog.open) bring.dialog.showModal();
   });
   bring.look.addEventListener("click", lookBring);
   bring.path.addEventListener("change", lookBring);
@@ -888,4 +878,41 @@ function startBring() {
     if (event.key === "Enter") { event.preventDefault(); lookBring(); }
   });
   bring.run.addEventListener("click", runBring);
+}
+
+/** ファイルを落とせる場所にする。落ちたら受け取って、すぐ中を読む。 */
+function acceptDrop(zone, before) {
+  if (!zone) return;
+  const over = (on) => zone.classList.toggle("is-over", on);
+  zone.addEventListener("dragover", (event) => {
+    if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+    event.preventDefault();
+    over(true);
+  });
+  zone.addEventListener("dragleave", () => over(false));
+  zone.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    over(false);
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+    if (before) before();
+    await uploadBring(file);
+  });
+}
+
+async function uploadBring(file) {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  bring.note.hidden = false;
+  bring.note.className = "status";
+  bring.note.textContent = `${file.name} を受け取っています…`;
+  try {
+    const got = await api.postForm("/api/settings/table-bring/upload", form);
+    bring.path.value = got.path;
+    await lookBring();
+  } catch (err) {
+    bring.note.className = "status status--ng";
+    bring.note.textContent = err.message;
+    toastError(err);
+  }
 }

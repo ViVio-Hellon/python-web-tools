@@ -61,7 +61,8 @@ async function request(path, options = {}) {
         // どのタブからの要求か。サーバは**最後に開いたタブ**からの
         // ものだけを通す(`packaging_tool/screen_lock.py`)
         [screen.HEADER]: screen.id(),
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        // ファイルを送るとき(FormData)は、ブラウザに区切りごと決めさせる
+        ...(typeof options.body === "string" ? { "Content-Type": "application/json" } : {}),
         ...(options.headers || {}),
       },
     });
@@ -100,4 +101,6 @@ export function tokenUrl(path) {
 export const api = {
   get: (path) => request(path),
   post: (path, data) => request(path, { method: "POST", body: JSON.stringify(data ?? {}) }),
+  // ファイルを送る(「表を持ってくる」のドラッグ&ドロップ)
+  postForm: (path, form) => request(path, { method: "POST", body: form }),
 };

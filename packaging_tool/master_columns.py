@@ -48,8 +48,37 @@ class Column:
 KIND_LABEL = {"int": "整数", "real": "小数", "text": "文字"}
 
 
+def _brought_columns(path: Path, table: str) -> list[Column]:
+    """「表を持ってくる」で足した表の列。**取り込み元の表の定義**から作る。
+
+    この表はこのツールが取り込まない(`IMPORT_SPECS` に無い)ので、型も
+    必須かどうかも、足したときの定義(Access の型、変換ツール経由なら型なし)
+    がそのまま答え。型の書いていない列は文字として扱う。
+    `INTEGER PRIMARY KEY` の列(番号が自動で振られる)は空欄で通す。
+    """
+    try:
+        rows = source_db.read_query(
+            path, f"PRAGMA table_info({source_db.quote_identifier(table)})")
+    except source_db.SourceError as exc:
+        log.warning("%s の列を引けません: %s", table, exc)
+        return []
+    out: list[Column] = []
+    for row in rows:
+        declared = str(row.get("type") or "")
+        auto_number = bool(row.get("pk")) and "INT" in declared.upper()
+        stamp = row["name"] in STAMP_COLUMNS
+        required = (bool(row.get("notnull")) and row.get("dflt_value") is None
+                    and not auto_number and not stamp)
+        note = ("空欄なら番号が自動で入ります" if auto_number
+                else "空欄なら今の日時が入ります" if stamp else "")
+        out.append(Column(name=row["name"], kind=_kind_of(declared),
+                          required=required, stamp=stamp, note=note))
+    return out
+
+
 def columns(conn: sqlite3.Connection, table: str,
-            present: Optional[Iterable[str]] = None) -> list[Column]:
+            present: Optional[Iterable[str]] = None, *,
+            source_path: Optional[Path] = None) -> list[Column]:
     """その表で直せる列。
 
     出どころは3つとも既にあるものを読むだけ ── **同じ事実を書き足さない**。
@@ -66,6 +95,9 @@ def columns(conn: sqlite3.Connection, table: str,
     """
     spec = import_specs.IMPORT_SPECS.get(table, [])
     if not spec:
+        # 持ってきた表は、取り込み元の定義から列を作る
+        if source_path is not None and table in master_common.brought_tables(source_path):
+            return _brought_columns(source_path, table)
         return []
     allowed = None if present is None else set(present)
     info: dict[str, sqlite3.Row] = {}

@@ -104,7 +104,7 @@ def save_row(conn: sqlite3.Connection, table: str, row_key: Any,
         return refused
 
     clean, problem = _clean(conn, table, values, filling=False,
-                            present=source_db.columns(path, table))
+                            present=source_db.columns(path, table), source_path=path)
     if problem:
         return Result(False, problem, REFUSE_BAD_VALUE)
     if not clean:
@@ -132,7 +132,7 @@ def add_row(conn: sqlite3.Connection, table: str, values: dict[str, Any], *,
         return refused
 
     clean, problem = _clean(conn, table, values, filling=True,
-                            present=source_db.columns(path, table))
+                            present=source_db.columns(path, table), source_path=path)
     if problem:
         return Result(False, problem, REFUSE_BAD_VALUE)
     if not clean:
@@ -190,10 +190,10 @@ def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],
     allowed, why = can_edit(conn, table)
     if not allowed:
         return None, Result(False, why, REFUSE_NOT_ALLOWED)
-    if table not in BY_TABLE:
+    found = path or source_for(table)
+    if table not in BY_TABLE and table not in master_common.brought_tables(found):
         return None, Result(False, view_only_why(table) or "直せない表です。",
                             REFUSE_NOT_EDITABLE)
-    found = path or source_for(table)
     if found is None:
         return None, Result(False,
                             f"{source_label(table)}が見つかりません。"
@@ -220,7 +220,8 @@ def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],
 
 def _clean(conn: sqlite3.Connection, table: str, values: dict[str, Any],
            *, filling: bool,
-           present: Optional[Iterable[str]] = None) -> tuple[dict[str, Any], str]:
+           present: Optional[Iterable[str]] = None,
+           source_path: Optional[Path] = None) -> tuple[dict[str, Any], str]:
     """画面から来た値を、取り込み元へ入れられる形にする。
 
     `filling` が真なら新しい行なので、送られてこなかった必須の列も
@@ -228,7 +229,7 @@ def _clean(conn: sqlite3.Connection, table: str, values: dict[str, Any],
     (送っていない列を消さないため)。
     """
     out: dict[str, Any] = {}
-    for column in master_columns.columns(conn, table, present):
+    for column in master_columns.columns(conn, table, present, source_path=source_path):
         if column.name not in values and not filling:
             continue
         raw = str(values.get(column.name, "")).strip()

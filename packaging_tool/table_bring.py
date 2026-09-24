@@ -55,6 +55,9 @@ REFUSE_EXISTS = "exists"
 REFUSE_WRITE_FAILED = "write_failed"
 REFUSE_CONVERT = "convert_failed"
 
+# 足した表の記録(梱包資材マスタの中)。マスタ管理が同じ名前で読む
+from .master_common import BROUGHT_REGISTRY as REGISTRY  # noqa: E402
+
 # Access のファイル。これを選んだら変換ツールで sqlite3 にしてから読む
 ACCESS_SUFFIXES = (".accdb", ".mdb")
 # 変換ツールに要るファイル(`engine.read_source` と `writers.write_sqlite`)
@@ -126,21 +129,24 @@ def _looks_like_converter(folder: Path) -> bool:
     return all((folder / name).is_file() for name in CONVERTER_FILES)
 
 
-def converter_dir() -> Optional[Path]:
-    """変換ツールのフォルダ。設定にあればそれ、無ければよくある置き場所を探す。
+# 同梱した変換ツールの読み取り部品(`vendor/accdb_converter/README.txt`)
+BUNDLED_CONVERTER = config.BASE_DIR / "vendor" / "accdb_converter"
 
-    よくある置き場所 = このツールと同じ階層の `accdb_converter`、
-    またはこのツールの中の `accdb_converter`。
+
+def converter_dir() -> Optional[Path]:
+    """変換に使う部品のフォルダ。**ふだんは同梱のもの。**
+
+    以前は変換ツールの置き場所を画面で指定させていた(現場の声:「変換ツールの
+    場所って指定するってことはこのツールにコンバーターが入ったわけではない
+    んですか？ 使いにくい」)。部品をこのツールに入れたので、指定は要らない。
+    設定に場所が書いてあるときだけ、そちら(変換ツールを直した直後など)を使う。
     """
     from . import user_settings
     saved = str(user_settings.get(config.KEY_CONVERTER_DIR, "") or "").strip()
-    if saved:
-        folder = Path(saved)
-        return folder if _looks_like_converter(folder) else None
-    for folder in (config.BASE_DIR.parent / "accdb_converter",
-                   config.BASE_DIR / "accdb_converter"):
-        if _looks_like_converter(folder):
-            return folder
+    if saved and _looks_like_converter(Path(saved)):
+        return Path(saved)
+    if _looks_like_converter(BUNDLED_CONVERTER):
+        return BUNDLED_CONVERTER
     return None
 
 
@@ -201,8 +207,8 @@ def _convert(src: Path) -> tuple[Path, str]:
     folder = converter_dir()
     if folder is None:
         raise ConvertError(
-            "Access のまま読むには、変換ツール(accdb_converter)の場所が要ります。"
-            "下の「変換ツールの場所」に入れてください。")
+            "Access を読む部品(vendor\\accdb_converter)が見つかりません。"
+            "ツールのフォルダが欠けていないか確かめてください。")
     from . import app_config
     work = app_config.local_dir("work")
     work.mkdir(parents=True, exist_ok=True)
@@ -278,6 +284,45 @@ def _suspect_rows(path: Path, table: str, columns: list[str]) -> int:
     return int(rows[0]["n"]) if rows else 0
 
 
+# ドラッグ&ドロップで受け取れるファイル
+UPLOAD_SUFFIXES = ACCESS_SUFFIXES + source_db.SUFFIXES
+# 受け取る大きさの上限。Access の上限(2GB)より手前で止める
+UPLOAD_LIMIT_BYTES = 1024 * 1024 * 1024
+
+
+def save_upload(filename: str, stream: Any) -> tuple[Optional[Path], str]:
+    """ドロップされたファイルを手元の作業フォルダへ置く。(置いた場所, 断る理由)。
+
+    名前はファイル名の部分だけを使う(フォルダを含む名前で外へ書かせない)。
+    同じ名前が来たら置き換える ── 直して落とし直すのがふつうの使い方なので。
+    """
+    from . import app_config
+    name = Path(str(filename).replace("\\", "/")).name
+    if Path(name).suffix.lower() not in UPLOAD_SUFFIXES:
+        return None, ("Access(.accdb / .mdb)か sqlite3(.sqlite3 / .db)の"
+                      "ファイルを落としてください。")
+    folder = app_config.local_dir("work") / "表を持ってくる"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / name
+    written = 0
+    try:
+        with open(target, "wb") as fh:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > UPLOAD_LIMIT_BYTES:
+                    raise ValueError("大きすぎます")
+                fh.write(chunk)
+    except (OSError, ValueError) as exc:
+        target.unlink(missing_ok=True)
+        return None, f"ファイルを受け取れませんでした({exc})"
+    _converted_cache.pop(str(target), None)      # 同じ名前で落とし直したら変換し直す
+    log.info("持ってくるファイルを受け取りました: %s (%s バイト)", target, written)
+    return target, ""
+
+
 def _dest() -> Optional[Path]:
     return sync_sources.find_material_db()
 
@@ -316,8 +361,8 @@ def plan(source_path: str) -> Plan:
         out.message = str(exc)
         return out
     if is_access(src):
-        out.converted = (f"Access を変換して読みました(変換ツール: {folder}"
-                         + (f"、読み取り: {engine}" if engine else "") + ")")
+        out.converted = ("Access を変換して読みました"
+                         + (f"(読み取り: {engine})" if engine else ""))
     try:
         names = source_db.list_tables(readable)
         existing = set(source_db.list_tables(dest))
@@ -326,7 +371,7 @@ def plan(source_path: str) -> Plan:
         out.message = f"ファイルを読めません: {exc}"
         return out
     internal = [n for n in names if is_access_internal(n)]
-    names = [n for n in names if not is_access_internal(n)]
+    names = [n for n in names if not is_access_internal(n) and n != REGISTRY]
     for name in names:
         columns = source_db.columns(readable, name)
         exists = name in existing
@@ -443,6 +488,16 @@ def bring(source_path: str, tables: list[str]) -> BringResult:
                     tx.execute(create)
                     for row in rows:
                         tx.insert(table, row)
+                    # 足したことを梱包資材マスタの中に書く。マスタ管理はこれを
+                    # 見て「足した表」として直せるようにする(どの端末からでも)
+                    tx.execute(
+                        f"CREATE TABLE IF NOT EXISTS {source_db.quote_identifier(REGISTRY)}"
+                        " (表 TEXT PRIMARY KEY, 足した日時 TEXT, 元のファイル TEXT)")
+                    tx.execute(
+                        f"INSERT OR REPLACE INTO {source_db.quote_identifier(REGISTRY)}"
+                        " (表, 足した日時, 元のファイル) VALUES (?, ?, ?)",
+                        [table, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                         str(original)])
                     # 索引の名前はファイルの中で1つしか使えない。梱包資材マスタに
                     # 同じ名前があるものは作らない(表は持ってくる)
                     for name, sql in indexes:
@@ -468,7 +523,8 @@ def bring(source_path: str, tables: list[str]) -> BringResult:
         return BringResult(False, "持ってこられませんでした: " + "、".join(failed)
                            + "。梱包資材マスタは変えていません。",
                            REFUSE_WRITE_FAILED, backup=str(backup))
-    message = f"梱包資材マスタに {done} を足しました。今ある表には触っていません。"
+    message = (f"梱包資材マスタに {done} を足しました。今ある表には触っていません。"
+               "マスタ管理の一覧に「足」の印で出ていて、そのまま直せます。")
     if failed:
         message += " ただし次は持ってこられませんでした: " + "、".join(failed)
     return BringResult(not failed, message, "" if not failed else REFUSE_WRITE_FAILED,

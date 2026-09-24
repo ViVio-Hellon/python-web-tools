@@ -42,7 +42,7 @@ INCLUDE: tuple[str, ...] = (
     "Start.vbs", "start.bat", "stop.bat",
     "start_app.py", "server.py", "boot_server.py", "launch_guard.py",
     "process_manager.py",
-    "app", "config", "docs", "packaging_tool", "scripts",
+    "app", "config", "docs", "packaging_tool", "scripts", "vendor",
 )
 
 # 中にあっても写さないもの(名前で見る。フォルダならその下ごと)
