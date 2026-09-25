@@ -138,6 +138,22 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("ボードタイプ", "ボードタイプ", to_text),
         ("データラベル", "データラベル", to_text),
     ],
+    # 全端末の「使用する」を集めた表(書き戻しで各端末が足していく)。
+    # 管理番号は取り込まない ── 手元で振り直す(ほかの書き戻し表と同じ)
+    config.TBL_BOARD_USAGE: [
+        ("ボード幅", "ボード幅", lambda v: to_int(v) or 0),
+        ("ボード丈", "ボード丈", lambda v: to_int(v) or 0),
+        ("ボードタイプ", "ボードタイプ", to_text),
+        ("枚数", "枚数", lambda v: to_int(v) or 0),
+        ("切断後幅", "切断後幅", lambda v: to_int(v) or 0),
+        ("切断後丈", "切断後丈", lambda v: to_int(v) or 0),
+        ("製品幅", "製品幅", lambda v: to_int(v) or 0),
+        ("製品丈", "製品丈", lambda v: to_int(v) or 0),
+        ("パレット幅", "パレット幅", lambda v: to_int(v) or 0),
+        ("パレット丈", "パレット丈", lambda v: to_int(v) or 0),
+        ("ロット番号", "ロット番号", to_text),
+        ("使用日時", "使用日時", to_text),
+    ],
     "CornerboardMaster": [
         ("アングル丈", "アングル丈", to_int),
         ("データラベル", "データラベル", to_text),
@@ -368,7 +384,12 @@ BLANK_IS_MISSING: dict[str, tuple[str, ...]] = {
 # にはまだ入っていません。無いあいだは手元に入れた基準表の初期値
 # (`pallet_threshold.SEED`)で動き、マスタ管理画面から取り込み元に
 # 作れます。
-OPTIONAL_TABLES: frozenset[str] = frozenset({"アクセス権限"}) | frozenset(THRESHOLD_TABLES)
+#
+# ボード使用実績も同じ。共有にはまだ無く、**最初に送った端末が作る**
+# (`sync_writeback.ensure_shared_tables`)。作られるまでは取り込まない
+# (手元の記録はそのまま残る)
+OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_BOARD_USAGE})
+                                   | frozenset(THRESHOLD_TABLES))
 
 # **取り込み元に無くても知らせない列**(表 → 取り込み元の列名)。
 #

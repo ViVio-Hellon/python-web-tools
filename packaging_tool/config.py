@@ -270,6 +270,9 @@ TBL_STOCK_HISTORY = "パレット入出庫履歴"  # UFMAP `TBL_HISTORY` 相当(
 # するため)。表の名前はここ以外に書かないこと ── 手元の表は `schema.sql`
 # ではなく `pattern_store.ensure_tables` がここから作る。
 TBL_PT_HEADER = "パレット実績ヘッダ"
+# ボード使用実績(資材選択の「使用する」)。**全端末ぶんを共有に集める**
+# (書き戻しで送り、取り込みで受け取る)。人気度は全端末の合計になる
+TBL_BOARD_USAGE = "ボード使用実績"
 TBL_PT_SELECT = "パレット実績選定"
 TBL_PT_PLACE = "パレット実績配置"
 TBL_PT_CUT = "パレット実績カット"

@@ -270,6 +270,23 @@ def popularity(conn: sqlite3.Connection,
     return Popularity(rows=rows, total_sheets=total_sheets, unlisted=unlisted)
 
 
+def unsent_sheets(conn: sqlite3.Connection) -> int:
+    """この端末で押したのに、まだ共有へ送れていない枚数。
+
+    人気度は全端末の合計(共有に集めた数)なので、送れていない分は
+    ほかの端末の表にはまだ出ない。画面でそのことを言うために数える。
+    """
+    from . import outbox_sync, sync_writeback
+    for spec in sync_writeback.WRITEBACK_SPECS:
+        if spec.sqlite_table == TABLE:
+            try:
+                return sum(int(r["枚数"] or 0)
+                           for r in outbox_sync.pending_rows(conn, spec))
+            except sqlite3.Error:
+                return 0
+    return 0
+
+
 def board_types(conn: sqlite3.Connection) -> list[str]:
     """ボード一覧にある種別。設定画面の絞り込みに出す。"""
     rows = db.fetch_all(

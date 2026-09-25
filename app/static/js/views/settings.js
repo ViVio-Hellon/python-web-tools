@@ -92,9 +92,8 @@ function renderBoardUsage(usage) {
   const unlisted = usage.unlisted || [];
 
   el.usageRateEmpty.hidden = rows.length > 0;
-  el.usageSummary.textContent = usage.top
-    ? `${usage.top} / 累計 ${usage.total_sheets}枚`
-    : (rows.length ? "まだ使われていません" : "0 件");
+  // 見出しの文はサーバが作る(全端末の合計か・送れていない分があるか)
+  el.usageSummary.textContent = usage.summary || "0 件";
 
   const cells = (values, right) => values.map((value, index) => {
     const td = document.createElement("td");

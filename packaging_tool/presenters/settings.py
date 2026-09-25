@@ -320,7 +320,8 @@ def _board_usage(conn: Optional[sqlite3.Connection]) -> dict[str, Any]:
     いるか、寸法を打ち間違えているかのどちらかで、どちらも直すべき
     事実です。
     """
-    empty = {"rows": [], "unlisted": [], "total_sheets": 0, "top": ""}
+    empty = {"rows": [], "unlisted": [], "total_sheets": 0, "top": "",
+             "unsent_sheets": 0, "summary": ""}
     if conn is None:
         return empty
     from .. import board_usage as usage
@@ -333,14 +334,26 @@ def _board_usage(conn: Optional[sqlite3.Connection]) -> dict[str, Any]:
 
     got = usage.popularity(conn)
     top = got.top
+    unsent = usage.unsent_sheets(conn)
+    top_text = (f"よく使うのは {top.board_type} {top.width}×{top.length}"
+                f"({top.share}%)" if top else "")
+    if top:
+        summary = f"{top_text} / 全端末の累計 {got.total_sheets}枚"
+    else:
+        summary = "まだ使われていません" if got.rows else "0 件"
+    if unsent:
+        # 送れていない分は手元にしか無い。**合計に入っているが、ほかの端末
+        # からはまだ見えない**ことを言う
+        summary += f"(うち、この端末からまだ送れていない {unsent}枚)"
     return {
+        "unsent_sheets": unsent,
+        "summary": summary,
         "rows": [line(r) for r in got.rows],
         "unlisted": [line(r) for r in got.unlisted],
         "total_sheets": got.total_sheets,
         # 見出しの一文。**一覧を全部読まなくても現状が分かる**ように、
         # 「いちばん使うもの」と「累計」だけを言う
-        "top": (f"よく使うのは {top.board_type} {top.width}×{top.length}"
-                f"({top.share}%)" if top else ""),
+        "top": top_text,
     }
 
 

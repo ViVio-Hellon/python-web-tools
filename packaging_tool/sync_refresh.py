@@ -122,6 +122,8 @@ def refresh_orders(conn: sqlite3.Connection,
     for spec in WRITEBACK_SPECS:
         if spec.sqlite_table in imported.imported:
             outbox_sync.mark_all_sent(conn, spec)
+    # ボード使用実績も入れ直すが、画面の件数には数えない(発注ではない)
+    imported.imported.pop(config.TBL_BOARD_USAGE, None)
     stock = imported.imported.pop(config.TBL_PALLET_MASTER, None)
     if stock:
         # 取り込みと同じく、入れ直したら適合範囲を計算し直す

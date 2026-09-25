@@ -61,7 +61,59 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   key_column="id",
                   number_column="管理番号",
                   on_insert=lambda tx, values: apply_stock(tx, values)),
+    # 資材選択の「使用する」。**全端末の合計で人気度を出す**ために集める。
+    # 足すだけで、あとから変わる値は無い(印は無い)
+    WriteBackSpec(sqlite_table=config.TBL_BOARD_USAGE,
+                  access_table=config.TBL_BOARD_USAGE,
+                  key_column="管理番号",
+                  number_column="管理番号"),
 ]
+
+# 共有にまだ無ければ、**最初に送る端末が作る**表。
+#
+# ボード使用実績は Access 時代には無かった表で、共有の梱包資材マスタには
+# 入っていない。作らないと送れず、送れない行が残るあいだはその表の
+# 取り込みも止まる(= いつまでも端末ごとの数のまま)。
+# 番号は共有側で自動で振る(INTEGER PRIMARY KEY)。送信ID列と一意索引は
+# ほかの表と同じく `ensure_op_id_column` が足す。
+SHARED_TABLE_DDL: dict[str, str] = {
+    config.TBL_BOARD_USAGE: (
+        f'CREATE TABLE IF NOT EXISTS "{config.TBL_BOARD_USAGE}" ('
+        " 管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " ボード幅 INTEGER NOT NULL DEFAULT 0, ボード丈 INTEGER NOT NULL DEFAULT 0,"
+        " ボードタイプ TEXT NOT NULL DEFAULT '', 枚数 INTEGER NOT NULL DEFAULT 0,"
+        " 切断後幅 INTEGER NOT NULL DEFAULT 0, 切断後丈 INTEGER NOT NULL DEFAULT 0,"
+        " 製品幅 INTEGER NOT NULL DEFAULT 0, 製品丈 INTEGER NOT NULL DEFAULT 0,"
+        " パレット幅 INTEGER NOT NULL DEFAULT 0, パレット丈 INTEGER NOT NULL DEFAULT 0,"
+        " ロット番号 TEXT NOT NULL DEFAULT '', 使用日時 TEXT NOT NULL DEFAULT '')"),
+}
+
+
+def ensure_shared_tables(conn: sqlite3.Connection, source: Any) -> list[str]:
+    """送るものがあるのに共有に無い表を作る。作った表の名前を返す。
+
+    **送るものが無ければ触らない。** 共有は全員のファイルなので、
+    用も無いのに書き換えない(更新時刻が変わると全端末が取り込み直す)。
+    """
+    made: list[str] = []
+    try:
+        names = set(source.table_names())
+    except source_db.SourceError:
+        return made
+    for spec in WRITEBACK_SPECS:
+        ddl = SHARED_TABLE_DDL.get(spec.access_table)
+        if ddl is None or spec.access_table in names:
+            continue
+        try:
+            if not outbox_sync.pending_rows(conn, spec):
+                continue
+            source.execute(ddl)
+        except (sqlite3.Error, source_db.SourceError) as exc:
+            log.warning("%s を取り込み元に作れませんでした: %s", spec.access_table, exc)
+            continue
+        log.info("%s を取り込み元に作りました", spec.access_table)
+        made.append(spec.access_table)
+    return made
 
 
 def _is_list_managed(value: Any) -> bool:
@@ -194,6 +246,7 @@ def write_back(conn: sqlite3.Connection,
         return result
 
     try:
+        ensure_shared_tables(conn, source)
         result = outbox_sync.write_back(conn, source, WRITEBACK_SPECS)
         _push_patterns(conn, source, result)
     finally:

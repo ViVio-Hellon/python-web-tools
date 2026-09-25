@@ -626,9 +626,7 @@
     <header>
       <i class="ib ib--sm" aria-hidden="true">人</i>
       <h3>ボード人気度</h3>
-      <span class="eyebrow" id="usageSummary">{% if view.board_usage.top %}{{
-        view.board_usage.top }} / 累計 {{ view.board_usage.total_sheets
-        }}枚{% elif view.board_usage.rows %}まだ使われていません{% else %}0 件{% endif %}</span>
+      <span class="eyebrow" id="usageSummary">{{ view.board_usage.summary or "0 件" }}</span>
     </header>
     <div class="pad">
       <p class="why">
@@ -638,6 +636,11 @@
         よいサイズを見つけるのもこの表の役目なので、隠すと意味が
         なくなります。積まれるのは資材選択で<b>「使用する」</b>を
         押したときだけです。
+      </p>
+      <p class="why">
+        数は<b>全端末の合計</b>です。「使用する」を押すと取り込み元へ送られ、
+        この画面を開いたときに、ほかの端末で押した分も取り込み直して数えます。
+        取り込み元に届かない端末では、この端末で押した分だけになります。
       </p>
       <p class="why">
         1回の配置でパレットをどれだけ覆えたか(<b>使用率・はみ出し</b>)は、

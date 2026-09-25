@@ -37,9 +37,25 @@ log = get_logger("app.routes.settings")
 bp = Blueprint("settings", __name__)
 
 
+def _caught_up_db():
+    """手元のDB。**共有が変わっていれば、先に取り込み直してから渡す。**
+
+    ボード人気度は全端末の「使用する」を合計した数で、ほかの端末の分は
+    取り込むまで手元に無い。見る前・書き出す前に追いつく。変わって
+    いなければファイルの姿を見るだけで帰り、届かなければ手元の数で出す。
+    """
+    conn = get_db()
+    try:
+        from packaging_tool import data_sync
+        data_sync.refresh_orders(conn, only_if_changed=True)
+    except Exception:                               # noqa: BLE001 - 画面は止めない
+        log.exception("設定画面の前の取り込み直しに失敗(手元の数で出します)")
+    return conn
+
+
 @bp.get("/settings")
 def page():
-    view = settings_presenter.build(get_db(), _startup_modes())
+    view = settings_presenter.build(_caught_up_db(), _startup_modes())
     registry = jobs.get_registry()
     # `?tab=` で面を名指しできる(帯のモード表示から「この端末の権限」
     # へ直接連れて行くため)。JS を待たずに最初の描画から正しい面が
@@ -246,7 +262,7 @@ def export_board_usage():
     if not isinstance(raw, str):
         return jsonify(_error("bad_dir",
                               "書き出し先はフォルダの道(文字)で指定してください")), 400
-    result = settings_presenter.export_board_usage(get_db(), raw)
+    result = settings_presenter.export_board_usage(_caught_up_db(), raw)
     if not result.ok:
         return jsonify(_error(result.reason, result.message)), 400
     state = settings_presenter.to_dict(

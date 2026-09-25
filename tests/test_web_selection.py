@@ -2645,6 +2645,16 @@ class SendTests(SelectionWebTestCase):
         self.assertEqual(usage[0]["length"], 2000)
         self.assertEqual(usage[0]["usage_count"], 1)
 
+    def test_押したら共有へ送りにいく(self) -> None:
+        """人気度は全端末の合計。手元に置いたままでは、ほかの端末に出ない。"""
+        from unittest import mock
+        from packaging_tool import data_sync
+        self._placed()
+        with mock.patch.object(data_sync, "write_back_in_background") as push:
+            self.post("/api/selection/boards/use")
+            self.post("/api/selection/boards/use")       # 二度目は積まないので送らない
+        self.assertEqual(push.call_count, 1)
+
     def test_同じ配置を二度押しても増えない(self) -> None:
         """**押した手応えが無いと人はもう一度押す。**
 

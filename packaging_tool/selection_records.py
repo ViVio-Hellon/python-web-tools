@@ -273,6 +273,9 @@ class RecordsMixin:
         self.presenter.user_log.log(
             f"[使用実績] {self.board_type} {sheets}枚を記録しました",
             emphasis=True)
+        # 共有へ送る。**人気度は全端末の合計**なので、手元に置いたままでは
+        # ほかの端末の表に出ない。送れなくても手元の記録は済んでいる
+        _push_later()
         return BoardOpResult(True, f"使用実績に{sheets}枚を記録しました。")
 
     def patterns(self) -> list[Any]:

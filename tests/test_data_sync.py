@@ -493,6 +493,9 @@ class WriteBackTests(unittest.TestCase):
             def query(self, sql, params=()):
                 return []
 
+            def table_names(self):
+                return []
+
             @contextlib.contextmanager
             def transaction(self):
                 yield self
@@ -535,6 +538,9 @@ class WriteBackTests(unittest.TestCase):
                 return 1
 
             def query(self, sql, params=()):
+                return []
+
+            def table_names(self):
                 return []
 
             @contextlib.contextmanager
@@ -977,6 +983,9 @@ class ConcurrentWriteBackTests(unittest.TestCase):
                 return 1
 
             def query(self, sql, params=()):
+                return []
+
+            def table_names(self):
                 return []
 
             @contextlib.contextmanager
@@ -1766,6 +1775,8 @@ class GuardRepairTests(unittest.TestCase):
         path.unlink(missing_ok=True)
         conn = sqlite3.connect(path)
         for spec in self.sync_writeback.WRITEBACK_SPECS:
+            if spec.access_table in self.sync_writeback.SHARED_TABLE_DDL:
+                continue                  # 変換したファイルには無い(ツールが作る表)
             conn.execute(f'CREATE TABLE "{spec.access_table}"'
                          f' (管理番号 INTEGER, "{spec.op_id_column}" TEXT)')
             conn.executemany(f'INSERT INTO "{spec.access_table}" VALUES (?, NULL)',
@@ -1775,9 +1786,11 @@ class GuardRepairTests(unittest.TestCase):
 
     def guards_ok(self) -> list[bool]:
         with source_db.connect(self.path) as src:
+            # 共有にある表だけ(ボード使用実績は最初に送る端末が作る)
+            names = set(src.table_names())
             return [outbox_sync.guard_state(src, spec).ok
                     for spec in self.sync_writeback.WRITEBACK_SPECS
-                    if spec.use_op_id_guard]
+                    if spec.use_op_id_guard and spec.access_table in names]
 
     def test_索引が無ければ作る(self):
         self.assertEqual(self.guards_ok(), [False, False])
@@ -1799,6 +1812,8 @@ class GuardRepairTests(unittest.TestCase):
         """以前はパスだけで「作った」と覚えていたので、差し替え後は作り直さなかった。"""
         with source_db.connect(self.path) as src:
             for spec in self.sync_writeback.WRITEBACK_SPECS:
+                if spec.access_table in self.sync_writeback.SHARED_TABLE_DDL:
+                    continue              # 共有にまだ無い表
                 self.assertTrue(outbox_sync.ensure_op_id_column(src, spec))
         self.assertEqual(self.guards_ok(), [True, True])
 
@@ -1806,6 +1821,8 @@ class GuardRepairTests(unittest.TestCase):
         self.assertEqual(self.guards_ok(), [False, False])
         with source_db.connect(self.path) as src:
             for spec in self.sync_writeback.WRITEBACK_SPECS:
+                if spec.access_table in self.sync_writeback.SHARED_TABLE_DDL:
+                    continue              # 共有にまだ無い表
                 self.assertTrue(outbox_sync.ensure_op_id_column(src, spec))
         self.assertEqual(self.guards_ok(), [True, True])
 
