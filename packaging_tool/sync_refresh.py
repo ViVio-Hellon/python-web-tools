@@ -89,8 +89,11 @@ def refresh_orders(conn: sqlite3.Connection,
     if only_if_changed and not changed:
         return result
 
+    # PalletMaster も入れ直す。受入・払出の在庫数は入出庫履歴と一緒に
+    # 共有へ届く(`sync_writeback.apply_stock`)ので、開いたままの端末にも
+    # ほかの端末の在庫数が出るように
     specs = {t: s for t, s in import_specs.IMPORT_SPECS.items()
-             if t in ORDER_TABLES}
+             if t in ORDER_TABLES or t == config.TBL_PALLET_MASTER}
     unsent = sync_writeback._unsent_writeback_tables(conn)
     if unsent:
         sync_writeback.write_back(conn, path)
@@ -119,7 +122,14 @@ def refresh_orders(conn: sqlite3.Connection,
     for spec in WRITEBACK_SPECS:
         if spec.sqlite_table in imported.imported:
             outbox_sync.mark_all_sent(conn, spec)
+    stock = imported.imported.pop(config.TBL_PALLET_MASTER, None)
+    if stock:
+        # 取り込みと同じく、入れ直したら適合範囲を計算し直す
+        from . import pallet_service
+        pallet_service.recompute_fit_ranges(conn)
 
+    # 画面の「○件を取り込みました」は発注まわりの件数。PalletMaster の
+    # 数千行を足すと、発注が来たように見える
     result.imported = imported.total
     result.tables = len(imported.imported)
     result.errors.extend(imported.errors)

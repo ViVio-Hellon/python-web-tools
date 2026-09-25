@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import shutil
 import sqlite3
 import tempfile
@@ -489,6 +490,13 @@ class WriteBackTests(unittest.TestCase):
                 sent.append((table, values))
                 return 1
 
+            def query(self, sql, params=()):
+                return []
+
+            @contextlib.contextmanager
+            def transaction(self):
+                yield self
+
             def close(self):
                 pass
 
@@ -525,6 +533,14 @@ class WriteBackTests(unittest.TestCase):
                 if calls["n"] == 1:
                     raise sources.source_db.SourceError("型が合いません")
                 return 1
+
+            def query(self, sql, params=()):
+                return []
+
+            @contextlib.contextmanager
+            def transaction(self):
+                # 番号を振るときは1行ずつまとまりで足す
+                yield self
 
             def close(self):
                 pass
@@ -960,6 +976,13 @@ class ConcurrentWriteBackTests(unittest.TestCase):
                     sent.append(values["LotNo"])
                 return 1
 
+            def query(self, sql, params=()):
+                return []
+
+            @contextlib.contextmanager
+            def transaction(self):
+                yield self
+
             def close(self):
                 pass
 
@@ -1227,12 +1250,13 @@ class ConfirmMarkWriteBackTests(unittest.TestCase):
         self.assertEqual(self.source_row("L41")["確認済み"], "1")  # 印は届いた
         self.assertEqual(self.local_row("L41")["確認済み"], "1")   # 消えてない
 
-    def test_どうしても送れない印は取り込みを見送らせる(self) -> None:
-        """送れないまま入れ替えたら、手元にしか無い印が消える。
+    def test_共有で消えた行の印は下ろして取り込みを止めない(self) -> None:
+        """共有の行そのものが消えている(誰かが消した、差し替えた等)。
 
-        ここでは共有の行そのものが消えている場合を作る(誰かが消した、
-        取り込み元を差し替えた等)。印の行き先が無いので送れない ──
-        そのときは**その表を取り込まない**のが正しい。
+        以前は「送れない印」として残し、その表の取り込みを見送らせていた。
+        行が戻ることは無いので**見送りが永久に続き、その端末だけ発注一覧が
+        二度と更新されなかった**。印を付ける相手がいないので下ろし、
+        共有の状態に揃える。下ろしたことは結果に残す。
         """
         data_sync.import_master(self.conn, self.src)
         svc.confirm_order(self.conn, self.mgr_no("L41"))
@@ -1241,11 +1265,12 @@ class ConfirmMarkWriteBackTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
+        pushed = data_sync.write_back(self.conn, self.src)
+        self.assertTrue(any("共有側で消えています" in e for e in pushed.errors),
+                        pushed.errors)
         result = data_sync.import_master(self.conn, self.src)
-        self.assertNotIn(self.TABLE, result.imported)
-        self.assertEqual(self.local_row("L41")["確認済み"], "1")
-        self.assertTrue(any("見送りました" in e for e in result.errors),
-                        result.errors)
+        self.assertIn(self.TABLE, result.imported)
+        self.assertEqual(self.local_row("L41"), {})
 
     def test_送り終われば見送りは解ける(self) -> None:
         data_sync.import_master(self.conn, self.src)

@@ -30,9 +30,25 @@ log = get_logger("app.routes.inventory")
 bp = Blueprint("inventory", __name__)
 
 
+def _db():
+    """手元のDB。**共有が変わっていれば、先に取り込み直してから渡す。**
+
+    在庫数は受入・払出の履歴と一緒に共有へ届く(`sync_writeback.apply_stock`)。
+    ほかの端末が動かした数は取り込むまで手元に無いので、見る前・動かす前に
+    追いつく。変わっていなければファイルの姿を見るだけで帰る。
+    届かない端末では何もせず、手元の値で続ける。
+    """
+    conn = get_db()
+    try:
+        data_sync.refresh_orders(conn, only_if_changed=True)
+    except Exception:                               # noqa: BLE001 - 画面は止めない
+        log.exception("在庫を見る前の取り込み直しに失敗(手元の値で続けます)")
+    return conn
+
+
 @bp.get("/inventory")
 def page():
-    view = inv.initial(get_db())
+    view = inv.initial(_db())
     return render_template(
         "inventory.html",
         state=inv.to_dict(view),
@@ -60,12 +76,12 @@ def search():
         return jsonify(_error("bad_size", "幅と丈は1以上で入れてください")), 400
 
     mode = request.args.get("mode", "exact")
-    return jsonify(inv.to_dict(inv.search(get_db(), width, length, mode)))
+    return jsonify(inv.to_dict(inv.search(_db(), width, length, mode)))
 
 
 @bp.get("/api/inventory/position/<name>")
 def at_position(name: str):
-    return jsonify(inv.to_dict(inv.at_position(get_db(), name)))
+    return jsonify(inv.to_dict(inv.at_position(_db(), name)))
 
 
 @bp.get("/api/inventory/map/background")
@@ -115,7 +131,7 @@ def _map_session():
 
 def _map_state(result=None):
     """図を触ったあとの**画面ぜんぶ**。どの操作の後も同じものを返す。"""
-    view = inv.initial(get_db())
+    view = inv.initial(_db())
     body = inv.to_dict(view)
     if result is not None:
         body["message"] = result.message
@@ -294,7 +310,7 @@ def receive():
         return error
 
     result = pallet_service.receive(
-        get_db(),
+        _db(),
         width=numbers["width"], length=numbers["length"], qty=numbers["qty"],
         position=str(body.get("position", "")).strip(),
         symbol=str(body.get("symbol", "")).strip(),
@@ -314,7 +330,7 @@ def issue():
         return error
 
     result = pallet_service.issue(
-        get_db(),
+        _db(),
         width=numbers["width"], length=numbers["length"],
         position=str(body.get("position", "")).strip(),
         qty=numbers["qty"],

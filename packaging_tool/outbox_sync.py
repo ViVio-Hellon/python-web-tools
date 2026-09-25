@@ -33,7 +33,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from . import source_db
 from .logging_utils import get_logger
@@ -81,6 +81,19 @@ class WriteBackSpec:
     source_key     : 送り先の行番号を覚えてある手元の列。取り込みで
                      受け取った行がこれを持つ。手元で作った行は持たない
                      ので、そちらは送信IDで行を決める
+    mark_blockers  : (印, 先に付いていたら負ける印) の組。送り先でもう
+                     相手の印が付いていたら、こちらの印は送らない
+                     (例: 取り消し済の発注に「確認済み」を付けない)
+    match_columns  : 行番号も送信IDも当たらないときに、同じ行を探す列
+                     (送信IDを書けなかった時期に送った行のため)
+    on_insert      : 1行を足すのと**同じまとまりで**送り先に施す処理
+                     (例: 入出庫履歴を足したら在庫数も動かす)。
+                     呼ばれ方は on_insert(送り先のトランザクション, 足した値)。
+                     足すのが二重と分かった(送信ID重複)ときは一緒に戻る
+    number_column  : 送り先で番号を振る列(`MAX+1`)。送り先が Access から
+                     変換した表だと、番号の列は自動で振られない
+                     (型の無いただの列)。空のまま足すと、ほかの端末が
+                     その行を番号で指せない
     """
 
     sqlite_table: str
@@ -91,6 +104,11 @@ class WriteBackSpec:
     mark_columns: tuple[str, ...] = ()
     mark_pending: str = ""
     source_key: str = ""
+    mark_blockers: tuple[tuple[str, str], ...] = ()
+    match_columns: tuple[str, ...] = ()
+    on_insert: Optional[Callable[[Any, dict[str, Any]], None]] = field(
+        default=None, compare=False)
+    number_column: str = ""
 
     @property
     def marks_enabled(self) -> bool:
@@ -293,9 +311,25 @@ def push_marks(conn: sqlite3.Connection,
     """手元で付けた印を、送り先の同じ行へ書き戻す。
 
     足すのではなく**書き換える**ので、行を取り違えると別の発注に印が
-    付く。どの行かが決まらない行は送らずに残す(`_mark_target`)。
-    1行も書き換えられなかったときも、送れたことにしない ── 送り先から
-    行が消えている場合があり、印だけ手元から消えると追えなくなる。
+    付く。行は送り先の行番号か送信IDで決め、当たらなければ中身
+    (`match_columns`)で探す。
+
+    【付いている印だけを送る ── 空で上書きしない】
+    以前は印の列を4つとも手元の値で書き換えていた。手元で「確認済み」
+    だけを付けた行は取消の列が空なので、**ほかの端末が先に付けた
+    「取り消し済」を空で消していた**(現場が取り消した発注が、倉庫の
+    確認で生き返る)。印は付けるだけで外す操作は無いので、空は送らない。
+
+    【相手の印が先なら送らない(`mark_blockers`)】
+    送り先で読んでから書くまでを1つのまとまり(BEGIN IMMEDIATE)にして、
+    負ける印が先に付いていたら書かない。手元の印は送らずに下ろし、
+    次の取り込みで共有の状態に揃う。
+
+    【送り先に行が無いときは、印を下ろす】
+    以前は「送れていない」のまま残した。残った印は発注の表の取り込みを
+    止めるので、**その端末だけ発注一覧が二度と更新されなかった**
+    (共有で行が消えた・変換し直しで送信IDが消えた、など)。行が無ければ
+    印を付ける相手がいない。下ろして、次の取り込みで共有に揃える。
     """
     if not spec.marks_enabled:
         return 0, []
@@ -306,30 +340,68 @@ def push_marks(conn: sqlite3.Connection,
     pushed, errors = 0, []
     for row in rows:
         row_id = int(row[spec.key_column])
-        where = _mark_target(conn, spec, row)
-        if where is None:
-            errors.append(
-                f"{spec.access_table}(行{row_id}): 送り先のどの行か決められません"
-                "(取り込み元の行番号も送信IDも分かりません)")
+        values = {c: row[c] for c in spec.mark_columns
+                  if c in row.keys() and row[c] not in (None, "")}
+        if not values:
+            _clear_mark_pending(conn, spec, row_id)
+            conn.commit()
             continue
-        values = {c: row[c] for c in spec.mark_columns if c in row.keys()}
         try:
-            changed = source.update(spec.access_table, values, where)
+            with source.transaction() as tx:
+                outcome = _put_marks(tx, spec, _mark_target(conn, spec, row),
+                                     row, values)
         except source_db.SourceError as exc:
             log.warning("%s の印を送れませんでした: %s", spec.access_table, exc)
             errors.append(f"{spec.access_table}(行{row_id}): {exc}")
             continue
-        if not changed:
-            errors.append(
-                f"{spec.access_table}(行{row_id}): 送り先に該当する行が"
-                "ありません")
-            continue
         _clear_mark_pending(conn, spec, row_id)
         conn.commit()
-        pushed += 1
+        if outcome is None:
+            pushed += 1
+        else:
+            log.warning("%s(行%s): %s", spec.access_table, row_id, outcome)
+            errors.append(f"{spec.access_table}(行{row_id}): {outcome}")
     if pushed:
         log.info("%s: 印を%s件書き戻しました", spec.access_table, pushed)
     return pushed, errors
+
+
+def _is_set(value: Any) -> bool:
+    """印が付いているか。空・0 は付いていない。"""
+    return value not in (None, "") and str(value).strip() not in ("0", "False", "false")
+
+
+def _put_marks(tx: "source_db.SourceTransaction", spec: WriteBackSpec,
+               where: Optional[dict[str, Any]], row: sqlite3.Row,
+               values: dict[str, Any]) -> Optional[str]:
+    """送り先の行に印を書く。書けなかったら理由(書けたら None)。"""
+    table = source_db.quote_identifier(spec.access_table)
+
+    def rows_by(cond: dict[str, Any]) -> tuple[list[dict[str, Any]], str, list[Any]]:
+        sql = " AND ".join(f"{source_db.quote_identifier(k)} = ?" for k in cond)
+        params = list(cond.values())
+        return tx.query(f"SELECT * FROM {table} WHERE {sql}", params), sql, params
+
+    found: list[dict[str, Any]] = []
+    if where:
+        found, cond_sql, cond_params = rows_by(where)
+    if not found and spec.match_columns and all(
+            c in row.keys() and row[c] not in (None, "") for c in spec.match_columns):
+        # 送信IDを書けなかった時期に送った行・変換し直しで送信IDが
+        # 消えた行は、中身で探す
+        found, cond_sql, cond_params = rows_by(
+            {c: row[c] for c in spec.match_columns})
+    if not found:
+        return ("送り先に行がありません(共有側で消えています)。"
+                "印は送らず、次の取り込みで共有に合わせます")
+    for flag, blocker in spec.mark_blockers:
+        if flag in values and any(_is_set(r.get(blocker)) for r in found):
+            return (f"送り先では先に「{blocker}」が付いていたため、"
+                    f"「{flag}」は送りませんでした。次の取り込みで共有に合わせます")
+    sets = ", ".join(f"{source_db.quote_identifier(k)} = ?" for k in values)
+    tx.execute(f"UPDATE {table} SET {sets} WHERE {cond_sql}",
+               list(values.values()) + cond_params)
+    return None
 
 
 def unsent_tables(conn: sqlite3.Connection,
@@ -730,7 +802,16 @@ def write_back(conn: sqlite3.Connection,
                 if op_id_ready:
                     values[spec.op_id_column] = op_ids[row_id]
                 try:
-                    source.insert(spec.access_table, values)
+                    if spec.on_insert is None and not spec.number_column:
+                        source.insert(spec.access_table, values)
+                    else:
+                        # 足すのと、それに伴う処理(番号・在庫数)は1つの
+                        # まとまり。二重と分かれば両方とも戻る
+                        with source.transaction() as tx:
+                            _number_row(tx, spec, values)
+                            tx.insert(spec.access_table, values)
+                            if spec.on_insert is not None:
+                                spec.on_insert(tx, values)
                 except source_db.SourceError as exc:
                     if op_id_ready and source_db.is_duplicate_error(str(exc)):
                         # 前回の送信が届いていた(送信ID重複)。エラーではなく成功
@@ -763,6 +844,27 @@ def write_back(conn: sqlite3.Connection,
         # 送っていない行は送り先に無く、印を付ける相手がいない
         _push_marks_into(result, conn, source, spec)
     return result
+
+
+def _number_row(tx: "source_db.SourceTransaction", spec: WriteBackSpec,
+                values: dict[str, Any]) -> None:
+    """送り先で番号が自動で振られない列なら、`MAX+1` を入れる(VBAと同じ)。
+
+    送り先の表を先に書き込みの鍵ごと押さえてある(BEGIN IMMEDIATE)ので、
+    2台が同時に送っても同じ番号にはならない。
+    """
+    if not spec.number_column:
+        return
+    table = source_db.quote_identifier(spec.access_table)
+    info = {r["name"]: r for r in tx.query(f"PRAGMA table_info({table})")}
+    column = info.get(spec.number_column)
+    if column is None:
+        return
+    if column["pk"] and str(column["type"] or "").upper() == "INTEGER":
+        return                     # 自動で振られる(INTEGER PRIMARY KEY)
+    name = source_db.quote_identifier(spec.number_column)
+    top = tx.query(f"SELECT MAX(CAST({name} AS INTEGER)) AS n FROM {table}")
+    values[spec.number_column] = int(top[0]["n"] or 0) + 1
 
 
 def _push_marks_into(result: WriteBackResult, conn: sqlite3.Connection,

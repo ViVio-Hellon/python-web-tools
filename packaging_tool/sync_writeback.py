@@ -48,11 +48,95 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   mark_columns=("確認済み", "確認日時",
                                 "取り消し済", "取り消し日時"),
                   mark_pending="印未反映",
-                  source_key="取込元管理番号"),
+                  source_key="取込元管理番号",
+                  # 取り消した発注を確認済みにしない・確認済みを取り消さない。
+                  # 手元の画面でも止めているが、相手の印は取り込むまで
+                  # 手元に無いので、送り先でもう一度確かめる
+                  mark_blockers=(("確認済み", "取り消し済"),
+                                 ("取り消し済", "確認済み")),
+                  match_columns=("登録日時", "LotNo", "品名"),
+                  number_column="管理番号"),
     WriteBackSpec(sqlite_table=config.TBL_STOCK_HISTORY,
                   access_table=config.TBL_STOCK_HISTORY,
-                  key_column="id"),
+                  key_column="id",
+                  number_column="管理番号",
+                  on_insert=lambda tx, values: apply_stock(tx, values)),
 ]
+
+
+def _is_list_managed(value: Any) -> bool:
+    return str(value or "").strip() == "要"
+
+
+def apply_stock(tx: Any, values: dict[str, Any]) -> None:
+    """入出庫履歴を1行送るとき、共有の PalletMaster の在庫数も同じだけ動かす。
+
+    【なぜ要るか】
+    受入・払出は手元の PalletMaster を書き換えるが、PalletMaster は
+    書き戻しの対象ではなかった。**在庫数は共有へ届かず、ほかの端末からは
+    見えず、次の取り込み(総入れ替え)で手元からも消えていた。**
+    (実データ: 共有の入出庫履歴にある受入7件の位置が、共有の
+     PalletMaster には1行も無い)
+
+    VBA は共有の PalletMaster を直接書き換えていた。ここでは履歴を
+    送るのと同じまとまりで**増減を**当てる ── 値で上書きしないので、
+    2台が同じ棚に入れても両方の数が足される。手順は手元の
+    `pallet_service.receive` / `issue` と同じ:
+
+        受入 … 幅・丈・位置が同じ行があれば足す。無ければ行を作る
+        払出 … 引く。0 になり リスト管理 が「要」でなければ行を消す
+               (共有に行が無ければ何もしない。マイナスにはしない)
+
+    共有の値は文字列で入っている(Access から変換したため)ので、
+    数として比べる。
+    """
+    kind = str(values.get("区分") or "")
+    try:
+        width, length = int(values["幅"]), int(values["丈"])
+        qty = int(values.get("数量") or 0)
+    except (KeyError, TypeError, ValueError):
+        return
+    if kind not in ("受入", "払出") or qty <= 0:
+        return
+    position = str(values.get("位置") or "")
+    now = values.get("更新日時") or db.now_db_string()
+    table = source_db.quote_identifier("PalletMaster")
+    found = tx.query(
+        f"SELECT rowid AS _rid, 在庫数, リスト管理 FROM {table}"
+        " WHERE CAST(幅 AS INTEGER) = ? AND CAST(丈 AS INTEGER) = ?"
+        "   AND TRIM(COALESCE(位置, '')) = TRIM(?)"
+        " ORDER BY rowid LIMIT 1", (width, length, position))
+    row = found[0] if found else None
+    stock = int(float(row["在庫数"])) if row and str(row["在庫数"] or "").strip() else 0
+
+    if kind == "受入":
+        if row is not None:
+            tx.execute(f"UPDATE {table} SET 在庫数 = ?, 更新日時 = ? WHERE rowid = ?",
+                       (stock + qty, now, row["_rid"]))
+            return
+        columns = {r["name"] for r in tx.query(f"PRAGMA table_info({table})")}
+        new = {"幅": width, "丈": length, "巾適合min": 0, "巾適合max": 0,
+               "丈適合min": 0, "丈適合max": 0,
+               "業界": values.get("業界") or "一般", "記号": values.get("記号") or "",
+               "位置": position, "在庫数": qty, "リスト管理": "", "桁数": 0,
+               "脚数": 0, "コード": "", "単位": "", "備考": values.get("備考") or "",
+               "更新日時": now}
+        if "管理番号" in columns:
+            # 共有の 管理番号 は型の無い列(自動では振られない)。
+            # 空のままだと取り込み側で行を見分けられないので、続きを振る
+            top = tx.query(f"SELECT MAX(CAST(管理番号 AS INTEGER)) AS n FROM {table}")
+            new["管理番号"] = int(top[0]["n"] or 0) + 1
+        tx.insert("PalletMaster", {k: v for k, v in new.items() if k in columns})
+        return
+
+    if row is None:
+        return
+    left = max(stock - qty, 0)
+    if left == 0 and not _is_list_managed(row["リスト管理"]):
+        tx.execute(f"DELETE FROM {table} WHERE rowid = ?", (row["_rid"],))
+    else:
+        tx.execute(f"UPDATE {table} SET 在庫数 = ?, 更新日時 = ? WHERE rowid = ?",
+                   (left, now, row["_rid"]))
 
 
 # 重すぎて、何度も走らせるものではない。
@@ -73,6 +157,11 @@ def _unsent_writeback_tables(conn: sqlite3.Connection) -> dict[str, int]:
     for table, count in outbox_sync.unpushed_mark_tables(
             conn, WRITEBACK_SPECS).items():
         remaining[table] = remaining.get(table, 0) + count
+    # 入出庫履歴が送れていないうちは、その在庫数も共有に無い
+    # (`apply_stock` は履歴と一緒に当たる)。PalletMaster を入れ替えると
+    # 受入・払出した在庫数が消えるので、こちらも待たせる
+    if config.TBL_STOCK_HISTORY in remaining:
+        remaining[config.TBL_PALLET_MASTER] = remaining[config.TBL_STOCK_HISTORY]
     # 実績(ヘッダ+明細)は専用の送り方(`pattern_sync`)。まだ送れていない
     # 実績・読んだ回数・削除も、総入れ替えで消えると取り返せない
     from . import pattern_sync

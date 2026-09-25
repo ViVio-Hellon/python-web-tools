@@ -204,7 +204,7 @@ def confirm_order(conn: sqlite3.Connection, mgr_no: int) -> ActionResult:
         where_params=(mgr_no,),
     )
     if result.reason == "not_found":
-        return ActionResult(ok=False, message="対象が見つからないか、既に確認済み/取り消し済みです。画面を更新してください。")
+        return ActionResult(ok=False, message=_refusal(conn, mgr_no, "確認済みにできません"))
     if not result.ok:
         return ActionResult(ok=False, message=f"更新に失敗しました。({result.error})")
     _mark_unsent(conn, mgr_no)
@@ -223,11 +223,68 @@ def cancel_order(conn: sqlite3.Connection, mgr_no: int) -> ActionResult:
         where_params=(mgr_no,),
     )
     if result.reason == "not_found":
-        return ActionResult(ok=False, message="対象が見つからないか、既に倉庫確認済み/取消済みのため取り消せません。")
+        return ActionResult(ok=False, message=_refusal(conn, mgr_no, "取り消せません"))
     if not result.ok:
         return ActionResult(ok=False, message=f"更新に失敗しました。({result.error})")
     _mark_unsent(conn, mgr_no)
     return ActionResult(ok=True, message="発注を取り消しました。")
+
+
+def _refusal(conn: sqlite3.Connection, mgr_no: int, cannot: str) -> str:
+    """断った理由を、**いまの状態から**言う。
+
+    「見つからないか、確認済みか、取り消し済み」とまとめて言うと、押した人は
+    どれなのか分からない。ほかの端末が先に動かしたときは特に、何が起きた
+    かを伝えないと、倉庫が取り消し済みの発注を用意しかねない。
+    """
+    row = conn.execute(f"SELECT * FROM {TABLE} WHERE 管理番号 = ?", (mgr_no,)).fetchone()
+    if row is None:
+        return "この発注は一覧にありません(共有で消えたか、入れ替わりました)。画面を更新してください。"
+    status = _status_of(row)
+    if status == STATUS_CANCELLED:
+        return f"この発注は取り消し済みのため、{cannot}。"
+    if status == STATUS_CONFIRMED:
+        if cannot.startswith("確認"):
+            return "この発注はもう確認済みです(ほかの端末で確認されています)。"
+        return f"この発注は倉庫が確認済みのため、{cannot}。"
+    return f"{cannot}でした。画面を更新してください。"
+
+
+_IDENTITY = ("取込元管理番号", "登録日時", "LotNo", "品名")
+
+
+def identity(conn: sqlite3.Connection, mgr_no: int) -> Optional[dict]:
+    """取り込み直しても変わらない、その発注の見分け方。
+
+    手元の管理番号は取り込み(総入れ替え)のたびに振り直されるので、
+    取り込みをまたいで同じ行を指すには使えない。
+    """
+    row = conn.execute(
+        f"SELECT {', '.join(_IDENTITY)} FROM {TABLE} WHERE 管理番号 = ?",
+        (mgr_no,)).fetchone()
+    return dict(zip(_IDENTITY, row)) if row else None
+
+
+def find_again(conn: sqlite3.Connection, mgr_no: int,
+               before: Optional[dict]) -> int:
+    """取り込み直したあとの、同じ発注の管理番号。見つからなければ元の番号。
+
+    元の番号で返せば、呼び手の更新が「見つかりません」と正しく断る。
+    """
+    if before is None or identity(conn, mgr_no) == before:
+        return mgr_no
+    if before["取込元管理番号"] not in (None, ""):
+        row = conn.execute(
+            f"SELECT 管理番号 FROM {TABLE} WHERE 取込元管理番号 = ?",
+            (before["取込元管理番号"],)).fetchone()
+        if row:
+            return int(row[0])
+    # 手元で作って送った行は、取り込むまで共有の行番号を知らない
+    row = conn.execute(
+        f"SELECT 管理番号 FROM {TABLE}"
+        " WHERE 登録日時 = ? AND LotNo = ? AND 品名 = ? ORDER BY 管理番号 LIMIT 1",
+        (before["登録日時"], before["LotNo"], before["品名"])).fetchone()
+    return int(row[0]) if row else mgr_no
 
 
 def _mark_unsent(conn: sqlite3.Connection, mgr_no: int) -> None:

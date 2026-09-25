@@ -305,7 +305,21 @@ def _action(func, label: str):
         return jsonify({"error": {"code": "bad_mgr_no",
                                   "message": "対象が指定されていません"}}), 400
 
-    result = func(get_db(), mgr_no)
+    conn = get_db()
+    before = svc.identity(conn, mgr_no)
+    # **押す前に、共有で変わっていれば取り込み直す。** 相手の端末が先に
+    # 取り消した(確認した)ことは、取り込むまで手元に無い。古いまま押すと
+    # 取り消し済の発注を「確認済みにしました」と言ってしまう
+    # (送るときにも止めるが、それでは押した人に伝わらない)。
+    # 変わっていなければファイルの姿を見るだけで帰る
+    try:
+        data_sync.refresh_orders(conn, only_if_changed=True)
+    except Exception:                               # noqa: BLE001 - 押す操作は止めない
+        log.exception("%s の前の取り込み直しに失敗(手元の状態で続けます)", label)
+    # 取り込み直すと手元の管理番号は振り直される。画面が持っている番号の
+    # 行を、共有の行番号(なければ登録日時・LotNo・品名)で探し直す
+    mgr_no = svc.find_again(conn, mgr_no, before)
+    result = func(conn, mgr_no)
     if not result.ok:
         # 「既に確認済み/取消済み」は、他の端末が先に動かした結果でもある。
         # 画面を取り直せば正しい状態が見えるので 409 で返す
