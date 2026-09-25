@@ -273,3 +273,83 @@ def rebuild_table(conn: sqlite3.Connection, table: str, *,
                   f"元の表は {backup_name} という名前で残しています"
                   "(中身が要らないと分かれば、あとで消してください)"
                   f"{_follow(conn, found, table)}")
+
+
+# ==================================================================
+# 表を消す
+# ==================================================================
+# 「表を持ってくる」で表を足せるようになったので、間違えて足したものを消す口が
+# 要る(現場の声:「無駄に入れてしまったものを消せないと困ってしまう」)。
+#
+# **このツールが使う表は消させない。** 消すと取り込みも書き戻しも止まる。
+# それ以外(持ってきた表・よそで作られた表)は消せるが、戻せないので
+#   管理者認証 / 表の名前をそのまま打って確かめる / 消す前に控えを取る
+# の3つを通す。
+def tool_tables() -> frozenset[str]:
+    """このツールが使う表。消させない。"""
+    return (frozenset(import_specs.IMPORT_SPECS) | frozenset(BY_TABLE)
+            | frozenset(master_common.VIEW_ONLY_WHY)
+            | frozenset({config.TBL_PT_HEADER, config.TBL_PT_SELECT,
+                         config.TBL_PT_PLACE, config.TBL_PT_CUT,
+                         master_common.BROUGHT_REGISTRY}))
+
+
+def drop_why(table: str, path: Optional[Path] = None) -> str:
+    """その表を消せない理由。消せるなら空。"""
+    if not table:
+        return "表を選んでください。"
+    if table in tool_tables():
+        return "このツールが使っている表なので消せません。"
+    found = path or source_for(table)
+    if found is None or table not in source_db.list_tables(found):
+        return f"{table} は取り込み元にありません。"
+    return ""
+
+
+def drop_note(table: str, path: Optional[Path] = None) -> str:
+    """消す前に言っておくこと。"""
+    if table in master_common.brought_tables(path or source_for(table)):
+        return "「表を持ってくる」で足した表です。"
+    return ("このツールでは使っていない表ですが、VBA などほかの道具が"
+            "使っているかもしれません。")
+
+
+def drop_table(conn: sqlite3.Connection, table: str, *, confirm: str,
+               path: Optional[Path] = None) -> Result:
+    """取り込み元から表を消す。**戻せない。** 消す前に控えを取る。"""
+    from . import import_diag, selection_session, table_bring
+
+    allowed, why = can_edit(conn, table)
+    if not allowed:
+        return Result(False, why, REFUSE_NOT_ALLOWED)
+    # **パスワードは必ず。** `can_edit` はアクセス権限がまだ空のとき誰でも通す
+    if not selection_session.get_session(conn).admin:
+        return Result(False, "表を消すには管理者認証が要ります。"
+                             "「パスワード」の面で認証してください。", REFUSE_NOT_ALLOWED)
+    found = path or source_for(table)
+    reason = drop_why(table, found)
+    if reason:
+        return Result(False, reason, REFUSE_NOT_EDITABLE)
+    if str(confirm or "").strip() != table:
+        return Result(False, f"確かめのため、表の名前「{table}」をそのまま入れてください。",
+                      REFUSE_BAD_VALUE)
+    try:
+        backup = table_bring._backup(found)
+    except OSError as exc:
+        return Result(False, f"消す前の控えを取れませんでした({exc})。何も消していません。",
+                      REFUSE_WRITE_FAILED)
+    registry = source_db.quote_identifier(master_common.BROUGHT_REGISTRY)
+    try:
+        with source_db.connect(found) as src:
+            with src.transaction() as tx:
+                tx.execute(f"DROP TABLE {source_db.quote_identifier(table)}")
+                if tx.query("SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                            " AND name = ?", [master_common.BROUGHT_REGISTRY]):
+                    tx.execute(f"DELETE FROM {registry} WHERE 表 = ?", [table])
+    except source_db.SourceError as exc:
+        return _write_failed(table, exc)
+
+    log.info("取り込み元から表を消しました: %s (%s) 控え: %s", table, found, backup)
+    import_diag.write(f"■ 表を消した: {table}({found}) 消す前の控え: {backup}")
+    return Result(True, f"{table} を梱包資材マスタから消しました。"
+                        f"消す前の控え: {backup}")

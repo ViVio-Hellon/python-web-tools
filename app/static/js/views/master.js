@@ -26,7 +26,7 @@ let loaded = false;
 let editing = null;       // いま開いている行(足すときは null)
 
 const IDS = ["mTables", "mMark", "mTitle", "mCan", "mCount", "mQuery", "mFind",
-             "mAdd", "mCreate", "mRebuild", "mReload", "mWhy", "mError", "mHead",
+             "mAdd", "mCreate", "mRebuild", "mDrop", "mReload", "mWhy", "mError", "mHead",
              "mRows", "mNote",
              "mEdit", "mEditTitle", "mEditKind", "mEditWhy", "mEditError",
              "mFields", "mFoot", "mSave", "mDelete", "mConfirm",
@@ -50,6 +50,7 @@ export function start(frame) {
   el.mAdd.addEventListener("click", () => openRow(null));
   el.mCreate.addEventListener("click", createTable);
   el.mRebuild.addEventListener("click", rebuildTable);
+  el.mDrop.addEventListener("click", dropTable);
 
   el.mRows.addEventListener("click", (event) => {
     const tr = event.target.closest("tr[data-key]");
@@ -227,6 +228,9 @@ function render(next) {
   el.mCreate.disabled = !view.can_edit;
   el.mRebuild.hidden = !rebuildable;
   el.mRebuild.disabled = !view.can_edit;
+  // 表を消す。このツールが使わない表だけ(サーバが決める)
+  el.mDrop.hidden = !page.droppable;
+  el.mDrop.disabled = !view.can_edit;
 
   showWhy();
   el.mError.hidden = !page.error;
@@ -464,6 +468,31 @@ async function rebuildTable() {
   try {
     render(await api.post("/api/master/table/rebuild",
                           { table, q: el.mQuery.value.trim() }));
+  } catch (err) {
+    if (err.body && err.body.page) render({ ...err.body, message: "" });
+    el.mError.hidden = false;
+    el.mError.textContent = err.message;
+    toastError(err);
+  }
+}
+
+/** 表を消す。**戻せない**ので、表の名前をそのまま打ってもらって確かめる。
+
+    消す前にサーバが控えを取る。確かめの文も押したあとの断りも帯に出す
+    (`createTable` と同じ理由)。 */
+async function dropTable() {
+  const table = view && view.table;
+  if (!table) return;
+  const page = view.page || {};
+  const typed = window.prompt(
+    `「${table}」を梱包資材マスタから消します(${(page.total || 0)}行)。戻せません。\n` +
+    (page.drop_note ? `${page.drop_note}\n` : "") +
+    "消す前に控えを取ります。\n\n消すなら、表の名前をそのまま入れてください。");
+  if (typed === null) return;                 // やめた
+  try {
+    render(await api.post("/api/master/table/drop",
+                          { table, confirm: typed, q: "" }));
+    toast(`${table} を消しました`, "ok");
   } catch (err) {
     if (err.body && err.body.page) render({ ...err.body, message: "" });
     el.mError.hidden = false;

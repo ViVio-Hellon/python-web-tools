@@ -1607,6 +1607,78 @@ class TableBringTests(DataWebTestCase):
         self.assertEqual(self.master_rows('SELECT 名前 FROM "新しい表" ORDER BY rowid'),
                          [("い",), ("う",)])
 
+    # --- 表を消す -------------------------------------------------------
+    def drop(self, table, confirm, expect=200) -> dict:
+        res = self.client.post("/api/master/table/drop", headers=self.auth(),
+                               json={"table": table, "confirm": confirm})
+        self.assertEqual(res.status_code, expect, res.get_json())
+        return res.get_json()
+
+    def test_持ってきた表は消せる(self) -> None:
+        """現場の声:「無駄に入れてしまったものを消せないと困ってしまう」。"""
+        self.session.admin = True
+        self.bring(["新しい表"])
+        page = self.client.get("/api/master/browse?table=新しい表",
+                               headers=self.auth()).get_json()["page"]
+        self.assertTrue(page["droppable"])
+        self.assertIn("持ってくる", page["drop_note"])
+
+        body = self.drop("新しい表", "新しい表")
+        self.assertIn("消しました", body["message"])
+        self.assertEqual(self.master_rows(
+            "SELECT name FROM sqlite_master WHERE name = '新しい表'"), [])
+        # 足した表の記録からも消える。一覧にも出ない
+        self.assertEqual(self.master_rows(
+            'SELECT 表 FROM "ツールで足した表"'), [])
+        self.assertNotIn("新しい表", [t["table"] for t in body["tables"]])
+        # 消す前の控え
+        backups = list((self.dir / "local" / "backup").glob("*.sqlite3"))
+        self.assertTrue(backups)
+        # ツールが書いた行には触らない
+        self.assertEqual(self.master_rows('SELECT 送信ID FROM "資材パレット注文管理"'),
+                         [("abc",)])
+
+    def test_表の名前が違えば消さない(self) -> None:
+        self.session.admin = True
+        self.bring(["新しい表"])
+        body = self.drop("新しい表", "新しい", expect=400)
+        self.assertIn("そのまま入れてください", body["error"]["message"])
+        self.assertTrue(self.master_rows(
+            "SELECT name FROM sqlite_master WHERE name = '新しい表'"))
+
+    def test_管理者認証が無ければ消さない(self) -> None:
+        self.session.admin = True
+        self.bring(["新しい表"])
+        self.session.admin = False
+        self.drop("新しい表", "新しい表", expect=403)
+        self.assertTrue(self.master_rows(
+            "SELECT name FROM sqlite_master WHERE name = '新しい表'"))
+
+    def test_このツールが使う表は消せない(self) -> None:
+        self.session.admin = True
+        page = self.client.get("/api/master/browse?table=BoardMaster",
+                               headers=self.auth()).get_json()["page"]
+        self.assertFalse(page["droppable"])
+        body = self.drop("BoardMaster", "BoardMaster", expect=422)
+        self.assertIn("このツールが使っている表", body["error"]["message"])
+        self.assertEqual(self.master_rows("SELECT * FROM BoardMaster"), [(1, 1100)])
+
+    def test_よその表も消せるが一言添える(self) -> None:
+        """前の版で持ってきて記録の無い表(現場の「Test」)も消せるように。"""
+        import sqlite3
+        conn = sqlite3.connect(self.master)
+        conn.execute('CREATE TABLE "Test" (a TEXT)')
+        conn.commit()
+        conn.close()
+        self.session.admin = True
+        page = self.client.get("/api/master/browse?table=Test",
+                               headers=self.auth()).get_json()["page"]
+        self.assertTrue(page["droppable"])
+        self.assertIn("VBA", page["drop_note"])
+        self.drop("Test", "Test")
+        self.assertEqual(self.master_rows(
+            "SELECT name FROM sqlite_master WHERE name = 'Test'"), [])
+
     def test_足していない知らない表は見るだけ(self) -> None:
         import sqlite3
         conn = sqlite3.connect(self.master)

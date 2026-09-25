@@ -225,6 +225,10 @@
             列名を直して作り直す</button>
           <button class="btn btn--find" type="button" id="mReload">
             <span class="gl">⟳</span>読み直す</button>
+          {# 表そのものを消す。**このツールが使わない表だけ**に出す
+             (持ってきた表・よそで作られた表)。戻せない #}
+          <button class="btn btn--danger" type="button" id="mDrop" hidden>
+            この表を消す…</button>
         </div>
 
         {# 直せない理由は**先に**言う。押してから断られるのは手戻り #}

@@ -113,6 +113,20 @@ def rebuild_table():
     return _write(master_admin.rebuild_table(get_db(), _table(body)), body)
 
 
+@bp.post("/api/master/table/drop")
+def drop_table():
+    """取り込み元から表を消す。`{"table":…, "confirm":…}`
+
+    消せるのはこのツールが使わない表だけ(`master_admin.drop_why`)。戻せないので
+    管理者認証と、表の名前をそのまま打った確かめ(`confirm`)を通し、消す前に控えを取る。
+    """
+    body = request.get_json(silent=True) or {}
+    result = master_admin.drop_table(get_db(), _table(body),
+                                     confirm=str(body.get("confirm", "")))
+    # 消えた表はもう選べない。一覧の先頭を開き直す
+    return _write(result, {**body, "table": "" if result.ok else _table(body)})
+
+
 def _table(body: dict) -> str:
     return str(body.get("table", ""))
 

@@ -79,7 +79,8 @@ from .master_columns import (  # noqa: F401
     KIND_LABEL, Column, column_mismatch_why, columns,
     expected_column_names)
 from .master_schema import (  # noqa: F401
-    can_create, can_rebuild, create_table, creatable_tables, rebuild_table)
+    can_create, can_rebuild, create_table, creatable_tables, drop_note,
+    drop_table, drop_why, rebuild_table, tool_tables)
 from .master_browse import Page, TableInfo, page, tables  # noqa: F401
 
 log = get_logger("master_admin")

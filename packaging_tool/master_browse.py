@@ -128,6 +128,9 @@ class Page:
     # いま並び替えている列。空なら既定(rowid、取り込み順)
     sort: str = ""
     sort_dir: str = "asc"
+    # この表を消せるか(このツールが使わない表だけ)と、消す前に言うこと
+    droppable: bool = False
+    drop_note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {"table": self.table, "label": self.label,
@@ -137,7 +140,8 @@ class Page:
                 "note": self.note, "error": self.error,
                 "missing": self.missing, "rebuildable": self.rebuildable,
                 "row_key": ROW_KEY,
-                "sort": self.sort, "sort_dir": self.sort_dir}
+                "sort": self.sort, "sort_dir": self.sort_dir,
+                "droppable": self.droppable, "drop_note": self.drop_note}
 
 
 def page(path: Optional[Path], table: str, *, query: str = "",
@@ -176,6 +180,9 @@ def page(path: Optional[Path], table: str, *, query: str = "",
         view.error = f"{table} は取り込み元にありません。"
         return view
     view.columns = names
+    if not master_schema.drop_why(table, path):
+        view.droppable = True
+        view.drop_note = master_schema.drop_note(table, path)
 
     where, params = _filter(names, query)
     order, sort_col = _order(names, sort, sort_dir)
