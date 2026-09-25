@@ -247,6 +247,9 @@ def alive():
 
     `leaving=true` はタブを閉じた合図(`sendBeacon`)。猶予のあとで
     終わりますが、そのあいだに心拍が戻れば取り消されます。
+    `visible=false` は裏に回った合図。ブラウザは裏のタブのタイマーを間引く
+    (止める)ので、そう言った画面は心拍が途切れても落としません。
+    `resumed=true` は表に戻った / スリープから戻った合図(`gap_ms` は止まっていた長さ)。
 
     **閉じたタブは「いま使っている画面」も手放します。** 番号は本文で
     受け取ります ── `sendBeacon` にはヘッダを付けられないからです。
@@ -262,11 +265,27 @@ def alive():
     if watch is None:
         return jsonify({"ok": True, "watching": False})
 
+    # **画面ごとに見る。** 2つ開いているうちの1つを閉じても、もう1つは生きている
+    screen = str(body.get("screen_id") or "")
     if body.get("leaving"):
-        watch.leaving()
+        watch.leaving(screen)
+    elif body.get("resumed"):
+        # 表に戻った / スリープから戻った(裏のまま気づいたなら裏のまま)
+        watch.resumed(screen, gap_sec=_number(body.get("gap_ms")) / 1000,
+                      visible=body.get("visible") is not False)
+    elif body.get("visible") is False:
+        # 裏に回った。ブラウザが心拍を間引いても落とさない
+        watch.hidden(screen)
     else:
-        watch.beat()
+        watch.beat(screen, visible=True if body.get("visible") else None)
     return jsonify({"ok": True, "watching": True})
+
+
+def _number(value) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @bp.post("/api/shutdown")

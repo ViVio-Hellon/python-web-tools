@@ -95,8 +95,9 @@ function alive(body) {
   // 「いま使っている画面」を手放すので、残ったタブが読み込み直さずに
   // 操作へ戻れる。`sendBeacon` はヘッダを付けられないので本文に入れる
   const payload = JSON.stringify({ ...(body || {}), screen_id: screen.id() });
-  // 閉じる瞬間は `sendBeacon`。**それ以外も同じ口**へ送る
-  if (body && body.leaving && navigator.sendBeacon) {
+  // 閉じる・裏に回る瞬間は `sendBeacon`。**このあとタブが固まっても**
+  // ブラウザが送りきってくれる(`fetch` は捨てられることがある)
+  if (body && (body.leaving || body.visible === false) && navigator.sendBeacon) {
     navigator.sendBeacon("/api/alive",
       new Blob([payload], { type: "application/json" }));
     return;
@@ -113,21 +114,83 @@ function alive(body) {
     .catch(() => { /* 届かなくても画面は続く。次の心拍で取り戻す */ });
 }
 
+/*
+  **裏に回っても、落とさせない。**
+
+  ブラウザは裏に回ったタブのタイマーを間引く(Chrome は5分を過ぎると
+  1分に1回以下、Edge の「スリープ中のタブ」やメモリ節約では止める)。
+  別のツールで、これで心拍が途切れて**使っている最中にセッションが
+  終わった**ことがあった。そこで:
+
+    裏に回る   … 「隠れます」を送る(`visible:false`)。サーバはこの画面を
+                   心拍が途切れても生きているものとして数える
+    固まる     … Chrome の `freeze`。同じく「隠れます」
+    表に戻る   … 「戻りました」を送り(`resumed`)、接続もすぐ確かめる
+    スリープ   … タイマーの間隔が大きく空いたら、PCが寝ていたとみなして
+                   「戻りました」(止まっていた長さも添える)
+    戻り方いろいろ … `resume`(固まりから)・`pageshow`(戻る/進むの控えから)・
+                   `focus`・`online` でも「戻りました」
+*/
+let lastTick = Date.now();
+let lastResume = 0;
+
+function isVisible() {
+  return document.visibilityState === "visible";
+}
+
+function comeBack(gapMs) {
+  // 立て続けに来る(visibilitychange と focus と pageshow が同時に飛ぶ)ので間引く
+  const now = Date.now();
+  if (now - lastResume < 1000 && !gapMs) return;
+  lastResume = now;
+  lastTick = now;
+  alive({ resumed: true, visible: isVisible(), gap_ms: gapMs || 0 });
+  // **戻ってきたらすぐ確かめる。** 別のタブや窓で権限を直してから
+  // 戻ったとき、15秒の見張りを待たずに帯が追いつく。スリープ明けで
+  // 繋がっていなければ、ここで分かる
+  misses = 0;
+  beat();
+}
+
+function goAway() {
+  alive({ visible: false });
+}
+
 function startAlive() {
   const period = window.APP.alivePollMs || 20000;
-  alive();
-  setInterval(alive, period);
+  alive({ visible: isVisible() });
+  setInterval(() => {
+    const now = Date.now();
+    const gap = now - lastTick;
+    lastTick = now;
+    // 間隔が大きく空いた = PCが寝ていた(または固まっていた)。裏のタブは
+    // 間引かれて1分ほど空くのが普通なので、それより十分長いときだけ
+    if (gap > Math.max(period * 3, 120000)) {
+      comeBack(gap);
+      return;
+    }
+    alive({ visible: isVisible() });
+  }, period);
 
-  // 閉じた/隠れた。`pagehide` は再読込でも飛ぶが、**戻ってくれば
-  // 次の心拍で取り消される**(サーバ側が猶予を持っている)
-  window.addEventListener("pagehide", () => alive({ leaving: true }));
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible") return;
-    alive();
-    // **戻ってきたらすぐ確かめる。** 別のタブや窓で権限を直してから
-    // 戻ったとき、15秒の見張りを待たずに帯が追いつく
-    beat();
+  // 閉じた。`pagehide` は再読込でも飛ぶが、**戻ってくれば次の心拍で
+  // 取り消される**(サーバ側が猶予を持っている)
+  window.addEventListener("pagehide", (event) => {
+    // 戻る/進むの控えに入るだけなら閉じたのではない。裏に回ったのと同じ
+    if (event.persisted) goAway();
+    else alive({ leaving: true });
   });
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) comeBack(0);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (isVisible()) comeBack(0);
+    else goAway();
+  });
+  // Chrome のページ ライフサイクル。裏で固められる直前と、戻った直後
+  document.addEventListener("freeze", goAway);
+  document.addEventListener("resume", () => comeBack(0));
+  window.addEventListener("focus", () => comeBack(0));
+  window.addEventListener("online", () => comeBack(0));
 }
 
 export function startHeartbeat() {

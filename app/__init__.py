@@ -432,7 +432,8 @@ def _register_db(app: Flask) -> None:
             return
         watch = idle_exit.get()
         if watch is not None:
-            watch.beat()
+            # どの画面からの要求か(ヘッダ)。無ければ「どれかの画面」
+            watch.beat(request.headers.get(screen_lock.HEADER, ""))
 
     @app.before_request
     def _take_write_lock():                     # noqa: ANN202 - Flaskのフック

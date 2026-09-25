@@ -17,6 +17,7 @@ import socket
 import sys
 import time
 import unittest
+from typing import Optional
 from pathlib import Path
 from unittest import mock
 
@@ -349,27 +350,30 @@ class RequestIsPresenceTests(unittest.TestCase):
         app.config["TESTING"] = True
         self.client = app.test_client()
 
+    def _closed_long_ago(self) -> Optional[str]:
+        """猶予が過ぎた時点で落ちるかどうか(猶予を0にして見る)。"""
+        self.watch.grace_sec = 0.0
+        return self.watch.overdue()
+
     def test_画面を開くと在席の合図になる(self) -> None:
         self.watch.beat()
         self.watch.leaving()                  # 画面を移った
-        self.assertIsNotNone(self.watch._leaving_at)
-
         self.client.get("/selection")         # 移った先が読み込まれた
-        self.assertIsNone(self.watch._leaving_at,
-                          "画面を読み込んだのに「閉じた」が残っています")
+        self.assertIsNone(self._closed_long_ago(),
+                          "画面を読み込んだのに「閉じた」で落ちます")
 
     def test_APIでも在席の合図になる(self) -> None:
         self.watch.beat()
         self.watch.leaving()
         self.client.get("/api/health")
-        self.assertIsNone(self.watch._leaving_at)
+        self.assertIsNone(self._closed_long_ago())
 
     def test_心拍の口だけは取り消さない(self) -> None:
         """`/api/alive` は「閉じました」も同じ口で受ける。
         ここで先に取り消すと、閉じたことが伝わらなくなる。"""
         self.watch.beat()
         self.client.post("/api/alive", json={"leaving": True})
-        self.assertIsNotNone(self.watch._leaving_at,
+        self.assertIsNotNone(self._closed_long_ago(),
                              "閉じた合図が取り消されています")
 
 
@@ -385,6 +389,92 @@ class IdleWatchTests(unittest.TestCase):
     def watch(self, **kw) -> idle_exit.IdleWatch:
         return idle_exit.IdleWatch(lambda: self.stopped.append(1),
                                    lambda: self.busy, **kw)
+
+    # --- 裏に回った画面(ブラウザのタイマー間引き) ----------------------
+    def test_裏に回った画面は心拍が途切れても落とさない(self):
+        """別のツールで、裏のタブのタイマーが間引かれて心拍が途切れ、
+        使っている最中に終了したことがある。"""
+        w = self.watch(idle_sec=0.0)
+        w.beat("A", visible=True)
+        self.assertIsNotNone(w.overdue(), "前提: 表なら心拍の途切れで落ちる")
+        w.hidden("A")
+        self.assertIsNone(w.overdue(), "裏に回った画面は落とさない")
+
+    def test_裏の画面の業務の要求は表にしない(self):
+        """裏のタブも一覧の見張りなどで要求を出す。表か裏かは言わないので変えない。"""
+        w = self.watch(idle_sec=0.0)
+        w.hidden("A")
+        w.beat("A")
+        self.assertIsNone(w.overdue())
+
+    def test_裏のまま閉じたら猶予のあとで落とす(self):
+        w = self.watch(idle_sec=0.0, grace_sec=0.0)
+        w.hidden("A")
+        w.leaving("A")
+        self.assertIn("閉じ", w.overdue())
+
+    def test_表に戻れば心拍でまた見る(self):
+        w = self.watch(idle_sec=0.0)
+        w.hidden("A")
+        w.resumed("A")
+        self.assertIsNotNone(w.overdue())
+
+    def test_裏のままスリープ明けに気づいても裏のまま(self):
+        w = self.watch(idle_sec=0.0)
+        w.hidden("A")
+        w.resumed("A", gap_sec=3600, visible=False)
+        self.assertIsNone(w.overdue())
+
+    def test_閉じた合図のあとに裏に回った合図が届いても閉じたまま(self):
+        """タブを閉じるとブラウザは「裏に回った」と「閉じた」を続けて送る。
+        届く順番は約束されない。後から届いた「裏に回った」で閉じたことを
+        打ち消すと、閉じたタブを数え続けていつまでも終わらない(ブラウザで起きた)。"""
+        w = self.watch(idle_sec=60.0, grace_sec=0.0)
+        w.beat("A", visible=True)
+        w.leaving("A")
+        w.hidden("A")                          # 遅れて届いた
+        self.assertIn("閉じ", w.overdue())
+
+    def test_番号の無い要求は猶予の長さで切れる(self):
+        """画面そのものや静的ファイルには番号が付かない。読み込みの橋渡しだけ。"""
+        w = self.watch(idle_sec=60.0, grace_sec=0.0)
+        w.beat("")
+        w.beat("A", visible=True)
+        w.leaving("A")
+        self.assertIn("閉じ", w.overdue())
+
+    # --- 画面ごと ------------------------------------------------------
+    def test_2つのうち1つを閉じても落とさない(self):
+        """以前は、もう1つが8秒以内に心拍を送らないと落ちていた。"""
+        w = self.watch(idle_sec=60.0, grace_sec=0.0)
+        w.beat("A", visible=True)
+        w.beat("B", visible=True)
+        w.leaving("A")
+        self.assertIsNone(w.overdue(), "B がまだ開いている")
+        w.leaving("B")
+        self.assertIn("閉じ", w.overdue())
+
+    def test_閉じた画面と裏の画面なら落とさない(self):
+        w = self.watch(idle_sec=0.0, grace_sec=0.0)
+        w.beat("A", visible=True)
+        w.hidden("B")
+        w.leaving("A")
+        self.assertIsNone(w.overdue())
+
+    # --- スリープ ------------------------------------------------------
+    def test_スリープから戻ったら待ち直す(self):
+        """Windows の monotonic はスリープ中も進む。戻った瞬間に「心拍が無い」が
+        成り立って、画面の最初の心拍より先に落ちていた。"""
+        w = self.watch(idle_sec=60.0, sleep_gap_sec=30.0)
+        w.beat("A", visible=True)
+        w._screens["A"].seen -= 3600           # 1時間寝ていた
+        self.assertIsNotNone(w.overdue(), "前提: このままだと落ちる")
+        self.assertTrue(w.check_sleep(3600))
+        self.assertIsNone(w.overdue(), "戻った直後は待つ")
+
+    def test_ふつうの間隔はスリープと見なさない(self):
+        w = self.watch(sleep_gap_sec=30.0)
+        self.assertFalse(w.check_sleep(w.tick_sec + 1))
 
     def test_1度も繋がっていなければ落とさない(self):
         """`--no-browser` で立てておく使い方を巻き添えにしない。"""
@@ -505,6 +595,22 @@ class AliveApiTests(unittest.TestCase):
                                headers={"X-Tool-Token": "test-token-abc123"})
         self.assertTrue(res.get_json()["watching"])
         self.assertIsNone(watch.overdue())
+
+    def test_裏に回った合図が届く(self):
+        watch = idle_exit.install(lambda: None, lambda: False, idle_sec=0.0)
+        watch.cancel()
+        self.client.post("/api/alive", json={"screen_id": "A", "visible": True})
+        self.assertIsNotNone(watch.overdue())
+        self.client.post("/api/alive", json={"screen_id": "A", "visible": False})
+        self.assertIsNone(watch.overdue(), "裏に回った画面は落とさない")
+
+    def test_戻った合図が届く(self):
+        watch = idle_exit.install(lambda: None, lambda: False, idle_sec=0.0)
+        watch.cancel()
+        self.client.post("/api/alive", json={"screen_id": "A", "visible": False})
+        self.client.post("/api/alive", json={"screen_id": "A", "resumed": True,
+                                             "visible": True, "gap_ms": 5000})
+        self.assertIsNotNone(watch.overdue(), "表に戻ったら心拍でまた見る")
 
     def test_閉じた合図が届く(self):
         watch = idle_exit.install(lambda: None, lambda: False, grace_sec=0.0)
