@@ -15,15 +15,31 @@ from packaging_tool import printing as p
 
 
 class PageSetupTests(unittest.TestCase):
-    def test_landscape_a4_without_margin(self):
+    def test_余白0を頼んでも紙の端から5mm内側に描く(self):
+        """プリンターは紙の縁から約4mmに印刷できない。余白0の帳票は、画面では
+        収まって見えても紙では縁が欠ける(現場の指摘)。下限をかける。"""
         css = p.PageSetup(orientation=p.LANDSCAPE, margin_mm=0).to_css()
         self.assertIn("size: A4 landscape", css)
-        self.assertIn("margin: 0mm", css)
+        self.assertIn(f"margin: {p.SAFE_MARGIN_MM}mm", css)
+        self.assertGreaterEqual(p.SAFE_MARGIN_MM, 5.0)
 
-    def test_portrait_with_margin(self):
+    def test_既定の余白も5mm以上(self):
+        self.assertGreaterEqual(p.PageSetup().effective_margin_mm, 5.0)
+
+    def test_広い余白はそのまま(self):
         css = p.PageSetup(orientation=p.PORTRAIT, margin_mm=10).to_css()
         self.assertIn("A4 portrait", css)
-        self.assertIn("margin: 10mm", css)
+        self.assertIn("margin: 10.0mm", css)
+
+    def test_画面のプレビューは紙と同じ大きさと余白(self):
+        """以前はプレビューの余白が8mm固定で、余白0の帳票は紙いっぱいに描いていた。"""
+        css = p.PageSetup(orientation=p.LANDSCAPE, margin_mm=0).screen_css()
+        self.assertIn("width: 297.0mm", css)
+        self.assertIn("min-height: 210.0mm", css)
+        self.assertIn(f"padding: {p.SAFE_MARGIN_MM}mm", css)
+        # 印刷できる範囲の境目を点線で見せる(画面だけ)
+        self.assertIn("dashed", css)
+        self.assertIn("@media screen", css)
 
 
 class RenderTests(unittest.TestCase):
@@ -87,3 +103,20 @@ class TableTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TemplateMarginTests(unittest.TestCase):
+    """帳票の部品を通らずに `@page` を書いている画面(配置図印刷など)も、
+    紙の端から5mm以上内側に描く。"""
+
+    def test_テンプレートの余白も5mm以上(self):
+        import re
+        root = Path(__file__).resolve().parent.parent / "app" / "templates"
+        found = []
+        for path in root.rglob("*.html"):
+            for m in re.finditer(r"@page\s*\{[^}]*margin:\s*([\d.]+)mm", path.read_text(encoding="utf-8")):
+                found.append((path.name, float(m.group(1))))
+        self.assertTrue(found, "前提: 配置図印刷のテンプレートに @page がある")
+        for name, mm in found:
+            with self.subTest(name=name):
+                self.assertGreaterEqual(mm, p.SAFE_MARGIN_MM)

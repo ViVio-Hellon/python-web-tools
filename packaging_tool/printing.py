@@ -51,20 +51,68 @@ LANDSCAPE = "landscape"
 PORTRAIT = "portrait"
 
 
+# **紙の端からこれより内側にしか描かない(mm)。**
+#
+# プリンターは紙の縁から約4mmには印刷できない(給紙の都合で、機種によっては
+# もっと広い)。余白0で作った帳票は、画面のプレビューでは紙いっぱいに収まって
+# 見えるが、紙では縁の罫線や文字が欠ける(現場の指摘)。VBA版はExcelの余白0を
+# そのまま使っていたので、同じ欠け方をしていたはず。
+#
+# 帳票ごとの `margin_mm` がこれより小さくても、**ここで下限をかける** ──
+# 新しい帳票を足したときに余白0を書いても、紙で欠けない。
+#
+# **5mm ちょうどにしない。** 縁の罫線は余白の線の上に乗るので、描き方(にじみ)
+# によっては 4.9mm に掛かる(PDF にして測ったら実際にそうなった)。プリンターの
+# 個体差も見て 1mm 足す。現場の求めは「5mm以上内側」
+SAFE_MARGIN_MM = 6.0
+
+# 用紙の大きさ(縦置きの 幅, 高さ mm)。画面のプレビューを紙と同じ大きさで描く
+PAPER_MM = {"A4": (210.0, 297.0), "A3": (297.0, 420.0), "B5": (182.0, 257.0)}
+
+
 @dataclass
 class PageSetup:
     """VBA `PageSetup` に対応する紙面設定。"""
 
     paper: str = "A4"
     orientation: str = LANDSCAPE
-    margin_mm: float = 0.0
+    # 余白。`SAFE_MARGIN_MM` より小さくしても、それより内側には寄らない
+    margin_mm: float = SAFE_MARGIN_MM
     # 追加のスタイル(帳票ごとの罫線・フォント等)
     extra_css: str = ""
+
+    @property
+    def effective_margin_mm(self) -> float:
+        """実際にかける余白。**下限は `SAFE_MARGIN_MM`。**"""
+        return max(float(self.margin_mm), SAFE_MARGIN_MM)
+
+    def paper_size_mm(self) -> tuple[float, float]:
+        """向きを入れた用紙の (幅, 高さ)。"""
+        w, h = PAPER_MM.get(self.paper, PAPER_MM["A4"])
+        return (h, w) if self.orientation == LANDSCAPE else (w, h)
 
     def to_css(self) -> str:
         return (
             f"@page {{ size: {self.paper} {self.orientation}; "
-            f"margin: {self.margin_mm}mm; }}"
+            f"margin: {self.effective_margin_mm}mm; }}"
+        )
+
+    def screen_css(self) -> str:
+        """画面のプレビューを**紙と同じ大きさ・同じ余白**で描く。
+
+        以前はプレビューの余白が帳票によらず8mmで、余白0の帳票は紙いっぱいに
+        描いていた ── 画面では収まって見えても、紙では縁が欠けた。いまは
+        用紙の大きさで描き、印刷できる範囲の境目を点線で見せる。
+        """
+        w, h = self.paper_size_mm()
+        m = self.effective_margin_mm
+        return (
+            "@media screen {\n"
+            f"  .sheet {{ position: relative; width: {w}mm; min-height: {h}mm;"
+            f" padding: {m}mm; }}\n"
+            f"  .sheet::after {{ content: ''; position: absolute; inset: {m}mm;"
+            " border: 1px dashed #c7ccd4; pointer-events: none; }\n"
+            "}\n"
         )
 
 
@@ -94,7 +142,8 @@ table.form th { background: #f0f0f0; font-weight: bold; }
 .big { font-size: 28pt; font-weight: bold; }
 @media screen {
   body { background: #e5e7eb; padding: 12px; }
-  .sheet { background: #fff; margin: 0 auto 12px; padding: 8mm;
+  /* 大きさと余白は帳票ごと(`PageSetup.screen_css`)。紙と同じに描く */
+  .sheet { background: #fff; margin: 0 auto 12px;
            box-shadow: 0 1px 4px rgba(0,0,0,.3); }
   .screen-only { margin: 0 auto 12px; max-width: 900px; color: #374151;
                  font-size: 12px; }
@@ -214,7 +263,8 @@ def render_html(report: Report, *, edit_url: str = "") -> str:
         "<!DOCTYPE html>\n"
         '<html lang="ja"><head><meta charset="utf-8">'
         f"<title>{escape(report.title)}</title>"
-        f"<style>{report.setup.to_css()}\n{BASE_CSS}\n{extra_css}\n"
+        f"<style>{report.setup.to_css()}\n{BASE_CSS}\n"
+        f"{report.setup.screen_css()}\n{extra_css}\n"
         f"{report.setup.extra_css}</style>"
         f"</head><body>{_PRINT_HINT}{hint}{sheets}{script}</body></html>"
     )

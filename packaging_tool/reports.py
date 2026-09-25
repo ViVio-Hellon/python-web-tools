@@ -105,7 +105,6 @@ td.val { font-size: 12pt; font-weight: bold; text-align: left;
 .circle-k { border: 3px solid #000; border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
             font-weight: bold; margin: 0 auto; }
-@media screen { .sheet { width: 297mm; height: 210mm; } }
 """
 
 
@@ -326,10 +325,16 @@ def build_label_sheet(data: LabelData) -> str:
 
 
 def build_label_report(data: LabelData) -> printing.Report:
-    """Lot貼付用の帳票(A4横・余白0)。VBA `PageSetup` と同じ設定。"""
+    """Lot貼付用の帳票(A4横)。
+
+    VBA は余白0だったが、プリンターは紙の縁から約4mmに印刷できないので、
+    縁の罫線や文字が欠けていた。**余白は `printing.SAFE_MARGIN_MM`(6mm)。**
+    行の高さの合計(193mm)は余白を取っても紙(210 − 12mm)に収まる。
+    """
     report = printing.Report(
         title=f"Lot貼付用 {data.lot_no}".strip(),
-        setup=printing.PageSetup(orientation=printing.LANDSCAPE, margin_mm=0.0,
+        setup=printing.PageSetup(orientation=printing.LANDSCAPE,
+                                 margin_mm=printing.SAFE_MARGIN_MM,
                                  extra_css=LABEL_CSS),
     )
     report.add_sheet(build_label_sheet(data))
@@ -374,7 +379,6 @@ td.pack { padding: 0; }
 td.diag { background: linear-gradient(to bottom right,
           transparent calc(50% - 0.5px), #000 calc(50% - 0.5px),
           #000 calc(50% + 0.5px), transparent calc(50% + 0.5px)); }
-@media screen { .sheet { width: 210mm; } }
 """
 
 

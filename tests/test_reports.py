@@ -5,7 +5,7 @@ import unittest
 from datetime import date
 
 from packaging_tool import board_selection_algorithm as alg
-from packaging_tool import reports
+from packaging_tool import printing, reports
 from packaging_tool.board_selection_algorithm import SelectedBoard
 from packaging_tool.models import PlacedBoardModel
 
@@ -154,11 +154,13 @@ class LabelSheetTests(unittest.TestCase):
         self.assertNotIn("<script>", html)
         self.assertIn("&lt;script&gt;", html)
 
-    def test_report_is_landscape_with_no_margin(self):
+    def test_report_is_landscape_inside_the_printable_area(self):
+        """VBA は余白0。プリンターは縁から約4mmに印刷できず、縁が欠けていた。"""
         report = reports.build_label_report(_label())
         css = report.setup.to_css()
         self.assertIn("A4 landscape", css)
-        self.assertIn("margin: 0.0mm", css)
+        self.assertIn(f"margin: {printing.SAFE_MARGIN_MM}mm", css)
+        self.assertGreaterEqual(printing.SAFE_MARGIN_MM, 5.0)
 
 
 def _pb(w, l, x=0, y=0, *, ow=None, ol=None, cat="上用", fill=False):
