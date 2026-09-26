@@ -90,6 +90,8 @@ class WriteBackSpec:
                      (例: 入出庫履歴を足したら在庫数も動かす)。
                      呼ばれ方は on_insert(送り先のトランザクション, 足した値)。
                      足すのが二重と分かった(送信ID重複)ときは一緒に戻る
+    optional_columns: 送り先に**あれば**送る列。無ければ外して送る
+                     (あとから足した列。足せなかった共有へも行は届ける)
     number_column  : 送り先で番号を振る列(`MAX+1`)。送り先が Access から
                      変換した表だと、番号の列は自動で振られない
                      (型の無いただの列)。空のまま足すと、ほかの端末が
@@ -109,6 +111,7 @@ class WriteBackSpec:
     on_insert: Optional[Callable[[Any, dict[str, Any]], None]] = field(
         default=None, compare=False)
     number_column: str = ""
+    optional_columns: tuple[str, ...] = ()
 
     @property
     def marks_enabled(self) -> bool:
@@ -780,6 +783,14 @@ def write_back(conn: sqlite3.Connection,
     for spec in specs:
         op_id_ready = spec.use_op_id_guard and ensure_op_id_column(source, spec)
         local_only = {c for c in (spec.mark_pending, spec.source_key) if c}
+        if spec.optional_columns:
+            # 送り先に無い列は送らない。混ぜると1行も入らなくなる
+            try:
+                have = {r["name"] for r in source.query(
+                    f"PRAGMA table_info({source_db.quote_identifier(spec.access_table)})")}
+            except source_db.SourceError:
+                have = set()
+            local_only |= {c for c in spec.optional_columns if c not in have}
         try:
             rows, op_ids = claim_rows(conn, spec)
         except sqlite3.Error as exc:

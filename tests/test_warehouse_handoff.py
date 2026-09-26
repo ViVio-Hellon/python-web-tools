@@ -12,6 +12,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from packaging_tool import config, data_sync, db, outbox_sync, source_db
@@ -254,6 +255,65 @@ class SentOrderTests(HandoffBase):
         after_no = wh.find_again(self.b, before_no, before)
         self.assertNotEqual(after_no, before_no)
         self.assertEqual(after_no, self.local_no(self.b, "L2"))
+
+
+class SenderTests(HandoffBase):
+    """取り消しは送った端末だけ。現場は複数台で使う。"""
+
+    def order(self, conn, lot: str, terminal: str) -> None:
+        made = wh.create_order(conn, lot_no=lot, hinmei="テスト品", hatchu_code="X1",
+                               tani="台", atu=1, haba=1000, take=2000, hatchu_suu=1,
+                               terminal=terminal)
+        self.assertTrue(made.ok, made.message)
+
+    def test_ほかの現場が送った発注は取り消せない(self):
+        """以前は、現場Aから現場Bの発注を取り消せた(3台で確かめた)。"""
+        self.order(self.a, "FROM_A", "PC-A")
+        self.send(self.a)
+        self.assertEqual(self.shared(f'SELECT 送信端末 FROM "{ORDER}" WHERE LotNo="FROM_A"'),
+                         [("PC-A",)])                     # 共有に列を足して送る
+        self.refresh(self.b)
+        got = wh.cancel_order(self.b, self.local_no(self.b, "FROM_A"), terminal="PC-B")
+        self.assertFalse(got.ok)
+        self.assertIn("PC-A から送られたもの", got.message)
+        self.assertEqual(self.status(self.b, "FROM_A"), ("", ""))
+        # 送った端末からは取り消せる。取り込み直した後でも(記録は共有にある)
+        self.refresh(self.a)
+        self.assertTrue(wh.cancel_order(self.a, self.local_no(self.a, "FROM_A"),
+                                        terminal="pc-a").ok)   # 大文字小文字は区別しない
+
+    def test_送った端末が分からない発注はどの現場からも取り消せる(self):
+        """この列を足す前の発注・VBAが入れた発注。誰にも取り消せなくはしない。"""
+        self.assertTrue(wh.cancel_order(self.b, self.local_no(self.b, "L1"),
+                                        terminal="PC-B").ok)
+
+    def test_一覧は押せない理由を言う(self):
+        from packaging_tool import modes
+        from packaging_tool.presenters import warehouse as presenter
+        self.order(self.a, "FROM_A", "PC-A")
+        self.send(self.a)
+        self.refresh(self.b)
+        with mock.patch.object(wh, "this_terminal", lambda: "PC-B"):
+            rows = {r.values["LotNo"]: r for r in
+                    presenter.build(self.b, mode=modes.FIELD).rows}
+        self.assertFalse(rows["FROM_A"].can_cancel)
+        self.assertIn("PC-A が送った発注", rows["FROM_A"].why)
+        self.assertEqual(rows["FROM_A"].values["送信端末"], "PC-A")
+        self.assertTrue(rows["L1"].can_cancel)            # 送った端末が分からない行
+
+    def test_共有に列を足せなくても発注は届く(self):
+        """取り消しの絞り込みが効かないだけで、発注が止まるよりよい。"""
+        self.order(self.a, "FROM_A", "PC-A")
+        with mock.patch.object(sync_writeback, "ensure_shared_tables",
+                               lambda *a, **k: []):
+            result = self.send(self.a)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(self.shared(f'SELECT COUNT(*) FROM "{ORDER}" WHERE LotNo="FROM_A"'),
+                         [(1,)])
+
+    def test_共有に列が無くても取り込みで知らせない(self):
+        result = data_sync.import_master(make_local(), self.src)
+        self.assertFalse([w for w in result.warnings if "送信端末" in w], result.warnings)
 
 
 class StockTests(HandoffBase):

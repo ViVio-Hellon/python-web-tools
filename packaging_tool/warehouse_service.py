@@ -47,6 +47,33 @@ STATUS_CONFIRMED = "確認済み"
 STATUS_PENDING = "未確認"
 
 
+def this_terminal() -> str:
+    """この端末の名前(PC名)。発注の `送信端末` に残し、取り消しを絞る。
+
+    アクセス権限で端末を見分けているのと同じ値を使う ── 同じ端末を
+    2通りの名前で呼ばない。
+    """
+    from . import access_control
+    return access_control.current_identity().pc_name
+
+
+def same_terminal(a: str, b: str) -> bool:
+    """Windows のPC名は大文字小文字を区別しない。"""
+    return (a or "").strip().casefold() == (b or "").strip().casefold()
+
+
+def can_cancel_from(sender: Optional[str], terminal: str) -> bool:
+    """この端末から取り消してよい発注か。
+
+    **送った端末だけ。** 現場は複数台で使うので、ほかの現場が出した発注を
+    取り消せると、別のラインの発注を誤って引っ込めてしまう。
+    送った端末が分からない発注(この列を足す前のもの・VBAが入れたもの)は、
+    以前と同じくどの現場からも取り消せる ── 誰にも取り消せなくなるより
+    よい。
+    """
+    return not (sender or "").strip() or same_terminal(sender, terminal)
+
+
 @dataclass
 class OrderResult:
     ok: bool
@@ -76,6 +103,7 @@ def create_order(
     yoto_code: str = "",
     hatchu_suu,
     is_ex_order: bool = False,
+    terminal: Optional[str] = None,
 ) -> OrderResult:
     """VBA `SendWarehouseRow`(+ `frmSendConfirm.btnSend_Click`の数量検証)の移植。
 
@@ -127,6 +155,8 @@ def create_order(
             "用途コード": db.sanitize_for_db(yoto_code),
             "納入先": db.sanitize_for_db(nounyusaki),
             "発注数": qty,
+            # 送った端末。取り消せるのはこの端末だけ(`cancel_order`)
+            "送信端末": terminal if terminal is not None else this_terminal(),
         },
         caller_name="create_order",
     )
@@ -211,11 +241,21 @@ def confirm_order(conn: sqlite3.Connection, mgr_no: int) -> ActionResult:
     return ActionResult(ok=True, message="確認済みにしました。")
 
 
-def cancel_order(conn: sqlite3.Connection, mgr_no: int) -> ActionResult:
+def cancel_order(conn: sqlite3.Connection, mgr_no: int, *,
+                 terminal: Optional[str] = None) -> ActionResult:
     """VBA `frmSendConfirm.btnDelete_Click` の移植(取り消し)。
 
     倉庫が確認済みの注文は現場から取り消せない(元VBA仕様を踏襲)。
+    **取り消せるのは送った端末だけ**(`can_cancel_from`)。
     """
+    terminal = terminal if terminal is not None else this_terminal()
+    row = conn.execute(f"SELECT 送信端末 FROM {TABLE} WHERE 管理番号 = ?",
+                       (mgr_no,)).fetchone()
+    if row is not None and not can_cancel_from(row[0], terminal):
+        return ActionResult(
+            ok=False,
+            message=(f"この発注は {row[0]} から送られたものです。"
+                     "取り消しは送った端末からしかできません。"))
     result = db.update_record(
         conn, TABLE, "管理番号", mgr_no,
         {"取り消し済": "1", "取り消し日時": db.now_db_string()},

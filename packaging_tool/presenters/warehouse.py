@@ -46,6 +46,7 @@ ORDER_COLUMNS: tuple[tuple[str, bool, bool], ...] = (
     ("用途コード", False, False),
     ("納入先", False, True),
     ("状態", False, False),
+    ("送信端末", False, False),
 )
 
 
@@ -82,20 +83,23 @@ class ViewColumn:
 # 残りの組(発注数/単位・材質/調質・厚/幅×丈)は、どれも同じものの
 # 言い換えか単位なのでそのまま。
 #
-# 幅の合計は 83%。残りは操作の列 ── ボタンは畳めない(切れたら押せない)
+# 幅の合計は 80%。残りは操作の列 ── ボタンは畳めない(切れたら押せない)
 # ので、**先に確保してから**残りを読み物に配る。
 ORDER_VIEW: tuple[ViewColumn, ...] = (
     ViewColumn("管理番号 / 登録日時", "管理番号", ("登録日時",),
-               numeric=True, width="10%"),
-    ViewColumn("LotNo / 品名", "LotNo", ("品名",), width="14%"),
+               numeric=True, width="8%"),
+    ViewColumn("LotNo / 品名", "LotNo", ("品名",), width="12%"),
     ViewColumn("発注コード", "発注コード", width="8%"),
-    ViewColumn("用途", "用途コード", width="6%"),
+    ViewColumn("用途", "用途コード", width="5%"),
     ViewColumn("発注数 / 単位", "発注数", ("単位",), numeric=True, width="7%"),
-    ViewColumn("材質 / 調質", "材質", ("調質",), width="8%"),
+    ViewColumn("材質 / 調質", "材質", ("調質",), width="7%"),
     ViewColumn("厚 / 幅×丈", "厚", ("幅", "丈"), sep=" × ",
-               numeric=True, width="10%"),
-    ViewColumn("納入先", "納入先", width="10%"),
+               numeric=True, width="8%"),
+    ViewColumn("納入先", "納入先", width="8%"),
     ViewColumn("状態", "状態", kind="status", width="7%"),
+    # どの現場が送ったか。**現場が複数台**なので、取り消せない行が
+    # 「なぜ押せないのか」を一覧で読めるようにする
+    ViewColumn("送った端末", "送信端末", width="10%"),
 )
 # 1行を開いたときに出す項目の並び。**VBA `frmWarehouseOrder` の
 # `lstOrders_Click` が埋めていた13個のラベル**と同じ並びにしてある
@@ -124,6 +128,7 @@ ORDER_DETAIL: tuple[tuple[str, str, bool], ...] = (
     ("用途コード", "用途コード", False),
     ("納入先", "納入先", False),
     ("管理番号", "管理番号", False),
+    ("送った端末", "送信端末", False),
 )
 
 # 押すと控えられる列(VBA `evtHatchu_Click`)。
@@ -218,6 +223,8 @@ class OrderRow:
     # その発注がどのLotのものか。**押すとロット検索でそのLotが開く。**
     # 空なら出さない(Lotが入っていない発注は辿れない)
     lot_no: str = ""
+    # ボタンが1つも無いときに添える理由。**言葉はサーバが決める**
+    why: str = ""
 
     @property
     def lot_url(self) -> str:
@@ -270,7 +277,8 @@ def build(conn: sqlite3.Connection, *, mode: str,
         # 資材は取り消し済みを既定では出さない(処理する対象ではない)
         include_cancelled=include_cancelled or not is_material)
 
-    rows = [_row(item, is_material=is_material) for item in raw]
+    terminal = svc.this_terminal()
+    rows = [_row(item, is_material=is_material, terminal=terminal) for item in raw]
     pending = sum(1 for r in rows if r.status == svc.STATUS_PENDING)
     return WarehouseViewModel(
         rows=rows, keyword=keyword, date_filter=date_filter,
@@ -280,8 +288,10 @@ def build(conn: sqlite3.Connection, *, mode: str,
     )
 
 
-def _row(item: dict, *, is_material: bool) -> OrderRow:
+def _row(item: dict, *, is_material: bool, terminal: str = "") -> OrderRow:
     status = item.get("状態", svc.STATUS_PENDING)
+    sender = str(item.get("送信端末") or "").strip()
+    mine = svc.can_cancel_from(sender, terminal)
     return OrderRow(
         mgr_no=item.get("管理番号", 0),
         values={label: _cell(item.get(label)) for label, _, _ in ORDER_COLUMNS},
@@ -297,11 +307,25 @@ def _row(item: dict, *, is_material: bool) -> OrderRow:
         # 移植のときに確認とまとめて資材専用にしてしまい、**逆**に
         # なっていた(現場の声:「送った発注を取り消せない」)。
         # 現場であっても、倉庫が確認したあとは取り消せない
-        can_cancel=not is_material and status == svc.STATUS_PENDING,
+        # **送った端末だけ。** 現場は複数台で使うので、ほかの現場の発注を
+        # 取り消せると別のラインの発注を誤って引っ込めてしまう
+        can_cancel=not is_material and status == svc.STATUS_PENDING and mine,
+        why=_why(status, is_material=is_material, sender=sender, mine=mine),
         # **どのモードでも出す。** 現場にとっても「この発注は何のLotか」は
         # 確かめたい事実で、資材だけのものではない
         lot_no=str(item.get("LotNo") or "").strip(),
     )
+
+
+def _why(status: str, *, is_material: bool, sender: str, mine: bool) -> str:
+    """ボタンが出ない行に添える理由。**押せない理由を空欄で示さない。**"""
+    if status == svc.STATUS_CONFIRMED:
+        return "確認済みです" if is_material else "倉庫が確認済みのため取り消せません"
+    if status == svc.STATUS_CANCELLED:
+        return "取り消し済みです"
+    if not is_material and not mine:
+        return f"{sender} が送った発注です(取り消しは送った端末から)"
+    return "この画面からできる操作はありません"
 
 
 def _cell(value: Any) -> Any:
@@ -401,6 +425,7 @@ def row_dict(row: OrderRow) -> dict[str, Any]:
         "status_kind": row.status_kind,
         "can_confirm": row.can_confirm,
         "can_cancel": row.can_cancel,
+        "why": row.why,
         "lot_no": row.lot_no,
         "lot_url": row.lot_url,
     }

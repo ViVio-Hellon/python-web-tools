@@ -55,7 +55,8 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   mark_blockers=(("確認済み", "取り消し済"),
                                  ("取り消し済", "確認済み")),
                   match_columns=("登録日時", "LotNo", "品名"),
-                  number_column="管理番号"),
+                  number_column="管理番号",
+                  optional_columns=("送信端末",)),
     WriteBackSpec(sqlite_table=config.TBL_STOCK_HISTORY,
                   access_table=config.TBL_STOCK_HISTORY,
                   key_column="id",
@@ -89,6 +90,17 @@ SHARED_TABLE_DDL: dict[str, str] = {
 }
 
 
+# 共有にあとから足す列。**送るものがある端末が足す**(表と同じ)。
+#
+# 送信端末 … どの現場が送った発注か。取り消しはその端末だけ
+#            (`warehouse_service.cancel_order`)。足せなかった共有へも
+#            発注は届ける(`optional_columns`)── 取り消しの絞り込みが
+#            効かないだけで、発注が止まるよりよい
+SHARED_ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    config.TBL_WAREHOUSE_ORDER: (("送信端末", "TEXT"),),
+}
+
+
 def ensure_shared_tables(conn: sqlite3.Connection, source: Any) -> list[str]:
     """送るものがあるのに共有に無い表を作る。作った表の名前を返す。
 
@@ -113,6 +125,24 @@ def ensure_shared_tables(conn: sqlite3.Connection, source: Any) -> list[str]:
             continue
         log.info("%s を取り込み元に作りました", spec.access_table)
         made.append(spec.access_table)
+    for spec in WRITEBACK_SPECS:
+        added = SHARED_ADDED_COLUMNS.get(spec.access_table)
+        if not added or spec.access_table not in names:
+            continue
+        try:
+            have = {r["name"] for r in source.query(
+                f"PRAGMA table_info({source_db.quote_identifier(spec.access_table)})")}
+            missing = [(c, t) for c, t in added if c not in have]
+            if not missing or not outbox_sync.pending_rows(conn, spec):
+                continue
+            for column, kind in missing:
+                source.execute(
+                    f"ALTER TABLE {source_db.quote_identifier(spec.access_table)}"
+                    f" ADD COLUMN {source_db.quote_identifier(column)} {kind}")
+                log.info("%s に %s 列を足しました", spec.access_table, column)
+                made.append(f"{spec.access_table}.{column}")
+        except (sqlite3.Error, source_db.SourceError) as exc:
+            log.warning("%s に列を足せませんでした: %s", spec.access_table, exc)
     return made
 
 

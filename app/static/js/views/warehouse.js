@@ -219,15 +219,18 @@ function actionsCell(row) {
       if (await ask("cancel", row)) act("/api/warehouse/cancel", row);
     }));
   }
-  // Lotを開くだけなら「操作」ではないので、理由の文は出したままにする
-  if (!box.querySelector("button")) {
+  // Lotを開くだけなら「操作」ではないので、理由の文は出したままにする。
+  // **操作のボタン(確認・取り消し)だけを見る。** ボタンなら何でも数えて
+  // いたので、Lotの入った発注では理由が一度も出ていなかった
+  if (!row.can_confirm && !row.can_cancel) {
     const why = document.createElement("span");
     why.className = "why";
     why.style.margin = "0";
     // 「できない」ことを空欄で示さない。なぜ押せないのかを書く。
-    // **役割は3つに分かれる**(出すのは現場 / 確認は倉庫 /
-    // 取り消しは現場、かつ倉庫の確認前)ので、理由もそれに沿って書く
-    if (row.status === "確認済み") {
+    // **言葉はサーバが決める**(送った端末で絞るなど、条件はサーバが持つ)
+    if (row.why) {
+      why.textContent = row.why;
+    } else if (row.status === "確認済み") {
       why.textContent = isMaterial ? "確認済みです"
         : "倉庫が確認済みのため取り消せません";
     } else if (row.status === "取消済") {

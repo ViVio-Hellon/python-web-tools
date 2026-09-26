@@ -190,7 +190,8 @@ def _migrate_after_schema(conn: sqlite3.Connection) -> None:
 # 発注テーブルにあとから足した列。`CREATE TABLE IF NOT EXISTS` は
 # **すでにある表には何もしない**ので、前の版から入れ替えた端末には
 # 足しに行く必要がある
-_ORDER_ADDED_COLUMNS = (("取込元管理番号", "INTEGER"), ("印未反映", "TEXT"))
+_ORDER_ADDED_COLUMNS = (("取込元管理番号", "INTEGER"), ("印未反映", "TEXT"),
+                        ("送信端末", "TEXT"))
 
 
 def _add_order_mark_columns(conn: sqlite3.Connection) -> None:

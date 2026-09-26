@@ -222,6 +222,9 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         # たびに振り直される(AUTOINCREMENT)ので、あとから確認の印を
         # 共有の同じ行へ書き戻すときの手がかりにならない
         ("取込元管理番号", "管理番号", to_int),
+        # どの端末が送ったか。取り消せるのはその端末だけ。共有に列が無い
+        # (最初の送信がまだ)あいだは空で入り、どの現場からも取り消せる
+        ("送信端末", "送信端末", to_text),
     ],
     "PalletMaster": [
         ("幅", "幅", to_int),
@@ -403,6 +406,8 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
 # **鍵や判断に使う列はここに入れないこと。**
 OPTIONAL_COLUMNS: dict[str, frozenset[str]] = {
     "仕掛ロット": frozenset({"BOX実績_枚本数", "前々工程実績_枚本数", "前工程実績_枚本数"}),
+    # 最初に送った端末が共有に足す列(`sync_writeback.SHARED_ADDED_COLUMNS`)
+    config.TBL_WAREHOUSE_ORDER: frozenset({"送信端末"}),
 }
 
 # 梱包資材マスタ.sqlite3 ではなく、**看板マスタ.sqlite3(別ファイル)** から
