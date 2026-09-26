@@ -233,6 +233,46 @@ def set_mode(mode: str) -> bool:
 # ------------------------------------------------------------------
 # セキュリティ (設計書 §3.6)
 # ------------------------------------------------------------------
+# ほかのサイトから読み込まれた画面を断るときの文。**画面そのもの(HTML)で返す**
+# ── 利用者の目に入るのは新しいタブか、何も見えない埋め込みのどちらか
+FOREIGN_PAGE_HTML = """<!doctype html><meta charset="utf-8">
+<title>梱包資材総合ツール</title>
+<body style="font-family:sans-serif;padding:2em;line-height:1.8">
+<h1 style="font-size:1.2em">この画面は、ほかのページから開かれたため表示しませんでした</h1>
+<p>いま使っている画面を守るためです(ほかのページがこのツールを読み込むと、
+使っている画面の操作ができなくなっていました)。</p>
+<p>ツールはデスクトップのショートカット(Start.vbs)か、ツールの画面から開いてください。</p>
+</body>"""
+
+
+def _refuse_foreign_page():
+    """**ほかのサイトのページ**が、このツールの画面を読み込んだら断る。
+
+    画面(HTML)はアドレス欄から開けるようにトークン無しで返している。
+    中身は読まれない(ブラウザが別のサイトには見せない)が、**読み込まれた
+    だけで「新しいタブが開いた」扱いになり、利用者の画面が「このタブは、
+    あとから開いたタブに操作を譲りました」で止まっていた**。
+    ほかのサイトのタブが `<img>`・`<iframe>`・リンク・`window.open` で
+    このアドレスを読むだけで起きる(試験で確かめた)。
+
+    ブラウザは読み込みのたびに、どこから来たか(`Sec-Fetch-Site`)を付ける:
+        none         … アドレス欄・ショートカット・ブックマーク → 通す
+        same-origin  … このツールの画面から → 通す
+        same-site    … 同じPCの別のポート(ほかのローカルの道具など) → 断る
+        cross-site   … ほかのサイト → 断る
+    付いていない(古いブラウザ・curl・試験)ときは通す。
+    断るときは**画面を開いた扱いにしない**(使っているタブを取り上げない)。
+    """
+    if request.method != "GET" or request.path.startswith("/static/"):
+        return None
+    site = request.headers.get("Sec-Fetch-Site", "")
+    if site not in ("cross-site", "same-site"):
+        return None
+    log.warning("ほかのページからの画面の読み込みを断りました: %s (%s)",
+                request.path, site)
+    return FOREIGN_PAGE_HTML, 403, {"Content-Type": "text/html; charset=utf-8"}
+
+
 def _register_security(app: Flask) -> None:
     @app.before_request
     def _check_request():                       # noqa: ANN202 - Flaskのフック
@@ -245,7 +285,7 @@ def _register_security(app: Flask) -> None:
             return jsonify(_error("bad_host", "このアドレスからは利用できません")), 400
 
         if not any(request.path.startswith(p) for p in TOKEN_REQUIRED_PREFIXES):
-            return None
+            return _refuse_foreign_page()
 
         # --- 同一オリジンの確認 ---
         # ブラウザが付ける Fetch Metadata。付いていない場合(古い

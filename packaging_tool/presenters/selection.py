@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -143,6 +144,39 @@ class SelectionPresenter:
     mode_1p1185: spk.Mode1P1185State = field(default_factory=spk.Mode1P1185State)
     last_hosozai: str = ""
     materials_1p0113: spk.Materials1P0113 = field(default_factory=spk.Materials1P0113)
+
+    # ------------------------------------------------------------------
+    # 接続はスレッドごと
+    # ------------------------------------------------------------------
+    # 作業状態(このオブジェクト)はプロセスに1つだが、`sqlite3` の接続は
+    # 作ったスレッドでしか使えない。以前は要求のたびに `conn` を差し替えて
+    # いたので、**要求が2つ重なると、先の要求が後の要求の接続を使って**
+    # 「SQLite objects created in a thread can only be used in that same
+    # thread」で 500 になった(ほかのサイトのタブが資材選択の画面を読み込んだ
+    # のと、利用者の操作が重なった試験で見つけた。帳票・マスタ管理の権限判定
+    # なども同じセッションを引くので、ふだんの操作でも重なりうる)。
+    # `conn` への代入と読み出しを、そのスレッドの置き場へ向ける
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "conn":
+            self._thread_conns().conn = value
+            # そのスレッドで一度も差していないとき(試験・起動時)の予備
+            object.__setattr__(self, "_last_conn", value)
+            return
+        object.__setattr__(self, name, value)
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "conn":
+            local = self._thread_conns()
+            found = getattr(local, "conn", None)
+            return found if found is not None else self.__dict__.get("_last_conn")
+        raise AttributeError(name)
+
+    def _thread_conns(self) -> threading.local:
+        local = self.__dict__.get("_conns")
+        if local is None:
+            local = threading.local()
+            object.__setattr__(self, "_conns", local)
+        return local
 
     # ------------------------------------------------------------------
     # 包装仕様NO
