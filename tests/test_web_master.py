@@ -49,6 +49,11 @@ class MasterApiTests(unittest.TestCase):
         self.conn = _web.bind_db(self, master_routes)
         self.client = _web.make_client("field", port=8713)
         self.auth = _web.auth()
+        # マスタを書くには必ず管理者パスワードが要る。書く試験は通した状態から
+        from packaging_tool import selection_session
+        selection_session.reset_session()
+        self.addCleanup(selection_session.reset_session)
+        selection_session.get_session(self.conn).admin = True
 
     # -- 道具 -------------------------------------------------------
     def browse(self, **params):
@@ -66,6 +71,9 @@ class MasterApiTests(unittest.TestCase):
 
     def only_field(self) -> None:
         """この端末を現場モードだけにする。"""
+        from packaging_tool import selection_session
+        # 権限を見る試験。パスワードは通していない状態から(通すなら試験が自分で)
+        selection_session.get_session(self.conn).admin = False
         identity = access_control.current_identity()
         self.conn.execute(
             'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
@@ -75,6 +83,9 @@ class MasterApiTests(unittest.TestCase):
 
     def only_material(self) -> None:
         """この端末を資材モードだけにする(管理者パスワードは別)。"""
+        from packaging_tool import selection_session
+        # 権限を見る試験。パスワードは通していない状態から(通すなら試験が自分で)
+        selection_session.get_session(self.conn).admin = False
         identity = access_control.current_identity()
         self.conn.execute(
             'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'

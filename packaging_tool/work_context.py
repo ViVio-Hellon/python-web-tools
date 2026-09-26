@@ -79,6 +79,9 @@ class WorkContext:
     # **棚検索が読んで、置き場をまとめて光らせる**(旧版 `btnMap`)。
     #   {"kind": "board"/"angle", "width": int, "length": int, "count": int}
     map_items: list[dict[str, Any]] = field(default_factory=list)
+    # 渡したばかりで、棚検索がまだ光らせていない。**着いた時点で1回だけ**
+    # 光らせるための印(開き直すたびに検索をやり直さない)
+    map_arrived: bool = False
 
     # 資材選択の「在庫を見る」が渡したパレット寸法(旧版 `btnUFMAP`)。
     # **簡易在庫が読んで、開いた時点で引いておく**。
@@ -101,6 +104,7 @@ class WorkContext:
         # 前のロットの発注を次のロットで登録させない
         self.pending_orders = []
         self.map_items = []
+        self.map_arrived = False
         self.stock_size = {}
 
     # --- ロット検索 -------------------------------------------------
@@ -127,6 +131,7 @@ class WorkContext:
     def set_map_items(self, items: list[dict[str, Any]]) -> None:
         """棚検索へ渡す資材。**渡すだけで、探すのは棚検索の仕事**。"""
         self.map_items = list(items)
+        self.map_arrived = True
         log.info("置き場をまとめて見る: %s件 (Lot %s)",
                  len(self.map_items), self.lot_no)
 

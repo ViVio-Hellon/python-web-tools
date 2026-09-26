@@ -71,6 +71,18 @@ def index():
     return redirect(shell.home_url(current_app.config["MODE"]), code=302)
 
 
+@bp.get("/favicon.ico")
+def favicon():
+    """タブのアイコン。**中身なし(204)で返す。**
+
+    画面(base.html)はモードの色のアイコンを埋め込んでいるが、帳票・
+    起動待機・カタログのような単独のページは持たない。そのときブラウザは
+    `/favicon.ico` を取りに来て、以前は 404 が返り、帳票を開くたびに
+    エラーが1行記録されていた(通しの試験で見つけた)。
+    """
+    return "", 204
+
+
 @bp.get("/api/health")
 def health():
     """起動確認と生存監視。

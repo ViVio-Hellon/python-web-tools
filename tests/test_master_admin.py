@@ -66,6 +66,11 @@ class MasterTestCase(unittest.TestCase):
         self.conn.row_factory = sqlite3.Row
         db.apply_schema(self.conn)
         self.addCleanup(self.conn.close)
+        # 書く試験は**管理者認証を通した状態**から始める(マスタを書くには
+        # 必ずパスワードが要る)。権限そのものを見る試験は自分で外す
+        selection_session.reset_session()
+        self.addCleanup(selection_session.reset_session)
+        selection_session.get_session(self.conn).admin = True
 
     def rows(self, table: str) -> list[dict]:
         return master_admin.page(self.src, table).rows
@@ -383,10 +388,19 @@ class PermissionTests(MasterTestCase):
         self.assertFalse(allowed)
         self.assertIn("資材", why)
 
-    def test_まだ誰も登録されていなければ塞がない(self) -> None:
-        """ここを塞ぐと、最初の1行をどこからも入れられなくなる。"""
+    def test_まだ誰も登録されていなければパスワードだけで開く(self) -> None:
+        """資材モードを問うと、最初の1行をどこからも入れられなくなる。
+
+        ただし**パスワードは要る**。以前は無条件に通していたので、
+        アクセス権限の表がまだ無い現場の梱包資材マスタでは、どの端末からでも
+        パスワード無しで全部のマスタを書き換えられた。
+        """
         self.conn.execute("DELETE FROM アクセス権限")
         self.conn.commit()
+        allowed, why = master_admin.can_edit(self.conn)
+        self.assertFalse(allowed)
+        self.assertIn("管理者パスワード", why)
+        selection_session.get_session(self.conn).admin = True
         allowed, _why = master_admin.can_edit(self.conn)
         self.assertTrue(allowed)
 
@@ -655,6 +669,7 @@ class CreateTableTests(MasterTestCase):
 
     def test_権限が無ければ作れない(self) -> None:
         """ただし**まだ誰も登録されていないうちは塞がない**(最初の1行)。"""
+        selection_session.get_session(self.conn).admin = False   # パスワード無し
         self.conn.execute("DELETE FROM アクセス権限")
         self.conn.execute(
             'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
@@ -753,6 +768,7 @@ class RebuildTableTests(MasterTestCase):
         self.assertTrue(result.ok, result.message)
 
     def test_権限が無ければ作り直せない(self) -> None:
+        selection_session.get_session(self.conn).admin = False   # パスワード無し
         self.conn.execute("DELETE FROM アクセス権限")
         self.conn.execute(
             'INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'

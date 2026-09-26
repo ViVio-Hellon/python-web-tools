@@ -299,6 +299,22 @@ class HandoffApiTests(unittest.TestCase):
         hit = [s["name"] for s in state["shelves"] if s["state"] == "hit"]
         self.assertEqual(hit, [self.labels[0]])
 
+    def test_着いた時点で光らせる(self):
+        """以前は着いたあとにもう一度押す必要があり、押すまでは前に手で
+        探した結果がそのまま出ていた(通しの試験で見つけた)。"""
+        from packaging_tool import board_selection_service as svc
+
+        insert_board(self.conn, width=750, length=1130, label=self.labels[0])
+        session = selection_session.get_session(self.conn)
+        session.selected.lower.append(svc.SelectedBoard(750, 1130, 1))
+        self.post("/api/selection/map")
+
+        self.assertEqual(self.client.get("/layout", headers=_web.auth()).status_code, 200)
+        state = self.client.get("/api/layout/state", headers=_web.auth()).get_json()
+        hit = [s["name"] for s in state["shelves"] if s["state"] == "hit"]
+        self.assertEqual(hit, [self.labels[0]])
+        self.assertFalse(work_context.get_context().map_arrived)   # 1回だけ
+
     def test_渡っていないのに受け側を押したら422(self):
         state = self.post("/api/layout/from-selection", expect=422)
         self.assertIn("資材選択", state["message"])

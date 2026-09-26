@@ -53,6 +53,7 @@ def _state(session, **extra):
 @bp.get("/layout")
 def page():
     session = _session()
+    _show_handed_over(session)
     view = presenter.build(get_db(), session)
     return render_template(
         "layout.html",
@@ -60,6 +61,25 @@ def page():
         state=presenter.to_dict(view),
         **shell_context("layout"),
     )
+
+
+def _show_handed_over(session) -> None:
+    """資材選択の「置き場をまとめて見る」で着いたら、**その場で光らせる**。
+
+    以前は着いたあとにもう一度「選定した資材 ○件をまとめて」を押す
+    必要があり、押すまでは**前に手で探した結果**がそのまま出ていた
+    (通しの試験で、8件渡したのに結果欄は前の 1000×1400 の検索のまま)。
+    資材選択の説明は「まとめて光らせます」と言っていて、簡易在庫の
+    受け渡しも着いた時点で引いている。1回だけ光らせ、開き直すたびには
+    やり直さない(受け側のボタンは残るので、押せばもう一度光る)。
+    """
+    from packaging_tool import work_context
+
+    context = work_context.get_context()
+    if not (context.map_arrived and context.map_items):
+        return
+    context.map_arrived = False
+    session.show_selection(get_db(), context.map_items)
 
 
 @bp.get("/api/layout/state")

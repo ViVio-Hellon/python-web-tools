@@ -108,7 +108,25 @@ class TilingMixin:
         return (tiling.cand_signature(state.lower[axis]),
                 tiling.cand_signature(state.upper[axis]))
 
-    def _next_tiling_axis(self, state: TilingState) -> tuple[int, list[str]]:
+    def _same_as_earlier(self, state: TilingState, axis: int) -> Optional[int]:
+        """この軸と中身が同じ、**より前の**軸。無ければ None。
+
+        同じ中身の軸は、いちばん前のものだけを出す。いま出ている軸と
+        比べるだけでは足りない ── C が A と同じとき、A→B と進んだあと
+        B と C を比べると「違う」ので C を出してしまい、**A と同じ候補が
+        名前を変えてもう一度出ていた**(実データ H8330P0 で、2回目の押下で
+        「候補C は同じ内容なので飛ばしました」と言った直後の3回目に
+        「候補C に切り替えました」と出た)。
+        """
+        mine = self._axis_signature(state, axis)
+        for earlier in range(axis):
+            if state.lower[earlier] is None and state.upper[earlier] is None:
+                continue
+            if self._axis_signature(state, earlier) == mine:
+                return earlier
+        return None
+
+    def _next_tiling_axis(self, state: TilingState) -> tuple[int, list[tuple[str, str]]]:
         """次に出す軸。**中身が変わる軸だけ**を回る(VBA `NextValidAxis`)。
 
         飛ばすものが2つあります。
@@ -143,9 +161,10 @@ class TilingMixin:
         first = state.axis < 0
         current = None if first else self._axis_signature(state, state.axis)
         start = 0 if first else state.axis + 1
-        skipped: list[str] = []
-        complete: list[int] = []
-        partial: list[int] = []
+        # 見た順に (軸, 同じ中身の軸 or None) を並べる。飛ばしたと言うのは
+        # **選んだ軸より手前で飛ばしたものだけ** ── 先まで見に行った分まで
+        # 言うと、A→B と進んだだけなのに「候補C は飛ばしました」と出る
+        seen: list[tuple[int, Optional[int]]] = []
         # **見に行くのは残りの2つだけ。** まだ何も出していないとき
         # (初回)は3つとも見る。出したあとで3周ぶん回すと、3周目は
         # いま出している軸そのものに戻ってきて、「候補Aは候補Aと同じ
@@ -156,25 +175,33 @@ class TilingMixin:
                 log.debug("候補変更: 軸%s は空なので飛ばします",
                           tiling.AXIS_NAMES[axis])
                 continue
-            if current is not None and self._axis_signature(state, axis) == current:
-                # **黙って飛ばさない。** 押した回数と出た候補が合わないと、
-                # 「押し損ねたのか、同じものが出たのか」が分からなくなる
-                name = tiling.AXIS_NAMES[axis]
-                skipped.append(name)
-                ulog.log(f"  候補{name} は候補{tiling.AXIS_NAMES[state.axis]}"
-                         " と同じ内容のため飛ばしました")
-                log.info("候補変更: 軸%s は軸%s と同じ内容なので飛ばしました",
-                         name, tiling.AXIS_NAMES[state.axis])
-                continue
-            (complete if not self._missing_sides(state, axis) else partial).append(axis)
+            same = self._same_as_earlier(state, axis)
+            if same is None and current is not None \
+                    and self._axis_signature(state, axis) == current:
+                same = state.axis
+            seen.append((axis, same))
 
-        for axis in complete:
-            return axis, skipped
-        for axis in partial:
+        usable = [axis for axis, same in seen if same is None]
+        complete = [axis for axis in usable if not self._missing_sides(state, axis)]
+        chosen = complete[0] if complete else (usable[0] if usable else -1)
+        if chosen >= 0 and not complete:
             log.info("候補変更: 軸%s は片側だけですが、両方そろう軸が"
-                     "ありません", tiling.AXIS_NAMES[axis])
-            return axis, skipped
-        return -1, skipped
+                     "ありません", tiling.AXIS_NAMES[chosen])
+
+        skipped: list[tuple[str, str]] = []
+        for axis, same in seen:
+            if axis == chosen:
+                break
+            if same is None:
+                continue
+            # **黙って飛ばさない。** 押した回数と出た候補が合わないと、
+            # 「押し損ねたのか、同じものが出たのか」が分からなくなる。
+            # **何と同じなのかも言う**
+            name, other = tiling.AXIS_NAMES[axis], tiling.AXIS_NAMES[same]
+            skipped.append((name, other))
+            ulog.log(f"  候補{name} は候補{other} と同じ内容のため飛ばしました")
+            log.info("候補変更: 軸%s は軸%s と同じ内容なので飛ばしました", name, other)
+        return chosen, skipped
 
     def _missing_sides(self, state: TilingState, axis: int) -> list[str]:
         """その軸で**空になる側**。画面に出さない側は数えない。
@@ -293,7 +320,7 @@ class TilingMixin:
         return state
 
     def _apply_tiling(self, axis: int,
-                      skipped: list[str]) -> BoardOpResult:
+                      skipped: list[tuple[str, str]]) -> BoardOpResult:
         """選んだ軸を選定リストと配置に反映する。
 
         `skipped` は「いま出ているものと同じ内容だったので飛ばした軸」。
@@ -359,8 +386,8 @@ class TilingMixin:
                  name, len(self.selected.upper), len(self.selected.lower),
                  len(ctx.placed))
 
-        notes = ([f"候補{'・'.join(skipped)} は同じ内容だったので飛ばしました。"]
-                 if skipped else [])
+        notes = [f"候補{name} は候補{other} と同じ内容だったので飛ばしました。"
+                 for name, other in skipped]
         # **片側だけ空になったら必ず言う。** 両方そろう軸を先に選ぶので
         # (`_next_tiling_axis`)ここに来るのは「どの軸でもそろわない」
         # ときだけ。それでも黙って空にすると「押したら消えた」ように

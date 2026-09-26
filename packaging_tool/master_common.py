@@ -219,12 +219,21 @@ def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool,
     if conn is None:
         return False, "手元のデータベースを開けませんでした。"
     grant = access_control.resolve(conn)
-    if not grant.has_master:
-        # まだ誰も登録されていない。ここを塞ぐと、資材モードに入るための
-        # 最初の1行をどこからも入れられなくなる
-        return True, ""
-
     authenticated = selection_session.get_session(conn).admin
+    if not grant.has_master:
+        # まだ誰も登録されていない。資材モードを問うと、資材モードに入るための
+        # 最初の1行をどこからも入れられなくなるので、**パスワードだけ**を問う。
+        #
+        # 以前はここで無条件に通していた。現場の梱包資材マスタには
+        # アクセス権限の表がまだ無いので、**どの端末からでもパスワード無しで
+        # 全部のマスタを書き換えられた**(通しの試験で「未認証」のまま
+        # BoardMaster の追加・編集・削除ができた)
+        if authenticated:
+            return True, ""
+        return False, (
+            "マスタを直すには管理者パスワードが要ります。"
+            "設定画面の「マスタ編集の認証」でパスワードを入れてください"
+            f"({access_control.TABLE} がまだ無いので、資材モードは問いません)。")
 
     if table == access_control.TABLE:
         # 資材モードを問わない復旧経路。パスワードだけが関門

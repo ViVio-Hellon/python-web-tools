@@ -1248,6 +1248,35 @@ class ChangeCandidateTests(SelectionWebTestCase):
         for text in skips:
             self.assertNotIn("候補A(枚数最小) は候補A(枚数最小)", text)
 
+    def test_前の軸と同じ中身は名前を変えて出し直さない(self) -> None:
+        """C が A と同じで B だけ違うとき(実データ H8330P0 で起きた)。
+
+        いま出ている軸とだけ比べていたので、A→B の次に「B と違う」C を
+        出し、**A と同じ候補が候補Cとしてもう一度出ていた**。2回目の押下では
+        「候補C は同じ内容なので飛ばしました」と言っていたのに、3回目で
+        「候補C に切り替えました」と出て、言うことも食い違っていた。
+        """
+        from unittest import mock
+
+        from packaging_tool import selection_tiling
+
+        session = self.session()
+        state = selection_tiling.TilingState(
+            key=("x",), lower=(object(), object(), object()),
+            upper=(object(), object(), object()), axis=-1)
+        content = {0: "A案", 1: "B案", 2: "A案"}
+        with mock.patch.object(type(session), "_axis_signature",
+                               lambda self, st, axis: content[axis]):
+            order, notes = [], []
+            for _ in range(4):
+                axis, skipped = session._next_tiling_axis(state)
+                state.axis = axis
+                order.append("ABC"[axis])
+                notes.append(skipped)
+        self.assertEqual(order, ["A", "B", "A", "B"])
+        self.assertEqual(notes[1], [])             # A→B では C を持ち出さない
+        self.assertEqual([(n[0], o[0]) for n, o in notes[2]], [("C", "A")])
+
     def test_作った時点で同じ軸に印を付ける(self) -> None:
         """押す前から「AとBは同じ」と分かっていれば、驚かずに済む。"""
         self.sizes()
