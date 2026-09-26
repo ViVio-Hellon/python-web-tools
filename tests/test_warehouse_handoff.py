@@ -323,6 +323,22 @@ class StockTests(HandoffBase):
         self.assertEqual(result.errors, [])
         self.assertEqual(self.stock(), [(1000, 1000, "A1", 3)])
 
+    def test_2台が最後の1台を払い出したら共有の履歴に残す(self):
+        """現場が複数台だと、互いの払出が共有に届く前に同じ棚から出せる。
+        在庫はマイナスにしないが、黙って0にすると後から追えない。"""
+        ps.receive(self.a, width=1000, length=1000, qty=1, position="A1")
+        self.send(self.a)
+        self.refresh(self.b)
+        ps.issue(self.a, width=1000, length=1000, position="A1", qty=1)
+        ps.issue(self.b, width=1000, length=1000, position="A1", qty=1)
+        self.send(self.a)
+        self.send(self.b)
+        self.assertEqual(self.stock(), [])
+        notes = [r[0] for r in self.shared(
+            f'SELECT COALESCE(備考, "") FROM "{HISTORY}" WHERE 区分 = "払出" ORDER BY rowid')]
+        self.assertEqual(notes[0], "")
+        self.assertIn("共有の在庫が足りませんでした: 在庫0・払出1", notes[1])
+
     def test_履歴を送れていないうちはPalletMasterを入れ替えない(self):
         ps.receive(self.a, width=1000, length=1000, qty=1, position="A1")
         unsent = sync_writeback._unsent_writeback_tables(self.a)

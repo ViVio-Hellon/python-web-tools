@@ -485,18 +485,84 @@ def _copy_of(resolved: Path) -> Path:
         atexit.register(shutil.rmtree, _COPY_DIR, True)
     copy = _COPY_DIR / f"{abs(hash(key)):x}{resolved.suffix}"
     for extra in _SIDECARS:
-        side = Path(str(resolved) + extra)
-        target = Path(str(copy) + extra)
-        target.unlink(missing_ok=True)
-        if side.exists():
-            shutil.copyfile(side, target)
-    shutil.copyfile(resolved, copy)
+        Path(str(copy) + extra).unlink(missing_ok=True)
+    if not _snapshot(resolved, copy):
+        stamp = _raw_copy(resolved, copy, stamp)
     _COPIES[key] = (stamp, copy)
     # **「開けないので」とは言わない。** 読むときは最初から写します
     # (`_open`)。失敗したように読める行がログに並ぶと、うまくいって
     # いるのに原因を探すことになります
     log.info("読むために手元へ写しました: %s → %s", resolved, copy)
     return copy
+
+
+def _snapshot(resolved: Path, copy: Path) -> bool:
+    """**書いている途中を写さない**写し方。写せたら True。
+
+    【なぜファイルのまま写さないのか】
+    現場の端末が何台もあると、発注・受払・使用実績を送るたびに共有の
+    ファイルが書き換わる。書いている最中にファイルをそのまま写すと、
+    **半分だけ書かれた姿**が写り「database disk image is malformed」で
+    読めない(書き込みを続けながら写す試験で 1,397回中24回)。その回の
+    取り込みは表ごと失敗する。
+
+    【どう防ぐか】
+    sqlite3 の**読むための鍵**を取ってから写す。鍵を持っているあいだは
+    ほかの端末が書き終える(確定する)ことができないので、写るのは
+    書き終わった姿だけ。書いている端末が居れば、書き終わるまで待つ
+    (busy_timeout。待ちきれなければ False を返して、ファイルのまま写す)。
+
+    `Connection.backup()` は使わない。ほかの端末が鍵を持ち続けると
+    **いつまでも待ち続けて戻らない**(待つ上限が無い)ため。
+    """
+    try:
+        src = sqlite3.connect(to_uri(resolved) + "?mode=ro", uri=True,
+                              timeout=BUSY_TIMEOUT_MS / 1000,
+                              isolation_level=None)
+    except sqlite3.Error:
+        return False
+    try:
+        src.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+        src.execute("BEGIN")
+        src.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()   # 読む鍵を取る
+        shutil.copyfile(resolved, copy)
+        src.execute("COMMIT")
+        return True
+    except (sqlite3.Error, OSError) as exc:
+        # WAL のファイルは共有の上では開けない(共有メモリが要る)。
+        # 待ちきれなかったときも同じ。ファイルのまま写す(`_raw_copy`)
+        log.debug("鍵を取って写せませんでした(ファイルのまま写します): %s", exc)
+        copy.unlink(missing_ok=True)
+        return False
+    finally:
+        src.close()
+
+
+def _raw_copy(resolved: Path, copy: Path,
+              stamp: tuple[int, int]) -> tuple[int, int]:
+    """ファイルのまま写す(backup で開けないとき)。写した姿を返す。
+
+    **写しているあいだに書き換わったら、写し直す。** 途中の姿を
+    掴んだかもしれないため(`_snapshot` の説明)。何度やっても
+    落ち着かないときは最後の写しを使う ── 読めなければ取り込みが
+    その表を見送るだけで、共有には何も起きない。
+    """
+    import time
+
+    for attempt in range(5):
+        for extra in _SIDECARS:
+            side = Path(str(resolved) + extra)
+            if side.exists():
+                shutil.copyfile(side, Path(str(copy) + extra))
+        shutil.copyfile(resolved, copy)
+        after = resolved.stat()
+        now = (after.st_size, after.st_mtime_ns)
+        if now == stamp:
+            return stamp
+        stamp = now
+        time.sleep(0.2 * (attempt + 1))
+    log.warning("%s は写しているあいだも書き換わり続けました", resolved.name)
+    return stamp
 
 
 def is_readable(path: Path) -> bool:

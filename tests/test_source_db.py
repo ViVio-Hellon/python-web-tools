@@ -611,3 +611,69 @@ class CheckEncodingScriptTests(unittest.TestCase):
     def test_正しいUTF8も壊れていないと言う(self) -> None:
         path = self.make("UTF8.sqlite3", ["JISN製品①", "シャーシ", "燿　"])
         self.assertFalse(self.script.inspect(path))
+
+
+class SnapshotTests(unittest.TestCase):
+    """読むための写しに、**書いている途中の姿**を写さない。
+
+    現場の端末が何台もあると、共有のファイルは送信のたびに書き換わる。
+    以前はファイルのまま写していたので、書き込みと重なると半分だけ
+    書かれた姿が写り「database disk image is malformed」で読めなかった
+    (書き込みを続けながら写す試験で 1,397回中24回)。
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+        self.dir = Path(tempfile.mkdtemp(prefix="snap_"))
+        self.path = self.dir / "梱包資材マスタ.sqlite3"
+        with sqlite3.connect(self.path) as conn:
+            conn.execute("CREATE TABLE t (n INTEGER)")
+            conn.execute("INSERT INTO t VALUES (1)")
+        source_db._COPIES.clear()
+        self.addCleanup(source_db._COPIES.clear)
+
+    def test_書いている端末が居れば書き終わるまで待って写す(self) -> None:
+        import threading
+        import time
+
+        writer = sqlite3.connect(self.path, isolation_level=None,
+                                 check_same_thread=False)
+        self.addCleanup(writer.close)
+        writer.execute("BEGIN EXCLUSIVE")
+        writer.execute("INSERT INTO t VALUES (2)")
+
+        def finish() -> None:
+            time.sleep(0.5)
+            writer.execute("COMMIT")
+
+        threading.Thread(target=finish).start()
+        with source_db._connect(self.path, read_only=True) as conn:
+            rows = [r[0] for r in conn.execute("SELECT n FROM t ORDER BY n")]
+            check = conn.execute("PRAGMA quick_check").fetchone()[0]
+        self.assertEqual(check, "ok")
+        self.assertEqual(rows, [1, 2])
+
+    def test_写しているあいだに変わったらファイルのまま写し直す(self) -> None:
+        """backup で開けない(共有の上の WAL など)ときの手。"""
+        from unittest import mock
+
+        copy = self.dir / "copy.sqlite3"
+        stat = self.path.stat()
+        old = (stat.st_size, stat.st_mtime_ns - 1)          # 写し始めの姿とずれている
+        with mock.patch("time.sleep"):
+            got = source_db._raw_copy(self.path, copy, old)
+        self.assertEqual(got, (stat.st_size, stat.st_mtime_ns))
+        with sqlite3.connect(copy) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM t").fetchone()[0], 1)
+
+    def test_鍵を放さない端末が居ても待ち続けない(self) -> None:
+        """以前の案(backup)は上限なく待ち続けて戻らなかった。"""
+        writer = sqlite3.connect(self.path, isolation_level=None)
+        self.addCleanup(writer.close)
+        writer.execute("BEGIN EXCLUSIVE")
+        writer.execute("INSERT INTO t VALUES (2)")
+        started = time.time()
+        with mock.patch.object(source_db, "BUSY_TIMEOUT_MS", 300):
+            ok = source_db._snapshot(self.path, self.dir / "copy.sqlite3")
+        self.assertFalse(ok)                                  # ファイルのまま写す手へ
+        self.assertLess(time.time() - started, 5)

@@ -126,6 +126,57 @@ class UsageTests(SyncTestCase):
         self.assertEqual(sync.pending(self.b), {})
 
 
+class ConcurrentUsageTests(SyncTestCase):
+    def test_同じ端末で書き戻しが重なっても読んだ回数は1回ぶん(self) -> None:
+        """操作のあとの裏の送信と、倉庫連携の見張りなどが**同時に**走る。
+
+        以前はどちらも同じ「未反映 1」を読んで足していた(遅い共有を
+        真似た試験で +1 のはずが +4)。ここでは1本目が共有へ書いている
+        最中に2本目を走らせる。
+        """
+        save(self.a)
+        self.push(self.a)
+        [row] = ps.get_pattern_list(self.a)
+        ps.load_pattern_snapshot(self.a, row.id)
+        before = self.source(f'SELECT 使用回数 FROM "{H}"')[0][0]
+
+        source = source_db.connect(self.path)
+        self.addCleanup(source.close)
+        original = source.execute
+        nested = {"done": False}
+
+        def execute(sql, params=()):
+            if not nested["done"]:
+                nested["done"] = True
+                sync._push_usage(self.a, source, sync.PushResult())   # 2本目
+            return original(sql, params)
+
+        source.execute = execute
+        sync._push_usage(self.a, source, sync.PushResult())           # 1本目
+        self.assertEqual(self.source(f'SELECT 使用回数 FROM "{H}"')[0][0], before + 1)
+        self.assertEqual(sync.pending(self.a), {})
+
+    def test_届かなかった分は戻して次に送る(self) -> None:
+        save(self.a)
+        self.push(self.a)
+        [row] = ps.get_pattern_list(self.a)
+        ps.load_pattern_snapshot(self.a, row.id)
+        before = self.source(f'SELECT 使用回数 FROM "{H}"')[0][0]
+        source = source_db.connect(self.path)
+        self.addCleanup(source.close)
+
+        def fail(sql, params=()):
+            raise source_db.SourceError("database is locked")
+
+        original, source.execute = source.execute, fail
+        result = sync.PushResult()
+        sync._push_usage(self.a, source, result)
+        self.assertTrue(result.errors)
+        source.execute = original
+        sync._push_usage(self.a, source, sync.PushResult())
+        self.assertEqual(self.source(f'SELECT 使用回数 FROM "{H}"')[0][0], before + 1)
+
+
 class DeleteTests(SyncTestCase):
     def test_Bで消すとAからも消える(self) -> None:
         save(self.a)

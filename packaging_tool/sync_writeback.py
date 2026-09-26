@@ -181,6 +181,19 @@ def apply_stock(tx: Any, values: dict[str, Any]) -> None:
         tx.insert("PalletMaster", {k: v for k, v in new.items() if k in columns})
         return
 
+    if row is None or stock < qty:
+        # **足りないのに払い出された。** 現場が複数台あると、同じ棚から
+        # ほぼ同時に払い出したとき、どちらの端末も手元では在庫があった
+        # ように見える(互いの払出が共有に届く前)。数はマイナスにしないが、
+        # 黙って0にすると「1台しか無いのに2台出た」が後から追えないので、
+        # 共有の履歴の備考に残す
+        note = f"[共有の在庫が足りませんでした: 在庫{stock}・払出{qty}]"
+        log.warning("払出が共有の在庫を超えました: %s×%s 位置%s 在庫%s 払出%s",
+                    width, length, position, stock, qty)
+        if values.get("送信ID"):
+            history = source_db.quote_identifier(config.TBL_STOCK_HISTORY)
+            tx.execute(f"UPDATE {history} SET 備考 = TRIM(COALESCE(備考, '') || ' ' || ?)"
+                       " WHERE 送信ID = ?", (note, values["送信ID"]))
     if row is None:
         return
     left = max(stock - qty, 0)

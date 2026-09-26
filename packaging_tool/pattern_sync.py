@@ -165,18 +165,31 @@ def _push_usage(conn: sqlite3.Connection, source: source_db.SourceConnection,
         f"SELECT 実績ID, 取込元実績ID, 使用回数未反映 FROM {h} "
         "WHERE 取込元実績ID IS NOT NULL AND COALESCE(使用回数未反映, 0) > 0").fetchall()
     for local_id, source_id, add in rows:
+        # **送る前に、手元から引いて自分の分にする。** 同じ端末で書き戻しが
+        # 2本同時に走ると(操作のあとの裏の送信と、倉庫連携の見張りなど)、
+        # 以前はどちらも同じ「未反映 1」を読んで足し、共有の使用回数が
+        # 走った本数ぶん増えていた(遅い共有を真似た試験で +1 のはずが +4)。
+        # 引けた1本だけが送る。送った分だけ引くので、送っているあいだに
+        # 増えた分は残る
+        with conn:
+            took = conn.execute(
+                f"UPDATE {h} SET 使用回数未反映 = 使用回数未反映 - ? "
+                "WHERE 実績ID = ? AND 使用回数未反映 >= ?",
+                (add, local_id, add)).rowcount
+        if not took:
+            continue                       # ほかの書き戻しが持っていった
         try:
             source.execute(
                 f"UPDATE {h} SET 使用回数 = COALESCE(使用回数, 0) + ?, "
                 "更新日時 = ? WHERE 実績ID = ?",
                 (add, db.now_db_string(), source_id))
         except source_db.SourceError as exc:
+            # 届かなかった分は戻す。次の書き戻しがまた送る
+            with conn:
+                conn.execute(f"UPDATE {h} SET 使用回数未反映 = 使用回数未反映 + ? "
+                             "WHERE 実績ID = ?", (add, local_id))
             result.errors.append(f"実績ID {local_id} の使用回数: {exc}")
             continue
-        # 送っているあいだに増えた分は残す(0 に戻さず、送った分だけ引く)
-        with conn:
-            conn.execute(f"UPDATE {h} SET 使用回数未反映 = 使用回数未反映 - ? "
-                         "WHERE 実績ID = ?", (add, local_id))
         result.usage += 1
 
 
