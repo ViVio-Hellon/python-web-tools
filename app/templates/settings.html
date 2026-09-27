@@ -785,8 +785,10 @@
     「足」の印で出て、そのまま直せます。
   </p>
   <p class="why">
-    <b>もうある表</b>は、<b>中身だけを Access の最新に入れ替え</b>られます(「中身を入れ替える」)。
-    表の列・索引や、ほかの表には触りません。Access をまるごと変換して差し替えると消えてしまう、
+    <b>もうある表</b>は、<b>Access の最新に入れ替え</b>られます(「入れ替える」)。
+    Access で列を足していれば、その列も足します。Access で列を消した・名前を変えたときは
+    <b>作り直し</b>ます(「作り直す」)── 今の表は「表名_作り直す前_日時」の名前で残すので、
+    中身を見比べられます。ほかの表には触りません。Access をまるごと変換して差し替えると消えてしまう、
     このツールが足した表・列・行はそのまま残ります。このツールが書き込む表(発注・受払・実績・
     使用実績・コメント)は入れ替えません。
   </p>
@@ -809,7 +811,7 @@
   </div>
   <div class="btn-row" style="margin-top:8px">
     <button class="btn btn--commit" type="button" id="bringRun" disabled>選んだ表を持ってくる</button>
-    <button class="btn btn--danger" type="button" id="bringRefresh" disabled>選んだ表の中身を入れ替える</button>
+    <button class="btn btn--danger" type="button" id="bringRefresh" disabled>選んだ表を入れ替える・作り直す</button>
   </div>
   <p class="why">
     管理者認証(「パスワード」の面)が要ります。書く前に、梱包資材マスタの控えを

@@ -1790,7 +1790,9 @@ class TableRefreshTests(TableBringTests):
         board = by_name["BoardMaster"]
         self.assertTrue(board["can_refresh"])
         self.assertEqual((board["current_rows"], board["rows"]), (1, 2))
-        self.assertEqual(board["not_copied"], ["Accessだけの列"])
+        self.assertEqual(board["action"], "refresh")
+        self.assertEqual(board["added_columns"], ["Accessだけの列"])
+        self.assertEqual(board["removed_columns"], [])
         orders = by_name["資材パレット注文管理"]
         self.assertFalse(orders["can_refresh"])
         self.assertIn("このツールが書き込む表", orders["refresh_why"])
@@ -1803,9 +1805,10 @@ class TableRefreshTests(TableBringTests):
         self.assertEqual(body["refreshed"], [{"name": "BoardMaster", "before": 1, "after": 2}])
         self.assertEqual(self.master_rows("SELECT 管理番号, ボード幅 FROM BoardMaster"),
                          [(1, 1200), (2, 1300)])
-        # 列の定義は変えない(Access にしか無い列は写さない)
-        self.assertNotIn("Accessだけの列",
-                         [r[1] for r in self.master_rows("PRAGMA table_info(BoardMaster)")])
+        # Access で足した列は、型も Access のまま足す
+        self.assertIn(("Accessだけの列", "TEXT"),
+                      [(r[1], r[2]) for r in self.master_rows("PRAGMA table_info(BoardMaster)")])
+        self.assertIn("列 Accessだけの列 を足しました", body["message"])
         # ほかの表(ツールが書いた発注)には触らない
         self.assertEqual(self.master_rows('SELECT * FROM "資材パレット注文管理"'), [(1, "abc")])
         self.assertTrue(Path(body["backup"]).exists())
@@ -1849,6 +1852,116 @@ class TableRefreshTests(TableBringTests):
     def test_管理者認証が要る(self) -> None:
         self.refresh(["BoardMaster"], expect=403)
         self.assertEqual(self.master_rows("SELECT ボード幅 FROM BoardMaster"), [(1100,)])
+
+    def rename_in_access(self, table: str, create: str, rows: list[tuple]) -> None:
+        """Access 側で列を消した・名前を変えた表にする。"""
+        import sqlite3
+        conn = sqlite3.connect(self.converted)
+        conn.execute(f'DROP TABLE "{table}"')
+        conn.execute(create)
+        marks = ",".join("?" * len(rows[0]))
+        conn.executemany(f'INSERT INTO "{table}" VALUES ({marks})', rows)
+        conn.commit()
+        conn.close()
+
+    def test_列の名前が変わった表は作り直して前の表を残す(self) -> None:
+        self.rename_in_access(
+            "BoardMaster",
+            "CREATE TABLE BoardMaster (管理番号 INTEGER, 幅 INTEGER, 備考 TEXT)",
+            [(1, 1200, "新"), (2, 1300, "新")])
+        import sqlite3
+        conn = sqlite3.connect(self.converted)
+        conn.execute('CREATE INDEX "IX_Board幅" ON BoardMaster(幅)')
+        conn.commit()
+        conn.close()
+        # 梱包資材マスタ側にも同じ名前の索引(前の表)があっても作り直せる
+        conn = sqlite3.connect(self.master)
+        conn.execute('CREATE INDEX "IX_Board幅" ON BoardMaster(ボード幅)')
+        conn.commit()
+        conn.close()
+
+        board = {t["name"]: t for t in self.plan()["tables"]}["BoardMaster"]
+        self.assertTrue(board["can_refresh"])
+        self.assertEqual(board["action"], "rebuild")
+        self.assertEqual(board["removed_columns"], ["ボード幅"])
+        self.assertEqual(board["added_columns"], ["幅", "備考"])
+        self.assertEqual(board["import_loses"], ["ボード幅"])     # 取り込みで読む列
+
+        self.session.admin = True
+        body = self.refresh(["BoardMaster"])
+        self.assertTrue(body["ok"], body)
+        self.assertEqual(len(body["kept_old"]), 1)
+        old = body["kept_old"][0]["old"]
+        self.assertTrue(old.startswith("BoardMaster_作り直す前_"), old)
+        self.assertIn(old, body["message"])
+        self.assertEqual([r[1] for r in self.master_rows("PRAGMA table_info(BoardMaster)")],
+                         ["管理番号", "幅", "備考"])
+        self.assertEqual(self.master_rows("SELECT * FROM BoardMaster"),
+                         [(1, 1200, "新"), (2, 1300, "新")])
+        # 前の表は中身ごと残る
+        self.assertEqual(self.master_rows(f'SELECT 管理番号, ボード幅 FROM "{old}"'), [(1, 1100)])
+        # 索引は作り直した表に付く
+        self.assertEqual(self.master_rows(
+            "SELECT tbl_name FROM sqlite_master WHERE name = 'IX_Board幅'"), [("BoardMaster",)])
+        self.assertEqual(self.master_rows('SELECT * FROM "資材パレット注文管理"'), [(1, "abc")])
+
+    def test_パレットは作り直しても在庫の行を移す(self) -> None:
+        self.rename_in_access(
+            "PalletMaster",
+            "CREATE TABLE PalletMaster (管理番号 INTEGER PRIMARY KEY, 幅, 丈, 位置, 在庫数, 摘要)",
+            [(1, 1000, 1000, "", "", "新しい型録"),
+             (3, 1200, 2500, "", "", "足された型録"),
+             (4, 1000, 1000, "A1", 1, "Access の古い在庫")])
+        self.session.admin = True
+        body = self.refresh(["PalletMaster"])
+        self.assertTrue(body["ok"], body)
+        self.assertIn("在庫の行 1行 は作り直した表へ移しました", body["message"])
+        rows = self.master_rows("SELECT 幅, 丈, 位置, 在庫数, 摘要 FROM PalletMaster"
+                                " ORDER BY 幅, 位置")
+        self.assertEqual(rows, [
+            (1000, 1000, "", "", "新しい型録"),
+            (1000, 1000, "A1", 5, None),             # ツールの在庫(備考は Access で消えた列)
+            (1200, 2500, "", "", "足された型録")])
+        numbers = [r[0] for r in self.master_rows("SELECT 管理番号 FROM PalletMaster")]
+        self.assertEqual(len(numbers), len(set(numbers)), numbers)
+
+    def test_作り直すとAccessに無い索引は付かないと言う(self) -> None:
+        import sqlite3
+        conn = sqlite3.connect(self.master)
+        conn.execute("CREATE INDEX IX_共有だけ ON PalletMaster(幅)")
+        conn.commit()
+        conn.close()
+        self.rename_in_access(
+            "PalletMaster", "CREATE TABLE PalletMaster (管理番号, 幅, 丈, 位置, 在庫数)",
+            [(1, 1000, 1000, "", "")])
+        self.session.admin = True
+        body = self.refresh(["PalletMaster"])
+        self.assertIn("Access に無い索引 IX_共有だけ は付けていません", body["message"])
+        self.assertEqual(self.master_rows(
+            "SELECT name FROM sqlite_master WHERE name = 'IX_共有だけ'"), [])
+
+    def test_作り直しで入れられない行があれば表は元のまま(self) -> None:
+        self.rename_in_access(
+            "松板角材", "CREATE TABLE 松板角材 (管理番号 INTEGER, 品名 TEXT NOT NULL)",
+            [(1, "a")])
+        import sqlite3
+        conn = sqlite3.connect(self.converted)
+        conn.execute("DROP TABLE 松板角材")
+        conn.execute("CREATE TABLE 松板角材 (管理番号 INTEGER, 品名 TEXT CHECK (品名 <> 'x'))")
+        conn.execute("INSERT INTO 松板角材 VALUES (1, 'a')")
+        conn.commit()
+        conn.close()
+        from unittest import mock
+        from packaging_tool import source_db
+        real = source_db.read_table
+        with mock.patch.object(source_db, "read_table",
+                               lambda p, t: real(p, t) + [{"管理番号": 2, "品名": "x"}]):
+            self.session.admin = True
+            body = self.refresh(["松板角材"], expect=422)
+        self.assertFalse(body["ok"])
+        self.assertEqual(self.master_rows("SELECT * FROM 松板角材"), [(1, "残るはず")])
+        self.assertEqual(self.master_rows(
+            "SELECT name FROM sqlite_master WHERE name LIKE '%作り直す前%'"), [])
 
 
 class TableBringAccessTests(TableBringTests):

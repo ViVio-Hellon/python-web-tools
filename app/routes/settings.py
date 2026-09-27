@@ -422,7 +422,7 @@ def admin_auth():
 
 @bp.post("/api/settings/table-refresh")
 def table_refresh_run():
-    """もうある表の中身を、Access の最新に入れ替える。`{"path":…, "tables":[…]}`
+    """もうある表を Access の最新にする(入れ替える・作り直す)。`{"path":…, "tables":[…]}`
 
     Access をまるごと変換して差し替えると、このツールが共有に足した表・列・
     行が消える。選んだ表の中身だけを入れ替える(`table_bring.refresh`)。
@@ -444,6 +444,7 @@ def table_refresh_run():
     payload = {"ok": result.ok, "message": result.message,
                "refreshed": [{"name": n, "before": b, "after": a}
                              for n, b, a in result.refreshed],
+               "kept_old": [{"name": n, "old": o} for n, o in result.kept_old],
                "backup": result.backup,
                "plan": table_bring.plan_dict(table_bring.plan(str(body.get("path", ""))))}
     if result.ok:

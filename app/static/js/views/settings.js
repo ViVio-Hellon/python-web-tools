@@ -804,17 +804,20 @@ function renderBring(plan) {
     const tr = document.createElement("tr");
     const pick = document.createElement("td");
     if (t.exists && t.can_refresh) {
-      // もうある表。**中身を Access の最新に入れ替える**ことだけ選べる。
-      // 消して入れ直す操作なので、既定では選ばない
+      // もうある表。**Access の最新に入れ替える(列が変わっていれば作り直す)**
+      // ことだけ選べる。消して入れ直す操作なので、既定では選ばない
+      const rebuild = t.action === "rebuild";
       const box = document.createElement("input");
       box.type = "checkbox";
       box.value = t.name;
       box.dataset.refresh = "1";
+      box.dataset.action = t.action;
+      box.dataset.loses = (t.import_loses || []).join("・");
       box.checked = false;
       box.addEventListener("change", updateBringRun);
       const label = document.createElement("label");
       label.className = "why";
-      label.append(box, " 入れ替える");
+      label.append(box, rebuild ? " 作り直す" : " 入れ替える");
       pick.appendChild(label);
     } else if (t.exists) {
       pick.textContent = "もうある";
@@ -845,13 +848,20 @@ function renderBring(plan) {
     cols.className = "why";
     cols.textContent = t.columns.join(", ");
     if (t.exists) {
-      // 入れ替えたら何行が何行になるか・残すもの・写さない列・できない理由
+      // 入れ替えたら何行が何行になるか・残すもの・列の違い・できない理由
       const note = document.createElement("div");
+      const added = t.added_columns || [];
+      const removed = t.removed_columns || [];
+      const loses = t.import_loses || [];
       note.textContent = t.can_refresh
         ? `いま ${t.current_rows.toLocaleString()}行 → Access ${t.rows.toLocaleString()}行`
           + (t.keeps ? `。${t.keeps}` : "")
-          + (t.not_copied && t.not_copied.length
-            ? `。梱包資材マスタに無い列は写しません: ${t.not_copied.join(", ")}` : "")
+          + (added.length ? `。Access で増えた列を足します: ${added.join(", ")}` : "")
+          + (removed.length
+            ? `。Access に無い列があるので作り直します(消える列: ${removed.join(", ")})。`
+              + "今の表は「表名_作り直す前_日時」の名前で残します" : "")
+          + (loses.length
+            ? `。⚠ このツールが取り込みで読む列が消えます: ${loses.join(", ")}` : "")
         : `入れ替えられません: ${t.refresh_why}`;
       cols.prepend(note);
     }
@@ -883,10 +893,19 @@ function updateBringRun() {
 async function runRefresh() {
   const tables = chosenRefresh();
   if (!tables.length) return;
+  const boxes = [...bring.rows.querySelectorAll("input[type=checkbox][data-refresh]:checked")];
+  const swap = boxes.filter((b) => b.dataset.action !== "rebuild").map((b) => b.value);
+  const rebuild = boxes.filter((b) => b.dataset.action === "rebuild").map((b) => b.value);
+  const loses = boxes.filter((b) => b.dataset.loses)
+    .map((b) => `${b.value}(${b.dataset.loses})`);
   // **消して入れ直す。** 控えは取るが、押す前に何が起きるかを言う
-  if (!window.confirm(`次の表の中身を、Access の中身に入れ替えます:\n${tables.join("、")}\n\n`
-                      + "梱包資材マスタにある今の行は消えます(書く前に控えを取ります)。"
-                      + "ほかの端末にも次の取り込みで届きます。よろしいですか？")) return;
+  if (!window.confirm(
+    (swap.length ? `中身を Access の中身に入れ替える表:\n${swap.join("、")}\n\n` : "")
+    + (rebuild.length ? `Access の定義で作り直す表(今の表は名前を変えて残します):\n`
+                        + `${rebuild.join("、")}\n\n` : "")
+    + (loses.length ? `⚠ このツールが取り込みで読む列が消えます: ${loses.join("、")}\n\n` : "")
+    + "梱包資材マスタにある今の行は消えます(書く前に控えを取ります)。"
+    + "ほかの端末にも次の取り込みで届きます。よろしいですか？")) return;
   try {
     const result = await api.post("/api/settings/table-refresh",
                                   { path: bring.path.value.trim(), tables });
