@@ -74,3 +74,32 @@ class ThreadConnectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MaterialOnlyAdminAuthTests(unittest.TestCase):
+    """資材モードだけの端末(倉庫)でも、設定画面で管理者認証を通せる。
+
+    以前は資材選択の口を使っていて、資材選択は現場モードの権限がある端末に
+    しか無いので 404 になり、マスタを直す役目の端末がパスワードを通せなかった。
+    """
+
+    def setUp(self) -> None:
+        from app.routes import settings as routes
+        from packaging_tool import access_control
+        selection_session.reset_session()
+        self.addCleanup(selection_session.reset_session)
+        self.conn = _web.bind_db(self, routes)
+        self.client = _web.make_client(
+            "material", port=8719, grant=access_control.grant_of("mode:material"))
+
+    def test_設定画面から認証できる(self):
+        self.assertEqual(self.client.post("/api/selection/auth", headers=_web.auth(),
+                                          json={"password": "nisk"}).status_code, 404)
+        bad = self.client.post("/api/settings/admin-auth", headers=_web.auth(),
+                               json={"password": "ちがう"})
+        self.assertEqual(bad.status_code, 422)
+        self.assertFalse(bad.get_json()["admin"]["authenticated"])
+        ok = self.client.post("/api/settings/admin-auth", headers=_web.auth(),
+                              json={"password": "nisk"})
+        self.assertEqual(ok.status_code, 200, ok.get_json())
+        self.assertTrue(selection_session.get_session(self.conn).admin)

@@ -22,6 +22,7 @@ from __future__ import annotations
 import atexit
 import os
 import shutil
+import re
 import sqlite3
 import tempfile
 from contextlib import contextmanager
@@ -128,6 +129,11 @@ SNIFF_ROWS = 200
 SNIFF_CP932_RATIO = 0.5
 
 
+# Access が自分のために持っている表(システム表・添付ファイルの中身)。
+# 変換したファイルに入っていることがある。文字の入れ方の判定には使わない
+_ACCESS_INTERNAL = re.compile(r"^(MSys|f_[0-9A-Fa-f]{32}_)")
+
+
 def sniff_encoding(conn: sqlite3.Connection) -> str:
     """このファイルの文字が、UTF-8で入っているのかCP932で入っているのか。
 
@@ -151,9 +157,16 @@ def sniff_encoding(conn: sqlite3.Connection) -> str:
     plan: list[tuple[str, list[str]]] = []
     with identifiers_as_utf8(conn):
         try:
+            # **Access の内部の表は見ない。** Access を access_parser で変換した
+            # ファイルには MSysObjects などが入っていて、中身は文字ではない
+            # (バイナリ)。先頭にあるそれを数えて「UTF-8 として読めない日本語が
+            # 多い → CP932」と誤って決め、UTF-8 の中身を CP932 で読んでいた
+            # (梱包保護材の「上蓋」が「荳願搭」になった。CP932 としても読めて
+            # しまう並びなので、例外も出ずに静かに化ける)
             names = [row[0] for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
-                " AND name NOT LIKE 'sqlite_%' LIMIT ?", (SNIFF_TABLES,))]
+                " AND name NOT LIKE 'sqlite_%'")
+                if not _ACCESS_INTERNAL.match(row[0])][:SNIFF_TABLES]
         except sqlite3.Error:
             return ENCODING_UTF8
         for table in names:
@@ -182,7 +195,10 @@ def sniff_encoding(conn: sqlite3.Connection) -> str:
     conn.text_factory = bytes          # 決める前に例外で止まらないように
     try:
         for table, columns in plan:
-            picked = ", ".join(quote_identifier(c) for c in columns)
+            # 値と一緒に**入れ方の種類**(typeof)も引く。文字(text)として
+            # 入っている値だけを数える ── BLOB は文字ではない
+            picked = ", ".join(f"{quote_identifier(c)}, typeof({quote_identifier(c)})"
+                               for c in columns)
             try:
                 rows = conn.execute(
                     f"SELECT {picked} FROM {quote_identifier(table)} LIMIT ?",
@@ -190,7 +206,9 @@ def sniff_encoding(conn: sqlite3.Connection) -> str:
             except sqlite3.Error:
                 continue               # 引けない表は飛ばす。判定は続ける
             for row in rows:
-                for value in row:
+                for value, kind in zip(row[0::2], row[1::2]):
+                    if kind not in (b"text", "text"):
+                        continue       # 文字として入っていない値は材料にしない
                     if not isinstance(value, bytes) or value.isascii():
                         continue       # ASCIIはどちらでも同じ。判断材料にしない
                     japanese += 1

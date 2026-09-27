@@ -75,10 +75,19 @@ class Candidate:
     columns: list[str] = field(default_factory=list)
     exists: bool = False          # 梱包資材マスタにもう同じ名前の表がある
     suspect: int = 0              # 文字化けの疑いがある行(置き換え文字 U+FFFD を含む)
+    # もうある表について ── 中身を入れ替えられるか(`refresh`)
+    current_rows: int = 0         # 梱包資材マスタのいまの行数
+    refresh_why: str = ""         # 入れ替えられない理由(入れ替えられるなら空)
+    keeps: str = ""               # 入れ替えても残すもの(PalletMaster の在庫の行など)
+    not_copied: list[str] = field(default_factory=list)   # 梱包資材マスタに無い列
 
     @property
     def can_bring(self) -> bool:
         return not self.exists
+
+    @property
+    def can_refresh(self) -> bool:
+        return self.exists and not self.refresh_why
 
 
 @dataclass
@@ -97,6 +106,10 @@ class Plan:
     def new_tables(self) -> list[Candidate]:
         return [c for c in self.candidates if c.can_bring]
 
+    @property
+    def refreshable(self) -> list[Candidate]:
+        return [c for c in self.candidates if c.can_refresh]
+
 
 @dataclass
 class BringResult:
@@ -105,6 +118,8 @@ class BringResult:
     reason: str = ""
     brought: list[tuple[str, int]] = field(default_factory=list)
     backup: str = ""
+    # 中身を入れ替えた表: (表, 前の行数, 後の行数)
+    refreshed: list[tuple[str, int, int]] = field(default_factory=list)
 
 
 # Access が自分のために持っている表。**持ってこない。**
@@ -372,22 +387,28 @@ def plan(source_path: str) -> Plan:
         return out
     internal = [n for n in names if is_access_internal(n)]
     names = [n for n in names if not is_access_internal(n) and n != REGISTRY]
+    dest_counts = source_db.table_counts(dest)
     for name in names:
         columns = source_db.columns(readable, name)
         exists = name in existing
-        out.candidates.append(Candidate(
+        found = Candidate(
             name=name, rows=max(counts.get(name, 0), 0), columns=columns,
-            exists=exists,
-            # 持ってこられる表だけ調べる(もうある表は持ってこないので)
-            suspect=0 if exists else _suspect_rows(readable, name, columns)))
+            exists=exists, suspect=_suspect_rows(readable, name, columns))
+        if exists:
+            found.current_rows = max(dest_counts.get(name, 0), 0)
+            have = source_db.columns(dest, name)
+            found.not_copied = [c for c in columns if c not in have]
+            found.refresh_why = refresh_why(name, found, have)
+            found.keeps = KEEPS.get(name, "")
+        out.candidates.append(found)
     out.ok = True
     new = len(out.new_tables)
-    out.message = (f"{len(names)}表のうち、梱包資材マスタに無い表が {new} 個あります。"
-                   if new else
-                   f"{len(names)}表とも、梱包資材マスタにもうあります。持ってくる表はありません。")
+    refresh = len(out.refreshable)
+    out.message = (f"{len(names)}表のうち、梱包資材マスタに無い表が {new} 個"
+                   f"、中身を Access の最新に入れ替えられる表が {refresh} 個あります。")
     if internal:
         out.message += f"(Access の内部の表 {len(internal)} 個は出していません)"
-    suspects = [c for c in out.new_tables if c.suspect]
+    suspects = [c for c in out.candidates if c.suspect]
     if suspects:
         out.message += (" ⚠ 文字化けの疑いがある行があります: "
                         + "、".join(f"{c.name} {c.suspect}行" for c in suspects)
@@ -414,12 +435,12 @@ def _create_sql(src: Path, table: str) -> tuple[str, list[tuple[str, str]]]:
     return create, indexes
 
 
-def _backup(dest: Path) -> Path:
+def _backup(dest: Path, why: str = "表を持ってくる前") -> Path:
     """書く前に梱包資材マスタを手元へ写す。戻したいときの頼り。"""
     from . import app_config
     folder = app_config.local_dir("backup")
     folder.mkdir(parents=True, exist_ok=True)
-    target = folder / f"{dest.stem}_表を持ってくる前_{datetime.now():%Y%m%d_%H%M%S}{dest.suffix}"
+    target = folder / f"{dest.stem}_{why}_{datetime.now():%Y%m%d_%H%M%S}{dest.suffix}"
     shutil.copyfile(dest, target)
     return target
 
@@ -531,6 +552,195 @@ def bring(source_path: str, tables: list[str]) -> BringResult:
                        brought=brought, backup=str(backup))
 
 
+# ------------------------------------------------------------------
+# もうある表の中身を、Access の最新に入れ替える
+# ------------------------------------------------------------------
+def _tool_owned() -> dict[str, str]:
+    """**このツールが書き込む表。** Access から入れ替えない。
+
+    これらは取り込み元(sqlite3)のほうが新しい ── 現場・倉庫の端末が
+    発注・受払・実績・使用実績・コメントを書き足していて、Access には
+    届いていない。Access の中身で入れ替えると、それが消える(しかも
+    ツールは「送り済み」と覚えているので送り直さない)。
+    """
+    from . import access_control, sync_writeback
+    owned = {spec.access_table: "このツールが書き込む表です(発注・受払・使用実績・コメント)"
+             for spec in sync_writeback.WRITEBACK_SPECS}
+    for table in (config.TBL_PT_HEADER, config.TBL_PT_SELECT,
+                  config.TBL_PT_PLACE, config.TBL_PT_CUT):
+        owned[table] = "このツールが書き込む表です(パレット実績)"
+    owned[access_control.TABLE] = "マスタ管理で直す表です(書き間違えると誰も入れなくなるため)"
+    owned[REGISTRY] = "このツールの控えの表です"
+    return owned
+
+
+# 入れ替えても**残すもの**。表ごとに決める(画面にも出す)
+KEYS_PALLET_STOCK = ("幅", "丈", "位置")
+KEEPS: dict[str, str] = {
+    "PalletMaster": ("このツールの受入・払出で入った在庫の行(位置のある行)は残します"
+                     "(Access には届いていないため)"),
+}
+
+
+def refresh_why(table: str, found: "Candidate", have: list[str]) -> str:
+    """その表の中身を Access の最新に入れ替えられない理由。できるなら空。"""
+    owned = _tool_owned().get(table)
+    if owned:
+        return owned + "。Access の中身では入れ替えません"
+    if found.suspect:
+        return (f"文字化けの疑いがある行が {found.suspect}行 あります。"
+                "Access のドライバ(pyodbc)が使えるPCで読み直してください")
+    if not [c for c in found.columns if c in have]:
+        return "梱包資材マスタの表と、同じ名前の列が1つもありません"
+    return ""
+
+
+def refresh(conn: Optional[sqlite3.Connection], source_path: str,
+            tables: list[str]) -> BringResult:
+    """もうある表の中身を、Access(変換したもの)の中身に入れ替える。
+
+    【なぜ要るか】
+    Access のほうが新しいとき、以前は Access をまるごと変換して差し替えて
+    いた。すると、このツールが共有に足した表・列・行(発注・コメント・
+    在庫・送信ID の索引など)が消える。**入れ替えるのは選んだ表の中身だけ**
+    にして、ほかには触らない。
+
+    【守っていること】
+    - このツールが書き込む表は入れ替えない(`_tool_owned`)
+    - 表の定義(列・索引)はそのまま。**同じ名前の列だけ**を写し、Access に
+      しか無い列は写さない(画面に出す)
+    - PalletMaster は、ツールが足した在庫の行を残す(`KEEPS`)
+    - 1つの表は **消す+入れる を1回で確定**。途中で落ちたら元のまま
+    - 書く前に梱包資材マスタを手元の `backup` へ写す
+    - 書いたら手元も取り込み直す(マスタ管理と同じ)
+    """
+    src = Path(str(source_path or "").strip())
+    if not src.is_file():
+        return BringResult(False, f"ファイルが見つかりません: {src}", REFUSE_NO_FILE)
+    dest = _dest()
+    if dest is None:
+        return BringResult(False, "梱包資材マスタが見つかりません。", REFUSE_NO_DEST)
+    if _same(src, dest):
+        return BringResult(False, "選んだのは、いま使っている梱包資材マスタそのものです。",
+                           REFUSE_SAME_FILE)
+    wanted = [t for t in dict.fromkeys(str(t) for t in tables) if t]
+    if not wanted:
+        return BringResult(False, "入れ替える表を選んでください。", REFUSE_NOTHING)
+    original = src
+    try:
+        src, _engine = _readable(src)
+    except ConvertError as exc:
+        return BringResult(False, str(exc), REFUSE_CONVERT)
+
+    available = set(source_db.list_tables(src))
+    existing = set(source_db.list_tables(dest))
+    refusals = []
+    for table in wanted:
+        if table not in available:
+            refusals.append(f"{table}(選んだファイルに無い)")
+        elif table not in existing:
+            refusals.append(f"{table}(梱包資材マスタに無い。「持ってくる」を使ってください)")
+        else:
+            columns = source_db.columns(src, table)
+            found = Candidate(name=table, columns=columns,
+                              suspect=_suspect_rows(src, table, columns))
+            why = refresh_why(table, found, source_db.columns(dest, table))
+            if why:
+                refusals.append(f"{table}({why})")
+    if refusals:
+        return BringResult(False, "入れ替えられない表があります: " + "、".join(refusals)
+                           + "。何も変えていません。", REFUSE_NOTHING)
+
+    try:
+        backup = _backup(dest, "中身を入れ替える前")
+    except OSError as exc:
+        return BringResult(False, f"書く前の控えを取れませんでした({exc})。"
+                                  "何も変えていません。", REFUSE_WRITE_FAILED)
+    import_diag.write("=" * 70)
+    import_diag.write(f"■ 表の中身を Access の最新に入れ替える  {original} → {dest}")
+    import_diag.write(f"  書く前の控え: {backup}")
+
+    done: list[tuple[str, int, int]] = []
+    failed: list[str] = []
+    notes: list[str] = []
+    with source_db.connect(dest) as dst:
+        for table in wanted:
+            try:
+                before, after, note = _refresh_one(dst, src, table)
+                done.append((table, before, after))
+                if note:
+                    notes.append(f"{table}: {note}")
+                import_diag.write(f"  入れ替えた: {table} {before:,}行 → {after:,}行"
+                                  + (f"({note})" if note else ""))
+                log.info("表の中身を入れ替えました: %s %s→%s行 (%s)", table, before, after, src)
+            except (source_db.SourceError, sqlite3.Error) as exc:
+                failed.append(f"{table}({exc})")
+                import_diag.write(f"  ✕ 入れ替えられませんでした: {table} ── {exc}")
+                log.warning("表の中身を入れ替えられませんでした: %s: %s", table, exc)
+
+    follow = []
+    if conn is not None:
+        from .master_common import _follow
+        for table, _b, _a in done:
+            said = _follow(conn, dest, table).lstrip("。")
+            if said:
+                follow.append(f"{table}: {said}")
+    if failed and not done:
+        return BringResult(False, "入れ替えられませんでした: " + "、".join(failed)
+                           + "。梱包資材マスタは変えていません。",
+                           REFUSE_WRITE_FAILED, backup=str(backup))
+    message = ("中身を Access の最新に入れ替えました: "
+               + "、".join(f"{t}({b:,}行 → {a:,}行)" for t, b, a in done) + "。")
+    if notes:
+        message += " " + " ".join(notes)
+    if follow:
+        message += " " + " / ".join(follow)
+    if failed:
+        message += " ただし次は入れ替えられませんでした: " + "、".join(failed)
+    return BringResult(not failed, message, "" if not failed else REFUSE_WRITE_FAILED,
+                       backup=str(backup), refreshed=done)
+
+
+def _refresh_one(dst: "source_db.SourceConnection", src: Path,
+                 table: str) -> tuple[int, int, str]:
+    """1つの表を入れ替える。(前の行数, 後の行数, 添える一言)。"""
+    q = source_db.quote_identifier
+    have = source_db.columns(dst.path, table)
+    common = [c for c in source_db.columns(src, table) if c in have]
+    rows = source_db.read_table(src, table)
+    note = ""
+    with dst.transaction() as tx:
+        before = int(tx.query(f"SELECT COUNT(*) AS n FROM {q(table)}")[0]["n"])
+        if table == "PalletMaster" and all(k in have for k in KEYS_PALLET_STOCK):
+            # 在庫の行(位置のある行)は残す。Access の行で同じ棚のものは
+            # 入れない(ツールの在庫のほうが新しい)
+            kept = {tuple(str(r[k] or "").strip() for k in KEYS_PALLET_STOCK)
+                    for r in tx.query(f"SELECT 幅, 丈, 位置 FROM {q(table)}"
+                                      " WHERE TRIM(COALESCE(位置, '')) <> ''")}
+            tx.execute(f"DELETE FROM {q(table)} WHERE TRIM(COALESCE(位置, '')) = ''")
+            rows = [r for r in rows
+                    if tuple(str(r.get(k) or "").strip() for k in KEYS_PALLET_STOCK)
+                    not in kept]
+            if kept:
+                note = f"在庫の行 {len(kept)}行 は残しました"
+        else:
+            tx.execute(f"DELETE FROM {q(table)}")
+        for row in rows:
+            tx.insert(table, {c: row.get(c) for c in common})
+        if table == "PalletMaster" and "管理番号" in have:
+            # 残した在庫の行と Access の行で管理番号が重ならないよう、
+            # 重なったものだけ続きを振り直す
+            dup = tx.query(f"SELECT rowid AS r FROM {q(table)} WHERE 管理番号 IN ("
+                           f" SELECT 管理番号 FROM {q(table)} GROUP BY 管理番号"
+                           " HAVING COUNT(*) > 1) AND TRIM(COALESCE(位置, '')) <> ''")
+            top = int(tx.query(f"SELECT COALESCE(MAX(CAST(管理番号 AS INTEGER)), 0) AS n"
+                               f" FROM {q(table)}")[0]["n"])
+            for i, r in enumerate(dup, start=1):
+                tx.execute(f"UPDATE {q(table)} SET 管理番号 = ? WHERE rowid = ?", (top + i, r["r"]))
+        after = int(tx.query(f"SELECT COUNT(*) AS n FROM {q(table)}")[0]["n"])
+    return before, after, note
+
+
 def plan_dict(p: Plan) -> dict[str, Any]:
     return {
         "source": p.source, "dest": p.dest, "ok": p.ok, "message": p.message,
@@ -539,5 +749,8 @@ def plan_dict(p: Plan) -> dict[str, Any]:
         "warn": any(c.suspect for c in p.new_tables),
         "access": is_access(Path(p.source)) if p.source else False,
         "tables": [{"name": c.name, "rows": c.rows, "columns": c.columns,
-                    "exists": c.exists, "suspect": c.suspect} for c in p.candidates],
+                    "exists": c.exists, "suspect": c.suspect,
+                    "current_rows": c.current_rows, "refresh_why": c.refresh_why,
+                    "can_refresh": c.can_refresh, "keeps": c.keeps,
+                    "not_copied": c.not_copied} for c in p.candidates],
     }

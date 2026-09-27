@@ -677,3 +677,36 @@ class SnapshotTests(unittest.TestCase):
             ok = source_db._snapshot(self.path, self.dir / "copy.sqlite3")
         self.assertFalse(ok)                                  # ファイルのまま写す手へ
         self.assertLess(time.time() - started, 5)
+
+
+class AccessInternalSniffTests(unittest.TestCase):
+    """Access を変換したファイルの内部の表で、文字の入れ方を決めない。
+
+    access_parser で変換すると MSysObjects などが入り、中身は文字ではない。
+    以前はそれを数えて CP932 と誤って決め、UTF-8 の「上蓋」を「荳願搭」と
+    読んでいた(中身を入れ替えた共有の梱包保護材が化けた)。
+    """
+
+    def setUp(self) -> None:
+        import tempfile
+        self.path = Path(tempfile.mkdtemp(prefix="sniff_")) / "変換.sqlite3"
+        conn = sqlite3.connect(self.path)
+        conn.execute('CREATE TABLE "MSysObjects" (Name, Lv)')
+        # 文字として入った、UTF-8 でも CP932 でも読めない並び(内部の表の中身)
+        for i in range(40):
+            conn.execute('INSERT INTO "MSysObjects" VALUES (CAST(? AS TEXT), ?)',
+                         (bytes([0xaf, 0xe2, 0x80 + i % 16]), bytes([0xff, 0x00, i])))
+        conn.execute('CREATE TABLE "梱包保護材" (管理番号, 使用保護材)')
+        conn.executemany('INSERT INTO "梱包保護材" VALUES (?, ?)',
+                         [(1, "上蓋"), (2, "アングル"), (3, "上蓋")])
+        conn.commit()
+        conn.close()
+        source_db._COPIES.clear()
+        self.addCleanup(source_db._COPIES.clear)
+
+    def test_内部の表に引きずられずUTF8と読む(self) -> None:
+        conn = sqlite3.connect(self.path)
+        self.addCleanup(conn.close)
+        self.assertEqual(source_db.sniff_encoding(conn), source_db.ENCODING_UTF8)
+        rows = source_db.read_table(self.path, "梱包保護材")
+        self.assertEqual([r["使用保護材"] for r in rows], ["上蓋", "アングル", "上蓋"])

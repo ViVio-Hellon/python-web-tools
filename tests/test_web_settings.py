@@ -1743,6 +1743,114 @@ def write_sqlite(tables, out_path, report=None):
 '''
 
 
+class TableRefreshTests(TableBringTests):
+    """もうある表の中身を、Access の最新に入れ替える(`table_bring.refresh`)。
+
+    以前は Access をまるごと変換して差し替えるしかなく、このツールが共有に
+    足した表・列・行が消えていた。**選んだ表の中身だけ**を入れ替える。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        import sqlite3
+        # いまの梱包資材マスタ: 型録の行 + このツールが足した在庫の行
+        conn = sqlite3.connect(self.master)
+        conn.execute("CREATE TABLE PalletMaster (管理番号, 幅, 丈, 位置, 在庫数, 備考)")
+        conn.executemany("INSERT INTO PalletMaster VALUES (?,?,?,?,?,?)", [
+            (1, 1000, 1000, "", "", "古い型録"),
+            (2, 1100, 2000, "", "", "古い型録"),
+            (3, 1000, 1000, "A1", 5, "ツールが受け入れた在庫")])
+        conn.execute("CREATE TABLE 松板角材 (管理番号 INTEGER, 名前 TEXT NOT NULL)")
+        conn.execute("INSERT INTO 松板角材 VALUES (1, '残るはず')")
+        conn.commit()
+        conn.close()
+        # Access 側: BoardMaster と PalletMaster が新しくなっている
+        conn = sqlite3.connect(self.converted)
+        conn.executemany("INSERT INTO BoardMaster VALUES (?, ?)", [(1, 1200), (2, 1300)])
+        conn.execute("ALTER TABLE BoardMaster ADD COLUMN Accessだけの列 TEXT")
+        conn.execute("CREATE TABLE PalletMaster (管理番号, 幅, 丈, 位置, 在庫数, 備考)")
+        conn.executemany("INSERT INTO PalletMaster VALUES (?,?,?,?,?,?)", [
+            (1, 1000, 1000, "", "", "新しい型録"),
+            (2, 1100, 2000, "", "", "新しい型録"),
+            (3, 1200, 2500, "", "", "足された型録"),
+            (4, 1000, 1000, "A1", 1, "Access の古い在庫")])
+        conn.execute("CREATE TABLE 松板角材 (管理番号 INTEGER, 名前 TEXT)")
+        conn.execute("INSERT INTO 松板角材 VALUES (1, NULL)")        # 入れると断られる行
+        conn.commit()
+        conn.close()
+
+    def refresh(self, tables, expect=200) -> dict:
+        res = self.client.post("/api/settings/table-refresh", headers=self.auth(),
+                               json={"path": str(self.converted), "tables": tables})
+        self.assertEqual(res.status_code, expect, res.get_json())
+        return res.get_json()
+
+    def test_中を見るともうある表の入れ替えを選べる(self) -> None:
+        by_name = {t["name"]: t for t in self.plan()["tables"]}
+        board = by_name["BoardMaster"]
+        self.assertTrue(board["can_refresh"])
+        self.assertEqual((board["current_rows"], board["rows"]), (1, 2))
+        self.assertEqual(board["not_copied"], ["Accessだけの列"])
+        orders = by_name["資材パレット注文管理"]
+        self.assertFalse(orders["can_refresh"])
+        self.assertIn("このツールが書き込む表", orders["refresh_why"])
+        self.assertIn("在庫の行", by_name["PalletMaster"]["keeps"])
+
+    def test_選んだ表の中身だけを入れ替える(self) -> None:
+        self.session.admin = True
+        body = self.refresh(["BoardMaster"])
+        self.assertTrue(body["ok"], body)
+        self.assertEqual(body["refreshed"], [{"name": "BoardMaster", "before": 1, "after": 2}])
+        self.assertEqual(self.master_rows("SELECT 管理番号, ボード幅 FROM BoardMaster"),
+                         [(1, 1200), (2, 1300)])
+        # 列の定義は変えない(Access にしか無い列は写さない)
+        self.assertNotIn("Accessだけの列",
+                         [r[1] for r in self.master_rows("PRAGMA table_info(BoardMaster)")])
+        # ほかの表(ツールが書いた発注)には触らない
+        self.assertEqual(self.master_rows('SELECT * FROM "資材パレット注文管理"'), [(1, "abc")])
+        self.assertTrue(Path(body["backup"]).exists())
+
+    def test_パレットはツールが足した在庫の行を残す(self) -> None:
+        self.session.admin = True
+        body = self.refresh(["PalletMaster"])
+        self.assertIn("在庫の行 1行 は残しました", body["message"])
+        rows = self.master_rows("SELECT 幅, 丈, 位置, 在庫数, 備考 FROM PalletMaster ORDER BY 幅, 位置")
+        self.assertEqual(rows, [
+            (1000, 1000, "", "", "新しい型録"),
+            (1000, 1000, "A1", 5, "ツールが受け入れた在庫"),       # Access の古い在庫では上書きしない
+            (1100, 2000, "", "", "新しい型録"),
+            (1200, 2500, "", "", "足された型録")])
+        numbers = [r[0] for r in self.master_rows("SELECT 管理番号 FROM PalletMaster")]
+        self.assertEqual(len(numbers), len(set(numbers)), numbers)   # 番号が重ならない
+
+    def test_ツールが書き込む表は入れ替えない(self) -> None:
+        self.session.admin = True
+        body = self.refresh(["資材パレット注文管理"], expect=400)
+        self.assertIn("このツールが書き込む表", body["message"])
+        self.assertEqual(self.master_rows('SELECT * FROM "資材パレット注文管理"'), [(1, "abc")])
+
+    def test_入れられない行があれば表は元のまま(self) -> None:
+        """消す+入れるを1回で確定する。途中で断られたら消した分も戻る。"""
+        self.session.admin = True
+        body = self.refresh(["松板角材"], expect=422)
+        self.assertFalse(body["ok"])
+        self.assertEqual(self.master_rows("SELECT * FROM 松板角材"), [(1, "残るはず")])
+
+    def test_文字化けの疑いがある表は入れ替えない(self) -> None:
+        import sqlite3
+        conn = sqlite3.connect(self.converted)
+        conn.execute("INSERT INTO BoardMaster (管理番号, ボード幅) VALUES (9, '13\ufffd')")
+        conn.commit()
+        conn.close()
+        board = {t["name"]: t for t in self.plan()["tables"]}["BoardMaster"]
+        self.assertFalse(board["can_refresh"])
+        self.assertIn("文字化け", board["refresh_why"])
+
+    def test_管理者認証が要る(self) -> None:
+        self.refresh(["BoardMaster"], expect=403)
+        self.assertEqual(self.master_rows("SELECT ボード幅 FROM BoardMaster"), [(1100,)])
+
+
 class TableBringAccessTests(TableBringTests):
     """Access(.accdb)のまま選べる。いつもの変換ツール(accdb_converter)を中で呼ぶ。"""
 

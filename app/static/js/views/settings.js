@@ -636,7 +636,7 @@ function startDistribution() {
    マスタ編集の認証
 
    以前は資材選択画面にしか入力欄が無かった。
-   `/api/selection/auth` はプロセスに1つの状態(`selection_session`)を
+   `/api/settings/admin-auth` はプロセスに1つの状態(`selection_session`)を
    触るだけなので、どの画面から認証しても同じ ── 応答は資材選択の
    状態なので、ここでは `admin.authenticated` だけを見て、設定側の
    表示は取り直す(2つの画面で同じ事実を別々に持たない)。
@@ -647,7 +647,9 @@ function startMasterAuth() {
   const authenticate = async () => {
     el.masterAuthWhy.hidden = true;
     try {
-      const res = await api.post("/api/selection/auth",
+      // 設定の口を使う。資材選択の口は、現場モードの権限が無い端末
+      // (倉庫だけの端末)には無い
+      const res = await api.post("/api/settings/admin-auth",
         { password: el.masterAuthPass.value });
       el.masterAuthPass.value = "";
       if (res.admin && res.admin.authenticated) {
@@ -658,7 +660,13 @@ function startMasterAuth() {
       }
       refreshStatus();
     } catch (err) {
-      toastError(err);
+      if (err.code === "denied") {
+        el.masterAuthWhy.hidden = false;
+        el.masterAuthWhy.textContent = "パスワードが違います。";
+      } else {
+        toastError(err);
+      }
+      refreshStatus();
     }
   };
 
@@ -795,10 +803,23 @@ function renderBring(plan) {
   const rows = (plan.tables || []).map((t) => {
     const tr = document.createElement("tr");
     const pick = document.createElement("td");
-    if (t.exists) {
+    if (t.exists && t.can_refresh) {
+      // もうある表。**中身を Access の最新に入れ替える**ことだけ選べる。
+      // 消して入れ直す操作なので、既定では選ばない
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.value = t.name;
+      box.dataset.refresh = "1";
+      box.checked = false;
+      box.addEventListener("change", updateBringRun);
+      const label = document.createElement("label");
+      label.className = "why";
+      label.append(box, " 入れ替える");
+      pick.appendChild(label);
+    } else if (t.exists) {
       pick.textContent = "もうある";
       pick.className = "why";
-      tr.title = "梱包資材マスタにもう同じ名前の表があります。触りません";
+      tr.title = t.refresh_why || "梱包資材マスタにもう同じ名前の表があります";
     } else {
       const box = document.createElement("input");
       box.type = "checkbox";
@@ -823,23 +844,62 @@ function renderBring(plan) {
     const cols = document.createElement("td");
     cols.className = "why";
     cols.textContent = t.columns.join(", ");
+    if (t.exists) {
+      // 入れ替えたら何行が何行になるか・残すもの・写さない列・できない理由
+      const note = document.createElement("div");
+      note.textContent = t.can_refresh
+        ? `いま ${t.current_rows.toLocaleString()}行 → Access ${t.rows.toLocaleString()}行`
+          + (t.keeps ? `。${t.keeps}` : "")
+          + (t.not_copied && t.not_copied.length
+            ? `。梱包資材マスタに無い列は写しません: ${t.not_copied.join(", ")}` : "")
+        : `入れ替えられません: ${t.refresh_why}`;
+      cols.prepend(note);
+    }
     tr.append(pick, name, count, cols);
-    // 持ってこられる表を上に並べる。もうある表は見えるだけでよい
-    tr.dataset.exists = t.exists ? "1" : "";
+    // 持ってこられる表を上に、入れ替えられる表を次に、どちらもできない表を下に
+    tr.dataset.order = !t.exists ? "0" : t.can_refresh ? "1" : "2";
     return tr;
-  }).sort((a, b) => (a.dataset.exists ? 1 : 0) - (b.dataset.exists ? 1 : 0));
+  }).sort((a, b) => Number(a.dataset.order) - Number(b.dataset.order));
   bring.rows.replaceChildren(...rows);
   bring.list.hidden = rows.length === 0;
   updateBringRun();
 }
 
 function chosenTables() {
-  return [...bring.rows.querySelectorAll("input[type=checkbox]:checked")]
+  return [...bring.rows.querySelectorAll("input[type=checkbox]:checked:not([data-refresh])")]
+    .map((box) => box.value);
+}
+
+function chosenRefresh() {
+  return [...bring.rows.querySelectorAll("input[type=checkbox][data-refresh]:checked")]
     .map((box) => box.value);
 }
 
 function updateBringRun() {
   bring.run.disabled = chosenTables().length === 0;
+  if (bring.refresh) bring.refresh.disabled = chosenRefresh().length === 0;
+}
+
+async function runRefresh() {
+  const tables = chosenRefresh();
+  if (!tables.length) return;
+  // **消して入れ直す。** 控えは取るが、押す前に何が起きるかを言う
+  if (!window.confirm(`次の表の中身を、Access の中身に入れ替えます:\n${tables.join("、")}\n\n`
+                      + "梱包資材マスタにある今の行は消えます(書く前に控えを取ります)。"
+                      + "ほかの端末にも次の取り込みで届きます。よろしいですか？")) return;
+  try {
+    const result = await api.post("/api/settings/table-refresh",
+                                  { path: bring.path.value.trim(), tables });
+    renderBring(result.plan);
+    toast(result.message, "ok");
+    if (result.refreshed && result.refreshed.length) master.show(result.refreshed[0].name);
+    bring.note.hidden = false;
+    bring.note.className = "status status--ok";
+    bring.note.textContent = `${result.message}(控え: ${result.backup})`;
+  } catch (err) {
+    if (err.body && err.body.plan) renderBring(err.body.plan);
+    toastError(err);
+  }
 }
 
 async function lookBring() {
@@ -877,6 +937,7 @@ function startBring() {
                            ["note", "bringNote"], ["list", "bringList"],
                            ["rows", "bringRows"], ["run", "bringRun"],
                            ["converted", "bringConverted"], ["drop", "bringDrop"],
+                           ["refresh", "bringRefresh"],
                            ["openDrop", "bringOpenDrop"]]) {
     bring[key] = document.getElementById(id);
   }
@@ -894,6 +955,7 @@ function startBring() {
     if (event.key === "Enter") { event.preventDefault(); lookBring(); }
   });
   bring.run.addEventListener("click", runBring);
+  if (bring.refresh) bring.refresh.addEventListener("click", runRefresh);
 }
 
 /** ファイルを落とせる場所にする。落ちたら受け取って、すぐ中を読む。 */

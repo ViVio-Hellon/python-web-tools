@@ -400,6 +400,59 @@ def table_bring_run():
     return jsonify(payload), status
 
 
+@bp.post("/api/settings/admin-auth")
+def admin_auth():
+    """管理者認証(マスタ編集・表を持ってくる・中身を入れ替える の関門)。
+
+    以前は資材選択の口(`/api/selection/auth`)を使っていた。資材選択は
+    **現場モードの権限がある端末にしか登録されない**ので、資材モードだけの
+    端末(倉庫)では 404 になり、マスタを直す役目の端末がパスワードを通せ
+    なかった(通しの試験で見つけた)。設定画面はどのモードにもあるので、
+    ここに口を置く。状態は同じもの(`selection_session` の admin)を使う。
+    """
+    from packaging_tool import selection_session
+    body = request.get_json(silent=True) or {}
+    session = selection_session.get_session(get_db())
+    result = session.authenticate(str(body.get("password", "")))
+    payload = {"admin": {"authenticated": bool(session.admin)}, "message": result.message}
+    if result.ok:
+        return jsonify(payload)
+    return jsonify({**payload, "error": {"code": "denied", "message": result.message}}), 422
+
+
+@bp.post("/api/settings/table-refresh")
+def table_refresh_run():
+    """もうある表の中身を、Access の最新に入れ替える。`{"path":…, "tables":[…]}`
+
+    Access をまるごと変換して差し替えると、このツールが共有に足した表・列・
+    行が消える。選んだ表の中身だけを入れ替える(`table_bring.refresh`)。
+    関門は「表を持ってくる」と同じ(管理者パスワード + マスタを直せる権限)。
+    """
+    from packaging_tool import master_admin, selection_session, table_bring
+    conn = get_db()
+    if not selection_session.get_session(conn).admin:
+        return jsonify(_error("not_allowed", "管理者認証が必要です。"
+                              "「パスワード」の面で認証してください。")), 403
+    allowed, why = master_admin.can_edit(conn, "")
+    if not allowed:
+        return jsonify(_error("not_allowed", why)), 403
+    body = request.get_json(silent=True) or {}
+    tables = body.get("tables")
+    if not isinstance(tables, list):
+        return jsonify(_error("bad_tables", "入れ替える表の指定が正しくありません")), 400
+    result = table_bring.refresh(conn, str(body.get("path", "")), [str(t) for t in tables])
+    payload = {"ok": result.ok, "message": result.message,
+               "refreshed": [{"name": n, "before": b, "after": a}
+                             for n, b, a in result.refreshed],
+               "backup": result.backup,
+               "plan": table_bring.plan_dict(table_bring.plan(str(body.get("path", ""))))}
+    if result.ok:
+        return jsonify(payload)
+    payload["error"] = {"code": result.reason, "message": result.message}
+    status = {table_bring.REFUSE_NOTHING: 400}.get(result.reason, 422)
+    return jsonify(payload), status
+
+
 @bp.post("/api/settings/write-back")
 def start_write_back():
     return _start("write_back", "取り込み元へ反映",

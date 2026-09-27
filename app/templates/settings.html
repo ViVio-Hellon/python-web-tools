@@ -781,8 +781,14 @@
     <span class="why">変換したsqlite3でも構いません。落とすとすぐ中を読みます。</span>
   </div>
   <p class="why">
-    <b>梱包資材マスタに無い表だけ</b>を写します。今ある表・行・索引には触りません。
-    足した表はマスタ管理に「足」の印で出て、そのまま直せます。
+    <b>梱包資材マスタに無い表</b>は、表ごと足します(「持ってくる」)。足した表はマスタ管理に
+    「足」の印で出て、そのまま直せます。
+  </p>
+  <p class="why">
+    <b>もうある表</b>は、<b>中身だけを Access の最新に入れ替え</b>られます(「中身を入れ替える」)。
+    表の列・索引や、ほかの表には触りません。Access をまるごと変換して差し替えると消えてしまう、
+    このツールが足した表・列・行はそのまま残ります。このツールが書き込む表(発注・受払・実績・
+    使用実績・コメント)は入れ替えません。
   </p>
   <div class="paths">
     <label for="bringPath">または場所で選ぶ</label>
@@ -797,12 +803,13 @@
   <p class="status" id="bringNote" hidden></p>
   <div class="tablewrap tablewrap--browse" id="bringList" hidden>
     <table class="table">
-      <thead><tr><th></th><th>表</th><th class="num">行</th><th>列</th></tr></thead>
+      <thead><tr><th></th><th>表</th><th class="num">行</th><th>列・入れ替えの説明</th></tr></thead>
       <tbody id="bringRows"></tbody>
     </table>
   </div>
   <div class="btn-row" style="margin-top:8px">
     <button class="btn btn--commit" type="button" id="bringRun" disabled>選んだ表を持ってくる</button>
+    <button class="btn btn--danger" type="button" id="bringRefresh" disabled>選んだ表の中身を入れ替える</button>
   </div>
   <p class="why">
     管理者認証(「パスワード」の面)が要ります。書く前に、梱包資材マスタの控えを
