@@ -2819,6 +2819,9 @@ class WarehouseDraftOnDecideTests(SelectionWebTestCase):
         original = lot_routes.get_db
         lot_routes.get_db = lambda: self.conn
         self.addCleanup(lambda: setattr(lot_routes, "get_db", original))
+        # 発注一覧もこの試験の接続から読む(開発機の手元DBの中身で結果を変えない)
+        from app.routes import warehouse as warehouse_routes
+        _web.bind_db(self, warehouse_routes, self.conn)
 
         insert_pallet(self.conn, width=1100, length=2000, code="P9", unit="台")
         insert_lot(self.conn)

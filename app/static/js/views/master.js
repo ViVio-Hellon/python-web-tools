@@ -421,15 +421,26 @@ async function send(path, body) {
   }
 }
 
+/** 開いている行の、一覧に出したときの値。サーバはこれがいまも同じときだけ書く
+    (開いたあとにほかで消された・入れ替わった行へ書かないため)。 */
+function seenRow() {
+  const rows = (view && view.page && view.page.rows) || [];
+  const row = rows.find((r) => String(r[view.row_key]) === String(editing));
+  if (!row) return undefined;
+  const out = { ...row };
+  delete out[view.row_key];
+  return out;
+}
+
 function saveRow() {
   if (editing === null) return void send("/api/master/row/add",
                                          { values: values() });
   return void send("/api/master/row/save",
-                   { key: Number(editing), values: values() });
+                   { key: Number(editing), values: values(), was: seenRow() });
 }
 
 function deleteRow() {
-  return void send("/api/master/row/delete", { key: Number(editing) });
+  return void send("/api/master/row/delete", { key: Number(editing), was: seenRow() });
 }
 
 /** 取り込み元にその表を作る。**帯の中の操作**なので、断りも帯に出す。

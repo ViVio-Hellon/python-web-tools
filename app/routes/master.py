@@ -66,10 +66,14 @@ def browse():
 
 @bp.post("/api/master/row/save")
 def save_row():
-    """1行を書き換える。`{"table":…, "key":…, "values":{…}}`"""
+    """1行を書き換える。`{"table":…, "key":…, "values":{…}, "was":{…}}`
+
+    `was` は画面が見ていたその行。いまも同じときだけ書く(`master_admin._write_row`)。
+    """
     body = request.get_json(silent=True) or {}
     return _write(master_admin.save_row(
-        get_db(), _table(body), body.get("key"), _values(body)), body)
+        get_db(), _table(body), body.get("key"), _values(body),
+        seen=_seen(body)), body)
 
 
 @bp.post("/api/master/row/add")
@@ -82,10 +86,10 @@ def add_row():
 
 @bp.post("/api/master/row/delete")
 def delete_row():
-    """1行消す。`{"table":…, "key":…}`"""
+    """1行消す。`{"table":…, "key":…, "was":{…}}`"""
     body = request.get_json(silent=True) or {}
     return _write(master_admin.delete_row(
-        get_db(), _table(body), body.get("key")), body)
+        get_db(), _table(body), body.get("key"), seen=_seen(body)), body)
 
 
 @bp.post("/api/master/table/create")
@@ -129,6 +133,12 @@ def drop_table():
 
 def _table(body: dict) -> str:
     return str(body.get("table", ""))
+
+
+def _seen(body: dict):
+    """画面が見ていたその行。送られてこなければ None(番号だけで書く)。"""
+    was = body.get("was")
+    return was if isinstance(was, dict) else None
 
 
 def _values(body: dict) -> dict:

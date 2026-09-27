@@ -149,6 +149,20 @@ def is_access_internal(name: str) -> bool:
     return bool(_ACCESS_INTERNAL.match(name))
 
 
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def _fold(name: str) -> str:
+    """表の名前の比べ方。**sqlite3 と同じく英字の大文字・小文字だけを区別しない**
+    ("Test" と "test" は同じ表。全角やほかの字はそのまま)。"""
+    return name.translate(_ASCII_LOWER)
+
+
+def _by_fold(names) -> dict[str, str]:
+    """{比べ方の名前: 実際の名前}。"""
+    return {_fold(n): n for n in names}
+
+
 class ConvertError(Exception):
     """Access を sqlite3 にできなかった。文は画面にそのまま出す。"""
 
@@ -397,7 +411,7 @@ def plan(source_path: str) -> Plan:
                          + (f"(読み取り: {engine})" if engine else ""))
     try:
         names = source_db.list_tables(readable)
-        existing = set(source_db.list_tables(dest))
+        existing = _by_fold(source_db.list_tables(dest))
         counts = source_db.table_counts(readable)
     except (source_db.SourceError, sqlite3.Error) as exc:
         out.message = f"ファイルを読めません: {exc}"
@@ -407,14 +421,15 @@ def plan(source_path: str) -> Plan:
     dest_counts = source_db.table_counts(dest)
     for name in names:
         columns = source_db.columns(readable, name)
-        exists = name in existing
+        # 梱包資材マスタでの名前(大文字・小文字だけ違っても同じ表)
+        here = existing.get(_fold(name))
         found = Candidate(
             name=name, rows=max(counts.get(name, 0), 0), columns=columns,
-            exists=exists, suspect=_suspect_rows(readable, name, columns))
-        if exists:
-            found.current_rows = max(dest_counts.get(name, 0), 0)
-            _compare_columns(found, source_db.columns(dest, name))
-            found.keeps = KEEPS.get(name, "")
+            exists=here is not None, suspect=_suspect_rows(readable, name, columns))
+        if here is not None:
+            found.current_rows = max(dest_counts.get(here, 0), 0)
+            _compare_columns(found, source_db.columns(dest, here), here)
+            found.keeps = KEEPS.get(here, "")
         out.candidates.append(found)
     out.ok = True
     new = len(out.new_tables)
@@ -445,7 +460,7 @@ def _create_sql(src: Path, table: str) -> tuple[str, list[tuple[str, str]]]:
     型・主キー・既定値を元のとおりに作るため、定義文をそのまま使う。
     """
     rows = source_db.read_query(
-        src, "SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ?"
+        src, "SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? COLLATE NOCASE"
              " AND sql IS NOT NULL", [table])
     create = next((r["sql"] for r in rows if r["type"] == "table"), "")
     indexes = [(r["name"], r["sql"]) for r in rows if r["type"] == "index"]
@@ -494,8 +509,8 @@ def bring(source_path: str, tables: list[str]) -> BringResult:
     if missing:
         return BringResult(False, f"選んだファイルに無い表です: {', '.join(missing)}",
                            REFUSE_NOTHING)
-    existing = set(source_db.list_tables(dest))
-    already = [t for t in wanted if t in existing]
+    existing = _by_fold(source_db.list_tables(dest))
+    already = [t for t in wanted if _fold(t) in existing]
     if already:
         # **上書きも合流もしない。** 今ある表には、このツールが書いた行が
         # 入っているかもしれない
@@ -607,13 +622,16 @@ def _import_columns(table: str) -> list[str]:
     return [source for _local, source, _conv in import_specs.IMPORT_SPECS.get(table, [])]
 
 
-def _compare_columns(found: "Candidate", have: list[str]) -> None:
-    """Access の列と梱包資材マスタの列を比べて、足す列・消える列・できない理由を入れる。"""
+def _compare_columns(found: "Candidate", have: list[str], table: str) -> None:
+    """Access の列と梱包資材マスタの列を比べて、足す列・消える列・できない理由を入れる。
+
+    `table` は梱包資材マスタでの表の名前。
+    """
     found.added_columns = [c for c in found.columns if c not in have]
     found.removed_columns = [c for c in have if c not in found.columns]
-    reads = _import_columns(found.name)
+    reads = _import_columns(table)
     found.import_loses = [c for c in found.removed_columns if c in reads]
-    found.refresh_why = refresh_why(found.name, found)
+    found.refresh_why = refresh_why(table, found)
 
 
 def refresh_why(table: str, found: "Candidate") -> str:
@@ -671,26 +689,33 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     except ConvertError as exc:
         return BringResult(False, str(exc), REFUSE_CONVERT)
 
-    available = set(source_db.list_tables(src))
-    existing = set(source_db.list_tables(dest))
+    available = _by_fold(source_db.list_tables(src))
+    existing = _by_fold(source_db.list_tables(dest))
     refusals = []
     actions: dict[str, str] = {}
+    # ここから先は**梱包資材マスタでの名前**で扱う(大文字・小文字だけ違う
+    # "palletmaster" が来ても PalletMaster として在庫の行を残すため)。
+    # sqlite3 の文は名前の大文字・小文字を区別しないので、Access 側もこれで読める
+    named = []
     for table in wanted:
-        if table not in available:
+        if _fold(table) not in available:
             refusals.append(f"{table}(選んだファイルに無い)")
-        elif table not in existing:
+        elif _fold(table) not in existing:
             refusals.append(f"{table}(梱包資材マスタに無い。「持ってくる」を使ってください)")
         else:
+            table = existing[_fold(table)]
+            named.append(table)
             columns = source_db.columns(src, table)
             found = Candidate(name=table, columns=columns, exists=True,
                               suspect=_suspect_rows(src, table, columns))
-            _compare_columns(found, source_db.columns(dest, table))
+            _compare_columns(found, source_db.columns(dest, table), table)
             if found.refresh_why:
                 refusals.append(f"{table}({found.refresh_why})")
             actions[table] = found.action
     if refusals:
         return BringResult(False, "入れ替えられない表があります: " + "、".join(refusals)
                            + "。何も変えていません。", REFUSE_NOTHING)
+    wanted = list(dict.fromkeys(named))
 
     try:
         backup = _backup(dest, "中身を入れ替える前")
@@ -853,6 +878,13 @@ def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
         for name in old_indexes:
             tx.execute(f"DROP INDEX {q(name)}")
         tx.execute(create)
+        made = tx.query("SELECT name FROM sqlite_master WHERE type = 'table'"
+                        " AND name = ? COLLATE NOCASE", [table])[0]["name"]
+        if made != table:
+            # Access では大文字・小文字だけ違う名前だった。梱包資材マスタでの
+            # 名前に戻す(sqlite3 は大文字・小文字だけの付け替えを断るので2段で)
+            tx.execute(f"ALTER TABLE {q(made)} RENAME TO {q(old + '_作りかけ')}")
+            tx.execute(f"ALTER TABLE {q(old + '_作りかけ')} RENAME TO {q(table)}")
 
         stock: list[dict[str, Any]] = []
         if (table == "PalletMaster" and all(k in old_columns for k in KEYS_PALLET_STOCK)

@@ -53,8 +53,12 @@ def _brought_columns(path: Path, table: str) -> list[Column]:
 
     この表はこのツールが取り込まない(`IMPORT_SPECS` に無い)ので、型も
     必須かどうかも、足したときの定義(Access の型、変換ツール経由なら型なし)
-    がそのまま答え。型の書いていない列は文字として扱う。
-    `INTEGER PRIMARY KEY` の列(番号が自動で振られる)は空欄で通す。
+    がそのまま答え。`INTEGER PRIMARY KEY` の列(番号が自動で振られる)は空欄で通す。
+
+    **型の書いていない列は、いま入っている値に合わせる**(`_kind_by_values`)。
+    変換ツールは列に型を書かないが、値は読み取り方しだいで数にも文字にもなる
+    (pyodbc なら数、access_parser なら文字)。数ばかりの列へ打った 20 を文字で
+    入れると、同じ列に数と文字が混ざって並べ替えがずれる。
     """
     try:
         rows = source_db.read_query(
@@ -71,9 +75,27 @@ def _brought_columns(path: Path, table: str) -> list[Column]:
                     and not auto_number and not stamp)
         note = ("空欄なら番号が自動で入ります" if auto_number
                 else "空欄なら今の日時が入ります" if stamp else "")
-        out.append(Column(name=row["name"], kind=_kind_of(declared),
+        kind = _kind_of(declared) if declared else _kind_by_values(path, table, row["name"])
+        out.append(Column(name=row["name"], kind=kind,
                           required=required, stamp=stamp, note=note))
     return out
+
+
+def _kind_by_values(path: Path, table: str, column: str) -> str:
+    """型の書いていない列の型を、入っている値から決める。空の列・混ざった列は文字。"""
+    q = source_db.quote_identifier
+    try:
+        rows = source_db.read_query(
+            path, f"SELECT typeof({q(column)}) AS t, COUNT(*) AS n FROM {q(table)}"
+                  f" WHERE {q(column)} IS NOT NULL GROUP BY 1")
+    except source_db.SourceError:
+        return "text"
+    seen = {r["t"] for r in rows}
+    if seen == {"integer"}:
+        return "int"
+    if seen and seen <= {"integer", "real"}:
+        return "real"
+    return "text"
 
 
 def columns(conn: sqlite3.Connection, table: str,

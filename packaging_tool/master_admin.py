@@ -96,10 +96,16 @@ class Result:
     reason: str = ""
 
 
+# 画面を開いたあとに、その行がほかで変わっていた(消えた・入れ替わった)
+STALE_ROW = ("その行は、一覧を出したあとにほかで変わっています(消された・"
+             "中身が入れ替わった など)。一覧を出し直してから、もう一度開いてください。")
+
+
 def save_row(conn: sqlite3.Connection, table: str, row_key: Any,
              values: dict[str, Any], *,
-             path: Optional[Path] = None) -> Result:
-    """1行を書き換える。"""
+             path: Optional[Path] = None,
+             seen: Optional[dict[str, Any]] = None) -> Result:
+    """1行を書き換える。`seen` は画面が見ていたその行(`_write_row`)。"""
     path, refused = _ready(conn, table, path)
     if refused:
         return refused
@@ -111,15 +117,16 @@ def save_row(conn: sqlite3.Connection, table: str, row_key: Any,
     if not clean:
         return Result(False, "変える値がありません。", REFUSE_BAD_VALUE)
 
+    q = source_db.quote_identifier
+    sets = ", ".join(f"{q(k)} = ?" for k in clean)
     try:
-        with source_db.connect(path) as src:
-            changed = src.update(table, clean, {"rowid": row_key})
+        changed = _write_row(path, table, row_key, seen,
+                             f"UPDATE {q(table)} SET {sets} WHERE rowid = ?",
+                             [*clean.values(), row_key])
     except source_db.SourceError as exc:
         return _write_failed(table, exc)
     if not changed:
-        # 一覧を出したあとに誰かが消した。押した人には見えていない事実
-        return Result(False, "その行はもうありません。一覧を出し直してください。",
-                      REFUSE_NO_ROW)
+        return Result(False, STALE_ROW, REFUSE_NO_ROW)
 
     log.info("マスタを直しました: %s rowid=%s %s", table, row_key, sorted(clean))
     return Result(True, f"{_label(table)}の1行を直しました{_follow(conn, path, table)}")
@@ -150,23 +157,71 @@ def add_row(conn: sqlite3.Connection, table: str, values: dict[str, Any], *,
 
 
 def delete_row(conn: sqlite3.Connection, table: str, row_key: Any, *,
-               path: Optional[Path] = None) -> Result:
-    """1行消す。"""
+               path: Optional[Path] = None,
+               seen: Optional[dict[str, Any]] = None) -> Result:
+    """1行消す。`seen` は画面が見ていたその行(`_write_row`)。"""
     path, refused = _ready(conn, table, path)
     if refused:
         return refused
 
     try:
-        with source_db.connect(path) as src:
-            changed = src.delete(table, {"rowid": row_key})
+        changed = _write_row(path, table, row_key, seen,
+                             f"DELETE FROM {source_db.quote_identifier(table)}"
+                             " WHERE rowid = ?", [row_key])
     except source_db.SourceError as exc:
         return _write_failed(table, exc)
     if not changed:
-        return Result(False, "その行はもうありません。一覧を出し直してください。",
-                      REFUSE_NO_ROW)
+        return Result(False, STALE_ROW, REFUSE_NO_ROW)
 
     log.info("マスタから消しました: %s rowid=%s", table, row_key)
     return Result(True, f"{_label(table)}の1行を消しました{_follow(conn, path, table)}")
+
+
+def _write_row(path: Path, table: str, row_key: Any, seen: Optional[dict[str, Any]],
+               sql: str, params: list[Any]) -> int:
+    """その行がまだ画面で見ていたとおりなら書く。書いた行数(0 = 変わっていた)。
+
+    【なぜ rowid だけでは足りないか】
+    行は取り込み元の `rowid` で指す。ところが rowid は**同じ番号が別の行に
+    付き直る**ことがある:
+    - 「表を持ってくる」の入れ替えで中身を消して入れ直すと、主キーの無い表
+      (Access から変換した表はみなそう)は 1 から振り直される
+    - 最後の行を消してから1行足すと、足した行に同じ番号が付く
+    画面を開いたままほかでこれが起きると、古い画面から直した値が**別の行**に
+    入る(通しの試験で起きた)。そこで、画面が見ていたその行の値(`seen`)が
+    いまも同じときだけ書く。確かめと書き込みは1回で確定する(間に割り込ませない)。
+    `seen` が無い呼び出し(画面を通らない道具)は番号だけで書く。
+    """
+    q = source_db.quote_identifier
+    with source_db.connect(path) as src:
+        with src.transaction() as tx:
+            now = tx.query(f"SELECT * FROM {q(table)} WHERE rowid = ?", [row_key])
+            if not now:
+                return 0
+            if seen is not None and not _same_row(now[0], seen):
+                return 0
+            return tx.execute(sql, params)
+
+
+def _same_row(now: dict[str, Any], seen: dict[str, Any]) -> bool:
+    """画面が見ていた値と、いまの値が同じか。画面から来た列だけを比べる。"""
+    for name, was in seen.items():
+        if name not in now:
+            continue                        # 行の鍵(`ROW_KEY`)や、もう無い列
+        if not _same_value(now[name], was):
+            return False
+    return True
+
+
+def _same_value(now: Any, was: Any) -> bool:
+    # 画面との行き来は JSON なので、数は数・文字は文字のまま戻る。
+    # ただし 1 と 1.0 は同じと見る(JSON で区別が消えることがある)
+    if now is None or was is None:
+        return now is None and was is None
+    if isinstance(now, (int, float)) and isinstance(was, (int, float)) \
+            and not isinstance(was, bool):
+        return float(now) == float(was)
+    return str(now) == str(was)
 
 
 def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],
@@ -193,6 +248,12 @@ def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],
         return None, Result(False, why, REFUSE_NOT_ALLOWED)
     found = path or source_for(table)
     if table not in BY_TABLE and table not in master_common.brought_tables(found):
+        if found is not None and not source_db.columns(found, table):
+            # 開いていた表を、ほかの端末が消した。「直さない表」と言うと、
+            # 表があるのに断られたように読める
+            return None, Result(False, f"{_label(table)}はもう梱包資材マスタにありません"
+                                       "(ほかで消されました)。一覧を出し直してください。",
+                                REFUSE_NO_ROW)
         return None, Result(False, view_only_why(table) or "直せない表です。",
                             REFUSE_NOT_EDITABLE)
     if found is None:
