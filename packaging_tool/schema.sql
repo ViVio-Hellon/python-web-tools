@@ -287,7 +287,36 @@ CREATE TABLE IF NOT EXISTS 資材パレット注文管理 (
     -- 総入れ替えで、まだ送れていない印を消してしまわないため
     印未反映    TEXT,
     -- 送った端末(PC名)。取り消せるのはこの端末だけ
-    送信端末    TEXT
+    送信端末    TEXT,
+    -- 発注を見分ける鍵(送る前に手元で振る)。コメントをこれで結ぶ。
+    -- 手元の管理番号は取り込みのたびに振り直され、共有の管理番号は
+    -- 送るまで決まらないので、どちらも鍵にならない
+    発注キー    TEXT
+);
+
+-- ------------------------------------------------------------------
+-- 発注コメント: 発注ごとの現場⇔倉庫のやり取り(`order_comments.py`)。
+--
+-- **1行 = 1つの書き込み。** 何件でも積む(書き直さない)。どの発注かは
+-- `発注キー`(資材パレット注文管理.発注キー。この列を足す前の発注は
+-- `#共有の管理番号`)で結ぶ。`コメントID` は書いたときに振る世界で1つの
+-- 番号で、未読の見分けに使う(手元の管理番号は取り込みで振り直される)。
+-- 書けるのは発注が未確認のあいだだけ(確認・取り消しで記録として固定)。
+-- ------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS 発注コメント (
+    管理番号    INTEGER PRIMARY KEY AUTOINCREMENT,
+    発注キー    TEXT NOT NULL DEFAULT '',
+    コメントID  TEXT NOT NULL DEFAULT '',
+    書いた端末  TEXT NOT NULL DEFAULT '',
+    書いた側    TEXT NOT NULL DEFAULT '',
+    本文       TEXT NOT NULL DEFAULT '',
+    書いた日時  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_order_comment_key ON 発注コメント(発注キー);
+
+-- この端末で読んだコメント。**端末ごと**なので共有へは送らない
+CREATE TABLE IF NOT EXISTS 発注コメント既読 (
+    コメントID  TEXT PRIMARY KEY
 );
 
 CREATE INDEX IF NOT EXISTS idx_warehouse_order_lotno ON 資材パレット注文管理(LotNo);

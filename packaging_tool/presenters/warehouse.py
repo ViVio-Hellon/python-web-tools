@@ -225,6 +225,12 @@ class OrderRow:
     lot_no: str = ""
     # ボタンが1つも無いときに添える理由。**言葉はサーバが決める**
     why: str = ""
+    # コメント(`order_comments`)。件数・この端末で未読の数・いちばん新しい1件
+    comments: int = 0
+    unread: int = 0
+    latest_comment: str = ""
+    # まだ書けるか(未確認のあいだだけ)。書けないなら理由
+    comment_why: str = ""
 
     @property
     def lot_url(self) -> str:
@@ -250,6 +256,8 @@ class WarehouseViewModel:
     message: str = ""
     # 未確認の件数。資材モードのレールに出す(行く前に分かる)
     pending: int = 0
+    # 相手が書いた、この端末で未読のコメントの数
+    unread_comments: int = 0
 
     @property
     def found(self) -> int:
@@ -278,21 +286,33 @@ def build(conn: sqlite3.Connection, *, mode: str,
         include_cancelled=include_cancelled or not is_material)
 
     terminal = svc.this_terminal()
-    rows = [_row(item, is_material=is_material, terminal=terminal) for item in raw]
+    from .. import order_comments
+    notes = order_comments.summaries(conn, terminal=terminal)
+    rows = [_row(item, is_material=is_material, terminal=terminal, notes=notes)
+            for item in raw]
     pending = sum(1 for r in rows if r.status == svc.STATUS_PENDING)
     return WarehouseViewModel(
         rows=rows, keyword=keyword, date_filter=date_filter,
         include_cancelled=include_cancelled,
         pending=pending,
+        unread_comments=sum(r.unread for r in rows),
         message=("" if rows else "該当する発注はありません。"),
     )
 
 
-def _row(item: dict, *, is_material: bool, terminal: str = "") -> OrderRow:
+def _row(item: dict, *, is_material: bool, terminal: str = "",
+         notes: Optional[dict] = None) -> OrderRow:
+    from .. import order_comments
     status = item.get("状態", svc.STATUS_PENDING)
     sender = str(item.get("送信端末") or "").strip()
     mine = svc.can_cancel_from(sender, terminal)
+    note = (notes or {}).get(order_comments.order_key(item)) \
+        if order_comments.order_key(item) else None
     return OrderRow(
+        comments=note.count if note else 0,
+        unread=note.unread if note else 0,
+        latest_comment=note.latest if note else "",
+        comment_why=order_comments.closed_why(item),
         mgr_no=item.get("管理番号", 0),
         values={label: _cell(item.get(label)) for label, _, _ in ORDER_COLUMNS},
         status=status,
@@ -410,6 +430,7 @@ def to_dict(view: WarehouseViewModel) -> dict[str, Any]:
         "include_cancelled": view.include_cancelled,
         "message": view.message,
         "pending": view.pending,
+        "unread_comments": view.unread_comments,
         "found": view.found,
         # EX受注の行で空のまま送る欄。**画面側で決めない**(どの欄が
         # 空でよいかを知っているのはここだけ。2か所で持つとずれる)
@@ -426,6 +447,10 @@ def row_dict(row: OrderRow) -> dict[str, Any]:
         "can_confirm": row.can_confirm,
         "can_cancel": row.can_cancel,
         "why": row.why,
+        "comments": row.comments,
+        "unread": row.unread,
+        "latest_comment": row.latest_comment,
+        "comment_why": row.comment_why,
         "lot_no": row.lot_no,
         "lot_url": row.lot_url,
     }

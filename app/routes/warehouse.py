@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, render_template, request
 
-from packaging_tool import (access_control, data_sync, modes,
+from packaging_tool import (access_control, data_sync, modes, order_comments,
                             warehouse_service as svc, work_context)
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import warehouse as presenter
@@ -161,10 +161,18 @@ def page():
         can_expand_here=False,
         lot_peek_why=LOT_PEEK_WHY,
         expand_absent_why=LOT_PEEK_WHY,
-        **shell_context("warehouse",
-                        badges={"warehouse": (str(view.pending), "todo")}
-                        if view.pending else None),
+        **shell_context("warehouse", badges=_rail_badge(view)),
     )
+
+
+def _rail_badge(view):
+    """レールの印。未確認の件数と、相手が書いた未読コメントの数。"""
+    parts = []
+    if view.pending:
+        parts.append(str(view.pending))
+    if view.unread_comments:
+        parts.append(f"新{view.unread_comments}")
+    return {"warehouse": ("・".join(parts), "todo")} if parts else None
 
 
 @bp.get("/api/warehouse/orders")
@@ -244,17 +252,97 @@ def send():
                 "message": (f"下書きのLotNoが作業中のロット({working})と"
                             "違います。画面を開き直してください。")}}), 400
 
+    note = str(body.get("comment") or "").strip()
+    if len(note) > order_comments.MAX_LENGTH:
+        return jsonify({"error": {
+            "code": "invalid", "field": "comment",
+            "message": f"コメントは{order_comments.MAX_LENGTH}文字までです(いま{len(note)}文字)。"}}), 400
+
     result = svc.create_order(get_db(), **values)
     if not result.ok:
         return jsonify({**presenter.order_dict(result),
                         "error": {"code": "rejected",
                                   "message": result.message}}), 422
     log.info("発注を登録しました: 管理番号=%s", result.mgr_no)
+    if note:
+        # 送るときに添えたコメント。発注と一緒に取り込み元へ届く
+        order_comments.add(get_db(), result.mgr_no, note,
+                           terminal=svc.this_terminal(), side=_side())
     # 倉庫へ届けるのが仕事なので、押した直後に送りにいく。
     # **画面には何も出さない** ── 手元の登録はもう終わっており、
     # 届かなくても次の「取り込み元へ反映」でまとめて送られる
     data_sync.write_back_in_background()
     return jsonify(presenter.order_dict(result))
+
+
+# ------------------------------------------------------------------
+# コメント(`order_comments`)。**どちらのモードからも**読み書きできる
+# ------------------------------------------------------------------
+def _side() -> str:
+    return (order_comments.SIDE_MATERIAL if _mode() == modes.MATERIAL
+            else order_comments.SIDE_FIELD)
+
+
+def _comments_body(conn, mgr_no: int, **extra):
+    row = conn.execute(f"SELECT * FROM {svc.TABLE} WHERE 管理番号 = ?",
+                       (mgr_no,)).fetchone()
+    comments = order_comments.comments_for(conn, mgr_no, terminal=svc.this_terminal())
+    return {"mgr_no": mgr_no,
+            "comments": [order_comments.to_dict(c) for c in comments],
+            # 書けないなら理由(未確認のあいだだけ書ける)。**画面で決めない**
+            "write_why": (order_comments.closed_why(row) if row is not None
+                          else "この発注は一覧にありません。画面を更新してください。"),
+            "max_length": order_comments.MAX_LENGTH,
+            **extra}
+
+
+@bp.get("/api/warehouse/comments")
+def comments():
+    """その発注のコメント。**開いたら読んだことにする**(この端末だけ)。
+
+    返す一覧の「未読」は、開く前の状態のまま ── どれが新しく届いたものかを
+    開いた画面で見分けられるように、印を付けてから既読にする。
+    """
+    try:
+        mgr_no = int(request.args.get("mgr_no", ""))
+    except ValueError:
+        return jsonify({"error": {"code": "bad_mgr_no",
+                                  "message": "対象が指定されていません"}}), 400
+    conn = get_db()
+    body = _comments_body(conn, mgr_no)
+    order_comments.mark_read(conn, mgr_no)
+    return jsonify(body)
+
+
+@bp.post("/api/warehouse/comment")
+def comment():
+    """コメントを書く。**未確認の発注にだけ**(確認・取り消しで固定)。
+
+    押す前に共有の変化を取り込む(確認・取消と同じ)── 相手が先に確認・
+    取り消していたら、書けない理由を言う。
+    """
+    body = request.get_json(silent=True) or {}
+    try:
+        mgr_no = int(body.get("mgr_no"))
+    except (TypeError, ValueError):
+        return jsonify({"error": {"code": "bad_mgr_no",
+                                  "message": "対象が指定されていません"}}), 400
+    conn = get_db()
+    before = svc.identity(conn, mgr_no)
+    try:
+        data_sync.refresh_orders(conn, only_if_changed=True)
+    except Exception:                               # noqa: BLE001 - 書く操作は止めない
+        log.exception("コメントの前の取り込み直しに失敗(手元の状態で続けます)")
+    mgr_no = svc.find_again(conn, mgr_no, before)
+    result = order_comments.add(conn, mgr_no, str(body.get("text") or ""),
+                                terminal=svc.this_terminal(), side=_side())
+    if not result.ok:
+        return jsonify(_comments_body(conn, mgr_no, error={
+            "code": "rejected", "message": result.message})), 422
+    order_comments.mark_read(conn, mgr_no)
+    # 相手に届けるのが目的なので、書いた直後に送りにいく(画面には出さない)
+    data_sync.write_back_in_background()
+    return jsonify(_comments_body(conn, mgr_no, message=result.message))
 
 
 @field_only.post("/api/warehouse/cancel")

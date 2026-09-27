@@ -191,7 +191,7 @@ def _migrate_after_schema(conn: sqlite3.Connection) -> None:
 # **すでにある表には何もしない**ので、前の版から入れ替えた端末には
 # 足しに行く必要がある
 _ORDER_ADDED_COLUMNS = (("取込元管理番号", "INTEGER"), ("印未反映", "TEXT"),
-                        ("送信端末", "TEXT"))
+                        ("送信端末", "TEXT"), ("発注キー", "TEXT"))
 
 
 def _add_order_mark_columns(conn: sqlite3.Connection) -> None:

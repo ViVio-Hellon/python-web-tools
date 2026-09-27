@@ -32,6 +32,7 @@ VBA `frmSendConfirm`(倉庫に発注データを送る確認ダイアログ)と
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -157,6 +158,9 @@ def create_order(
             "発注数": qty,
             # 送った端末。取り消せるのはこの端末だけ(`cancel_order`)
             "送信端末": terminal if terminal is not None else this_terminal(),
+            # コメントを結ぶ鍵(`order_comments`)。管理番号は手元でも共有でも
+            # 変わりうるので、作るときに世界で1つの番号を振る
+            "発注キー": uuid.uuid4().hex,
         },
         caller_name="create_order",
     )

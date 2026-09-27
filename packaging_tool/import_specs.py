@@ -154,6 +154,15 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("ロット番号", "ロット番号", to_text),
         ("使用日時", "使用日時", to_text),
     ],
+    # 発注ごとのやり取り。全端末が書き戻しで足していく(管理番号は手元で振り直す)
+    config.TBL_ORDER_COMMENT: [
+        ("発注キー", "発注キー", to_text),
+        ("コメントID", "コメントID", to_text),
+        ("書いた端末", "書いた端末", to_text),
+        ("書いた側", "書いた側", to_text),
+        ("本文", "本文", to_text),
+        ("書いた日時", "書いた日時", to_text),
+    ],
     "CornerboardMaster": [
         ("アングル丈", "アングル丈", to_int),
         ("データラベル", "データラベル", to_text),
@@ -225,6 +234,8 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         # どの端末が送ったか。取り消せるのはその端末だけ。共有に列が無い
         # (最初の送信がまだ)あいだは空で入り、どの現場からも取り消せる
         ("送信端末", "送信端末", to_text),
+        # 発注を見分ける鍵。コメントをこれで結ぶ(無い発注は `#共有の管理番号`)
+        ("発注キー", "発注キー", to_text),
     ],
     "PalletMaster": [
         ("幅", "幅", to_int),
@@ -391,7 +402,8 @@ BLANK_IS_MISSING: dict[str, tuple[str, ...]] = {
 # ボード使用実績も同じ。共有にはまだ無く、**最初に送った端末が作る**
 # (`sync_writeback.ensure_shared_tables`)。作られるまでは取り込まない
 # (手元の記録はそのまま残る)
-OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_BOARD_USAGE})
+OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_BOARD_USAGE,
+                                               config.TBL_ORDER_COMMENT})
                                    | frozenset(THRESHOLD_TABLES))
 
 # **取り込み元に無くても知らせない列**(表 → 取り込み元の列名)。
@@ -407,7 +419,7 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
 OPTIONAL_COLUMNS: dict[str, frozenset[str]] = {
     "仕掛ロット": frozenset({"BOX実績_枚本数", "前々工程実績_枚本数", "前工程実績_枚本数"}),
     # 最初に送った端末が共有に足す列(`sync_writeback.SHARED_ADDED_COLUMNS`)
-    config.TBL_WAREHOUSE_ORDER: frozenset({"送信端末"}),
+    config.TBL_WAREHOUSE_ORDER: frozenset({"送信端末", "発注キー"}),
 }
 
 # 梱包資材マスタ.sqlite3 ではなく、**看板マスタ.sqlite3(別ファイル)** から

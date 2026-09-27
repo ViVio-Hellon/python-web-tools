@@ -71,6 +71,14 @@
         ここからは「EXである」と分かる合図(品名 <b>EX</b>)と、
         どのロットかが分かる寸法だけを送ります。
       </p>
+      {# 送るときに倉庫へ添えるひとこと。**発注の欄ではない**(下書きでも打てる)。
+         送ったあとも、倉庫が確認するまでは一覧の「コメント」から書き足せる #}
+      <div class="field" style="align-items:flex-start;margin-top:8px">
+        <label for="sendComment">コメント</label>
+        <textarea class="input" id="sendComment" rows="2" maxlength="300"
+                  style="width:100%;resize:vertical"
+                  placeholder="倉庫へのひとこと(任意)。送ったあとも確認までは書き足せます"></textarea>
+      </div>
       <p class="status" id="sendStatus" hidden></p>
       <div class="btn-row" style="margin-top:10px">
         <button class="btn btn--commit" type="button" id="send">倉庫へ送信</button>
@@ -113,6 +121,8 @@
       <i class="ib ib--sm ib--accent" aria-hidden="true">注</i>
       <h3>{{ '受け取った発注' if is_material else '送った発注' }}</h3>
       <span class="badge badge--todo" id="pending" hidden></span>
+      {# 相手が書いた、この端末でまだ開いていないコメントの数 #}
+      <span class="badge badge--todo" id="unreadComments" hidden></span>
     </header>
     <div class="pad">
       <div class="field">
@@ -192,6 +202,19 @@
   <div class="pad">
     <dl class="fields fields--order" id="orderFields"></dl>
     <p class="why" id="orderCopied"></p>
+    {# 現場⇔倉庫のやり取り。**何件でも積む**(書き直さない)。書けるのは
+       倉庫が確認する前・取り消す前まで(`order_comments`) #}
+    <section class="comments" aria-labelledby="commentsTitle">
+      <h3 id="commentsTitle">やり取り</h3>
+      <ol class="comments__list" id="commentList"></ol>
+      <p class="why" id="commentEmpty" hidden>まだコメントはありません。</p>
+      <div class="comments__write" id="commentWrite">
+        <textarea class="input" id="commentText" rows="2" maxlength="300"
+                  placeholder="現場・倉庫へのひとこと"></textarea>
+        <button class="btn btn--commit" type="button" id="commentSend">書く</button>
+      </div>
+      <p class="why" id="commentWhy" hidden></p>
+    </section>
   </div>
 </dialog>
 
@@ -207,6 +230,20 @@
 
 {% block head %}
 <style>
+  /* やり取り。**自分の書き込みと相手の書き込みを見分けられる**ように並べる */
+  .comments { margin-top:14px; border-top:1px solid var(--line, #ddd); padding-top:10px; }
+  .comments h3 { font-size:1em; margin:0 0 6px; }
+  .comments__list { list-style:none; margin:0; padding:0; max-height:40vh; overflow:auto;
+                    display:flex; flex-direction:column; gap:6px; }
+  .comments__list li { padding:6px 10px; border-radius:6px;
+                       background:var(--surface-2, #f3f4f6); max-width:85%; }
+  .comments__list li.mine { align-self:flex-end; background:var(--accent-weak, #e6f0ff); }
+  .comments__list li.unread { outline:2px solid var(--warn, #d97706); }
+  .comments__meta { font-size:.8em; color:var(--muted, #666); }
+  .comments__text { white-space:pre-wrap; word-break:break-word; }
+  .comments__write { display:flex; gap:8px; align-items:flex-end; margin-top:8px; }
+  .comments__write textarea { flex:1; resize:vertical; }
+  .btn .newmark { color:var(--warn, #b45309); font-weight:bold; margin-left:2px; }
   /* 既定は2対。**列の幅で決める**(画面幅ではない) ── 一覧が16列あって
      結果側を広く取っているので、画面が1920でもこの列は 660px しかない。
      4対に詰めると入力欄が 70px になり、LotNo が読めなくなる */

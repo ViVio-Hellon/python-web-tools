@@ -124,6 +124,8 @@ def refresh_orders(conn: sqlite3.Connection,
             outbox_sync.mark_all_sent(conn, spec)
     # ボード使用実績も入れ直すが、画面の件数には数えない(発注ではない)
     imported.imported.pop(config.TBL_BOARD_USAGE, None)
+    # コメントは入れ直すが、発注の件数には数えない
+    comments = imported.imported.pop(config.TBL_ORDER_COMMENT, None)
     stock = imported.imported.pop(config.TBL_PALLET_MASTER, None)
     if stock:
         # 取り込みと同じく、入れ直したら適合範囲を計算し直す
@@ -133,7 +135,8 @@ def refresh_orders(conn: sqlite3.Connection,
     # 画面の「○件を取り込みました」は発注まわりの件数。PalletMaster の
     # 数千行を足すと、発注が来たように見える
     result.imported = imported.total
-    result.tables = len(imported.imported)
+    # コメントだけが届いたときも画面を出し直す(新しいコメントの印を出す)
+    result.tables = len(imported.imported) + (1 if comments is not None else 0)
     result.errors.extend(imported.errors)
     # **「変わっていた」は取り込み元の姿で決める。** 押されたから取り込んだ
     # だけのときに「新しいものがありました」と言うと、押すたびに何かが

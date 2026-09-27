@@ -56,7 +56,7 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                                  ("取り消し済", "確認済み")),
                   match_columns=("登録日時", "LotNo", "品名"),
                   number_column="管理番号",
-                  optional_columns=("送信端末",)),
+                  optional_columns=("送信端末", "発注キー")),
     WriteBackSpec(sqlite_table=config.TBL_STOCK_HISTORY,
                   access_table=config.TBL_STOCK_HISTORY,
                   key_column="id",
@@ -66,6 +66,11 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
     # 足すだけで、あとから変わる値は無い(印は無い)
     WriteBackSpec(sqlite_table=config.TBL_BOARD_USAGE,
                   access_table=config.TBL_BOARD_USAGE,
+                  key_column="管理番号",
+                  number_column="管理番号"),
+    # 発注ごとの現場⇔倉庫のやり取り。足すだけ(書き直さない)
+    WriteBackSpec(sqlite_table=config.TBL_ORDER_COMMENT,
+                  access_table=config.TBL_ORDER_COMMENT,
                   key_column="管理番号",
                   number_column="管理番号"),
 ]
@@ -87,6 +92,12 @@ SHARED_TABLE_DDL: dict[str, str] = {
         " 製品幅 INTEGER NOT NULL DEFAULT 0, 製品丈 INTEGER NOT NULL DEFAULT 0,"
         " パレット幅 INTEGER NOT NULL DEFAULT 0, パレット丈 INTEGER NOT NULL DEFAULT 0,"
         " ロット番号 TEXT NOT NULL DEFAULT '', 使用日時 TEXT NOT NULL DEFAULT '')"),
+    config.TBL_ORDER_COMMENT: (
+        f'CREATE TABLE IF NOT EXISTS "{config.TBL_ORDER_COMMENT}" ('
+        " 管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " 発注キー TEXT NOT NULL DEFAULT '', コメントID TEXT NOT NULL DEFAULT '',"
+        " 書いた端末 TEXT NOT NULL DEFAULT '', 書いた側 TEXT NOT NULL DEFAULT '',"
+        " 本文 TEXT NOT NULL DEFAULT '', 書いた日時 TEXT NOT NULL DEFAULT '')"),
 }
 
 
@@ -97,7 +108,7 @@ SHARED_TABLE_DDL: dict[str, str] = {
 #            発注は届ける(`optional_columns`)── 取り消しの絞り込みが
 #            効かないだけで、発注が止まるよりよい
 SHARED_ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
-    config.TBL_WAREHOUSE_ORDER: (("送信端末", "TEXT"),),
+    config.TBL_WAREHOUSE_ORDER: (("送信端末", "TEXT"), ("発注キー", "TEXT")),
 }
 
 

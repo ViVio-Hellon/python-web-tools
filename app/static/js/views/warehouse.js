@@ -50,6 +50,11 @@ function render(view) {
   el.found.textContent = view.found ? `${view.found} 件` : "";
   el.pending.hidden = !view.pending;
   el.pending.textContent = `未確認 ${view.pending}`;
+  if (el.unreadComments) {
+    el.unreadComments.hidden = !view.unread_comments;
+    el.unreadComments.textContent = `新しいコメント ${view.unread_comments}`;
+    el.unreadComments.title = "相手が書いたコメントのうち、この端末でまだ開いていないもの";
+  }
   // 数字だけでは何の数か読めない(現場の声:「未確認 4とはなんだ」)。
   // 見えている一覧のうち、倉庫がまだ受けていない件数
   el.pending.title = isMaterial
@@ -132,7 +137,7 @@ function rowElement(row) {
  * いた。開いただけで控えると、利用者が別に写していたものを黙って
  * 消すことになる。
  */
-function openOrder(row) {
+function openOrder(row, { focus = false } = {}) {
   el.orderTitle.textContent = row.values[copyColumn] || `管理番号 ${row.mgr_no}`;
   el.orderStatus.textContent = row.status;
   el.orderStatus.className = `st st--${row.status_kind}`;
@@ -141,7 +146,73 @@ function openOrder(row) {
   // 前の行で出した「コピーしました」を持ち越さない(VBA も選択のたびに
   // `lblCopyMsg` を空にしていた)
   el.orderCopied.textContent = "";
+  openedRow = row;
+  el.commentList.replaceChildren();
+  el.commentEmpty.hidden = true;
   el.orderModal.showModal();
+  loadComments(row, focus);
+}
+
+/* ================================================================
+   やり取り(コメント)
+
+   **書けるかどうか・理由はサーバが決める**(`write_why`)。開いたら
+   この端末では既読になる(サーバ側)ので、閉じたら一覧を取り直して
+   「新」の印を消す。
+   ================================================================ */
+let openedRow = null;
+
+async function loadComments(row, focus) {
+  try {
+    const body = await api.get(`/api/warehouse/comments?mgr_no=${row.mgr_no}`);
+    renderComments(body);
+    if (focus && !el.commentText.disabled) el.commentText.focus();
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+function renderComments(body) {
+  const items = (body.comments || []).map((c) => {
+    const li = document.createElement("li");
+    if (c.mine) li.classList.add("mine");
+    if (c.unread) li.classList.add("unread");
+    const meta = document.createElement("div");
+    meta.className = "comments__meta";
+    meta.textContent = `${c.side} ${c.terminal} ・ ${c.written_at}`
+      + (c.unread ? " ・ 新" : "");
+    const text = document.createElement("div");
+    text.className = "comments__text";
+    text.textContent = c.text;
+    li.append(meta, text);
+    return li;
+  });
+  el.commentList.replaceChildren(...items);
+  el.commentEmpty.hidden = items.length > 0;
+  if (items.length) items[items.length - 1].scrollIntoView({ block: "nearest" });
+  const why = body.write_why || "";
+  el.commentText.disabled = Boolean(why);
+  el.commentSend.disabled = Boolean(why);
+  el.commentWrite.hidden = Boolean(why);
+  el.commentWhy.hidden = !why;
+  el.commentWhy.textContent = why;
+}
+
+async function sendComment() {
+  if (!openedRow) return;
+  const text = el.commentText.value.trim();
+  if (!text) { el.commentText.focus(); return; }
+  try {
+    const body = await api.post("/api/warehouse/comment",
+                                { mgr_no: openedRow.mgr_no, text });
+    el.commentText.value = "";
+    renderComments(body);
+    toast(body.message || "コメントを書きました。", "ok");
+  } catch (err) {
+    // 断られても一覧は返る(書けない理由と、いまのやり取り)
+    if (err.body && err.body.comments) renderComments(err.body);
+    toastError(err);
+  }
 }
 
 function detailRow(row, field) {
@@ -206,6 +277,22 @@ function actionsCell(row) {
     // たどり直しで、現場から「非常に手間」と言われた
     box.appendChild(button("Lotを開く", "btn--find",
                            () => peekLot(row.lot_no)));
+  }
+
+  // やり取り。**あるときだけ**件数と、未読があれば「新」を出す。押すと
+  // 発注を開いてやり取りの欄へ。まだ無い発注は、行を開けば書く欄がある
+  // (全部の行に出すと、130行の一覧でボタンが3つずつ並んで読めなくなる)
+  if (row.comments) {
+    const label = `コメント ${row.comments}`;
+    const b = button(label, "btn--find", () => openOrder(row, { focus: true }));
+    if (row.unread) {
+      const mark = document.createElement("span");
+      mark.className = "newmark";
+      mark.textContent = `新${row.unread}`;
+      b.appendChild(mark);
+    }
+    if (row.latest_comment) b.title = `最新: ${row.latest_comment}`;
+    box.appendChild(b);
   }
 
   // できることはサーバが返す。ここで条件を組み立て直さない
@@ -379,6 +466,8 @@ async function send() {
   // 同じか**を確かめる ── 画面で打てなくするだけにしない(守りは1枚では
   // ない)。手入力は別のロットの分を起こすことがあるので掛からない
   values.from_draft = drafts.length > 0;
+  // 倉庫へのひとこと。**発注の欄ではない**ので、下書きでも打てる
+  if (el.sendComment) values.comment = el.sendComment.value.trim();
 
   try {
     const body = await api.post("/api/warehouse/send", values);
@@ -386,6 +475,7 @@ async function send() {
     toast(body.message, "ok");
     // 送った内容は消す。同じものを二度送らせないため
     for (const node of Object.values(el.fields)) node.value = "";
+    if (el.sendComment) el.sendComment.value = "";
     dropDraft();
     await load();
   } catch (err) {
@@ -484,7 +574,8 @@ export function start(state, material, lotPeekWhy) {
   draftAt = 0;
   exBlankKeys = state.ex_blank_keys || [];
   draftIsEx = false;
-  for (const id of ["rows", "listNote", "found", "pending", "q", "refresh",
+  for (const id of ["rows", "listNote", "found", "pending", "unreadComments", "q", "refresh",
+                    "sendComment",
                     "send", "clearForm", "sendStatus", "cancelled", "exNote",
                     "drafts", "draftPrev", "draftNext", "draftPos", "draftNote"]) {
     el[id] = document.getElementById(id);
@@ -508,11 +599,23 @@ export function start(state, material, lotPeekWhy) {
   // 確かめる場所なので、ボタンはテンプレートにも出していない
   for (const id of ["orderModal", "orderTitle", "orderStatus",
                     "orderFields", "orderClose", "orderCopied",
+                    "commentList", "commentEmpty", "commentWrite", "commentText",
+                    "commentSend", "commentWhy",
                     "askModal", "askTitle", "askFields", "askWhy",
                     "askYes", "askNo"]) {
     el[id] = document.getElementById(id);
   }
   el.orderClose.addEventListener("click", () => el.orderModal.close());
+  el.commentSend.addEventListener("click", sendComment);
+  el.commentText.addEventListener("keydown", (event) => {
+    // Ctrl+Enter で書く(Enter だけは改行)
+    if (event.key === "Enter" && event.ctrlKey) { event.preventDefault(); sendComment(); }
+  });
+  // 閉じたら一覧を取り直す。開いたコメントは既読になったので「新」を消す
+  el.orderModal.addEventListener("close", () => {
+    if (openedRow && openedRow.unread) load();
+    openedRow = null;
+  });
   el.orderModal.addEventListener("click", (event) => {
     if (event.target === el.orderModal) el.orderModal.close();
   });
