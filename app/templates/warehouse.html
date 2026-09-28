@@ -231,19 +231,22 @@
 {% block head %}
 <style>
   /* やり取り。**自分の書き込みと相手の書き込みを見分けられる**ように並べる */
-  .comments { margin-top:14px; border-top:1px solid var(--line, #ddd); padding-top:10px; }
+  .comments { margin-top:14px; border-top:1px solid var(--rule); padding-top:10px; }
   .comments h3 { font-size:1em; margin:0 0 6px; }
   .comments__list { list-style:none; margin:0; padding:0; max-height:40vh; overflow:auto;
                     display:flex; flex-direction:column; gap:6px; }
-  .comments__list li { padding:6px 10px; border-radius:6px;
-                       background:var(--surface-2, #f3f4f6); max-width:85%; }
-  .comments__list li.mine { align-self:flex-end; background:var(--accent-weak, #e6f0ff); }
-  .comments__list li.unread { outline:2px solid var(--warn, #d97706); }
-  .comments__meta { font-size:.8em; color:var(--muted, #666); }
+  /* 色はアプリの色(tokens.css)だけを使う。無い名前に既定の色を添えると、
+     暗い画面で「明るい地に明るい字」になって読めなかった */
+  .comments__list li { padding:6px 10px; border-radius:6px; color:var(--ink);
+                       background:var(--raised); border:1px solid var(--rule); max-width:85%; }
+  .comments__list li.mine { align-self:flex-end; background:var(--accent-soft);
+                            border-color:var(--accent-line); }
+  .comments__list li.unread { outline:2px solid var(--warn-fg); }
+  .comments__meta { font-size:.8em; color:var(--muted); }
   .comments__text { white-space:pre-wrap; word-break:break-word; }
   .comments__write { display:flex; gap:8px; align-items:flex-end; margin-top:8px; }
   .comments__write textarea { flex:1; resize:vertical; }
-  .btn .newmark { color:var(--warn, #b45309); font-weight:bold; margin-left:2px; }
+  .btn .newmark { color:var(--warn-fg); font-weight:bold; margin-left:2px; }
   /* 既定は2対。**列の幅で決める**(画面幅ではない) ── 一覧が16列あって
      結果側を広く取っているので、画面が1920でもこの列は 660px しかない。
      4対に詰めると入力欄が 70px になり、LotNo が読めなくなる */
