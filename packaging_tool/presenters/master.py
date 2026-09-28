@@ -29,6 +29,8 @@ class MasterViewModel:
     # --- 中身(面を開いてから読む) ---
     loaded: bool = False
     source: str = ""
+    source_note: str = ""       # 書き先のファイル(ファイルの名前まで)
+    source_why: str = ""        # 梱包資材マスタが見つからない理由(候補が多すぎる など)
     tables: list[master_admin.TableInfo] = field(default_factory=list)
     table: str = ""
     query: str = ""
@@ -57,6 +59,9 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
     found = path or data_sync.find_material_db()
     view.loaded = True
     view.source = str(found) if found else ""
+    if found is None:
+        from .. import sync_sources
+        view.source_why = sync_sources.material_db_missing_why()
     view.tables = master_admin.tables(found)
 
     view.table = _pick(view.tables, table)
@@ -76,6 +81,7 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
     # は表が決まらないと判断できないので、表が決まった時点で引き直す
     view.can_edit, view.edit_why = master_admin.can_edit(conn, view.table)
 
+    view.source_note = _where(found)
     view.page = master_admin.page(found, view.table, query=view.query,
                                   sort=sort, sort_dir=sort_dir)
     # 打ち込める欄は、**取り込み元に本当にある列**だけにする。
@@ -97,6 +103,15 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
     return view
 
 
+def _where(found: Optional[Path]) -> str:
+    """書き先の言い方。直すと**このファイル**が変わる、と名前まで言う。"""
+    if found is None:
+        return ""
+    from .. import sync_sources
+    return (sync_sources.where_written(found)
+            + "。手元の写しではなく元のファイルを直すので、他の端末にも効きます。")
+
+
 def _pick(tables: list[master_admin.TableInfo], wanted: str) -> str:
     """出す表を決める。
 
@@ -116,6 +131,8 @@ def to_dict(view: MasterViewModel) -> dict[str, Any]:
         "source_dir": view.source_dir,
         "loaded": view.loaded,
         "source": view.source,
+        "source_note": view.source_note,
+        "source_why": view.source_why,
         "tables": [t.to_dict() for t in view.tables],
         "table": view.table,
         "query": view.query,

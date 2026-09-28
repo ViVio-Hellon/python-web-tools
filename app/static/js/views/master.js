@@ -27,7 +27,7 @@ let editing = null;       // いま開いている行(足すときは null)
 
 const IDS = ["mTables", "mMark", "mTitle", "mCan", "mCount", "mQuery", "mFind",
              "mAdd", "mCreate", "mRebuild", "mDrop", "mReload", "mWhy", "mError", "mHead",
-             "mRows", "mNote",
+             "mRows", "mNote", "mSource",
              "mEdit", "mEditTitle", "mEditKind", "mEditWhy", "mEditError",
              "mFields", "mFoot", "mSave", "mDelete", "mConfirm",
              "mDeleteYes", "mDeleteNo"];
@@ -199,7 +199,8 @@ function render(next) {
     note.className = "why";
     note.textContent = view.source
       ? "取り込み元に表がありません。"
-      : "梱包資材マスタが見つかりません。「取り込み元」の面で置き場所を確かめてください。";
+      : (view.source_why
+         || "梱包資材マスタが見つかりません。「取り込み元」の面で置き場所を確かめてください。");
     items.push(note);
   }
   el.mTables.replaceChildren(...items);
@@ -256,6 +257,8 @@ function render(next) {
   // 出しきれなかった分は**黙って落とさない**(文言はサーバが持つ)
   el.mNote.hidden = !page.note;
   el.mNote.textContent = page.note || "";
+  // 書き先はファイルの名前まで(フォルダだけでは、並んだどのファイルか分からない)
+  if (el.mSource && view.source_note) el.mSource.textContent = view.source_note;
 
   if (view.message) toast(view.message, "ok");
 }

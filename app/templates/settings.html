@@ -242,6 +242,7 @@
           </table>
         </div>
         <p class="why" id="mNote" hidden></p>
+        {# 表を開くと、ファイルの名前まで入った文に置き換わる(`source_note`) #}
         <p class="why" id="mSource">
           書き先は取り込み元({{ master.source_dir }})です。
           手元の写しではなく<b>元のファイル</b>を直すので、他の端末にも効きます。
@@ -801,6 +802,7 @@
       <button class="btn" type="button" id="bringLook">中を見る</button>
     </span>
   </div>
+  <p class="why" id="bringDest" hidden></p>
   <p class="why" id="bringConverted" hidden></p>
   <p class="status" id="bringNote" hidden></p>
   <div class="tablewrap tablewrap--browse" id="bringList" hidden>

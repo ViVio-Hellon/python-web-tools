@@ -58,6 +58,26 @@ class FindFilesTests(unittest.TestCase):
         self.assertEqual(data_sync.find_material_db(self._tmp).name,
                          "資材マスタ_2026.sqlite3")
 
+    def test_候補が2つ以上なら推し量って選ばない(self):
+        """関係の無いファイルに書かないよう、どれが梱包資材マスタか決めつけない。"""
+        from packaging_tool import sync_sources
+        (self._tmp / "資材マスタ_2026.sqlite3").write_text("")
+        (self._tmp / "Access変換_テスト.sqlite3").write_text("")
+        self.assertIsNone(data_sync.find_material_db(self._tmp))
+        why = sync_sources.material_db_missing_why(self._tmp)
+        self.assertIn("決められません", why)
+        self.assertIn("資材マスタ_2026.sqlite3", why)
+        self.assertIn("Access変換_テスト.sqlite3", why)
+
+    def test_看板やパレット閾値のファイルを梱包資材マスタにしない(self):
+        for name in (config.KANBAN_DB_NAME, config.THRESHOLD_DB_NAME):
+            (self._tmp / name).write_text("")
+        self.assertIsNone(data_sync.find_material_db(self._tmp))
+        # ほかに1つだけあれば、それを使う
+        (self._tmp / "資材マスタ_2026.sqlite3").write_text("")
+        self.assertEqual(data_sync.find_material_db(self._tmp).name,
+                         "資材マスタ_2026.sqlite3")
+
     def test_finds_the_db_suffix_too(self):
         """上流の付け方に合わせてこちらが折れる(.db でも拾う)。"""
         (self._tmp / "梱包資材マスタ.db").write_text("")

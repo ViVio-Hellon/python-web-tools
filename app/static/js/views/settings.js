@@ -795,6 +795,11 @@ function startBrowser() {
 const bring = {};
 
 function renderBring(plan) {
+  // どのファイルに書くのか(ファイルの名前まで)。見ているファイルと違わないか確かめられる
+  if (bring.dest) {
+    bring.dest.hidden = !plan.dest_note;
+    bring.dest.textContent = plan.dest_note || "";
+  }
   bring.converted.hidden = !plan.converted;
   bring.converted.textContent = plan.converted || "";
   bring.note.hidden = !plan.message;
@@ -956,6 +961,7 @@ function startBring() {
                            ["note", "bringNote"], ["list", "bringList"],
                            ["rows", "bringRows"], ["run", "bringRun"],
                            ["converted", "bringConverted"], ["drop", "bringDrop"],
+                           ["dest", "bringDest"],
                            ["refresh", "bringRefresh"],
                            ["openDrop", "bringOpenDrop"]]) {
     bring[key] = document.getElementById(id);

@@ -114,6 +114,7 @@ class Plan:
     ok: bool = False
     message: str = ""
     candidates: list[Candidate] = field(default_factory=list)
+    dest_note: str = ""           # 書き先のファイル(`sync_sources.where_written`)
     converted: str = ""           # Access を変換して読んだとき、その旨(読み取り方式)
     converter: str = ""           # 使った(使う)変換ツールのフォルダ
 
@@ -394,9 +395,10 @@ def plan(source_path: str) -> Plan:
         return out
     dest = _dest()
     if dest is None:
-        out.message = "梱包資材マスタが見つかりません。「取り込み元」で置き場所を確かめてください。"
+        out.message = sync_sources.material_db_missing_why()
         return out
     out.dest = str(dest)
+    out.dest_note = sync_sources.where_written(dest)
     if _same(src, dest):
         out.message = ("選んだのは、いま使っている梱包資材マスタそのものです。"
                        "Access から変換した別のファイルを選んでください。")
@@ -486,7 +488,7 @@ def bring(source_path: str, tables: list[str]) -> BringResult:
         return BringResult(False, f"ファイルが見つかりません: {src}", REFUSE_NO_FILE)
     dest = _dest()
     if dest is None:
-        return BringResult(False, "梱包資材マスタが見つかりません。", REFUSE_NO_DEST)
+        return BringResult(False, sync_sources.material_db_missing_why(), REFUSE_NO_DEST)
     if _same(src, dest):
         return BringResult(False, "選んだのは、いま使っている梱包資材マスタそのものです。",
                            REFUSE_SAME_FILE)
@@ -579,7 +581,8 @@ def bring(source_path: str, tables: list[str]) -> BringResult:
                            + "。梱包資材マスタは変えていません。",
                            REFUSE_WRITE_FAILED, backup=str(backup))
     message = (f"梱包資材マスタに {done} を足しました。今ある表には触っていません。"
-               "マスタ管理の一覧に「足」の印で出ていて、そのまま直せます。")
+               "マスタ管理の一覧に「足」の印で出ていて、そのまま直せます。"
+               f"(書いたファイル: {dest})")
     if failed:
         message += " ただし次は持ってこられませんでした: " + "、".join(failed)
     return BringResult(not failed, message, "" if not failed else REFUSE_WRITE_FAILED,
@@ -676,7 +679,7 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
         return BringResult(False, f"ファイルが見つかりません: {src}", REFUSE_NO_FILE)
     dest = _dest()
     if dest is None:
-        return BringResult(False, "梱包資材マスタが見つかりません。", REFUSE_NO_DEST)
+        return BringResult(False, sync_sources.material_db_missing_why(), REFUSE_NO_DEST)
     if _same(src, dest):
         return BringResult(False, "選んだのは、いま使っている梱包資材マスタそのものです。",
                            REFUSE_SAME_FILE)
@@ -767,7 +770,7 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     rebuilt = {t for t, _o in kept_old}
     parts = [f"{t}({b:,}行 → {a:,}行{'・作り直し' if t in rebuilt else ''})"
              for t, b, a in done]
-    message = "Access の最新にしました: " + "、".join(parts) + "。"
+    message = "Access の最新にしました: " + "、".join(parts) + f"。(書いたファイル: {dest})"
     if kept_old:
         message += (" 作り直す前の表は "
                     + "、".join(f"{old}" for _t, old in kept_old)
@@ -930,7 +933,8 @@ def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
 
 def plan_dict(p: Plan) -> dict[str, Any]:
     return {
-        "source": p.source, "dest": p.dest, "ok": p.ok, "message": p.message,
+        "source": p.source, "dest": p.dest, "dest_note": p.dest_note,
+        "ok": p.ok, "message": p.message,
         "converted": p.converted, "converter": p.converter,
         # 持ってこられる表に文字化けの疑いがある(画面は注意の色にする)
         "warn": any(c.suspect for c in p.new_tables),

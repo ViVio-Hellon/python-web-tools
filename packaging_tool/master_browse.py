@@ -165,8 +165,8 @@ def page(path: Optional[Path], table: str, *, query: str = "",
                 editable=managed is not None or brought,
                 why="" if brought else view_only_why(table))
     if path is None:
-        view.error = (f"梱包資材マスタが見つかりません。"
-                      f"{config.master_db_dir()} を確かめてください。")
+        from . import sync_sources
+        view.error = sync_sources.material_db_missing_why()
         return view
 
     names = source_db.columns(path, table)

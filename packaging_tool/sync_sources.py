@@ -79,25 +79,80 @@ def list_tables(path: Path) -> list[str]:
 def find_material_db(directory: Optional[Path] = None) -> Optional[Path]:
     """梱包資材マスタの sqlite3 をフォルダから探す。
 
-    既定のファイル名(拡張子違いも可)で見つからなければ、そのフォルダに
-    ある sqlite3 のうち仕掛台帳(SIKA*)以外で最初のものを使う。
-    利用者がファイル名を変えていても動くようにするため。
+    既定のファイル名(拡張子違いも可)で見つからなければ、そのフォルダの
+    sqlite3 のうち、**梱包資材マスタの候補がただ1つのときだけ**それを使う
+    (利用者がファイル名を変えていても動くようにするため)。
+
+    【候補が2つ以上なら選ばない】
+    以前は、候補のうち名前順で最初のものを**黙って**使っていた。書き込み
+    (表を持ってくる・マスタ管理)もそのファイルへ行くので、関係の無い
+    ファイルに表を足しかねない(現場の声:「関係ないファイルにテーブル
+    追加したりしてたの？」)。どれが梱包資材マスタかは推し量らず、見つから
+    ない扱いにして理由を言う(`material_db_missing_why`)。
     """
     directory = Path(directory or config.master_db_dir())
     named = source_db.find(directory, config.MATERIAL_DB_NAME)
     if named is not None:
         return named
-    # **名前ではなく頭で外す。** 以前はこの3ファイルの名前とぴったり
-    # 一致するものだけを外していたが、上流がファイル名を変えたときに
-    # (SIKALOTNOW → SIKALOT)、**古い名前で残っているファイルが
-    # 梱包資材マスタとして拾われる**。仕掛台帳はどれも SIKA で始まるので、
-    # 上の説明どおり頭で見る
-    for path in source_db.list_source_files(directory):
-        if path.stem.upper().startswith("SIKA"):
-            continue
-        log.info("梱包資材マスタとして %s を使います", path.name)
-        return path
+    found = material_candidates(directory)
+    if len(found) == 1:
+        log.info("梱包資材マスタとして %s を使います(既定の名前のファイルが無いため)",
+                 found[0].name)
+        return found[0]
+    if found:
+        log.warning("梱包資材マスタを決められません。候補が %s 個あります: %s",
+                    len(found), ", ".join(f.name for f in found))
     return None
+
+
+def material_candidates(directory: Path) -> list[Path]:
+    """梱包資材マスタかもしれないファイル。**役目の決まったファイルは外す。**
+
+    仕掛台帳(SIKA で始まる。**名前ではなく頭で外す** ── 上流が SIKALOTNOW →
+    SIKALOT と改名したとき古い名前のファイルが残った)、看板マスタ、
+    パレット閾値マスタ、置き換え待ちの `.pending_` は梱包資材マスタではない。
+    """
+    known = {Path(config.KANBAN_DB_NAME).stem, Path(config.THRESHOLD_DB_NAME).stem}
+    return [f for f in source_db.list_source_files(directory)
+            if not f.stem.upper().startswith("SIKA") and f.stem not in known
+            and ".pending_" not in f.name]
+
+
+def material_db_missing_why(directory: Optional[Path] = None) -> str:
+    """梱包資材マスタが見つからないときの言い方。候補が多すぎるならそう言う。"""
+    directory = Path(directory or config.master_db_dir())
+    found = material_candidates(directory)
+    if len(found) > 1:
+        return (f"梱包資材マスタを決められません。{directory} に"
+                f" {Path(config.MATERIAL_DB_NAME).stem}.sqlite3 が無く、"
+                f"sqlite3 が {len(found)} 個あります({'、'.join(f.name for f in found)})。"
+                f"使うファイルの名前を {Path(config.MATERIAL_DB_NAME).stem}.sqlite3 に"
+                "してください(関係の無いファイルに書かないよう、推し量って選びません)。")
+    return (f"梱包資材マスタが見つかりません({directory})。"
+            "「取り込み元」で置き場所を確かめてください。")
+
+
+def where_written(path: Optional[Path]) -> str:
+    """書き先のファイルを、**ファイルの名前まで**言う文。
+
+    「取り込んだのに .sqlite3 が変わっていない」(現場の声)は、見ている
+    ファイルと書いたファイルが違うと起きる。フォルダだけでは、同じ
+    フォルダに並んだどのファイルかが分からない。既定の名前のファイルが
+    無くて別のファイルを使っているとき(`find_material_db`)と、同じ
+    フォルダにほかの sqlite3 が並んでいるときは、それも言う。
+    """
+    if path is None:
+        return ""
+    path = Path(path)
+    said = f"書き先のファイル: {path}"
+    if path.stem != Path(config.MATERIAL_DB_NAME).stem:
+        said += (f"(フォルダに {Path(config.MATERIAL_DB_NAME).stem}.sqlite3 が無いので、"
+                 "このファイルを梱包資材マスタとして使っています)")
+    # 役目の決まっているほかの取り込み元(仕掛台帳・看板・パレット閾値)は数えない
+    others = [f.name for f in material_candidates(path.parent) if f.name != path.name]
+    if others:
+        said += (f"。同じフォルダのほかのファイル({'、'.join(others)})には書いていません")
+    return said
 
 
 def find_kanban_db(directory: Optional[Path] = None) -> Optional[Path]:

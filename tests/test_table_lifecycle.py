@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from pathlib import Path
 
 from tests.test_web_settings import TableBringTests
 
@@ -343,6 +344,53 @@ class UntypedColumnTests(LifecycleBase):
         self.add("文字の表", {"管理番号": "2", "単位質量": "0.2"})
         self.assertEqual(self.master_rows('SELECT typeof(管理番号) FROM "文字の表"'),
                          [("text",), ("text",)])
+
+
+class WhereWrittenTests(LifecycleBase):
+    """どのファイルに書いたかを、ファイルの名前まで言う。
+
+    現場の声:「表を取り込んでも .sqlite3 が更新されていない。ツールの表示では
+    更新されている」── 見ているファイルと書いたファイルが違うと、こう見える。
+    """
+
+    def test_中を見ると書き先のファイルを言う(self) -> None:
+        plan = self.plan()
+        self.assertIn(f"書き先のファイル: {self.master}", plan["dest_note"])
+        self.assertNotIn("ほかのファイル", plan["dest_note"])
+
+    def test_持ってきたら書いたファイルを言いファイルそのものが変わっている(self) -> None:
+        import os
+        import time
+        before = os.stat(self.master).st_mtime_ns
+        time.sleep(0.02)
+        body = self.bring([BROUGHT])
+        self.assertIn(f"書いたファイル: {self.master}", body["message"])
+        self.assertGreater(os.stat(self.master).st_mtime_ns, before)
+        conn = sqlite3.connect(self.master)
+        self.assertEqual(conn.execute(f'SELECT COUNT(*) FROM "{BROUGHT}"').fetchone(), (2,))
+        conn.close()
+
+    def test_同じフォルダにほかのsqlite3があれば書いていないと言う(self) -> None:
+        from packaging_tool import config
+        sqlite3.connect(self.dir / "梱包資材マスタ_古い写し.sqlite3").close()
+        # 役目の決まっている取り込み元は数えない
+        sqlite3.connect(self.dir / f"{Path(config.THRESHOLD_DB_NAME).stem}.sqlite3").close()
+        plan = self.plan()
+        self.assertIn("梱包資材マスタ_古い写し.sqlite3", plan["dest_note"])
+        self.assertIn("書いていません", plan["dest_note"])
+        self.assertNotIn(Path(config.THRESHOLD_DB_NAME).stem, plan["dest_note"])
+
+    def test_既定の名前のファイルが無ければ使っているファイルを言う(self) -> None:
+        other = self.dir / "マスタ_別名.sqlite3"
+        self.master.rename(other)
+        plan = self.plan()
+        self.assertIn(f"書き先のファイル: {other}", plan["dest_note"])
+        self.assertIn("このファイルを梱包資材マスタとして使っています", plan["dest_note"])
+
+    def test_マスタ管理も書き先をファイルの名前まで言う(self) -> None:
+        self.bring([BROUGHT])
+        note = self.browse(BROUGHT)["source_note"]
+        self.assertIn(f"書き先のファイル: {self.master}", note)
 
 
 if __name__ == "__main__":

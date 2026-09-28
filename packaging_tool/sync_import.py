@@ -302,9 +302,7 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
         import_diag.write("    表と行数: " + _counts_text(path))
     if path is None:
         result = ImportResult()
-        result.errors.append(
-            f"梱包資材マスタが見つかりません。{config.master_db_dir()} に "
-            f"{config.MATERIAL_DB_NAME} を置いてください。")
+        result.errors.append(sync_sources.material_db_missing_why())
         return result
 
     log.info("マスタ取り込み開始: %s", path)
