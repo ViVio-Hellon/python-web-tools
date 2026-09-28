@@ -239,8 +239,18 @@
      暗い画面で「明るい地に明るい字」になって読めなかった */
   .comments__list li { padding:6px 10px; border-radius:6px; color:var(--ink);
                        background:var(--raised); border:1px solid var(--rule); max-width:85%; }
-  .comments__list li.mine { align-self:flex-end; background:var(--accent-soft);
-                            border-color:var(--accent-line); }
+  /* 書いた側で地の色を分ける。色はモード切替と同じ(現場=青・倉庫=橙)。
+     色だけに頼らないよう、見出しに「現場」「倉庫」の字も出している */
+  .comments__list li[data-side="field"] {
+    background:color-mix(in srgb, var(--act-run) 20%, var(--surface));
+    border-color:color-mix(in srgb, var(--act-run) 40%, var(--surface));
+    border-left:4px solid var(--act-run); }
+  .comments__list li[data-side="material"] {
+    background:color-mix(in srgb, var(--act-select) 20%, var(--surface));
+    border-color:color-mix(in srgb, var(--act-select) 40%, var(--surface));
+    border-left:4px solid var(--act-select); }
+  /* 自分の書いたものは右に寄せる(色は書いた側のまま) */
+  .comments__list li.mine { align-self:flex-end; }
   .comments__list li.unread { outline:2px solid var(--warn-fg); }
   .comments__meta { font-size:.8em; color:var(--muted); }
   .comments__text { white-space:pre-wrap; word-break:break-word; }

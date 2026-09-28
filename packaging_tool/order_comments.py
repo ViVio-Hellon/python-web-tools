@@ -197,6 +197,9 @@ def _same(a: str, b: str) -> bool:
 
 def to_dict(comment: Comment) -> dict:
     return {"id": comment.comment_id, "terminal": comment.terminal,
-            "side": comment.side, "text": comment.text,
+            "side": comment.side,
+            # 画面が色を分けるための鍵(字の「現場」「倉庫」で比べさせない)
+            "side_key": "material" if comment.side == SIDE_MATERIAL else "field",
+            "text": comment.text,
             "written_at": comment.written_at, "mine": comment.mine,
             "unread": comment.unread}

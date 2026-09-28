@@ -147,6 +147,7 @@ class RouteTests(CommentTestBase):
         body = self.client.get(f"/api/warehouse/comments?mgr_no={no}",
                                headers=self.headers).get_json()
         self.assertEqual([c["unread"] for c in body["comments"]], [True])   # 開いた時点の印
+        self.assertEqual([c["side_key"] for c in body["comments"]], ["material"])  # 色分けの鍵
         state = self.client.get("/api/warehouse/orders", headers=self.headers).get_json()
         self.assertEqual(state["unread_comments"], 0)
 

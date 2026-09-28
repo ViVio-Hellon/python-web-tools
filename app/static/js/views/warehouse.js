@@ -176,6 +176,8 @@ function renderComments(body) {
   const items = (body.comments || []).map((c) => {
     const li = document.createElement("li");
     if (c.mine) li.classList.add("mine");
+    // 書いた側で地の色を分ける(現場・倉庫)
+    li.dataset.side = c.side_key || "field";
     if (c.unread) li.classList.add("unread");
     const meta = document.createElement("div");
     meta.className = "comments__meta";
