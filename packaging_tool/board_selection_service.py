@@ -91,14 +91,31 @@ def apply_pallet_size(width_text: str, length_text: str) -> tuple[ApplyResult, P
     return ApplyResult(True, f"パレット: {width} × {length} (設定済)"), palette
 
 
+def stack_note(two_stack: bool, stack_dir: str, single: int = 0) -> str:
+    """製品サイズの表示に添える2山の断り(VBA `btnApplyProductSize_Click` の `yamaNote`)。"""
+    if not two_stack:
+        return ""
+    if stack_dir in ("幅", "丈"):
+        return f" ※2山({stack_dir}{single}×2)"
+    return " ※2山積(向き未決定→1山扱い)"
+
+
 def apply_product_size(
-    width_text: str, length_text: str, palette: Palette,
+    width_text: str, length_text: str, palette: Palette, *,
+    two_stack: bool = False, stack_dir: str = "",
 ) -> tuple[ApplyResult, ProductSize, bool]:
     """VBA `btnApplyProductSize_Click` の移植。
 
     製品サイズがパレットに収まるか確認し、通常向きで収まらず回転すれば
     収まる場合は自動的に幅・丈を入れ替える。戻り値は
     (結果, 製品サイズ, 回転したか)。
+
+    2山積(`two_stack`)で向き(`stack_dir`)が決まっていれば、その向きを
+    2倍して**2山分を1つの製品として**扱う。上用の選定・配置、下用の補填、
+    カバー表示、切断依頼はすべてこの製品サイズを見るので、2山分を基準に動く。
+    渡す値は1山分のまま ── パレット検索は入力を2倍して探すので、
+    入力のほうを2倍にすると次の検索で4倍になる。向きが決まっていなければ
+    1山として扱う(パレット検索をやり直してもらう)。
     """
     if not (_is_numeric(width_text) and _is_numeric(length_text)):
         return ApplyResult(False, "製品サイズには数値を入力してください。", REFUSE_BAD_INPUT), ProductSize(), False
@@ -109,6 +126,18 @@ def apply_product_size(
 
     if not palette.is_set:
         return ApplyResult(False, "先にパレットサイズを設定してください。", REFUSE_BUSINESS), ProductSize(), False
+
+    yama = ""
+    if two_stack:
+        if stack_dir == "幅":
+            yama = stack_note(two_stack, stack_dir, width)
+            width *= 2
+        elif stack_dir == "丈":
+            yama = stack_note(two_stack, stack_dir, length)
+            length *= 2
+        else:
+            yama = stack_note(two_stack, "")
+        log.debug("apply_product_size: 2山 向き=[%s] → 製品 %sx%s", stack_dir, width, length)
 
     normal_fit = width <= palette.width and length <= palette.length
     rotated_fit = width <= palette.length and length <= palette.width
@@ -126,7 +155,8 @@ def apply_product_size(
         rotated = True
 
     note = " ※回転済(幅丈入替)" if rotated else ""
-    return ApplyResult(True, f"製品: {width} × {length} (設定済){note}"), ProductSize(width=width, length=length), rotated
+    return (ApplyResult(True, f"製品: {width} × {length} (設定済){note}{yama}"),
+            ProductSize(width=width, length=length), rotated)
 
 def list_board_types(conn: sqlite3.Connection) -> list[str]:
     """VBA `InitializeAvailableBoards` 内の `cboBoardType` 初期候補構築の移植。

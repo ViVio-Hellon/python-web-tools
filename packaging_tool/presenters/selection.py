@@ -1086,8 +1086,11 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
         view.product_width = str(context.product_width)
         view.product_length = str(context.product_length)
     if session.product.is_set:
+        # 2山は2山分を1つの製品として確定している。**そう書かないと、
+        # 入力欄(1山分)と数字が合わない理由が分からない**
         view.product_status = (f"製品: {session.product.width} × "
-                               f"{session.product.length} (設定済)")
+                               f"{session.product.length} (設定済)"
+                               f"{session.product_stack_note}")
         view.product_set = True
 
     # この寸法がどこから来たのか。**人が打った数字ではない**ことが

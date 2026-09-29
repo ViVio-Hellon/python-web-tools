@@ -59,6 +59,7 @@ from .selection_common import (  # noqa: F401 - ここから外へも公開す�
     REFUSE_NOT_FOUND, REFUSE_NOT_LISTED, REFUSE_NO_CANDIDATES, TOGGLES,
     log_placed)
 from .selection_angle import AngleMixin
+from .pallet_common import KIND_WIDTH2
 from .pattern_store import METHOD_NORMAL
 from .selection_records import RecordsMixin, RestoredFacts
 from .selection_tiling import (  # noqa: F401 - ここから外へも公開する
@@ -82,6 +83,15 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
     show_all: bool = False      # EXまで表示
     ex_only: bool = False       # EXオンリー(EX受注のときだけ効く)
     two_stack: bool = False     # 2山積
+    # 2山の向き(VBA `m_2YamaDir`)。"幅" / "丈" / ""(未決定=1山として扱う)。
+    # パレット検索が決め、「セット」がこの向きで製品サイズを2倍する。
+    # 2山積の切り替え・パレット検索のやり直し・ロット切替・実績読込で忘れる
+    stack_dir: str = ""
+    # 確定した製品サイズ(`product`)のうち、2山で2倍した辺("width" / "length")
+    # と、その断り書き。**入力欄へ書き戻すときは1山分に戻す** ── 2倍のまま
+    # 戻すと、次のパレット検索で4倍になる
+    product_stack_axis: str = ""
+    product_stack_note: str = ""
     # 疲労度優先は `work_context` が持つ(下の property)
 
     # 一覧が何を出しているか(上の3種)と、直接検索の条件。
@@ -254,6 +264,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                       "製品サイズの確定を解除します",
                       before_width, before_length, palette.width, palette.length)
             self.product = svc.ProductSize()
+            self.forget_product_stack()
             # **黙って解除しない。** 押した人は製品サイズが生きている
             # つもりでいるので、ボード選定が押せない理由が分からなくなる
             self.presenter.user_log.log(
@@ -266,6 +277,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         """VBA `btnClearPalProd_Click`。"""
         self.palette = svc.Palette()
         self.product = svc.ProductSize()
+        self.forget_product_stack()
         self.list_mode = LIST_ALL
         self.direct_width = self.direct_length = ""
         self.live_product_width = self.live_product_length = ""
@@ -289,22 +301,78 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self.pallet_row = row
         return BoardOpResult(True, "")
 
+    def decide_stack_for_row(self, width: int, length: int, symbol: str,
+                             product_width: int, product_length: int) -> bool:
+        """一覧から選んだ行で、2山の向き(`stack_dir`)を決める。戻りは「回転して当たったか」。
+
+        VBA は「パレット検索」が向きを決める。Web版の画面には検索ボタンが無く、
+        **製品サイズで絞った一覧から行を選ぶ**のが検索の代わりなので、その行が
+        どう当たったか(`list_pallets_for_product` の幅2山 / 丈2山・回転)を
+        向きとして覚える。2山積でない・製品サイズが無い・一覧で当たらない
+        ときは向きを忘れる(1山として扱う)。
+        """
+        self.forget_stack_dir("パレットを選び直した")
+        if not (self.two_stack and product_width > 0 and product_length > 0):
+            return False
+        rows = svc.list_pallets_for_product(
+            self.presenter.conn, product_width=product_width,
+            product_length=product_length, two_stack=True,
+            last_hosozai=self.presenter.last_hosozai,
+            manufactured_thickness=self.presenter.manufactured_thickness,
+            **self.flags())
+        hit = next((r for r in rows if (r.width, r.length) == (width, length)
+                    and (r.symbol or "").strip() == (symbol or "").strip()), None)
+        if hit is None or not hit.two_stack:
+            return False
+        self.stack_dir = "幅" if hit.two_stack == KIND_WIDTH2 else "丈"
+        self.presenter.user_log.log(
+            f"2山の向き: {self.stack_dir}方向（{hit.two_stack}"
+            + ("・回転" if hit.rotated else "")
+            + f"で当たった行。製品サイズの{self.stack_dir}を2倍して扱います）",
+            emphasis=True)
+        return bool(hit.rotated)
+
     # --- 製品サイズ ---------------------------------------------------
-    def apply_product(self, width_text: str,
-                      length_text: str) -> tuple[svc.ApplyResult, bool]:
-        """VBA `btnApplyProductSize_Click`。戻りは (結果, 回転したか)。"""
+    def apply_product(self, width_text: str, length_text: str, *,
+                      searched_rotated: bool = False) -> tuple[svc.ApplyResult, bool]:
+        """VBA `btnApplyProductSize_Click`。戻りは (結果, 回転したか)。
+
+        2山積で向きが決まっていれば、その向きを2倍して確定する
+        (`svc.apply_product_size`)。`searched_rotated` はパレット検索が
+        製品を回転させて決めたこと ── VBA は回転Passで決まると入力欄の
+        幅・丈を入れ替えてから「セット」する。2山は回転後の寸法に対して
+        2倍しないと検索したときの大きさと合わないので、2山のときは
+        先に入れ替える。
+        """
+        pre_rotated = bool(searched_rotated and self.two_stack and self.stack_dir)
+        if pre_rotated:
+            width_text, length_text = length_text, width_text
         result, product, rotated = svc.apply_product_size(
-            width_text, length_text, self.palette)
+            width_text, length_text, self.palette,
+            two_stack=self.two_stack, stack_dir=self.stack_dir)
         if not result.ok:
             self.presenter.user_log.log(
                 f"[製品サイズ確定] 断りました: {result.message}")
             return result, False
         self.product = product
-        self.product_rotated = bool(rotated)
+        # 2倍した辺。収まる向きへ入れ替えたら(`fit_rotated`)、2倍した辺も入れ替わる
+        fit_rotated = bool(rotated)
+        axis = ""
+        if self.two_stack and self.stack_dir in ("幅", "丈"):
+            axis = "width" if self.stack_dir == "幅" else "length"
+            if fit_rotated:
+                axis = "length" if axis == "width" else "width"
+        self.product_stack_axis = axis
+        rotated = fit_rotated != pre_rotated
+        self.product_rotated = rotated
+        self.product_stack_note = (svc.stack_note(
+            self.two_stack, self.stack_dir,
+            getattr(product, axis) // 2 if axis else 0))
         # 回転したかどうかは**現物の載せ方が変わる**ので必ず残す
         self.presenter.user_log.log(
             f"[製品サイズ確定] {product.width} x {product.length}"
-            + ("(製品を回転させました)" if rotated else ""), emphasis=True)
+            + ("(製品を回転させました)" if rotated else "")
+            + self.product_stack_note, emphasis=True)
         # 上用の基準枠は製品寸法そのもの。変われば図は作り直し
         self.invalidate_placement()
         self._sync_ribbon()
@@ -322,8 +390,30 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                                 if self.palette.is_set else "")
         if self.product.is_set:
             # 「セット」は回転を含む確定操作。入力欄側もそろえる
-            context.product_width = self.product.width
-            context.product_length = self.product.length
+            # (2山は1山分に戻して ── 入力欄は1山分のまま)
+            single = self.product_single
+            context.product_width = single.width
+            context.product_length = single.length
+
+    @property
+    def product_single(self) -> svc.ProductSize:
+        """確定した製品サイズを**1山分**で(入力欄へ戻す値)。2山でなければ `product` そのもの。"""
+        if self.product_stack_axis == "width":
+            return svc.ProductSize(self.product.width // 2, self.product.length)
+        if self.product_stack_axis == "length":
+            return svc.ProductSize(self.product.width, self.product.length // 2)
+        return self.product
+
+    def forget_product_stack(self) -> None:
+        """確定した製品サイズの2山の印を外す(製品サイズを捨てた・入れ直したとき)。"""
+        self.product_stack_axis = ""
+        self.product_stack_note = ""
+
+    def forget_stack_dir(self, why: str) -> None:
+        """2山の向きを忘れる(VBA `m_2YamaDir = ""`)。"""
+        if self.stack_dir:
+            log.debug("2山の向き[%s]を忘れます: %s", self.stack_dir, why)
+        self.stack_dir = ""
 
     def toggle(self, name: str) -> bool:
         """押しっぱなしのモードの切り替え。知らない名前なら `KeyError`。"""
@@ -345,8 +435,12 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             # 2山積はパレット一覧の当たり方そのものを変える
             # (`list_pallets_for_product` が片側2倍の寸法も見る)。
             # 押したのに何も起きていないように見える、を作らない
+            # 切り替えたら2山の向きは決め直し(パレット検索をやり直してもらう。
+            # VBA `lblAutoToggle_Click`)
+            self.forget_stack_dir("2山積を切り替えた")
             self.presenter.user_log.log(
-                f"[2山積] {'ON' if now else 'OFF'}", emphasis=True)
+                f"[2山積] {'ON' if now else 'OFF'}"
+                "(2山の向きはパレット検索で決め直します)", emphasis=True)
         if name == "fatigue":
             # VBA `btnFatigueSelect_Click`。以降の**ボード選定とアングル
             # 自動選定の両方**がこの値を見るので、押したことを記録に残す。
@@ -882,6 +976,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         """
         log.info("ロットが変わったので資材選択の作業を捨てます")
         self.clear_sizes()
+        self.forget_stack_dir("ロットが変わった")   # 2山の向きも忘れる
         self.selected = svc.SelectedBoards()
         self.select_result = None
         self.restored = None

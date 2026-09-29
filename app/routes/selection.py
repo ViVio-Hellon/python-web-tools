@@ -127,10 +127,16 @@ def pick_pallet():
     if not picked.ok:
         return _apply(session, picked)
 
+    # 2山積なら、この行がどう当たったか(幅2山 / 丈2山・回転)で2山の向きを
+    # 決める。画面に「パレット検索」は無く、一覧から選ぶのが検索の代わり
+    pw, pl = _product_dims(body)
+    stack_rotated = session.decide_stack_for_row(
+        width, length, str(body.get("symbol", "")), pw, pl)
+
     # 製品サイズが分かっているなら、載るかどうかまで確かめて確定する。
     # **確かめる規則は変えていない**(`apply_product_size`)。押す回数を
     # 減らしただけで、載らないパレットを選べば今までどおり断られる
-    note = _settle_product(session, body)
+    note = _settle_product(session, body, searched_rotated=stack_rotated)
     _prepare_warehouse_draft(session)
     return _state(session, message=f"{applied.message}{note}")
 
@@ -154,7 +160,23 @@ def _prepare_warehouse_draft(session) -> None:
     work_context.get_context().set_pending_orders(orders)
 
 
-def _settle_product(session, body: dict) -> str:
+def _product_texts(body: dict) -> tuple[str, str]:
+    """製品 幅・丈。**画面が送ってきた値を先に見る**(無ければ覚えている入力欄の値)。"""
+    width = str(body.get("product_width", "")).strip()
+    length = str(body.get("product_length", "")).strip()
+    if not (width and length):
+        context = work_context.get_context()
+        width = str(context.product_width or "")
+        length = str(context.product_length or "")
+    return width, length
+
+
+def _product_dims(body: dict) -> tuple[int, int]:
+    width, length = _product_texts(body)
+    return _to_int(width) or 0, _to_int(length) or 0
+
+
+def _settle_product(session, body: dict, *, searched_rotated: bool = False) -> str:
     """パレットが決まった直後に、製品サイズを確定させる。
 
     製品サイズはロットから入っている(`資材展開`)ので、人が打ち直す
@@ -170,22 +192,21 @@ def _settle_product(session, body: dict) -> str:
     成り立っているので、断りにはしない。理由は製品サイズの段が出す。
     """
     context = work_context.get_context()
-    width = str(body.get("product_width", "")).strip()
-    length = str(body.get("product_length", "")).strip()
-    if not (width and length):
-        width = str(context.product_width or "")
-        length = str(context.product_length or "")
+    width, length = _product_texts(body)
     if not (width and length):
         return ""
-    result, rotated = session.apply_product(width, length)
+    result, rotated = session.apply_product(
+        width, length, searched_rotated=searched_rotated)
     if not result.ok:
         return ""
     # 回転して載せると決まったら、覚えている向きもそろえる。
-    # 二か所で別々に入れ替えると、どちらが本当か分からなくなる
-    context.product_width = session.product.width
-    context.product_length = session.product.length
-    return f" / 製品 {session.product.width}×{session.product.length} を確定" + (
-        "(回転)" if rotated else "")
+    # 二か所で別々に入れ替えると、どちらが本当か分からなくなる。
+    # 入力欄は**1山分**のまま(2倍のまま戻すと次のパレット検索で4倍になる)
+    single = session.product_single
+    context.product_width = single.width
+    context.product_length = single.length
+    return (f" / 製品 {session.product.width}×{session.product.length} を確定"
+            + ("(回転)" if rotated else "") + session.product_stack_note)
 
 
 @bp.post("/api/selection/pallet/list")
@@ -241,6 +262,8 @@ def search_pallet():
         return _state(session, direct=True,
                       message="製品サイズが空なので、パレット寸法で直接検索しました")
 
+    # 2山の向きは検索のたびに決め直す(見つからなかったときに前の向きを残さない)
+    session.forget_stack_dir("パレット検索をやり直した")
     result = svc.auto_select_pallet(
         conn, product_width_text=product_width, product_length_text=product_length,
         two_stack=session.two_stack, show_all=session.show_all,
@@ -261,6 +284,7 @@ def search_pallet():
         # 形は正しいが、載るパレットが無い ── 業務としての断り
         return _state(session, message=result.message, found=False), 422
 
+    session.stack_dir = result.stack_dir
     session.apply_pallet(str(result.width), str(result.length))
     # 決まった行を**サーバにも覚えさせる**(tkinter版 `_select_pallet_row`)。
     # 発注コードと単位は一覧の行にしか無いので、覚えないと画面上は行が
@@ -274,7 +298,7 @@ def search_pallet():
     # **ここまで来たら製品サイズも確定させる。** 「載るパレットを探して
     # 見つかった」のだから、載ることはもう確かめてある。もう一度
     # 「セット」を押させるのは、同じ確認を2回やらせているだけ
-    note = _settle_product(session, body)
+    note = _settle_product(session, body, searched_rotated=result.rotated)
     _prepare_warehouse_draft(session)
 
     log.info("パレット自動選定: %s×%s (%s)",

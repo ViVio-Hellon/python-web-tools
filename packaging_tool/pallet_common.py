@@ -441,3 +441,7 @@ class AutoSelectPalletResult:
     # 選定結果が現物に載るかを呼び出し側でも確かめられるようにする
     search_width: int = 0
     search_length: int = 0
+    # 2山積で決まったときの2山の向き(VBA `m_2YamaDir`)。
+    # "幅" = 幅方向に2山(Pass1〜16と強制入替え) / "丈" = 丈方向に2山(Pass17〜20)
+    # / "" = 2山積でない。「セット」で製品サイズのこの向きを2倍する
+    stack_dir: str = ""

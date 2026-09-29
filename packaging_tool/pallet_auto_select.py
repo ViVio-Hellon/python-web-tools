@@ -246,6 +246,14 @@ def auto_select_pallet(
         rotated = pass_def.number % 2 == 0
         ulog.log(f"Pass {pass_def.number} で決定" + ("（製品回転）" if rotated else ""),
                  emphasis=True)
+        # 2山の向きを記録する(Pass1〜16=幅2山 / Pass17〜20=丈2山)。
+        # 回転して決まった場合も、回転後の製品サイズに対して同じ向きで
+        # 2倍すれば、検索したときの大きさと一致する
+        stack_dir = ""
+        if two_stack:
+            stack_dir = "幅" if pass_def.number <= 16 else "丈"
+            ulog.log(f"2山の向き: {stack_dir}方向（製品サイズの「セット」で"
+                     f"{stack_dir}を2倍して扱います）", emphasis=True)
 
         return AutoSelectPalletResult(
             ok=True,
@@ -255,6 +263,7 @@ def auto_select_pallet(
             pass_label=pass_def.label, rotated=rotated,
             needs_thickness_warning=best_warning,
             search_width=search_w, search_length=search_l,
+            stack_dir=stack_dir,
         )
 
     # 強制フォールバック(元VBA仕様: フィルタ大幅緩和・1回のみ・回転フラグは立てない)
@@ -287,6 +296,8 @@ def auto_select_pallet(
             industry=best_row["業界"] or "", symbol=(best_row["記号"] or "").strip(),
             pass_label="強制フォールバック", rotated=False,
             search_width=fb_w, search_length=fb_l,
+            # 強制入替えの2山は幅方向(検索条件が「製品幅×2 × 製品丈」のため)
+            stack_dir="幅" if two_stack else "",
         )
 
     ulog.log("適合パレットなし", emphasis=True)

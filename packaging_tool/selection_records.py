@@ -384,6 +384,10 @@ class RecordsMixin:
         self.product = svc.ProductSize(width=store.pt_long(h.get("製品幅")),
                                        length=store.pt_long(h.get("製品丈")))
         self.product_rotated = store.pt_long(h.get("製品回転")) != 0
+        # 保存済みの製品サイズは2山分を含むので、再度2倍しないよう向きを消す
+        # (VBA `LoadSinglePattern`)。入力欄へは保存した値がそのまま戻る
+        self.forget_stack_dir("実績を読み込んだ")
+        self.forget_product_stack()
 
         # ③〜⑥ 選定リスト(タグ込み)・アングル・選定の結果
         lower, upper = [], []
