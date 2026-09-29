@@ -703,11 +703,19 @@ class SendApiTests(WarehouseWebTestCase):
         work_context.get_context().lot_no = "4102781"
         self.assertTrue(self.send(lot_no="9999999").get_json()["ok"])
 
-    def test_作業中のロットが無ければ掛けない(self) -> None:
-        """引き直す前でも、届いている下書きは送れる。"""
+    def test_作業中のロットが無ければ下書きは送らない(self) -> None:
+        """VBA で直した不具合: 見つからないロット番号を開いた・クリックした後でも、
+        前のロットで送信できた。作業中のロットが無ければ下書きは送らない。"""
         from packaging_tool import work_context
         work_context.get_context().lot_no = ""
-        self.assertTrue(self.send(from_draft=True).get_json()["ok"])
+        res = self.send(from_draft=True)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.get_json()["error"]["code"], "no_lot")
+
+    def test_手入力は作業中のロットが無くても送れる(self) -> None:
+        from packaging_tool import work_context
+        work_context.get_context().lot_no = ""
+        self.assertTrue(self.send().get_json()["ok"])
 
     def test_必須漏れは400で欄を返す(self) -> None:
         res = self.send(hinmei="")

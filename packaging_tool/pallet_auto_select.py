@@ -32,6 +32,22 @@ from .user_log import UserLog, tag_area
 log = get_logger("board_selection.pallet_auto")
 
 @tag_area("パレット")
+def _listable(row: sqlite3.Row, *, ex_only_mode: bool, show_all: bool,
+              last_hosozai: str) -> bool:
+    """パレット一覧に出せる行か。**一覧に出せないパレットを自動で決めない。**
+
+    VBA で直した不具合: 自動検索の候補選びは単位を見ておらず、一覧には
+    出ない単位(上下共用でないときの「枚」など)のパレットを決めていた。
+    一覧と同じ規則(EX と `unit_allowed`)で候補を絞る。
+    """
+    is_ex = "EX" in (row["記号"] or "").strip().upper()
+    if ex_only_mode:
+        return is_ex
+    if show_all:
+        return True
+    return not is_ex and unit_allowed(row["単位"], last_hosozai)
+
+
 def auto_select_pallet(
     conn: sqlite3.Connection,
     *,
@@ -141,10 +157,8 @@ def auto_select_pallet(
             is_ex = "EX" in symbol.upper()
 
             # EXフィルタで落ちた分はVBA同様ログに出さない(件数が多すぎるため)
-            if ex_only_mode:
-                if not is_ex:
-                    continue
-            elif not show_all and is_ex:
+            if not _listable(row, ex_only_mode=ex_only_mode, show_all=show_all,
+                             last_hosozai=last_hosozai):
                 continue
 
             size_ok = _size_ok(row, search_w, search_l, pass_def.tolerance)
@@ -249,6 +263,10 @@ def auto_select_pallet(
     fb_candidates = []
     for row in candidate_rows:
         industry = row["業界"] or "一般"
+        # 一覧に出せないパレット(EX・単位)は、強制入替えでも決めない
+        if not _listable(row, ex_only_mode=ex_only_mode, show_all=show_all,
+                         last_hosozai=last_hosozai):
+            continue
         if not (row["巾適合min"] <= fb_w <= row["巾適合max"] and row["丈適合min"] <= fb_l <= row["丈適合max"]):
             continue
         # 最終フォールバックでも現物に載らないものは出さない

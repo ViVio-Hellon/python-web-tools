@@ -860,6 +860,17 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             return False
         return current.lot.lot_no != result.lot.lot_no
 
+    def forget_lot(self) -> None:
+        """開こうとしたロットが見つからなかった。前のロットで決めたことも捨てる
+        (`work_context.WorkContext.forget_lot` と対)。ロットが無い状態に戻すので、
+        倉庫送信は「先にロット検索でロットを確定してください」で断られる。
+        """
+        if self.presenter.lot_result is None:
+            return
+        self.clear_for_new_lot()
+        self.presenter.lot_result = None
+        self.presenter.lot_no = ""
+
     def clear_for_new_lot(self) -> None:
         """前のロットで決めたことを捨てる(VBA `ClearForNewLot`)。
 

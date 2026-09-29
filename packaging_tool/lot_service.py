@@ -229,6 +229,7 @@ class OdrInfo:
     specific_gravity: float = 0.0   # 材質_比重(VBA `m_hizyuu`)
     pack_unit_weight: dict[str, float] = field(default_factory=dict)  # 受注番号→梱包単位_重量
     pack_unit_count: dict[str, float] = field(default_factory=dict)   # 受注番号→梱包単位_枚数
+    delivery_names: dict[str, str] = field(default_factory=dict)      # 受注番号→納入先名称(全引当分)
 
 
 @dataclass
@@ -409,13 +410,32 @@ def _load_odr(conn: sqlite3.Connection, order_nos: list[str]) -> OdrInfo:
 
     unit_rows = db.fetch_all(
         conn,
-        f"SELECT 受注番号, 梱包単位_重量, 梱包単位_枚数 FROM 仕掛受注 WHERE 受注番号 IN ({marks})",
+        f"SELECT 受注番号, 梱包単位_重量, 梱包単位_枚数, 納入先名称 FROM 仕掛受注"
+        f" WHERE 受注番号 IN ({marks})",
         tuple(order_nos), caller_name="lot_service._load_odr.units",
     ) or []
     for r in unit_rows:
         odr.pack_unit_weight[r["受注番号"]] = r["梱包単位_重量"] or 0.0
         odr.pack_unit_count[r["受注番号"]] = r["梱包単位_枚数"] or 0.0
+        # 受注番号ごとの納入先。**納入先の違う引当が混ざっているか**を見るのに使う
+        # (VBA `m_nouDict`。受注情報の欄は先頭の1件しか出さないので、ここで全件持つ)
+        odr.delivery_names.setdefault(r["受注番号"], (r["納入先名称"] or "").strip())
     return odr
+
+
+def hiki_delivery_names(result: "LotSearchResult") -> list[str]:
+    """引当一覧に含まれる納入先(重複なし・引当の並び順・空は数えない)。
+
+    VBA `GetHikiNounyusakiCount` / `GetHikiNounyusakiList`。2つ以上なら
+    「納入先の違う引当が混ざっている」。倉庫へ送る納入先は1つだけ、発注数は
+    ロット全体なので、送る前にそのことを知らせる(`outputs.draft_notice`)。
+    """
+    names: list[str] = []
+    for row in result.hiki:
+        name = result.odr.delivery_names.get(row.order_no, "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 def pack_unit_of(odr: OdrInfo, order_no: str) -> tuple[str, float]:

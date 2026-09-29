@@ -51,11 +51,14 @@ class ContextTests(unittest.TestCase):
         self.context.apply_lot(make_result())
         self.assertEqual(self.context.ribbon()["lot"], "4102781")
 
-    def test_見つからなかったロットは覚えない(self) -> None:
-        """「無い」を作業中の状態にしない。"""
+    def test_見つからなかったロットを開いたら作業中のロットを外す(self) -> None:
+        """VBA で直した不具合: 見つからないロット番号を開いたあとも前のロットが
+        作業中のまま残り、倉庫送信が前のロットで通った。見つかるまで空にする。"""
         self.context.apply_lot(make_result())
+        self.context.set_pending_orders([{"lot_no": "4102781"}])
         self.context.apply_lot(lot_service.LotSearchResult(found=False))
-        self.assertEqual(self.context.lot_no, "4102781")
+        self.assertEqual(self.context.lot_no, "")
+        self.assertEqual(self.context.take_pending_orders(), [])
 
     def test_EXは常時見せる(self) -> None:
         """見落とすと梱包の仕様が変わり、積み直しになる。"""

@@ -107,10 +107,18 @@ class ListPalletSizesTests(BoardSelectionTestCase):
         self.assertEqual(len(rows), 0)
 
     def test_unit_filter_relaxed_with_hosozai(self):
-        insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="組")
+        insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="枚")
         self.assertEqual(len(svc.list_pallet_sizes(self.conn)), 0)
         rows = svc.list_pallet_sizes(self.conn, last_hosozai="厚紙")
         self.assertEqual(len(rows), 1)
+
+    def test_上下共用でも組は出さない(self):
+        """更新後の VBA `IsPalletUnitAllowed`: 上下共用は「台・枚」。以前は経路ごとに
+        「台・組」「台・枚」とずれていた。"""
+        insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="組")
+        self.assertEqual(len(svc.list_pallet_sizes(self.conn, last_hosozai="厚紙")), 0)
+        self.assertEqual(len(svc.list_pallet_sizes(self.conn, last_hosozai="厚紙",
+                                                   show_all=True)), 1)
 
     def test_ex_only_mode_requires_is_ex_order(self):
         insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, symbol="EXﾀｲﾄ", unit="台")
@@ -330,14 +338,42 @@ class AutoSelectPalletTests(BoardSelectionTestCase):
             {"幅": 0, "丈": 0}, 1528, 3053))
 
     def test_fallback_used_when_no_pass_matches(self):
-        # EX記号の行は通常パス(EX除外)には一切引っかからないが、
-        # フォールバック探索はEXフィルタを行わないため拾われる
+        # 5×10 は板厚13mm以下だと強度UP以外を通常パスで外す。フォールバック探索は
+        # その条件を掛けないので拾われる(元VBA仕様: フィルタ大幅緩和)
         insert_pallet(self.conn, width=500, length=500, w_min=1, w_max=99999, l_min=1, l_max=99999,
-                      industry="一般", symbol="EX")
-        result = svc.auto_select_pallet(self.conn, product_width_text="500", product_length_text="500")
+                      industry="5×10", symbol="")
+        result = svc.auto_select_pallet(self.conn, product_width_text="500", product_length_text="500",
+                                        manufactured_thickness=10.0)
         self.assertTrue(result.ok)
         self.assertEqual(result.pass_label, "強制フォールバック")
         self.assertFalse(result.rotated)
+
+    def test_一覧に出せないパレットは強制入替えでも決めない(self):
+        """更新後の VBA: 強制入替えにも一覧と同じ EX・単位の条件を掛ける
+        (一覧に出せないパレットを決定しないため)。"""
+        insert_pallet(self.conn, width=500, length=500, w_min=1, w_max=99999, l_min=1, l_max=99999,
+                      industry="一般", symbol="EX")
+        result = svc.auto_select_pallet(self.conn, product_width_text="500", product_length_text="500")
+        self.assertFalse(result.ok)
+
+    def test_自動検索は一覧に出ない単位を選ばない(self):
+        """VBA で直した不具合: 候補選びが単位を見ておらず、一覧に出ない
+        パレットを決めていた。上下共用でなければ「台」だけ、上下共用なら「台・枚」。"""
+        insert_pallet(self.conn, width=1100, length=2100, w_min=900, w_max=1100,
+                      l_min=1900, l_max=2100, industry="一般", unit="枚", code="MAI")
+        insert_pallet(self.conn, width=1200, length=2200, w_min=900, w_max=1200,
+                      l_min=1900, l_max=2200, industry="一般", unit="台", code="DAI")
+        insert_pallet(self.conn, width=1050, length=2050, w_min=900, w_max=1100,
+                      l_min=1900, l_max=2100, industry="一般", unit="組", code="KUMI")
+        got = svc.auto_select_pallet(self.conn, product_width_text="1000",
+                                     product_length_text="2000")
+        self.assertEqual((got.width, got.length), (1200, 2200))      # 台だけ
+        got = svc.auto_select_pallet(self.conn, product_width_text="1000",
+                                     product_length_text="2000", last_hosozai="上蓋")
+        self.assertEqual((got.width, got.length), (1100, 2100))      # 台・枚(組は選ばない)
+        got = svc.auto_select_pallet(self.conn, product_width_text="1000",
+                                     product_length_text="2000", show_all=True)
+        self.assertEqual((got.width, got.length), (1050, 2050))      # 全件表示なら単位を問わない
 
     def test_1p1185_mode_only_matches_tight_1300x1300(self):
         # 特定業界の1300x1300は幅丈こそ合うが業界がタイトでないため
@@ -362,17 +398,15 @@ class AutoSelectPalletTests(BoardSelectionTestCase):
         self.assertFalse(result.ok)
 
     def test_1p1185_mode_applies_to_the_fallback_too(self):
-        # EX記号のため通常パス(EX除外)には引っかからずフォールバックで
-        # 拾われる行でも、1P1185の絞り込み(候補行そのものから除外)は
-        # フォールバックにも及んでいることを確認する
+        # EX記号の行は、一覧と同じくフォールバックでも拾わない(更新後の VBA)。
+        # 1P1185の絞り込み(候補行そのものから除外)がフォールバックにも及ぶことは
+        # 下の test_1p1185_mode_removes_non_matching_rows_before_the_fallback が見る
         insert_pallet(self.conn, width=1300, length=1300, w_min=1, w_max=9999,
                       l_min=1, l_max=9999, industry="タイト", symbol="EX")
         result = svc.auto_select_pallet(
             self.conn, product_width_text="1245", product_length_text="1245",
             is_1p1185_mode=True)
-        self.assertTrue(result.ok)
-        self.assertEqual(result.pass_label, "強制フォールバック")
-        self.assertEqual(result.industry, "タイト")
+        self.assertFalse(result.ok)
 
     def test_1p1185_mode_removes_non_matching_rows_before_the_fallback(self):
         # 一般業界のEX行はフォールバックなら本来拾われるはずだが、
@@ -444,8 +478,9 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
             self.conn, product_width=1000, product_length=2500)
         self.assertEqual([r.unit for r in rows], ["台"])
 
-    def test_保護材が決まっていれば枚と組も出す(self):
-        """上蓋は台で数えないものがある。既定のままだと現物が出ない。"""
+    def test_保護材が決まっていれば枚も出す(self):
+        """上蓋は台で数えないものがある。既定のままだと現物が出ない。
+        「組」は出さない(更新後の VBA `IsPalletUnitAllowed`)。"""
         for unit in ("台", "枚", "組", "本"):
             insert_pallet(self.conn, width=1150, length=2650,
                           w_min=900, w_max=1200, l_min=2400, l_max=2700,
@@ -453,7 +488,7 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
         rows = svc.list_pallets_for_product(
             self.conn, product_width=1000, product_length=2500,
             last_hosozai="上蓋")
-        self.assertEqual(sorted(r.unit for r in rows), ["台", "枚", "組"])
+        self.assertEqual(sorted(r.unit for r in rows), ["台", "枚"])
 
     def test_アングルなら台だけに戻る(self):
         """保護材がアングル=別に用意するもの。パレットの単位は緩めない。"""

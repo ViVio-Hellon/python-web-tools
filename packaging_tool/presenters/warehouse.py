@@ -330,19 +330,24 @@ def _row(item: dict, *, is_material: bool, terminal: str = "",
         # **送った端末だけ。** 現場は複数台で使うので、ほかの現場の発注を
         # 取り消せると別のラインの発注を誤って引っ込めてしまう
         can_cancel=not is_material and status == svc.STATUS_PENDING and mine,
-        why=_why(status, is_material=is_material, sender=sender, mine=mine),
+        why=_why(status, is_material=is_material, sender=sender, mine=mine,
+                 cancelled_at=str(item.get("取り消し日時") or "").strip()),
         # **どのモードでも出す。** 現場にとっても「この発注は何のLotか」は
         # 確かめたい事実で、資材だけのものではない
         lot_no=str(item.get("LotNo") or "").strip(),
     )
 
 
-def _why(status: str, *, is_material: bool, sender: str, mine: bool) -> str:
+def _why(status: str, *, is_material: bool, sender: str, mine: bool,
+         cancelled_at: str = "") -> str:
     """ボタンが出ない行に添える理由。**押せない理由を空欄で示さない。**"""
     if status == svc.STATUS_CONFIRMED:
         return "確認済みです" if is_material else "倉庫が確認済みのため取り消せません"
     if status == svc.STATUS_CANCELLED:
-        return "取り消し済みです"
+        # **いつ取り消されたか**も言う。倉庫は印刷したあとに取り消されたのかを
+        # これで判断する(VBA で足した「【取消済】…(取消日時: …)」)
+        when = f"(取消日時: {cancelled_at})" if cancelled_at else ""
+        return ("現場で取り消されています" + when) if is_material else ("取り消し済みです" + when)
     if not is_material and not mine:
         return f"{sender} が送った発注です(取り消しは送った端末から)"
     return "この画面からできる操作はありません"
@@ -462,3 +467,34 @@ def action_dict(result: svc.ActionResult) -> dict[str, Any]:
 
 def order_dict(result: svc.OrderResult) -> dict[str, Any]:
     return {"ok": result.ok, "message": result.message, "mgr_no": result.mgr_no}
+
+
+# 二重送信の確認で見せる送信済みの件数(VBA は最新5件まで)
+ALREADY_SENT_SHOWN = 5
+
+
+def already_sent_ask(lot_no: str, sent: list[dict]) -> dict[str, Any]:
+    """同じロットを送ってあるときに訊く中身(VBA `ConfirmNotAlreadySent`)。
+
+    **何を送ってあるかを見せてから訊く。** 件数だけでは、前に送ったのが
+    同じ内容なのか(二重発注)、追加で要る分なのかを判断できない。
+    """
+    fields = []
+    for item in sent[:ALREADY_SENT_SHOWN]:
+        value = f"{item['hinmei']}　発注数:{item['qty'] or '---'}"
+        if item["confirmed"]:
+            value += "　[倉庫確認済]"
+        fields.append({"label": item["registered"], "value": value})
+    if len(sent) > ALREADY_SENT_SHOWN:
+        fields.append({"label": "ほか", "value": f"{len(sent) - ALREADY_SENT_SHOWN}件"})
+    return {
+        "title": "二重送信の確認",
+        "lead": (f"このロット({lot_no})は、すでに倉庫へ送信されています。"
+                 "もう一度送信すると、二重発注になります。"),
+        "why": (f"送信済み(取り消していないもの){len(sent)}件。新しい順に"
+                f"{min(len(sent), ALREADY_SENT_SHOWN)}件まで出しています。それでも送信しますか？"),
+        "ok": "それでも送信する",
+        # 何件かを並べるので、1件を大きく見せる並べ方にしない
+        "compact": True,
+        "fields": fields,
+    }

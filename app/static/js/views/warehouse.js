@@ -413,17 +413,34 @@ async function peekLot(lotNo) {
  */
 function ask(kind, row) {
   const text = askTexts[kind] || {};
+  return askWith({
+    title: text.title, why: text.why, ok: text.ok,
+    fields: askFields.map((label) => ({ label, value: row.values[label] })),
+  });
+}
+
+/**
+ * 訊く窓そのもの。題・理由・押す言葉・見せる項目は**呼ぶ側(サーバ)が決める**
+ * (二重送信の確認は `/api/warehouse/send` が `ask` で中身を返す)。
+ */
+function askWith(spec) {
   return new Promise((resolve) => {
-    el.askTitle.textContent = text.title || "よろしいですか？";
-    el.askWhy.textContent = text.why || "";
-    el.askYes.textContent = text.ok || "する";
-    el.askFields.replaceChildren(...askFields.map((label) => {
+    el.askTitle.textContent = spec.title || "よろしいですか？";
+    // 警告として先に読ませたい文(`lead`)は上に。項目の説明(`why`)は下に
+    if (el.askLead) {
+      el.askLead.hidden = !spec.lead;
+      el.askLead.textContent = spec.lead || "";
+    }
+    el.askWhy.textContent = spec.why || "";
+    el.askYes.textContent = spec.ok || "する";
+    el.askFields.replaceChildren(...(spec.fields || []).map((item) => {
       const box = document.createElement("div");
-      box.className = "big";
+      // 1件を大きく見せる窓(確認・取り消し)と、何件かを並べる窓(二重送信)がある
+      box.className = spec.compact ? "" : "big";
       const dt = document.createElement("dt");
-      dt.textContent = label;
+      dt.textContent = item.label;
       const dd = document.createElement("dd");
-      const value = row.values[label];
+      const value = item.value;
       dd.textContent = (value === "" || value === null || value === undefined)
         ? "---" : value;
       box.append(dt, dd);
@@ -458,7 +475,8 @@ async function act(path, row) {
   await load();
 }
 
-async function send() {
+async function send(confirmDuplicate = false) {
+  keepDraftQty();
   const values = {};
   for (const [key, node] of Object.entries(el.fields)) values[key] = node.value.trim();
   // EX受注かどうかは**打った内容から推し量らない**。組み立てた側
@@ -468,8 +486,13 @@ async function send() {
   // 同じか**を確かめる ── 画面で打てなくするだけにしない(守りは1枚では
   // ない)。手入力は別のロットの分を起こすことがあるので掛からない
   values.from_draft = drafts.length > 0;
+  // **下書きが2行以上なら全行を一緒に送る**(1P0113 の角材と松板)。サーバは
+  // 全行を1回で登録し、1行でもだめなら1行も登録しない ── 片方だけが倉庫に
+  // 届くと、倉庫は半分だけ用意してしまう
+  if (drafts.length > 1) values.rows = drafts.map((d) => ({ ...d }));
   // 倉庫へのひとこと。**発注の欄ではない**ので、下書きでも打てる
   if (el.sendComment) values.comment = el.sendComment.value.trim();
+  if (confirmDuplicate) values.confirm_duplicate = true;
 
   try {
     const body = await api.post("/api/warehouse/send", values);
@@ -478,12 +501,27 @@ async function send() {
     // 送った内容は消す。同じものを二度送らせないため
     for (const node of Object.values(el.fields)) node.value = "";
     if (el.sendComment) el.sendComment.value = "";
-    dropDraft();
+    if (values.rows) { drafts = []; showDraft(); } else dropDraft();
     await load();
   } catch (err) {
+    // 同じロットをもう送ってある。**何を送ってあるかを見せてから**続けるかを訊く
+    if (err.code === "already_sent" && err.body && err.body.ask && !confirmDuplicate) {
+      if (await askWith(err.body.ask)) return send(true);
+      setStatus(el.sendStatus, "送信をやめました。", "warn");
+      return;
+    }
     setStatus(el.sendStatus, err.message, "ng");
+    // まとめて送った何行目で断られたか。その行を出してから欄を指す
+    const row = err.body && err.body.error ? err.body.error.row : undefined;
+    if (values.rows && Number.isInteger(row)) { draftAt = row; showDraft(); }
     if (err.field && el.fields[err.field]) el.fields[err.field].focus();
   }
+}
+
+/** 下書きで打ち直した発注数を、その下書きに書き戻す(行を移る前・送る前)。 */
+function keepDraftQty() {
+  if (!drafts.length || !el.fields.hatchu_suu) return;
+  drafts[draftAt].hatchu_suu = el.fields.hatchu_suu.value.trim();
 }
 
 /* ================================================================
@@ -548,6 +586,11 @@ function showDraft() {
   const box = el.drafts;
   if (!box) return;
   box.hidden = !drafts.length;
+  const notice = drafts.length ? (drafts[0].notice || "") : "";
+  if (el.draftNotice) {
+    el.draftNotice.hidden = !notice;
+    el.draftNotice.textContent = notice;
+  }
   if (!drafts.length) { applyExLock(false); applyDraftLock(false); return; }
 
   draftAt = Math.max(0, Math.min(draftAt, drafts.length - 1));
@@ -579,7 +622,8 @@ export function start(state, material, lotPeekWhy) {
   for (const id of ["rows", "listNote", "found", "pending", "unreadComments", "q", "refresh",
                     "sendComment",
                     "send", "clearForm", "sendStatus", "cancelled", "exNote",
-                    "drafts", "draftPrev", "draftNext", "draftPos", "draftNote"]) {
+                    "drafts", "draftPrev", "draftNext", "draftPos", "draftNote",
+                    "draftNotice"]) {
     el[id] = document.getElementById(id);
   }
   // 発注フォームは現場モードにしか無い
@@ -603,7 +647,7 @@ export function start(state, material, lotPeekWhy) {
                     "orderFields", "orderClose", "orderCopied",
                     "commentList", "commentEmpty", "commentWrite", "commentText",
                     "commentSend", "commentWhy",
-                    "askModal", "askTitle", "askFields", "askWhy",
+                    "askModal", "askTitle", "askFields", "askWhy", "askLead",
                     "askYes", "askNo"]) {
     el[id] = document.getElementById(id);
   }
@@ -644,7 +688,7 @@ export function start(state, material, lotPeekWhy) {
   toggles.attach(el.periodGroup, "period", load);
   if (el.cancelled) el.cancelled.addEventListener("change", load);
 
-  if (el.send) el.send.addEventListener("click", send);
+  if (el.send) el.send.addEventListener("click", () => send());
   if (el.clearForm) {
     el.clearForm.addEventListener("click", () => {
       // **下書きから抜ける。** 消したのに下書きの錠が残っていると、
@@ -669,8 +713,8 @@ export function start(state, material, lotPeekWhy) {
     } catch {
       drafts = [];
     }
-    el.draftPrev.addEventListener("click", () => { draftAt -= 1; showDraft(); });
-    el.draftNext.addEventListener("click", () => { draftAt += 1; showDraft(); });
+    el.draftPrev.addEventListener("click", () => { keepDraftQty(); draftAt -= 1; showDraft(); });
+    el.draftNext.addEventListener("click", () => { keepDraftQty(); draftAt += 1; showDraft(); });
     showDraft();
   }
 }

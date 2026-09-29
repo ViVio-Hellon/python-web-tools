@@ -206,6 +206,17 @@ def send_refusal(session: Any) -> Optional[Refusal]:
             return Refusal(
                 "角材・松板をマスタから引けていません。"
                 "製品サイズを設定してから送信してください。", NEEDS_SIZES)
+        # **発注コードの無い資材は送らない**(VBA で直した不具合)。
+        # マスタの行が見つかってもコードが空だと、発注コード・単位が「---」の
+        # まま倉庫に届き、倉庫は何を出せばよいか分からない
+        missing = [f"{label}" for hit, label in (
+            (m.kakuzai, spk.KAKUZAI_SIZE_LABEL), (m.matsuita, spk.MATSUITA_SIZE_LABEL))
+            if not (hit.code or "").strip() or hit.code.strip() == NO_CODE]
+        if missing:
+            return Refusal(
+                "資材マスタに該当がない資材があるため、倉庫に送信できません"
+                f"({'・'.join(missing)} の発注コードがありません)。"
+                "資材マスタ(松板角材)の丈の範囲とコードを確認してください。", NEEDS_SIZES)
         return None
 
     if not session.palette.is_set:
@@ -224,6 +235,9 @@ def send_refusal(session: Any) -> Optional[Refusal]:
 # ==================================================================
 # EX受注のときに送る品名。**これだけが倉庫側への合図**になる
 EX_HINMEI = "EX"
+
+# 発注コードが無いことを表す字(`MaterialHit.full_info` の `CD:---`)
+NO_CODE = "---"
 
 
 def build_orders(session: Any) -> list[dict[str, Any]]:
@@ -247,7 +261,28 @@ def build_orders(session: Any) -> list[dict[str, Any]]:
 def _build_rows(session: Any) -> list[dict[str, Any]]:
     if session.presenter.mode_1p0113:
         return _orders_1p0113(session)
-    return [_order_normal(session)]
+    order = _order_normal(session)
+    notice = draft_notice(session, order)
+    if notice:
+        order["notice"] = notice
+    return [order]
+
+
+def draft_notice(session: Any, order: dict[str, Any]) -> str:
+    """送る前に知らせること。**納入先の違う引当が混ざっているとき**(VBA で足した案内)。
+
+    倉庫へ送る納入先は1つ(受注情報の先頭の引当のもの)、発注数はロット全体。
+    納入先が違ってもパレットは同じことがあるので**分けずに送る**が、そのことを
+    知らずに送ると、倉庫はどの納入先の分か取り違える。
+    """
+    names = lot_service.hiki_delivery_names(session.presenter.lot_result)
+    if len(names) < 2:
+        return ""
+    qty = order.get("hatchu_suu") or ""
+    return ("このロットには納入先の違う引当があります(" + "・".join(names) + ")。"
+            f"倉庫には 納入先: {order.get('nounyusaki') or '---'}(先頭の引当)、"
+            "発注数: " + (f"{qty}(ロット全体)" if qty else "送信の欄で入力")
+            + " で送ります。")
 
 
 def _ex_source_rows(session: Any) -> list[dict[str, Any]]:

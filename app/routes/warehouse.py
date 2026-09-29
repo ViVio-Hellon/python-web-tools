@@ -222,7 +222,11 @@ def refresh():
 
 @field_only.post("/api/warehouse/send")
 def send():
-    """発注を出す(VBA `SendWarehouseRow`)。**出せるのは現場だけ。**
+    """発注を出す(VBA `btnSendToWarehouse_Click` 〜 `WriteWarehouseRows`)。**出せるのは現場だけ。**
+
+    `rows` に複数行を渡すと、**全行を1回で登録する**(1P0113 の角材と松板)。
+    片方だけが倉庫に届くことが無いように、1行でもおかしければ1行も登録しない
+    (`warehouse_service.create_orders`)。1行のときは本文そのものが1行。
 
     下書き(資材選択の「倉庫送信」から届いたもの)は、**発注数のほかを
     打ち直せない**。原文の `frmSendConfirm.BuildRowUI` も発注数だけを
@@ -230,23 +234,39 @@ def send():
     ものだから。
 
     画面で打てなくするだけにしない(守りは1枚ではない)。ここでは
-    **LotNo がいま作業中のロットと同じか**を確かめる。書き替えられると
-    別のロットの発注になり、倉庫が受け取った現物と帳簿が合わなくなる。
+    **LotNo がいま作業中のロットと同じか**を確かめる。作業中のロットが
+    無い(見つからないロット番号を開いた・まだ開いていない)ときも断る ──
+    前のロットのまま送れてしまうため(VBA で直した不具合)。
     手入力(`from_draft` が無い)には掛けない ── 別のロットの分を手で
     起こすことがあるため。
+
+    **同じロットをもう送ってあれば、続けるかを聞く**(VBA `ConfirmNotAlreadySent`)。
+    `confirm_duplicate` が無ければ 409 と、送信済みの一覧を返す。
     """
     body = request.get_json(silent=True) or {}
-    values, problem = presenter.validate(body)
-    if problem:
-        field, message = problem
-        return jsonify({"error": {"code": "invalid", "message": message,
-                                  "field": field}}), 400
+    raw_rows = body.get("rows")
+    if not isinstance(raw_rows, list) or not raw_rows:
+        raw_rows = [body]
+    orders = []
+    for index, raw in enumerate(raw_rows):
+        values, problem = presenter.validate(raw if isinstance(raw, dict) else {})
+        if problem:
+            field, message = problem
+            where = f"{index + 1}行目: " if len(raw_rows) > 1 else ""
+            return jsonify({"error": {"code": "invalid", "message": where + message,
+                                      "field": field, "row": index}}), 400
+        orders.append(values)
 
     if body.get("from_draft"):
         working = (work_context.get_context().lot_no or "").strip()
-        if working and values["lot_no"] != working:
-            log.warning("下書きのLotNoが作業中と違います: %s ≠ %s",
-                        values["lot_no"], working)
+        if not working:
+            return jsonify({"error": {
+                "code": "no_lot", "field": "lot_no",
+                "message": ("作業中のロットがありません。ロット検索でロットを開き直してから、"
+                            "資材選択でパレットを決め直してください。")}}), 400
+        wrong = [o["lot_no"] for o in orders if o["lot_no"] != working]
+        if wrong:
+            log.warning("下書きのLotNoが作業中と違います: %s ≠ %s", wrong[0], working)
             return jsonify({"error": {
                 "code": "lot_mismatch", "field": "lot_no",
                 "message": (f"下書きのLotNoが作業中のロット({working})と"
@@ -258,21 +278,32 @@ def send():
             "code": "invalid", "field": "comment",
             "message": f"コメントは{order_comments.MAX_LENGTH}文字までです(いま{len(note)}文字)。"}}), 400
 
-    result = svc.create_order(get_db(), **values)
+    conn = get_db()
+    if not body.get("confirm_duplicate"):
+        lot_no = orders[0]["lot_no"]
+        sent = svc.already_sent(conn, lot_no)
+        if sent:
+            log.info("同じロットの送信済みがあるので確かめます: LotNo=%s %s件", lot_no, len(sent))
+            return jsonify({"error": {"code": "already_sent",
+                                      "message": f"このロット({lot_no})は、すでに倉庫へ送信されています。"},
+                            "ask": presenter.already_sent_ask(lot_no, sent)}), 409
+
+    result = svc.create_orders(conn, orders, terminal=svc.this_terminal())
     if not result.ok:
-        return jsonify({**presenter.order_dict(result),
-                        "error": {"code": "rejected",
-                                  "message": result.message}}), 422
-    log.info("発注を登録しました: 管理番号=%s", result.mgr_no)
+        return jsonify({"ok": False, "message": result.message,
+                        "error": {"code": "rejected", "message": result.message}}), 422
+    log.info("発注を登録しました: 管理番号=%s", result.mgr_nos)
     if note:
         # 送るときに添えたコメント。発注と一緒に取り込み元へ届く
-        order_comments.add(get_db(), result.mgr_no, note,
+        # (まとめて送ったときは1行目に付ける。同じ文を行の数だけ積まない)
+        order_comments.add(conn, result.mgr_nos[0], note,
                            terminal=svc.this_terminal(), side=_side())
     # 倉庫へ届けるのが仕事なので、押した直後に送りにいく。
     # **画面には何も出さない** ── 手元の登録はもう終わっており、
     # 届かなくても次の「取り込み元へ反映」でまとめて送られる
     data_sync.write_back_in_background()
-    return jsonify(presenter.order_dict(result))
+    return jsonify({"ok": True, "message": result.message,
+                    "mgr_no": result.mgr_nos[0], "mgr_nos": result.mgr_nos})
 
 
 # ------------------------------------------------------------------

@@ -8,6 +8,8 @@ VBA `frmSendConfirm`(倉庫に発注データを送る確認ダイアログ)と
     VBA                                  -> Python
     ------------------------------------------------------------
     SendWarehouseRow                       -> create_order
+    WriteWarehouseRows(全行を1回で登録)      -> create_orders
+    ConfirmNotAlreadySent(二重送信の確認)    -> already_sent
     frmWarehouseOrder.LoadOrders/RefreshList -> list_orders
     frmWarehouseOrder.btnConfirm_Click        -> confirm_order
     frmSendConfirm.btnDelete_Click             -> cancel_order
@@ -33,7 +35,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from . import db, outbox_sync
@@ -88,6 +90,23 @@ class ActionResult:
     message: str
 
 
+# 発注コードが「無い」ことを表す字。1P0113 の資材の情報(`MaterialHit.full_info`)は、
+# マスタのコードが空だと `CD:---` になる。**これは発注コードではない**
+NO_CODE = "---"
+
+# 登録の途中でロックに当たったときに、全行を最初からやり直す回数(VBA `MAX_SEND_RETRY`)
+MAX_SEND_RETRY = 3
+
+
+@dataclass
+class OrdersResult:
+    """まとめて登録した結果。**全部入ったか、1行も入っていないか**のどちらか。"""
+
+    ok: bool
+    message: str
+    mgr_nos: list[int] = field(default_factory=list)
+
+
 def create_order(
     conn: sqlite3.Connection,
     *,
@@ -106,7 +125,26 @@ def create_order(
     is_ex_order: bool = False,
     terminal: Optional[str] = None,
 ) -> OrderResult:
-    """VBA `SendWarehouseRow`(+ `frmSendConfirm.btnSend_Click`の数量検証)の移植。
+    """1行の発注を出す。中身は `create_orders`(1行だけのまとめて登録)。"""
+    got = create_orders(conn, [dict(
+        lot_no=lot_no, hinmei=hinmei, hatchu_code=hatchu_code, tani=tani,
+        zaisitu=zaisitu, choshitu=choshitu, atu=atu, haba=haba, take=take,
+        nounyusaki=nounyusaki, yoto_code=yoto_code, hatchu_suu=hatchu_suu,
+        is_ex_order=is_ex_order)], terminal=terminal)
+    return OrderResult(ok=got.ok, message=got.message,
+                       mgr_no=got.mgr_nos[0] if got.mgr_nos else None)
+
+
+def create_orders(conn: sqlite3.Connection, orders: list[dict], *,
+                  terminal: Optional[str] = None) -> OrdersResult:
+    """VBA `WriteWarehouseRows`(+ `SendWarehouseRow`・`frmSendConfirm` の数量検証)の移植。
+
+    **全行を1回で登録する。途中で失敗したら1行も残さない。**
+    1P0113 は角材と松板の2行で1つの発注。片方だけが倉庫に届くと、倉庫は
+    半分だけ用意してしまう(VBA は1行ずつ書いていて、途中で落ちるとこう
+    なった。やり直しも閉じた接続のまま行うので必ず失敗していた)。
+    先に全行の中身を確かめ、1行でもおかしければ何も書かない。
+    ロックに当たったときだけ、全行を最初からやり直す(`MAX_SEND_RETRY` 回まで)。
 
     【EX受注】`is_ex_order` の行は、発注コード・単位・発注数を**空のまま**
     登録する。EXの実データは別の職場から別途届き、そちらが優先されるため、
@@ -114,60 +152,119 @@ def create_order(
     中途半端な値を入れると、届いた側の突き合わせで混乱する。
     どのロットのEXかは LotNo と寸法で分かるので、そこは通常どおり入れる。
     """
-    lot_no = db.sanitize_for_db(lot_no)
-    hinmei = db.sanitize_for_db(hinmei)
-    hatchu_code = db.sanitize_for_db(hatchu_code)
+    if not orders:
+        return OrdersResult(False, "送る発注がありません。")
+    sender = terminal if terminal is not None else this_terminal()
+    now = db.now_db_string()
+    rows = []
+    for index, order in enumerate(orders):
+        values, problem = _order_values(order, now=now, sender=sender)
+        if problem:
+            where = f"{index + 1}行目: " if len(orders) > 1 else ""
+            return OrdersResult(False, where + problem)
+        rows.append(values)
+
+    columns = list(rows[0])
+    sql = (f"INSERT INTO {TABLE} ({', '.join(columns)})"
+           f" VALUES ({', '.join('?' for _ in columns)})")
+    last_error = ""
+    for attempt in range(1, MAX_SEND_RETRY + 2):
+        made: list[int] = []
+        try:
+            if conn.in_transaction:
+                conn.commit()           # 手前の読み取りが開いたままなら閉じてから始める
+            conn.execute("BEGIN IMMEDIATE")
+            for values in rows:
+                made.append(conn.execute(sql, [values[c] for c in columns]).lastrowid)
+            conn.commit()
+            return OrdersResult(True, "倉庫へ発注を送信しました。" if len(rows) == 1
+                                else f"倉庫へ発注を{len(rows)}行まとめて送信しました。", made)
+        except sqlite3.Error as exc:
+            if conn.in_transaction:
+                conn.rollback()
+            last_error = str(exc)
+            log.warning("発注の登録に失敗しました(全行取り消し %s/%s回目): %s",
+                        attempt, MAX_SEND_RETRY + 1, exc)
+            if "locked" not in last_error.lower() and "busy" not in last_error.lower():
+                break
+    return OrdersResult(False, f"発注登録に失敗しました({last_error})。"
+                               "1行も登録していません。時間をおいてもう一度送信してください。")
+
+
+def _order_values(order: dict, *, now: str, sender: str) -> tuple[dict, str]:
+    """1行ぶんの登録内容。おかしければ (空, 理由)。"""
+    is_ex_order = bool(order.get("is_ex_order"))
+    lot_no = db.sanitize_for_db(order.get("lot_no") or "")
+    hinmei = db.sanitize_for_db(order.get("hinmei") or "")
+    hatchu_code = db.sanitize_for_db(order.get("hatchu_code") or "").strip()
     if not lot_no or not hinmei:
-        return OrderResult(ok=False, message="LotNo・品名は必須です。")
-    if not hatchu_code and not is_ex_order:
-        return OrderResult(ok=False, message="LotNo・品名・発注コードは必須です。")
+        return {}, "LotNo・品名は必須です。"
+    if not is_ex_order and (not hatchu_code or hatchu_code == NO_CODE):
+        # 「---」は発注コードではない(資材マスタに該当が無いときの表示)
+        return {}, "LotNo・品名・発注コードは必須です。"
 
     try:
         # 呼び出し側はVBA同様の書式済み文字列("1122.0"等)を渡してくることがある。
         # Access版は列型に合わせて暗黙変換していたので、floatを経由して受ける
-        atu_v, haba_v, take_v = float(atu), int(float(haba)), int(float(take))
+        atu_v = float(order.get("atu"))
+        haba_v = int(float(order.get("haba")))
+        take_v = int(float(order.get("take")))
     except (TypeError, ValueError, OverflowError):
-        return OrderResult(ok=False, message="厚・幅・丈は数値で入力してください。")
+        return {}, "厚・幅・丈は数値で入力してください。"
 
     if is_ex_order:
         qty = None                       # 列は NULL 可。**0 で埋めない**
     else:
         try:
-            qty = int(hatchu_suu)
+            qty = int(order.get("hatchu_suu"))
         except (TypeError, ValueError):
-            return OrderResult(ok=False, message="発注数を入力してください。")
+            return {}, "発注数を入力してください。"
         if qty <= 0:
-            return OrderResult(ok=False, message="発注数は1以上を入力してください。")
+            return {}, "発注数は1以上を入力してください。"
 
-    now = db.now_db_string()
-    result = db.insert_record(
-        conn, TABLE,
-        {
-            "登録日時": now,
-            "LotNo": lot_no,
-            "品名": hinmei,
-            "発注コード": hatchu_code,
-            "単位": db.sanitize_for_db(tani),
-            "材質": db.sanitize_for_db(zaisitu),
-            "調質": db.sanitize_for_db(choshitu),
-            "厚": atu_v,
-            "幅": haba_v,
-            "丈": take_v,
-            "用途コード": db.sanitize_for_db(yoto_code),
-            "納入先": db.sanitize_for_db(nounyusaki),
-            "発注数": qty,
-            # 送った端末。取り消せるのはこの端末だけ(`cancel_order`)
-            "送信端末": terminal if terminal is not None else this_terminal(),
-            # コメントを結ぶ鍵(`order_comments`)。管理番号は手元でも共有でも
-            # 変わりうるので、作るときに世界で1つの番号を振る
-            "発注キー": uuid.uuid4().hex,
-        },
-        caller_name="create_order",
-    )
-    if not result.ok:
-        return OrderResult(ok=False, message=f"発注登録に失敗しました。({result.error})")
+    return {
+        "登録日時": now,
+        "LotNo": lot_no,
+        "品名": hinmei,
+        "発注コード": hatchu_code,
+        "単位": db.sanitize_for_db(order.get("tani") or ""),
+        "材質": db.sanitize_for_db(order.get("zaisitu") or ""),
+        "調質": db.sanitize_for_db(order.get("choshitu") or ""),
+        "厚": atu_v,
+        "幅": haba_v,
+        "丈": take_v,
+        "用途コード": db.sanitize_for_db(order.get("yoto_code") or ""),
+        "納入先": db.sanitize_for_db(order.get("nounyusaki") or ""),
+        "発注数": qty,
+        # 送った端末。取り消せるのはこの端末だけ(`cancel_order`)
+        "送信端末": sender,
+        # コメントを結ぶ鍵(`order_comments`)。管理番号は手元でも共有でも
+        # 変わりうるので、作るときに世界で1つの番号を振る
+        "発注キー": uuid.uuid4().hex,
+    }, ""
 
-    return OrderResult(ok=True, message="倉庫へ発注を送信しました。", mgr_no=result.lastrowid)
+
+def already_sent(conn: sqlite3.Connection, lot_no: str) -> list[dict]:
+    """同じLotNoで出して、まだ取り消していない発注(新しい順)。VBA `ConfirmNotAlreadySent`。
+
+    **同じロットを二度送ると二重発注になる。** 送る前に見せて、続けるかを
+    聞く(`/api/warehouse/send`)。読めないときは確認せずに続ける(送信自体は
+    止めない。VBA と同じ)。
+    """
+    lot_no = (lot_no or "").strip()
+    if not lot_no:
+        return []
+    try:
+        rows = conn.execute(
+            f"SELECT 登録日時, 品名, 発注数, 確認済み FROM {TABLE}"
+            " WHERE LotNo = ? AND (取り消し済 IS NULL OR 取り消し済 <> '1')"
+            " ORDER BY 登録日時 DESC, 管理番号 DESC", (lot_no,)).fetchall()
+    except sqlite3.Error as exc:
+        log.warning("送信済みの発注を読めません(確認せずに続けます): %s", exc)
+        return []
+    return [{"registered": r[0] or "", "hinmei": r[1] or "",
+             "qty": "" if r[2] is None else str(r[2]),
+             "confirmed": (r[3] or "") == "1"} for r in rows]
 
 
 def _status_of(row: sqlite3.Row) -> str:

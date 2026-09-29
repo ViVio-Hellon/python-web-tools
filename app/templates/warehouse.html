@@ -45,7 +45,9 @@
       {% if drafts %}
       <div class="status status--ng" id="drafts" data-orders="{{ drafts | tojson | forceescape }}">
         <span>資材選択から <b>{{ drafts | length }} 件</b> 届いています。
-          内容を確かめてから「倉庫へ送信」を押してください。</span>
+          内容を確かめてから「倉庫へ送信」を押してください。
+          {% if drafts | length > 1 %}<b>{{ drafts | length }} 件はまとめて送ります</b>
+          (どれか1件でも送れないときは、1件も送りません)。{% endif %}</span>
         <span class="draftnav" style="margin-left:auto">
           <button class="btn" type="button" id="draftPrev">前へ</button>
           <span id="draftPos" class="num"></span>
@@ -59,6 +61,9 @@
       {# 下書きを出しているあいだだけ。**打てない理由と、打ちたいときの
          逃げ道を一緒に書く** ── 押せないことだけ示して黙ると、壊れて
          いるのか決まりなのかが分からない(§2.3) #}
+      {# 送る前に知っておいてほしいこと(納入先の違う引当が混ざっている など)。
+         **言葉はサーバが決める**(`presenters/outputs.draft_notice`) #}
+      <p class="status status--warn" id="draftNotice" hidden></p>
       <p class="why" id="draftNote" hidden>
         下書きの値は<b>発注数のほかは打ち直せません</b> ──
         資材選択がロットから引いた値なので、ここで書き替えると倉庫が
@@ -176,6 +181,8 @@
     <div class="modal__title"><h2 id="askTitle">—</h2></div>
   </header>
   <div class="pad">
+    {# 先に言っておくこと(二重送信の確認など)。確認・取り消しでは使わない #}
+    <p class="status status--warn" id="askLead" hidden></p>
     <dl class="fields fields--order" id="askFields"></dl>
     <p class="why" id="askWhy"></p>
     <div class="btn-row">

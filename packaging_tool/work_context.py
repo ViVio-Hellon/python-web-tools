@@ -116,6 +116,7 @@ class WorkContext:
         ここでは**事実だけ**を持つ。判断を2か所に置かない。
         """
         if result is None or not result.found:
+            self.forget_lot()
             return
         if result.lot.lot_no != self.lot_no:
             self.clear()
@@ -126,6 +127,24 @@ class WorkContext:
         self.lot_length = result.lot.length
         self.lot_day = date.today()
         log.info("作業中のロット: %s (EX=%s)", self.lot_no, self.is_ex)
+
+    def forget_lot(self) -> None:
+        """開こうとしたロットが見つからなかった。**作業中のロットを外す。**
+
+        VBA で直した不具合(`SearchLotInfo` の `g_currentLotNo = ""`)。見つから
+        ない・読めないロット番号を開いたあとも前のロットが作業中のまま残って
+        いると、画面は新しい番号を見せているのに、倉庫送信は前のロットで
+        通ってしまう。見つかるまで作業中のロットは空にしておく。
+        """
+        if self.lot_no:
+            log.info("ロットが見つからないので作業中のロット %s を外します", self.lot_no)
+        self.clear()
+        self.lot_no = ""
+        self.is_ex = False
+        self.packaging_spec = ""
+        self.lot_width = 0.0
+        self.lot_length = 0.0
+        self.lot_day = None
 
     # --- 資材選択 → 倉庫連携 -----------------------------------------
     def set_map_items(self, items: list[dict[str, Any]]) -> None:
