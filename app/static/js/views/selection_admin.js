@@ -37,12 +37,12 @@ export function render(admin) {
     // 押せないところへ追いやると、一覧に出ている意味が無い。
     // 全文は押さえたままにする(title)
     const boards = tr.lastElementChild;
-    boards.className = "clip";
-    boards.title = p.boards;
+    boards.className = "wrap";
     const count = document.createElement("td");
     count.className = "n";
     count.textContent = p.usage_count;
     const at = document.createElement("td");
+    at.className = "at";
     at.textContent = p.registered_at;
     // まだ共有(取り込み元)へ届いていない実績。**ほかの端末からは
     // まだ見えない**ことを、保存した人が分かるようにする
@@ -55,6 +55,7 @@ export function render(admin) {
     }
 
     const cell = document.createElement("td");
+    cell.className = "acts";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "btn btn--find rowdel";
@@ -81,7 +82,9 @@ export function render(admin) {
       del.dataset.label = `No.${p.id}  ${p.product}  ${p.boards}`;
       cell.appendChild(del);
     }
-    tr.append(count, at, cell);
+    tr.append(count, at);
+    // 操作は No のすぐ右(横にずらさなくても見える位置)
+    tr.insertBefore(cell, tr.children[1]);
     return tr;
   }));
 

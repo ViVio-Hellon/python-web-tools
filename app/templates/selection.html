@@ -596,9 +596,11 @@
       <p class="why" id="patternsNote">{{ view.admin.patterns_note }}</p>
       <div class="tablewrap tablewrap--patterns">
         <table class="table">
+          {# 「読込」「削除」は No のすぐ右。ボードの内訳が長く、右端に置くと
+             横にずらさないと見えなかった(現場の声:「これは見つけられない」) #}
           <thead><tr>
-            <th>No</th><th>製品</th><th>ボード</th>
-            <th class="n">使用</th><th>登録</th><th></th>
+            <th>No</th><th></th><th>製品</th><th>ボード</th>
+            <th class="n">使用</th><th>登録</th>
           </tr></thead>
           <tbody id="patternRows"></tbody>
         </table>
@@ -937,6 +939,12 @@
   .tablewrap--patterns { max-height:22vh; overflow:auto; }
   /* ボードの内訳は長い。省略して「読込」を押せる位置に残す */
   .table td.clip { max-width:28em; overflow:hidden; text-overflow:ellipsis; }
+  /* 実績のボード内訳は**省かずに折り返す**。省くと同じ寸法の実績を見分けられず、
+     1行に収めると表が横にはみ出して「読込」が隠れる */
+  #patternRows td.wrap { white-space:normal; word-break:break-all; min-width:14em; text-align:left; }
+  /* 登録日時は日付と時刻の間で折り返してよい(狭い幅で右端が隠れないように) */
+  #patternRows td.at { white-space:normal; min-width:6em; }
+  #patternRows td.acts { white-space:nowrap; }
   .card--admin { border-color:var(--rule); }
   .card--admin > header h3 { color:var(--muted); }
 

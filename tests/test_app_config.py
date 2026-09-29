@@ -138,6 +138,28 @@ class VersionTests(_ConfigTestCase):
         self.assertIn(app_config.version_label(), text,
                       "docs/変更履歴.md にいまの版の節がありません")
 
+    def test_変更履歴の目次が本文と合っている(self) -> None:
+        """版を足したのに目次を作り直し忘れた、を機械で止める。
+
+        目次は `scripts/make_changelog_index.py` が節見出しから作る。
+        落ちたら `python3 scripts/make_changelog_index.py` を流す。
+        """
+        import importlib.util
+        from pathlib import Path as _Path
+        root = _Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "make_changelog_index", root / "scripts" / "make_changelog_index.py")
+        index = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(index)
+        text = (root / "docs" / "変更履歴.md").read_text(encoding="utf-8")
+        self.assertIn(index.BEGIN, text, "変更履歴に項目別の目次がありません")
+        self.assertEqual(index.apply(text), text,
+                         "変更履歴の目次が古いままです。"
+                         "python3 scripts/make_changelog_index.py を流してください")
+        # 実績の保存・呼び出し(VER2.85.0)が目次から引けること(現場で探せなかった)
+        line = next(l for l in text.splitlines() if "**実績パターン" in l)
+        self.assertIn("[VER2.85.0](#ver2850)", line)
+
 
 class FallbackTests(_ConfigTestCase):
     """壊れた設定でも起動できること(基盤仕様書 ステップ5)。"""
