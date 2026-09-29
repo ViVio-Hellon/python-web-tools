@@ -186,6 +186,57 @@ def record_usage(conn: sqlite3.Connection, placed: list[PlacedBoardModel],
     return total
 
 
+# 使用実績だけを取り込み直したときの、取り込み元の姿(`refresh_if_changed`)
+_seen_stamp: dict[str, tuple[int, int]] = {}
+
+
+def refresh_if_changed(conn: sqlite3.Connection,
+                       path: Optional[Path] = None) -> bool:
+    """取り込み元が前に見たときから変わっていれば、**使用実績だけ**取り込み直す。
+
+    【なぜ要るか】
+    使用実績は全端末の合計で見るものなのに、取り込むのは起動時と発注の
+    取り込み直し(倉庫連携・簡易在庫・設定の見張り)だけだった。資材選択を
+    開いたままの端末には、ほかの端末が「使用する」を押した分が出なかった
+    (2台での通し試験。共有は8枚なのに、画面は自分の4枚のまま)。
+    資材選択が使用実績の一覧を作るたびにここを通す。変わっていなければ
+    ファイルの姿を見るだけで帰る。
+
+    **この端末でまだ送っていない分があれば入れ替えない**(総入れ替えなので
+    消えてしまう)。送れたあとの一覧で取り込み直す。取り込んだら True。
+    """
+    from . import import_specs, outbox_sync, sync_import, sync_sources, sync_writeback
+    path = path or sync_sources.find_material_db()
+    if path is None:
+        return False
+    stamp = sync_sources.source_stamp(path)
+    if stamp is None or _seen_stamp.get(str(path)) == stamp:
+        return False
+    if TABLE in sync_writeback._unsent_writeback_tables(conn):
+        return False
+    result = sync_import.import_tables(
+        conn, path, {TABLE: import_specs.IMPORT_SPECS[TABLE]},
+        required=import_specs.REQUIRED_KEY_COLUMNS,
+        blank_is_missing=import_specs.BLANK_IS_MISSING,
+        optional=import_specs.OPTIONAL_TABLES,
+        fallbacks=import_specs.NULL_FALLBACKS)
+    # 読めなかった表は次も読めない(取り込み元に表が無いなど)。同じ姿で
+    # 何度も読みに行かないよう、見たことにする
+    _seen_stamp[str(path)] = stamp
+    if TABLE not in result.imported:
+        return False
+    for spec in sync_writeback.WRITEBACK_SPECS:
+        if spec.sqlite_table == TABLE:
+            outbox_sync.mark_all_sent(conn, spec)
+    log.info("使用実績を取り込み直しました: %s件", result.imported[TABLE])
+    return True
+
+
+def forget_seen() -> None:
+    """試験用。次の `refresh_if_changed` で必ず見に行く。"""
+    _seen_stamp.clear()
+
+
 def list_usage(conn: sqlite3.Connection) -> list[UsageRow]:
     """使用枚数の多い順。選定画面の実績一覧に出す。"""
     rows = db.fetch_all(

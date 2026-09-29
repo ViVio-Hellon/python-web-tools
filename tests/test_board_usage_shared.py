@@ -87,6 +87,35 @@ class SharedUsageTests(unittest.TestCase):
         # 使用実績を数えると、発注が来たように見える
         self.assertEqual(got.imported, 2)
 
+    def test_資材選択を開いたままでもほかの端末の分が出る(self):
+        """2台での通し試験: 共有は8枚なのに、資材選択の一覧は自分の4枚のままだった
+        (取り込みが起動時と発注の見張りにしか乗っていなかった)。一覧を出すたびに、
+        共有が変わっていれば使用実績だけ取り込み直す。"""
+        board_usage.forget_seen()
+        self.addCleanup(board_usage.forget_seen)
+        self.use(self.a, (660, 1310))
+        data_sync.write_back(self.a, self.src)
+        self.assertTrue(board_usage.refresh_if_changed(self.b, self.src))
+        self.assertEqual(self.sheets(self.b), {(660, 1310): 1})
+        self.assertFalse(board_usage.refresh_if_changed(self.b, self.src))   # 変わっていない
+        self.use(self.a, (660, 1310))
+        data_sync.write_back(self.a, self.src)
+        self.assertTrue(board_usage.refresh_if_changed(self.b, self.src))
+        self.assertEqual(self.sheets(self.b), {(660, 1310): 2})
+
+    def test_送っていない分があれば取り込み直さない(self):
+        """総入れ替えなので、送る前の自分の分が消えてしまう。"""
+        board_usage.forget_seen()
+        self.addCleanup(board_usage.forget_seen)
+        self.use(self.a, (660, 1310))
+        data_sync.write_back(self.a, self.src)
+        self.use(self.b, (100, 2000))                  # Bはまだ送っていない
+        self.assertFalse(board_usage.refresh_if_changed(self.b, self.src))
+        self.assertEqual(self.sheets(self.b), {(100, 2000): 1})
+        data_sync.write_back(self.b, self.src)
+        self.assertTrue(board_usage.refresh_if_changed(self.b, self.src))
+        self.assertEqual(self.sheets(self.b), {(660, 1310): 1, (100, 2000): 1})
+
     def test_送れないあいだは手元の記録を消さない(self):
         """共有に表を作れない(読み取り専用など)あいだも、取り込みで消えない。"""
         self.use(self.a, (100, 2000))
