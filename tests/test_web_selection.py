@@ -2337,20 +2337,64 @@ class SendTests(SelectionWebTestCase):
         # 発注一覧にはまだ何も入っていない
         self.assertEqual(self.get("/api/warehouse/orders")["found"], 0)
 
-    def test_倉庫画面が受け取ると手放す(self) -> None:
-        """残っていると、開き直すたびに同じ発注を出せてしまう。"""
+    def test_下書きは送るまで開き直しても消えない(self) -> None:
+        """タブをもう1枚開く・譲ったタブを読み込み直す、で送っていない下書きが
+        黙って消えていた(タブを複数開いた通しの試験)。送ったと思い込むと
+        倉庫には何も届かない。送る・捨てる・ロットが変わるまで預かる。"""
+        self.pick_and_send()
+        for _ in range(2):             # 1枚目のタブ、2枚目のタブ(読み込み直し)
+            html = self.client.get("/warehouse").get_data(as_text=True)
+            self.assertIn("届いています", html)
+        self.assertTrue(work_context.get_context().pending_orders)
+
+    def test_下書きを送ったら出さない(self) -> None:
+        self.pick_and_send()
+        draft = work_context.get_context().pending_orders[0]
+        res = self.client.post("/api/warehouse/send", headers=self.auth(),
+                               json={**draft, "hatchu_suu": "2", "from_draft": True})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(work_context.get_context().pending_orders, [])
+        self.assertNotIn("届いています",
+                         self.client.get("/warehouse").get_data(as_text=True))
+
+    def test_入力を消すと下書きを捨てる(self) -> None:
+        self.pick_and_send()
+        res = self.client.post("/api/warehouse/drafts/discard", headers=self.auth(), json={})
+        self.assertEqual(res.status_code, 200)
+        self.assertNotIn("届いています",
+                         self.client.get("/warehouse").get_data(as_text=True))
+
+    def test_送れなかった下書きは残る(self) -> None:
+        self.pick_and_send()
+        draft = work_context.get_context().pending_orders[0]
+        res = self.client.post("/api/warehouse/send", headers=self.auth(),
+                               json={**draft, "hatchu_suu": "", "from_draft": True})
+        self.assertEqual(res.status_code, 400)
+        self.assertTrue(work_context.get_context().pending_orders)
+
+    def test_譲ったタブからは下書きを送れない(self) -> None:
+        """2枚目のタブを開いたら、1枚目からの送信は断る(下書きは残る)。"""
+        from packaging_tool import screen_lock
+        self.addCleanup(screen_lock.reset)
+        self.pick_and_send()
+        draft = work_context.get_context().pending_orders[0]
+        screen_lock.claim("tab-A")
+        screen_lock.claim("tab-B")                         # あとから開いたタブ
+        headers = {**self.auth(), screen_lock.HEADER: "tab-A"}
+        res = self.client.post("/api/warehouse/send", headers=headers,
+                               json={**draft, "hatchu_suu": "2", "from_draft": True})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], screen_lock.REFUSE_TAKEN)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM 資材パレット注文管理").fetchone()[0], 0)
+        self.assertTrue(work_context.get_context().pending_orders)
+
+    def pick_and_send(self) -> None:
         self.post("/api/selection/pallet/pick",
                   {"width": 1100, "length": 2000, "symbol": ""})
         self.post("/api/selection/pallet/apply",
                   {"width": "1100", "length": "2000"})
         self.post("/api/selection/send")
-
-        html = self.client.get("/warehouse").get_data(as_text=True)
-        self.assertIn("届いています", html)
-        self.assertEqual(work_context.get_context().pending_orders, [])
-        # 2回目は下書きが出ない
-        self.assertNotIn("届いています",
-                         self.client.get("/warehouse").get_data(as_text=True))
 
     def test_ロットが変わったら下書きは捨てる(self) -> None:
         """前のロットの発注を次のロットで登録させない。"""

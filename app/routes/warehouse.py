@@ -142,11 +142,12 @@ def _mode() -> str:
 def page():
     mode = _mode()
     view = presenter.build(get_db(), mode=mode)
-    # 資材選択の「倉庫送信」が組み立てた下書き。**受け取ったら手放す**
-    # ので、開き直しても同じ発注が二重に出てくることはない
-    drafts = work_context.get_context().take_pending_orders()
+    # 資材選択の「倉庫送信」が組み立てた下書き。**見るだけで手放さない**
+    # (`WorkContext.peek_pending_orders`)。手放すのは、送ったとき・
+    # 「入力を消す」で捨てたとき・ロットが変わったとき
+    drafts = work_context.get_context().peek_pending_orders()
     if drafts:
-        log.info("倉庫送信の下書きを %s 行 受け取りました", len(drafts))
+        log.info("倉庫送信の下書きを %s 行 出します", len(drafts))
     return render_template(
         "warehouse.html",
         state=presenter.to_dict(view),
@@ -293,6 +294,9 @@ def send():
         return jsonify({"ok": False, "message": result.message,
                         "error": {"code": "rejected", "message": result.message}}), 422
     log.info("発注を登録しました: 管理番号=%s", result.mgr_nos)
+    if body.get("from_draft"):
+        # 送った下書きは手放す。開き直しても、送ったものはもう出さない
+        work_context.get_context().drop_pending_orders()
     if note:
         # 送るときに添えたコメント。発注と一緒に取り込み元へ届く
         # (まとめて送ったときは1行目に付ける。同じ文を行の数だけ積まない)
@@ -304,6 +308,16 @@ def send():
     data_sync.write_back_in_background()
     return jsonify({"ok": True, "message": result.message,
                     "mgr_no": result.mgr_nos[0], "mgr_nos": result.mgr_nos})
+
+
+@field_only.post("/api/warehouse/drafts/discard")
+def discard_drafts():
+    """下書きを捨てる(「入力を消す」)。手入力に切り替えるときの口でもある。
+
+    捨てないと、開き直したときにまた下書きが出てくる(下書きは送るまで預かる)。
+    """
+    work_context.get_context().drop_pending_orders()
+    return jsonify({"ok": True})
 
 
 # ------------------------------------------------------------------

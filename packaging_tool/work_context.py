@@ -165,13 +165,31 @@ class WorkContext:
         log.info("倉庫送信の下書き: %s行 (Lot %s)",
                  len(self.pending_orders), self.lot_no)
 
-    def take_pending_orders(self) -> list[dict[str, Any]]:
-        """下書きを取り出して**空にする**。
+    def peek_pending_orders(self) -> list[dict[str, Any]]:
+        """下書きを見る。**空にはしない。**
 
-        登録しても残っていると、画面を開き直すたびに同じ発注を
-        出せてしまう。渡したら手放す。
+        以前は倉庫連携の画面を開いた時点で手放していた(`take_pending_orders`)。
+        すると、タブをもう1枚開いたり、譲ったタブで「このタブで続ける」を押して
+        読み込み直したりしただけで、**送っていない下書きが黙って消えた**
+        (タブを複数開いた通しの試験で起きた)。送ったと思い込むと、倉庫には
+        何も届かない。下書きは、送る(`drop_pending_orders`)・「入力を消す」で
+        捨てる・ロットが変わる(`clear`)まで預かっておく。
+        開き直すたびに同じ下書きが出ても、二重に登録される前に
+        「二重送信の確認」が止める(`warehouse_service.already_sent`)。
         """
-        orders, self.pending_orders = self.pending_orders, []
+        return [dict(order) for order in self.pending_orders]
+
+    def drop_pending_orders(self) -> None:
+        """下書きを手放す(送った・捨てた)。"""
+        if self.pending_orders:
+            log.info("倉庫送信の下書きを手放しました: %s行 (Lot %s)",
+                     len(self.pending_orders), self.lot_no)
+        self.pending_orders = []
+
+    def take_pending_orders(self) -> list[dict[str, Any]]:
+        """下書きを取り出して空にする(試験の後片付け用)。"""
+        orders = self.peek_pending_orders()
+        self.drop_pending_orders()
         return orders
 
     def can_expand(self) -> bool:

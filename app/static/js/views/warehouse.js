@@ -691,6 +691,9 @@ export function start(state, material, lotPeekWhy) {
   if (el.send) el.send.addEventListener("click", () => send());
   if (el.clearForm) {
     el.clearForm.addEventListener("click", () => {
+      // 下書きは送るまでサーバが預かっている。捨てたことを伝えないと、
+      // 開き直したときにまた出てくる
+      if (drafts.length) api.post("/api/warehouse/drafts/discard", {}).catch(toastError);
       // **下書きから抜ける。** 消したのに下書きの錠が残っていると、
       // 空欄なのに打てない状態になる。ここが手入力への切り替え口でも
       // ある(道具が組み立てた値を直したいときは、一度消して打ち直す)
