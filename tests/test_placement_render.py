@@ -346,18 +346,34 @@ class BuildRenderPlanTests(unittest.TestCase):
         self.assertEqual(len(plan.boards), 1)
         self.assertEqual(plan.boards[0].fill, render.COLOR_UPPER)
 
-    def test_fill_board_gets_distinct_color_when_large_enough_for_caption(self):
-        """補填ボードは、キャプションが入る大きさなら主ボードと同じ
-
-        赤/緑ではなく専用色にする(現場の声:「補填ボードが解かりにくい」)。
-        既存のTHIN_*色分け(細すぎて文字が入らないとき)とは別の仕組み。
-        """
+    def test_普通の大きさの補填の板は主ボードと同じ色(self):
+        """現場の声:「カットする部分の色を変えるのはよいが、ボード全部の色を
+        変えてしまってよくわからない」。補填の色は細い補填材だけにし、
+        普通の大きさの板は補填に使っても主ボードの色のまま(切る部分は斜線)。"""
         boards = [placed(0, 0, 1150, 2650, is_fill=True)]
         plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
         rect = plan.boards[0]
-        self.assertNotEqual(rect.caption, "")   # 主ボードと同じ大きさ扱い
-        self.assertEqual(rect.fill, render.COLOR_FILL)
-        self.assertEqual(rect.outline, render.COLOR_FILL_OUTLINE)
+        self.assertNotEqual(rect.caption, "")
+        self.assertEqual(rect.fill, render.COLOR_LOWER)
+        self.assertEqual(rect.outline, render.COLOR_BOARD_OUTLINE)
+
+    def test_細い補填材は補填の色(self):
+        boards = [placed(0, 0, 70, 2650, is_fill=True)]
+        plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
+        self.assertEqual(plan.boards[0].fill, render.COLOR_FILL)
+        self.assertEqual(plan.boards[0].outline, render.COLOR_FILL_OUTLINE)
+
+    def test_切り落とす部分は枠の外へ描かない(self):
+        """30×2500 を 500 に切って枠の途中に置くと、捨てる 2000mm が
+        枠の外まで伸びて、はみ出しに見えていた。"""
+        pb = placed(2500, 20, 30, 500, UPPER)
+        pb.original_width, pb.original_length = 30, 2500
+        plan = render.build_render_plan([pb], UPPER, 1783, 3838, 882, 440)
+        right = plan.border.x + plan.border.width
+        zones = [c for c in plan.cut_marks if c.fill == render.COLOR_CUT_ZONE]
+        self.assertTrue(zones)
+        for zone in zones:
+            self.assertLessEqual(zone.x + zone.width, right + 0.01)
 
     def test_main_board_keeps_category_color(self):
         boards = [placed(0, 0, 1150, 2650, is_fill=False)]
@@ -385,7 +401,7 @@ class BuildRenderPlanTests(unittest.TestCase):
 
     def test_overhanging_fill_board_prefers_warning_outline(self):
         # はみ出し(警告)と補填(専用色)が両方成り立つ場合、輪郭は警告を優先
-        boards = [placed(0, 0, 1150, 4000, is_fill=True)]
+        boards = [placed(0, 0, 80, 4000, is_fill=True)]
         plan = render.build_render_plan(boards, LOWER, 1150, 2650, 400, 200)
         rect = plan.boards[0]
         self.assertEqual(rect.fill, render.COLOR_FILL)

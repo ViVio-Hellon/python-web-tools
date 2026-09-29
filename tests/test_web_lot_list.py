@@ -86,8 +86,23 @@ class StateTests(ListWebTestCase):
         body = self.get()
         self.assertEqual(self.lots(body), ["1111111", "2222222", "3333333"])
         self.assertEqual([h["label"] for h in body["headers"]][:4],
-                         ["ロット番号", "引当有無", "用途コード", "用途名"])
+                         ["ロット番号", "引当有無", "引当数", "用途コード"])
         self.assertEqual(body["count_note"], "3 件")
+
+    def test_引当があれば引当数を出す_無ければ空欄(self) -> None:
+        """現場の声:「引当有無が1の時だけ表示し引当数を表示させてほしい」。"""
+        self.conn.executemany(
+            "INSERT INTO 仕掛引当 (ロット番号, 引当番号) VALUES (?, ?)",
+            [("2222222", "60000001"), ("2222222", "60000002"), ("3333333", "60000003")])
+        self.conn.commit()
+        body = self.get()
+        keys = [h["key"] for h in body["headers"]]
+        at, count_at = keys.index("hiki"), keys.index("hiki_count")
+        self.assertEqual(count_at, at + 1)                # 引当有無のすぐ右
+        got = {r["lot_no"]: (r["values"][at], r["values"][count_at]) for r in body["rows"]}
+        self.assertEqual(got["1111111"][1], "")           # 引当なし → 空欄
+        self.assertEqual(got["2222222"], ("1", "2"))
+        self.assertEqual(got["3333333"], ("1", "1"))
 
     def test_引当有無が一覧に出る(self) -> None:
         """同じロット番号が仕掛引当(SIKAHIKI)にあれば1、無ければ0。"""

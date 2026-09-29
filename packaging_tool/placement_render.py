@@ -464,6 +464,10 @@ def board_color(category: str) -> str:
 # 出るときと出ないときがある(色での案内)」)
 FIXED_THIN_SIDES = (30, 50, 100)
 
+# 補填の色で塗る板の、短い辺の上限。これより太い板は補填に使っても
+# 主ボードと同じ色にする(`build_render_plan`)
+FILL_STRIP_MAX = 100
+
 
 def fill_board_color(thin_side: int) -> str:
     """補填ボードの塗り。**厚みで決める(30/50/100)。**
@@ -652,7 +656,13 @@ def build_render_plan(
             if not caption_fits(caption, font_size, screen_w):
                 caption, font_size, thin = "", 14, True
 
-        if board.is_fill_board:
+        # 補填の色は**細い補填材(短い辺が FILL_STRIP_MAX 以下)だけ**。普通の
+        # 大きさの板を丈の継ぎ足しに使ったときは主ボードと同じ色にする ──
+        # 板全体が別の色になると、切る部分の印と見分けがつかない(現場の声:
+        # 「カットする部分の色を変えるのはよいが、ボード全部の色を変えて
+        # しまってよくわからない」)。切る部分は斜線の帯(`cut_marks`)が示す
+        strip = board.is_fill_board and thin_side <= FILL_STRIP_MAX
+        if strip:
             fill = fill_board_color(thin_side)
         elif thin:
             fill = thin_board_color(thin_side, screen_h)
@@ -665,7 +675,7 @@ def build_render_plan(
         if _is_overhanging(board, base_w, base_l):
             outline, outline_width = COLOR_OVERHANG_LINE, 2.5
             tooltip += " / はみ出し"
-        elif board.is_fill_board:
+        elif strip:
             outline, outline_width = COLOR_FILL_OUTLINE, 1.0
         else:
             outline, outline_width = COLOR_BOARD_OUTLINE, 1.0
@@ -690,8 +700,7 @@ def build_render_plan(
         #      その色が何ミリを指すのかは凡例にしか書いていない。
         #      以前は 1 だけを見ていたので、同じ100の補填が、帯が太くて
         #      文字が入る図では凡例から消えていた
-        show_in_legend = thin or (board.is_fill_board
-                                  and thin_side in FIXED_THIN_SIDES)
+        show_in_legend = thin or (strip and thin_side in FIXED_THIN_SIDES)
         if show_in_legend and thin_side not in legend_seen:
             legend_seen[thin_side] = fill  # 図に出ている色をそのまま出す
 
@@ -699,10 +708,17 @@ def build_render_plan(
         if board.is_fill_board and not cut.cut_length and not cut.cut_width:
             continue
 
+        # 切り落とす部分は**枠(下用=パレット・上用=製品)の中にだけ**描く。
+        # 板の先に切り落とし分をそのまま足すと、枠の外へ長く伸びて
+        # はみ出しに見えていた(30×2500 を 500 に切ると、捨てる 2000mm が
+        # 枠の外まで描かれた。現場の声:「はみ出していないのにはみ出し」)
+        frame_right = offset_x + base_l * scale
+        frame_bottom = offset_y + base_w * scale
         if cut.cut_length:
             plan.cut_marks.append(Rect(
                 x=px + screen_w - 1, y=py, width=3, height=screen_h, fill=COLOR_CUT_LINE))
             zone_w = (board.length + cut.amount_length) * scale - screen_w
+            zone_w = min(zone_w, frame_right - (px + screen_w))
             if zone_w > 2:
                 plan.cut_marks.append(Rect(
                     x=px + screen_w, y=py, width=zone_w, height=screen_h,
@@ -712,6 +728,7 @@ def build_render_plan(
             plan.cut_marks.append(Rect(
                 x=px, y=py + screen_h - 1, width=screen_w, height=3, fill=COLOR_CUT_LINE))
             zone_h = (board.width + cut.amount_width) * scale - screen_h
+            zone_h = min(zone_h, frame_bottom - (py + screen_h))
             if zone_h > 2:
                 plan.cut_marks.append(Rect(
                     x=px, y=py + screen_h, width=screen_w, height=zone_h,

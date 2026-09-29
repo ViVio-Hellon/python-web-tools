@@ -75,6 +75,10 @@ class Column:
     # 「候補は実際にデータにある値から作る」という `suggest` の約束を守るため
     # ── 空なら値の候補はデータから引く
     choices: tuple[str, ...] = ()
+    # 数字を打っただけのときに、この列の値を候補に出すか。引当数のように
+    # 小さな数しか入らない列は「3」と打つたびに先頭を取ってしまうので、
+    # 名前で呼ばれたときだけ出す(板厚を探す人の邪魔をしない)
+    suggest_by_value: bool = True
 
     @property
     def sql(self) -> str:
@@ -97,6 +101,13 @@ HIKI_EXISTS = (f'(EXISTS (SELECT 1 FROM {TABLE_HIKI} h '
                f'WHERE h."ロット番号" = {TABLE}."ロット番号"))')
 
 
+# 同じロット番号の引当の**件数**。引当が無ければ NULL(一覧では空欄)。
+# 現場の声:「引当有無が1の時だけ引当数を表示させてほしい」。
+# 件数にするのは、引当数量は受注ごとに kg / 枚 と単位が違い、足すと意味を成さないため
+HIKI_COUNT = (f'(SELECT NULLIF(COUNT(*), 0) FROM {TABLE_HIKI} h '
+              f'WHERE h."ロット番号" = {TABLE}."ロット番号")')
+
+
 # 一覧の列。並びがそのまま表の左からの順になる
 # 一覧の列。並びがそのまま表の左からの順になる。
 #
@@ -114,6 +125,9 @@ COLUMNS: tuple[Column, ...] = (
     # 「引当のあるロットだけ」を一覧で作れる
     Column("hiki", "引当有無", "引当有無", TYPE_NUMBER,
            expr=HIKI_EXISTS, choices=("0", "1")),
+    # 引当の件数。引当有無が1のときだけ値が出る(0件は空欄)
+    Column("hiki_count", "引当数", "引当数", TYPE_NUMBER, expr=HIKI_COUNT,
+           suggest_by_value=False),
     Column("yoto_code", "用途コード", "用途コード"),
     Column("yoto_name", "用途名", "用途名"),
     Column("zaishitsu", "製造材質", "製造材質"),
@@ -364,6 +378,8 @@ def suggest(conn: sqlite3.Connection, text: str,
         # ので、他の列の値より優先してよい
         if _named(c):
             return -2
+        if not c.suggest_by_value:
+            return 2
         # 打った文字がその列の取りうる値そのものなら次に出す。
         # 引当有無は値が 0/1 しか無いので、ちょうど「1」と打ったのなら
         # それを探している見込みが高い。候補は12件で打ち切られるため、
@@ -405,6 +421,8 @@ def suggest(conn: sqlite3.Connection, text: str,
                 out.append(Suggestion(
                     kind="condition", column=col.key, op=OP_EQ, value=value,
                     label=f"{col.label} {OP_EQ} {value}"))
+            continue
+        if not col.suggest_by_value:
             continue
         if col.choices:
             # 取りうる値が決まっている列(引当有無の 0/1)。打った文字が
