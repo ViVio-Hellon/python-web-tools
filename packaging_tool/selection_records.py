@@ -279,13 +279,39 @@ class RecordsMixin:
         return BoardOpResult(True, f"使用実績に{sheets}枚を記録しました。")
 
     def patterns(self) -> list[Any]:
-        """いまのパレット寸法で登録されている実績(VBA `GetPatternList`)。"""
+        """いまのパレット寸法で登録されている実績(VBA `GetPatternList`)。
+
+        **ほかの端末が保存した実績も出す。** 共有が変わっていれば、一覧を作る
+        前に実績だけ取り込み直す(`pattern_sync.refresh_if_changed`)。
+        """
         if not self.palette.is_set:
             return []
+        from . import pattern_sync
+        pattern_sync.refresh_if_changed(self.presenter.conn)
         return store.get_pattern_list(
             self.presenter.conn, self.palette.width, self.palette.length)
 
-    def delete_pattern(self, pattern_id: int) -> BoardOpResult:
+    def _stale_pattern(self, pattern_id: int, seen: Optional[dict]) -> str:
+        """画面が見ていた実績と、いまその番号の実績が違えば理由を返す。
+
+        実績の番号は、共有から取り込み直すと共有での番号に振り直される。
+        古い一覧のまま押すと、**別の実績を読み込む・消す**ことになる。
+        画面は見ていた実績の登録日時とボードの内訳を送ってくる(`seen`)。
+        """
+        if not seen:
+            return ""
+        now = next((p for p in store.get_pattern_list(self.presenter.conn)
+                    if p.id == pattern_id), None)
+        if now is None:
+            return "その実績はもうありません(ほかの端末で消されたか、番号が振り直されました)。一覧を確かめてください。"
+        if (str(seen.get("registered_at", "")) != now.registered_at
+                or str(seen.get("boards", "")) != now.board_summary):
+            return ("実績の一覧が新しくなっています(ほかの端末の保存・削除で番号が"
+                    "振り直されました)。一覧を確かめてから、もう一度押してください。")
+        return ""
+
+    def delete_pattern(self, pattern_id: int,
+                       seen: Optional[dict] = None) -> BoardOpResult:
         """実績の削除(VBA `DeletePatternByID`)。
 
         **保存と同じで認証が要る。** 実績は端末をまたいで共有するもので、
@@ -298,6 +324,9 @@ class RecordsMixin:
         """
         if not self.admin:
             return BoardOpResult(False, "管理者認証が必要です。", REFUSE_DENIED)
+        stale = self._stale_pattern(pattern_id, seen)
+        if stale:
+            return BoardOpResult(False, stale, REFUSE_NOT_FOUND)
         try:
             gone = store.delete_pattern_by_id(self.presenter.conn, pattern_id)
         except store.PatternStoreError as exc:
@@ -312,7 +341,8 @@ class RecordsMixin:
         _push_later()
         return BoardOpResult(True, f"実績 ID {pattern_id} を削除しました")
 
-    def load_pattern(self, pattern_id: int) -> BoardOpResult:
+    def load_pattern(self, pattern_id: int,
+                     seen: Optional[dict] = None) -> BoardOpResult:
         """実績を読み込む(VBA `LoadSinglePattern`)。**計算し直さない。**
 
         保存したときの画面の状態(選定リストとタグ・配置・カット・プロテック
@@ -322,6 +352,9 @@ class RecordsMixin:
         ロットから決まる状態(プロテックか・保護材)は**上書きしない**。
         いまのロットと食い違っていれば、読み込んだうえで知らせる。
         """
+        stale = self._stale_pattern(pattern_id, seen)
+        if stale:
+            return BoardOpResult(False, stale, REFUSE_NOT_FOUND)
         try:
             snap = store.load_pattern_snapshot(self.presenter.conn, pattern_id)
         except store.PatternStoreError as exc:

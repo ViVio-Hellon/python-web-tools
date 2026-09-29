@@ -532,7 +532,7 @@ def load_pattern():
     pattern_id = _parse_int(body.get("id"))
     if pattern_id is None:
         return jsonify(_error("bad_id", "読み込むパターンを選んでください。")), 400
-    return _apply(session, session.load_pattern(pattern_id))
+    return _apply(session, session.load_pattern(pattern_id, seen=_seen_pattern(body)))
 
 
 @bp.post("/api/selection/pattern/delete")
@@ -547,7 +547,13 @@ def delete_pattern():
     pattern_id = _parse_int(body.get("id"))
     if pattern_id is None:
         return jsonify(_error("bad_id", "削除するパターンを選んでください。")), 400
-    return _apply(session, session.delete_pattern(pattern_id))
+    return _apply(session, session.delete_pattern(pattern_id, seen=_seen_pattern(body)))
+
+
+def _seen_pattern(body: dict):
+    """画面が見ていた実績(登録日時・ボードの内訳)。番号の振り直しに気づくため。"""
+    was = body.get("was")
+    return was if isinstance(was, dict) else None
 
 
 # ------------------------------------------------------------------

@@ -323,6 +323,40 @@ def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
     return outcome
 
 
+# 実績だけを取り込み直したときの、取り込み元の姿(`refresh_if_changed`)
+_seen_stamp: dict[str, tuple[int, int]] = {}
+
+
+def refresh_if_changed(conn: sqlite3.Connection,
+                       path: Optional[Path] = None) -> Optional[ImportOutcome]:
+    """取り込み元が前に見たときから変わっていれば、**実績だけ**取り込み直す。
+
+    【なぜ要るか】
+    実績の取り込みは、起動時と、発注の取り込み直し(倉庫連携・簡易在庫・設定の
+    見張り)に乗っているだけだった。資材選択を開いたままの端末には、ほかの端末が
+    保存した実績が**いつまでも出なかった**(2台での通し試験)。VBA は一覧を
+    開くたびに共有を直接読むので、保存すればすぐ見える。
+    資材選択が実績の一覧を作るたびにここを通す。変わっていなければファイルの
+    姿(大きさ・更新時刻)を見るだけで帰る。
+    """
+    from . import sync_sources
+    path = path or sync_sources.find_material_db()
+    if path is None:
+        return None
+    stamp = sync_sources.source_stamp(path)
+    if stamp is None or _seen_stamp.get(str(path)) == stamp:
+        return None
+    outcome = import_from(conn, path)
+    if not outcome.error and not outcome.skipped_reason:
+        _seen_stamp[str(path)] = stamp
+    return outcome
+
+
+def forget_seen() -> None:
+    """試験用。次の `refresh_if_changed` で必ず見に行く。"""
+    _seen_stamp.clear()
+
+
 def push_to(conn: sqlite3.Connection, path: Optional[Path]) -> PushResult:
     """取り込み元の場所を受け取って送る(開けなければ理由を返す)。"""
     result = PushResult()

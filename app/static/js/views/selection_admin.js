@@ -60,6 +60,10 @@ export function render(admin) {
     button.className = "btn btn--find rowdel";
     button.textContent = "読込";
     button.dataset.pattern = p.id;
+    // 見ていた実績。番号は共有から取り込み直すと振り直されるので、
+    // サーバはこれがいまの番号の実績と同じかを確かめてから読む
+    const seen = JSON.stringify({ registered_at: p.registered_at, boards: p.boards });
+    button.dataset.seen = seen;
     cell.appendChild(button);
     // 削除(VBA `frmPatterns.btnDelete_Click`)。**認証したときだけ出す**
     // ── 押せないボタンを並べても操作が増えるだけ。
@@ -73,6 +77,7 @@ export function render(admin) {
       del.className = "btn btn--danger rowdel";
       del.textContent = "削除";
       del.dataset.deletePattern = p.id;
+      del.dataset.seen = seen;
       del.dataset.label = `No.${p.id}  ${p.product}  ${p.boards}`;
       cell.appendChild(del);
     }
@@ -126,7 +131,8 @@ export function mount(api) {
   el.patternRows.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-pattern]");
     if (button) {
-      send("/api/selection/pattern/load", { id: button.dataset.pattern });
+      send("/api/selection/pattern/load",
+           { id: button.dataset.pattern, was: JSON.parse(button.dataset.seen || "{}") });
       return;
     }
     // 削除は取り消せない。**何を消すのかを見せてから訊く**
@@ -140,7 +146,8 @@ export function mount(api) {
                 { key: "delete", label: "削除する", note: "元に戻せません" }],
     }, (key) => {
       if (key !== "delete") return;
-      send("/api/selection/pattern/delete", { id: del.dataset.deletePattern });
+      send("/api/selection/pattern/delete",
+           { id: del.dataset.deletePattern, was: JSON.parse(del.dataset.seen || "{}") });
     });
   });
 }

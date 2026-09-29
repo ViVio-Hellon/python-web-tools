@@ -349,6 +349,79 @@ class VbaSourceTests(SyncTestCase):
             self.assertEqual(self.source(f'SELECT COUNT(*) FROM "{table}"'), [(0,)], table)
 
 
+class RefreshIfChangedTests(SyncTestCase):
+    """資材選択が実績の一覧を作るたびに、共有が変わっていれば実績だけ取り込み直す。
+
+    2台での通し試験: 資材選択を開いたままの端末Bには、端末Aが保存した実績が
+    いつまでも出なかった(取り込みが起動時と発注の見張りにしか乗っていなかった)。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        sync.forget_seen()
+        self.addCleanup(sync.forget_seen)
+
+    def test_共有が変わったときだけ取り込み直す(self) -> None:
+        save(self.a)
+        self.push(self.a)
+        self.assertEqual(sync.refresh_if_changed(self.b, self.path).imported, 1)
+        self.assertIsNone(sync.refresh_if_changed(self.b, self.path))   # 変わっていない
+        save(self.a, 製品幅=1000)
+        self.push(self.a)
+        self.assertEqual(sync.refresh_if_changed(self.b, self.path).imported, 2)
+        self.assertEqual(len(ps.get_pattern_list(self.b)), 2)
+
+    def test_送れていない実績があれば入れ替えず次にまた見る(self) -> None:
+        save(self.a)
+        self.push(self.a)
+        save(self.b, 製品幅=900)                      # Bにまだ送っていない実績
+        got = sync.refresh_if_changed(self.b, self.path)
+        self.assertTrue(got.skipped_reason)
+        self.assertEqual(len(ps.get_pattern_list(self.b)), 1)   # Bの分は消えない
+        self.push(self.b)
+        self.assertEqual(sync.refresh_if_changed(self.b, self.path).imported, 2)
+
+
+class StalePatternIdTests(SyncTestCase):
+    """実績の番号は、共有から取り込み直すと振り直される。古い一覧のまま押しても
+    別の実績を読み込む・消すことがない(画面は見ていた実績も送る)。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from packaging_tool import selection_session
+        selection_session.reset_session()
+        self.addCleanup(selection_session.reset_session)
+        self.session = selection_session.get_session(self.b)
+        self.session.admin = True
+
+    def seen(self, pid: int) -> dict:
+        row = next(p for p in ps.get_pattern_list(self.b) if p.id == pid)
+        return {"registered_at": row.registered_at, "boards": row.board_summary}
+
+    def test_番号が別の実績に替わっていたら読まない消さない(self) -> None:
+        pid = save(self.b, 配置方式="通常")
+        old = self.seen(pid)
+        # 取り込み直しで、同じ番号に別の実績が入った
+        self.b.execute(f'UPDATE "{H}" SET 配置方式 = ? WHERE 実績ID = ?', ("別案B", pid))
+        self.b.commit()
+        got = self.session.load_pattern(pid, seen=old)
+        self.assertFalse(got.ok)
+        self.assertIn("一覧が新しくなっています", got.message)
+        got = self.session.delete_pattern(pid, seen=old)
+        self.assertFalse(got.ok)
+        self.assertEqual(len(ps.get_pattern_list(self.b)), 1)
+
+    def test_見ていたとおりなら読める消せる(self) -> None:
+        pid = save(self.b)
+        self.assertTrue(self.session.load_pattern(pid, seen=self.seen(pid)).ok)
+        self.assertTrue(self.session.delete_pattern(pid, seen=self.seen(pid)).ok)
+
+    def test_もう無い番号は無いと言う(self) -> None:
+        got = self.session.load_pattern(999, seen={"registered_at": "x", "boards": "y"})
+        self.assertFalse(got.ok)
+        self.assertIn("もうありません", got.message)
+
+
 class ProvisionalNameTests(unittest.TestCase):
     def test_仮の名前の表で保存した実績を移す(self) -> None:
         """VER2.85.0 は VBA の名前が届く前で、仮の名前の表に保存していた。"""
