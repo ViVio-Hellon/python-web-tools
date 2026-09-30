@@ -161,12 +161,6 @@ function drawEditBar(map) {
 // ------------------------------------------------------------------
 function drawRows(view) {
   el.rows.replaceChildren(...view.rows.map((row) => rowElement(row, view.columns)));
-  if (el.invTabs) {
-    // **開く前に何件あるかが分かる**(§2.4)
-    tabs.setBadges(el.invTabs, {
-      list: { text: view.rows.length ? String(view.rows.length) : "" },
-    });
-  }
   el.found.textContent = view.found ? `${view.found} 件` : "";
   el.caption.textContent = view.caption || "";
   el.listNote.textContent = view.message || "";
@@ -258,16 +252,14 @@ async function runSearch() {
 /**
  * 図の位置を押したときに、その位置の在庫を出す。
  *
- * **押したのに何も起きないように見えるのが一番わるい。** 一覧は別の面に
- * あるので、こちらから開く ── 「ここに何がある?」と押した以上、答えは
- * その場に出す。
+ * 一覧は図の右に**いつも見えている**ので、面を切り替えない(以前は一覧を
+ * 別の面に置いていて、押すと図が裏に回った ── 現場の声)。
  */
 async function showPosition(name) {
   lastQuery = () => api.get(`/api/inventory/position/${encodeURIComponent(name)}`);
   // 位置で引き直したら、渡された寸法の結果はもう出ていない
   el.fromSelectionWhy.hidden = true;
   await load();
-  if (el.invTabs) tabs.select(el.invTabs, "list");
 }
 
 /** 図の位置を押した。**編集中は選ぶだけ**(消す対象を決める)。
@@ -426,7 +418,6 @@ export function start(state) {
                     "mapSave", "mapReset"]) {
     el[id] = document.getElementById(id);
   }
-  el.invTabs = document.getElementById("invTabs");
   el.actTabs = document.getElementById("actTabs");
   el.modeGroup = document.querySelector('.choose[aria-label="一致条件"]');
   tabs.attachAll();

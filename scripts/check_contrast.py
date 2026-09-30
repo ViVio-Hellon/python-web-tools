@@ -216,9 +216,12 @@ UI_PAIRS: tuple[tuple[str, str, str], ...] = (
     # 棚の輪郭。隣の棚と見分けられないと、図としての用をなさない
     ("map-idle", "map-line", "棚の輪郭(在庫あり)"),
     ("map-empty", "map-line", "棚の輪郭(空)"),
-    ("surface", "map-hit", "検索で当たった棚(地との差)"),
+    # 検索で当たった棚は**黄の塗り + 濃い金の縁**(現場の声:「青を黄色にして
+    # もっと目立つように」)。明るい黄は地との明度差が小さいので、形を
+    # 見分ける役は縁(`map-hit-line`)が受け持つ ── 3:1 は縁で測る
+    ("surface", "map-hit-line", "検索で当たった棚の縁(地との差)"),
     ("surface", "map-active", "いま見ている棚(地との差)"),
-    ("map-idle", "map-hit", "当たった棚とそうでない棚の差"),
+    ("map-idle", "map-hit-line", "当たった棚の縁とそうでない棚の差"),
 
     ("act-idle", "accent", "進捗バーの伸びた分"),
     ("act-idle", "state-ok", "進捗バー(完了)"),

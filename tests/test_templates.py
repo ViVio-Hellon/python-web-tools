@@ -172,7 +172,8 @@ try:
 except ImportError:                              # pragma: no cover
     HAS_WEB = False
 
-TABBED_PAGES = ("/selection", "/inventory", "/layout", "/settings")
+# 棚検索は図と中身を同時に見せるようにしたので(面で分けない)、面の組を持たない
+TABBED_PAGES = ("/selection", "/inventory", "/settings")
 # 現場モードの7画面。**どれを開いても**帯の左端は同じでなければならない
 ALL_PAGES = ("/lot", "/selection", "/inventory", "/warehouse", "/layout",
              "/log", "/settings")

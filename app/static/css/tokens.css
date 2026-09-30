@@ -115,12 +115,15 @@
   --angle-bar-4:#5b2d82; --angle-bar-5:#0f5f52; --angle-bar-6:#8c2230;
   --angle-bar-fg:#ffffff;
 
-  /* 保管位置マップ。**色の意味はVBA `clsMapBtn` のまま**:
-     検索で当たった棚=青 / いま見ている棚=赤。現場の記憶をそのまま使う。
+  /* 保管位置マップ。いま見ている棚=赤は VBA `clsMapBtn` のまま。
+     **検索で当たった棚は黄**(VBA は青)── VBA はフォームの地が明るい水色で
+     青が目立ったが、本ツールの地は灰色で、濃い青は沈んで見えた(現場の声:
+     「黄色にしてもっと目立つように」)。黄は明るい地では縁が溶けるので、
+     濃い金の縁(map-hit-line)を付ける
      在庫のある棚と空の棚も分ける(空まで同じ濃さだと物の在り処が読めない) */
   --map-idle:#dbe3ec;   --map-idle-fg:#101720;
   --map-empty:#f2f5f8;  --map-empty-fg:#556171;
-  --map-hit:#1e3a8a;    --map-hit-fg:#ffffff;
+  --map-hit:#ffd21f;    --map-hit-fg:#1a1600;  --map-hit-line:#8f6a00;
   --map-active:#b4232a; --map-active-fg:#ffffff;
   --map-line:#6b7683;
 
@@ -253,7 +256,7 @@
     --angle-bar-fg:#101720;
     --map-idle:#2f3a49;   --map-idle-fg:#e6ecf3;
     --map-empty:#1e2632;  --map-empty-fg:#9aa6b4;
-    --map-hit:#9cc4f7;    --map-hit-fg:#0b1220;
+    --map-hit:#ffd84a;    --map-hit-fg:#1a1600;  --map-hit-line:#fff1a8;
     --map-active:#f0888e; --map-active-fg:#2a0d0f;
     --map-line:#8894a4;
 
@@ -312,7 +315,7 @@
 
   --map-idle:#2f3a49;   --map-idle-fg:#e6ecf3;
   --map-empty:#1e2632;  --map-empty-fg:#9aa6b4;
-  --map-hit:#9cc4f7;    --map-hit-fg:#0b1220;
+  --map-hit:#ffd84a;    --map-hit-fg:#1a1600;  --map-hit-line:#fff1a8;
   --map-active:#f0888e; --map-active-fg:#2a0d0f;
   --map-line:#8894a4;
 

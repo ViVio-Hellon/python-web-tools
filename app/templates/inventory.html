@@ -3,21 +3,155 @@
 
 {% block content %}
 {#
-  **結果は左、操作は右**(設計指針 §4.2)。以前は1本の列に
-
-     検索 → (図 | 一覧) → (受け入れ | 払い出し)
-
-  と積んでいた。払い出しは**上の一覧で選んだ行**を対象にするのに、
-  その欄は一覧のさらに下 ── 選ぶ・確かめる・数を入れる、のたびに
-  上下へ視線が往復する。操作を右へ寄せると、選んだ行と入力欄が
-  同時に見える。
+  3列(検索 | 図 | 在庫一覧)。以前は「結果は左、操作は右」の2列で、結果の側を
+  図と一覧の面(タブ)で切り替えていた。並びと理由は下の `.split` の説明。
 #}
 <div class="split split--inventory">
+{#
+  **検索 | 図 | 在庫一覧 を横に並べ、3つとも同時に見せる**(現場の声:
+  「保管位置をクリックすると map が裏に回って在庫一覧が表に来る。
+  同時に表示してほしい。検索・map・在庫で縦に区切るほうがよい」)。
+  以前は図と一覧を面(タブ)で切り替えていたので、位置を押すと図が隠れ、
+  次の位置を押すには面を戻す必要があった。VBA(UFMAP)も
+  メニュー | 図 | 一覧 の3列だった。
+  払い出しは**右の一覧で選んだ行**を対象にする。3列なら選んだ行と入力欄が
+  同じ画面に並ぶ。
+#}
+  {# ============================================================
+     左: 操作。探す → 受け入れる / 払い出す
+     ============================================================ #}
+  <div class="split__controls" id="controlCol">
+    <section class="card">
+      <header>
+        <i class="ib ib--sm ib--accent" aria-hidden="true">検</i>
+        <h3>検索</h3>
+        <button class="btn btn--find" type="button" id="refresh">
+          <span class="gl">⟳</span>最新にする</button>
+      </header>
+      <div class="pad">
+      <div class="field">
+        <label for="w">幅</label>
+        <input class="input num" id="w" inputmode="numeric" style="width:6em"
+               autocomplete="off" value="{{ state.width_text }}" autofocus>
+        <span class="x">×</span>
+        <label for="l" class="sr">丈</label>
+        <input class="input num" id="l" inputmode="numeric" style="width:6em"
+               autocomplete="off" value="{{ state.length_text }}">
+        <button class="btn btn--find" type="button" id="search">
+          <span class="gl">⌕</span>検索
+        </button>
+        <button class="btn btn--danger" type="button" id="clear">
+          <span class="gl">×</span>クリア
+        </button>
+      </div>
+      {# 打っていないのに欄が埋まっている理由を書く。**書かないと、
+         前の人の打ち残しに見える**(旧版 `btnUFMAP` の受け側) #}
+      <p class="why" id="fromSelectionWhy"
+         {% if not state.from_selection %}hidden{% endif %}>
+        資材選択で決めたパレットの寸法で引いています。
+      </p>
+      {# 一致条件。**ラジオの丸は直径13px**でフィッツの法則がいちばん嫌う
+         的の大きさ ── 手袋では狙えない。カードにすると的が約20倍になり、
+         違いを1行添えられるので押す前に分かる。
+         選ばれているものは色・縁・チェックの3つで示す(§3.8) #}
+      <div class="choose" role="group" aria-label="一致条件">
+        {% for key, label, note in modes %}
+        <button class="choice" type="button" data-mode="{{ key }}"
+                aria-pressed="{{ 'true' if loop.first else 'false' }}">
+          <i class="ib ib--sm" aria-hidden="true">{{ '＝' if loop.first else '±' }}</i>
+          <span class="choice__tx"><b>{{ label }}</b><small>{{ note }}</small></span>
+          <i class="choice__ck" aria-hidden="true">✓</i>
+        </button>
+        {% endfor %}
+      </div>
+      <p class="status" id="status" hidden></p>
+      </div>
+    </section>
+
+    {# 登録は**どちらか片方**しかしない。縦に積むと、1366幅では操作の
+       列が 121px はみ出す ── 操作の列はスクロールさせない決まりなので
+       (§4.2)、択一のものは面で分ける。
+       既定は払い出し ── 探して見つけて出す、がこの画面の作業の流れで、
+       「右の一覧から選んでください」が次の一手そのものになる #}
+    <div class="tabs" data-tabs="inventory-act" id="actTabs">
+      {# **払い出しは現場モードだけ**(現場の声:「受け入れは必要かなぁ
+         払い出しは現場だね」)。資材モードでは面ごと出さず、受け入れを
+         既定にする。押せない面を置かない(`routes/inventory._field_only_writes`
+         が直接送られても断る) #}
+      {% set can_issue = mode == "field" %}
+      <div class="tabs__bar" role="tablist" aria-label="登録の種類">
+        {% if can_issue %}
+        <button class="tab" type="button" role="tab" data-key="issue" data-default="1"
+                id="tab-issue" aria-controls="panel-issue" aria-selected="false">
+          <span class="tab__label">払い出し</span>
+          <span class="tab__badge" id="issueTabBadge" hidden></span>
+        </button>
+        {% endif %}
+        <button class="tab" type="button" role="tab" data-key="receive"{% if not can_issue %} data-default="1"{% endif %}
+                id="tab-receive" aria-controls="panel-receive" aria-selected="false">
+          <span class="tab__label">受け入れ</span>
+          <span class="tab__badge" hidden></span>
+        </button>
+      </div>
+      <div class="tabs__panels">
+        {% if can_issue %}
+        <section class="tabpanel" id="panel-issue" role="tabpanel"
+                 aria-labelledby="tab-issue" hidden>
+          <section class="card">
+            <header><i class="ib ib--sm ib--upper" aria-hidden="true">払</i><h3>払い出し</h3></header>
+            <div class="pad">
+              {# 対象は一覧から選ぶ。手で打たせると、在庫に無い組み合わせを
+                 打ててしまう(強制選択機能) #}
+              <p class="status" id="pickWhy">右の在庫一覧から払い出す行を選んでください。</p>
+              <dl class="fields" id="picked" hidden>
+                <div><dt>幅 × 丈</dt><dd id="pkSize">---</dd></div>
+                <div><dt>位置</dt><dd id="pkPos">---</dd></div>
+                <div><dt>記号</dt><dd id="pkSym">---</dd></div>
+                <div><dt>在庫数</dt><dd id="pkStock">---</dd></div>
+              </dl>
+              <div class="field" style="margin-top:10px">
+                <label for="iqty">払い出す数</label>
+                <input class="input num" id="iqty" inputmode="numeric" style="width:7em" disabled>
+                <button class="btn btn--commit" type="button" id="issue" disabled>
+                  払い出しを登録
+                </button>
+              </div>
+              <p class="why">在庫数を超える数は登録できません。</p>
+            </div>
+          </section>
+        </section>
+        {% endif %}
+
+        <section class="tabpanel" id="panel-receive" role="tabpanel"
+                 aria-labelledby="tab-receive" hidden>
+          <section class="card">
+            <header><i class="ib ib--sm ib--lower" aria-hidden="true">受</i><h3>受け入れ</h3></header>
+            <div class="pad">
+              <div class="form">
+                <label for="rw">幅</label><input class="input num" id="rw" inputmode="numeric">
+                <label for="rl">丈</label><input class="input num" id="rl" inputmode="numeric">
+                <label for="rqty">台数</label><input class="input num" id="rqty" inputmode="numeric">
+                <label for="rpos">位置</label><input class="input" id="rpos" list="positions">
+                <label for="rsym">記号</label><input class="input" id="rsym" list="symbols">
+                <label for="rind">業界</label><input class="input" id="rind" list="industries">
+                <label for="runit">単位</label><input class="input" id="runit" list="units">
+                <label for="rnote">備考</label><input class="input" id="rnote">
+              </div>
+              <div class="btn-row" style="margin-top:10px">
+                <button class="btn btn--commit" type="button" id="receive">受け入れを登録</button>
+              </div>
+              <p class="why">同じ幅・丈・位置があれば足し、無ければ新しく作ります。</p>
+            </div>
+          </section>
+        </section>
+      </div>
+    </div>
+  </div>
 
   {# ============================================================
-     左: 結果。図と一覧
+     中央: 図
      ============================================================ #}
-  <div class="split__results" id="resultCol">
+  <div class="split__results split__map" id="resultCol">
     <div class="pane__head">
       <div>
         <span class="eyebrow">Step 3</span>
@@ -26,25 +160,6 @@
       <p class="why" id="caption">{{ state.caption or "" }}</p>
     </div>
 
-    {# 結果も面で分ける。図と一覧を縦に積むと、片方を見るのに
-       もう片方を通り過ぎることになる。見出しに件数を出すので、
-       開く前に「何件あるか」は分かる(§2.4) #}
-    <div class="tabs" data-tabs="inventory-result" id="invTabs">
-      <div class="tabs__bar" role="tablist" aria-label="結果の面">
-        <button class="tab" type="button" role="tab" data-key="map" data-default="1"
-                id="tab-map" aria-controls="panel-map" aria-selected="false">
-          <span class="tab__label">保管位置</span>
-          <span class="tab__badge" hidden></span>
-        </button>
-        <button class="tab" type="button" role="tab" data-key="list"
-                id="tab-list" aria-controls="panel-list" aria-selected="false">
-          <span class="tab__label">在庫一覧</span>
-          <span class="tab__badge" id="listTabBadge" hidden></span>
-        </button>
-      </div>
-      <div class="tabs__panels">
-        <section class="tabpanel" id="panel-map" role="tabpanel"
-                 aria-labelledby="tab-map" hidden>
     {# 図。この画面の値打ちはここにある。押せば中身が出る #}
     <section class="card" id="mapCard">
       <header>
@@ -140,9 +255,12 @@
         </p>
       </div>
     </section>
-        </section>
-        <section class="tabpanel" id="panel-list" role="tabpanel"
-                 aria-labelledby="tab-list" hidden>
+  </div>
+
+  {# ============================================================
+     右: 在庫一覧。**大きめの字で**出す(現場の声)
+     ============================================================ #}
+  <div class="split__results split__list" id="listCol">
     {# 一覧 #}
     <section class="card" id="listCard">
       <header>
@@ -164,142 +282,6 @@
         <p class="why" id="listNote">{{ state.message }}</p>
       </div>
     </section>
-        </section>
-      </div>
-    </div>
-  </div>
-
-  {# ============================================================
-     右: 操作。探す → 受け入れる / 払い出す
-     **払い出しは左の一覧で選んだ行が対象**なので、選んだ行と
-     入力欄が同時に見える位置に置く
-     ============================================================ #}
-  <div class="split__controls" id="controlCol">
-    <section class="card">
-      <header>
-        <i class="ib ib--sm ib--accent" aria-hidden="true">検</i>
-        <h3>検索</h3>
-        <button class="btn btn--find" type="button" id="refresh">
-          <span class="gl">⟳</span>最新にする</button>
-      </header>
-      <div class="pad">
-      <div class="field">
-        <label for="w">幅</label>
-        <input class="input num" id="w" inputmode="numeric" style="width:6em"
-               autocomplete="off" value="{{ state.width_text }}" autofocus>
-        <span class="x">×</span>
-        <label for="l" class="sr">丈</label>
-        <input class="input num" id="l" inputmode="numeric" style="width:6em"
-               autocomplete="off" value="{{ state.length_text }}">
-        <button class="btn btn--find" type="button" id="search">
-          <span class="gl">⌕</span>検索
-        </button>
-        <button class="btn btn--danger" type="button" id="clear">
-          <span class="gl">×</span>クリア
-        </button>
-      </div>
-      {# 打っていないのに欄が埋まっている理由を書く。**書かないと、
-         前の人の打ち残しに見える**(旧版 `btnUFMAP` の受け側) #}
-      <p class="why" id="fromSelectionWhy"
-         {% if not state.from_selection %}hidden{% endif %}>
-        資材選択で決めたパレットの寸法で引いています。
-      </p>
-      {# 一致条件。**ラジオの丸は直径13px**でフィッツの法則がいちばん嫌う
-         的の大きさ ── 手袋では狙えない。カードにすると的が約20倍になり、
-         違いを1行添えられるので押す前に分かる。
-         選ばれているものは色・縁・チェックの3つで示す(§3.8) #}
-      <div class="choose" role="group" aria-label="一致条件">
-        {% for key, label, note in modes %}
-        <button class="choice" type="button" data-mode="{{ key }}"
-                aria-pressed="{{ 'true' if loop.first else 'false' }}">
-          <i class="ib ib--sm" aria-hidden="true">{{ '＝' if loop.first else '±' }}</i>
-          <span class="choice__tx"><b>{{ label }}</b><small>{{ note }}</small></span>
-          <i class="choice__ck" aria-hidden="true">✓</i>
-        </button>
-        {% endfor %}
-      </div>
-      <p class="status" id="status" hidden></p>
-      </div>
-    </section>
-
-    {# 登録は**どちらか片方**しかしない。縦に積むと、1366幅では操作の
-       列が 121px はみ出す ── 操作の列はスクロールさせない決まりなので
-       (§4.2)、択一のものは面で分ける。
-       既定は払い出し ── 探して見つけて出す、がこの画面の作業の流れで、
-       「上の一覧から選んでください」が次の一手そのものになる #}
-    <div class="tabs" data-tabs="inventory-act" id="actTabs">
-      {# **払い出しは現場モードだけ**(現場の声:「受け入れは必要かなぁ
-         払い出しは現場だね」)。資材モードでは面ごと出さず、受け入れを
-         既定にする。押せない面を置かない(`routes/inventory._field_only_writes`
-         が直接送られても断る) #}
-      {% set can_issue = mode == "field" %}
-      <div class="tabs__bar" role="tablist" aria-label="登録の種類">
-        {% if can_issue %}
-        <button class="tab" type="button" role="tab" data-key="issue" data-default="1"
-                id="tab-issue" aria-controls="panel-issue" aria-selected="false">
-          <span class="tab__label">払い出し</span>
-          <span class="tab__badge" id="issueTabBadge" hidden></span>
-        </button>
-        {% endif %}
-        <button class="tab" type="button" role="tab" data-key="receive"{% if not can_issue %} data-default="1"{% endif %}
-                id="tab-receive" aria-controls="panel-receive" aria-selected="false">
-          <span class="tab__label">受け入れ</span>
-          <span class="tab__badge" hidden></span>
-        </button>
-      </div>
-      <div class="tabs__panels">
-        {% if can_issue %}
-        <section class="tabpanel" id="panel-issue" role="tabpanel"
-                 aria-labelledby="tab-issue" hidden>
-          <section class="card">
-            <header><i class="ib ib--sm ib--upper" aria-hidden="true">払</i><h3>払い出し</h3></header>
-            <div class="pad">
-              {# 対象は一覧から選ぶ。手で打たせると、在庫に無い組み合わせを
-                 打ててしまう(強制選択機能) #}
-              <p class="status" id="pickWhy">上の一覧から払い出す行を選んでください。</p>
-              <dl class="fields" id="picked" hidden>
-                <div><dt>幅 × 丈</dt><dd id="pkSize">---</dd></div>
-                <div><dt>位置</dt><dd id="pkPos">---</dd></div>
-                <div><dt>記号</dt><dd id="pkSym">---</dd></div>
-                <div><dt>在庫数</dt><dd id="pkStock">---</dd></div>
-              </dl>
-              <div class="field" style="margin-top:10px">
-                <label for="iqty">払い出す数</label>
-                <input class="input num" id="iqty" inputmode="numeric" style="width:7em" disabled>
-                <button class="btn btn--commit" type="button" id="issue" disabled>
-                  払い出しを登録
-                </button>
-              </div>
-              <p class="why">在庫数を超える数は登録できません。</p>
-            </div>
-          </section>
-        </section>
-        {% endif %}
-
-        <section class="tabpanel" id="panel-receive" role="tabpanel"
-                 aria-labelledby="tab-receive" hidden>
-          <section class="card">
-            <header><i class="ib ib--sm ib--lower" aria-hidden="true">受</i><h3>受け入れ</h3></header>
-            <div class="pad">
-              <div class="form">
-                <label for="rw">幅</label><input class="input num" id="rw" inputmode="numeric">
-                <label for="rl">丈</label><input class="input num" id="rl" inputmode="numeric">
-                <label for="rqty">台数</label><input class="input num" id="rqty" inputmode="numeric">
-                <label for="rpos">位置</label><input class="input" id="rpos" list="positions">
-                <label for="rsym">記号</label><input class="input" id="rsym" list="symbols">
-                <label for="rind">業界</label><input class="input" id="rind" list="industries">
-                <label for="runit">単位</label><input class="input" id="runit" list="units">
-                <label for="rnote">備考</label><input class="input" id="rnote">
-              </div>
-              <div class="btn-row" style="margin-top:10px">
-                <button class="btn btn--commit" type="button" id="receive">受け入れを登録</button>
-              </div>
-              <p class="why">同じ幅・丈・位置があれば足し、無ければ新しく作ります。</p>
-            </div>
-          </section>
-        </section>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -328,6 +310,18 @@
      どちらの列も **gap** で間隔を作る(個々の margin を撒かない) */
   .split--inventory .split__results,
   .split--inventory .split__controls { gap: 12px; display: flex; flex-direction: column; }
+
+  /* 3列の幅は `layout.css` の `.split--inventory` */
+  /* 図は列の高さを使い切る(以前は面の中で 56vh に抑えていた) */
+  .split__map .mapwrap { max-height: calc(100vh - 230px); }
+  /* 在庫一覧は**大きめの字**(現場の声:「在庫一覧の中身をもっと大きく」)。
+     離れて立ったままでも読める大きさにする */
+  #listCard .table { font-size: var(--fs-lg); }
+  #listCard .table thead th { font-size: var(--fs-sm); }
+  #listCard .table tbody td { padding-top: 7px; padding-bottom: 7px; }
+  /* 列が細いので、更新日時(いちばん長い)だけは日付と時刻の間で折り返す。
+     ほかの列(寸法・位置・数)は折り返すと読みにくいのでそのまま */
+  #listCard .table tbody td:last-child { white-space: normal; min-width: 6.5em; }
   /* 操作の列はスクロールさせない(§4.2)。以前ここに `overflow-y: auto`
      を置いていたが、それは「入りきらない」を隠していただけだった。
      入りきらないぶんは面(受け入れ / 払い出し)で分ける */
@@ -341,6 +335,7 @@
   /* 図。論理座標(pallet_map.json)をそのまま viewBox に載せる。
      拡大したぶんは枠の中でスクロールする(ページ全体は動かさない) */
   .mapwrap { width:100%; overflow:auto; max-height:56vh; }
+  @media (max-width: 1100px) { .split__map .mapwrap { max-height:56vh; } }
   /* `touch-action:none` はドラッグ(配置編集)に要る。付いていないと、
      指で掴んだつもりが画面のスクロールに持っていかれる */
   #map { width:calc(100% * var(--zoom, 1)); height:auto; display:block;
@@ -367,7 +362,7 @@
                    pointer-events:none; font-family:var(--sans); }
   #map .pos--idle   rect { fill:var(--map-idle); }
   #map .pos--idle   text { fill:var(--map-idle-fg); }
-  #map .pos--hit    rect { fill:var(--map-hit); stroke:var(--map-hit); }
+  #map .pos--hit    rect { fill:var(--map-hit); stroke:var(--map-hit-line); stroke-width:2; }
   #map .pos--hit    text { fill:var(--map-hit-fg); }
   #map .pos--active rect { fill:var(--map-active); stroke:var(--map-active);
                            stroke-width:2; }
@@ -392,7 +387,7 @@
   .maplegend { display:flex; gap:10px; flex-wrap:wrap; }
   .lg { font-size: var(--fs-xs); padding:2px 9px; border-radius:var(--pill);
         border:1px solid var(--map-line); }
-  .lg--hit    { background:var(--map-hit);    color:var(--map-hit-fg); }
+  .lg--hit    { background:var(--map-hit);    color:var(--map-hit-fg); border-color:var(--map-hit-line); }
   .lg--active { background:var(--map-active); color:var(--map-active-fg); }
   .lg--idle   { background:var(--map-idle);   color:var(--map-idle-fg); }
   .lg--empty  { background:var(--map-empty);  color:var(--map-empty-fg); }

@@ -319,7 +319,12 @@ a.role-chip .gl { font-size: var(--fs-sm); opacity: 0.8; }
 /* 画面ごとの列幅。**結果を広く**取るのが基本(§4.4 結果:操作 = 1.3:1)。
    発注フォームは12項目あるので、そこだけ操作側を広く取る */
 .split--selection { grid-template-columns: 1.35fr 1fr; }
-.split--inventory { grid-template-columns: 1.3fr 1fr; }
+/* 簡易在庫は**検索 | 図 | 在庫一覧**の3列(現場の声:「位置を押すと図が裏に回る。
+   同時に見せてほしい。検索・map・在庫で縦に区切る」)。図がいちばん広い。
+   操作の列が左なので、区切りの線は操作の列の右に引く */
+.split--inventory { grid-template-columns: minmax(270px, 0.75fr) minmax(0, 1.6fr) minmax(380px, 1.25fr); }
+.split--inventory .split__controls { border-right: 1px solid var(--rule); }
+.split--inventory .split__list { border-right: 0; }
 .split--layout    { grid-template-columns: 1.45fr 1fr; }
 /* 倉庫連携の一覧は16列ある。1.25:1 だと右端の「確認」ボタンが枠から
    出て、押せるものがあること自体が見えなくなる。

@@ -34,7 +34,7 @@ TEMPLATES = _ROOT / "app" / "templates"
 # ここに挙げたものが操作カラム側に移ったら試験が落ちる
 TWO_COLUMN = {
     "selection.html": ["planCard"],          # 配置図
-    "inventory.html": ["mapCard", "listCard"],  # 保管位置の図・在庫一覧
+    "inventory.html": ["mapCard", "listCard"],  # 保管位置の図・在庫一覧(3列)
     "layout.html": ["map"],                  # 配置図(SVG)
     "warehouse.html": ["rows"],              # 発注一覧
 }
@@ -42,7 +42,10 @@ TWO_COLUMN = {
 # 倉庫連携だけは書く順が逆(操作=送信フォームが先、結果=一覧が後ろ)。
 # 現場の要望で、この画面は「一覧を眺める」より先に「送る」が主な作業
 # なため、意図して他画面と順序を変えている(§4.2 の例外として明記)
-REVERSED_ORDER = {"warehouse.html"}
+# 簡易在庫も同じく操作(検索)が先。**検索 | 図 | 在庫一覧 の3列**で、
+# 図と一覧を同時に見せる(現場の声:「位置を押すと図が裏に回る。
+# 検索・map・在庫で縦に区切るほうがよい」。VBA の UFMAP も同じ並び)
+REVERSED_ORDER = {"warehouse.html", "inventory.html"}
 
 # 1カラムのままでよい画面。**結果しか無い**か、設定のように
 # 順に読むものなので、左右に分ける理由がない
@@ -114,6 +117,27 @@ class TwoColumnTests(unittest.TestCase):
         for name in ONE_COLUMN:
             with self.subTest(screen=name):
                 self.assertNotIn('split__controls', read(name))
+
+
+class SimultaneousTests(unittest.TestCase):
+    """図と中身は**同時に**見える(面で切り替えない)。
+
+    以前は図と一覧(置き場の中身)を面(タブ)で切り替えていて、位置を押すと
+    図が裏に回った(現場の声:「同時に表示させてほしい」)。
+    """
+
+    def test_簡易在庫は図と一覧を面で分けない(self) -> None:
+        text = read("inventory.html")
+        self.assertNotIn('data-tabs="inventory-result"', text)
+        self.assertLess(text.index('id="controlCol"'), text.index('id="mapCard"'))
+        self.assertLess(text.index('id="mapCard"'), text.index('id="listCard"'))
+
+    def test_棚検索は図と中身を面で分けない(self) -> None:
+        text = read("layout.html")
+        self.assertNotIn('data-tabs="layout-result"', text)
+        # 中身は右の列(検索の下)
+        controls = text[text.index('split__controls'):]
+        self.assertIn('id="materialRows"', controls)
 
 
 class SpacingTests(unittest.TestCase):

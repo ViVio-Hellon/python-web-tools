@@ -14,7 +14,7 @@
 <div class="split split--layout">
 
   {# ============================================================
-     左: 結果。図と、選んだ置き場の中身
+     左: 結果。図
      ============================================================ #}
   <div class="split__results" id="resultCol">
   <div class="pane__head">
@@ -32,24 +32,10 @@
   {% endif %}
 
 
-    {# 結果を面で分ける。図と中身を縦に積むと、置き場を選ぶたびに
-       図を通り過ぎて下まで見に行くことになる #}
-    <div class="tabs" data-tabs="layout-result" id="layoutTabs">
-      <div class="tabs__bar" role="tablist" aria-label="結果の面">
-        <button class="tab" type="button" role="tab" data-key="plan" data-default="1"
-                id="tab-plan" aria-controls="panel-plan" aria-selected="false">
-          <span class="tab__label">配置図</span>
-          <span class="tab__badge" hidden></span>
-        </button>
-        <button class="tab" type="button" role="tab" data-key="contents"
-                id="tab-contents" aria-controls="panel-contents" aria-selected="false">
-          <span class="tab__label">置き場の中身</span>
-          <span class="tab__badge" id="contentsTabBadge" hidden></span>
-        </button>
-      </div>
-      <div class="tabs__panels">
-        <section class="tabpanel" id="panel-plan" role="tabpanel"
-                 aria-labelledby="tab-plan" hidden>
+    {# 図だけを置く。**置き場の中身は右の列**(検索の下)に出す ── 以前は
+       図と中身を面(タブ)で切り替えていて、置き場を押すと図が隠れた。
+       右の列は検索欄の下が空いていたので、そこに大きな字で出す
+       (現場の声:「置き場の中身をもっと大きく表示して」) #}
   <!-- 2. 配置図 -->
   <section class="card">
     <header>
@@ -136,29 +122,6 @@
       </p>
     </div>
   </section>
-        </section>
-        <section class="tabpanel tabpanel--scroll" id="panel-contents" role="tabpanel"
-                 aria-labelledby="tab-contents" hidden>
-  <!-- 3. 置き場の中身 -->
-  <section class="card">
-    <header>
-      <i class="ib ib--sm" aria-hidden="true">材</i>
-      <h3>置き場の資材</h3>
-      <span class="eyebrow" id="materialsNote">{{ view.materials_note }}</span>
-    </header>
-    <div class="pad">
-      <div class="tablewrap tablewrap--materials">
-        <table class="table">
-          <thead><tr><th>種別</th><th class="n">サイズ</th></tr></thead>
-          <tbody id="materialRows"></tbody>
-        </table>
-      </div>
-      <p class="why">図の置き場を押すと、そこにある資材が出ます。</p>
-    </div>
-  </section>
-        </section>
-      </div>
-    </div>
 
   {# **図に無いラベルは面の外。** これはデータの不整合の知らせで、
      見ていない面に隠れていると「検索しても当たらない」形でしか
@@ -184,7 +147,7 @@
   </div>
 
   {# ============================================================
-     右: 操作。探す条件。**スクロールさせない**
+     右: 操作。探す条件と、押した置き場の中身
      ============================================================ #}
   <div class="split__controls" id="controlCol">
   <!-- 1. 検索 (VBA frmLayout の検索欄) -->
@@ -239,6 +202,23 @@
          id="result" {% if not view.result %}hidden{% endif %}>{{ view.result }}</p>
     </div>
   </section>
+  <!-- 3. 置き場の中身 -->
+  <section class="card" id="contentsCard">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">材</i>
+      <h3>置き場の資材</h3>
+      <span class="eyebrow" id="materialsNote">{{ view.materials_note }}</span>
+    </header>
+    <div class="pad">
+      <div class="tablewrap tablewrap--materials">
+        <table class="table">
+          <thead><tr><th>種別</th><th class="n">サイズ</th></tr></thead>
+          <tbody id="materialRows"></tbody>
+        </table>
+      </div>
+      <p class="why">図の置き場を押すと、そこにある資材が出ます。</p>
+    </div>
+  </section>
     <p class="why">
       置き場は<b>マスタの「データラベル」列</b>が決めます。
       図をずらせば置き場が変わり、テーブルを直せば中身が変わります。
@@ -273,7 +253,7 @@
   /* 置き場の状態。色だけに頼らないよう、名前も箱の中に出す(§3.8) */
   .shelf--idle  rect { fill:var(--map-idle);   stroke:var(--map-line); }
   .shelf--empty rect { fill:var(--map-empty);  stroke:var(--map-line); }
-  .shelf--hit   rect { fill:var(--map-hit);    stroke:var(--map-hit); }
+  .shelf--hit   rect { fill:var(--map-hit);    stroke:var(--map-hit-line); stroke-width:2; }
   .shelf--base  rect { fill:var(--map-active); stroke:var(--map-active); }
   .shelf--idle  text { fill:var(--map-idle-fg); }
   .shelf--empty text { fill:var(--map-empty-fg); }
@@ -304,7 +284,11 @@
 
   .radio { display:inline-flex; align-items:center; gap:4px; font-size: var(--fs-sm);
            min-height:44px; }
-  .tablewrap--materials { max-height:26vh; overflow:auto; }
+  /* 置き場の中身は**大きな字**で(現場の声)。右の列の残りの高さを使う */
+  .tablewrap--materials { max-height:calc(100vh - 420px); min-height:160px; overflow:auto; }
+  #contentsCard .table { font-size: var(--fs-xl); }
+  #contentsCard .table thead th { font-size: var(--fs-sm); }
+  #contentsCard .table tbody td { padding-top: 8px; padding-bottom: 8px; }
   .legend:empty { display:none; }
   /* 凡例。**色見本と言葉をくっつけ、項目どうしは離す** ── 何も当たって
      いなかったので「☐資材あり☐割り当てなし」と地続きに読めていた

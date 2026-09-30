@@ -170,13 +170,6 @@ function render(next) {
     tr.append(category, size);
     return tr;
   }));
-  if (el.layoutTabs) {
-    // **開く前に何件あるか**を見出しが言う(情報の匂い、§2.4)。
-    // 置き場を押したのに空だった、を開いてから知るのは遅い
-    tabs.setBadges(el.layoutTabs, {
-      contents: { text: next.materials.length ? String(next.materials.length) : "" },
-    });
-  }
 
   // マスタが指しているのに図に無いラベル。検索に当たらないので知らせる
   el.unplacedCard.hidden = !next.unplaced.length;
@@ -206,15 +199,11 @@ async function send(path, body) {
 }
 
 /**
- * 押した置き場の中身を出す。
- *
- * **押したのに何も起きないように見えるのが一番わるい。** 中身は別の面に
- * あるので、こちらから開く ── 「ここに何がある?」と押した以上、答えは
- * 押した場所のそばに出す。断られたときは開かない(出すものが無い)。
+ * 押した置き場の中身を出す。中身は右の列に**いつも見えている**ので、
+ * 面を切り替えない(以前は別の面にあり、押すと図が隠れた ── 現場の声)。
  */
 async function showContents(name) {
-  if (await send("/api/layout/select", { name })
-      && el.layoutTabs) tabs.select(el.layoutTabs, "contents");
+  await send("/api/layout/select", { name });
 }
 
 /**
@@ -297,7 +286,6 @@ export function start(initial) {
                     "unplacedCard", "unplacedNote", "unplacedList"]) {
     el[id] = document.getElementById(id);
   }
-  el.layoutTabs = document.getElementById("layoutTabs");
   tabs.attachAll();
   dragger?.reset();     // 再入場のたびに真っさらから(`nav.js`)
 

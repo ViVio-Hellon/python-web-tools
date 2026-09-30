@@ -249,7 +249,7 @@ class InventoryPageTests(InventoryWebTestCase):
     def test_払出は一覧から選ばせる(self) -> None:
         """手で打たせると、在庫に無い組み合わせを打ててしまう。"""
         html = self.client.get("/inventory").get_data(as_text=True)
-        self.assertIn("上の一覧から払い出す行を選んでください", html)
+        self.assertIn("右の在庫一覧から払い出す行を選んでください", html)
 
     def test_複数選択の件数を出す場所がある(self) -> None:
         """Shift+クリックの見た目(点線の色)だけでは選べたか分からない、
