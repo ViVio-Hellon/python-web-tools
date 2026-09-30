@@ -321,14 +321,20 @@ def coverage_deficit_text(placed: list[PlacedBoardModel], category: str,
     """
     max_y = 0
     max_x = 0
+    min_x: Optional[int] = None
     for pb in placed:
         if pb.board_category != category:
             continue
         max_y = max(max_y, pb.y + pb.width)
         max_x = max(max_x, pb.x + pb.length)
+        min_x = pb.x if min_x is None else min(min_x, pb.x)
 
+    # 丈は**ボードを置き始めた位置から**数える。狭幅の下用は帯をパレット丈の
+    # 中央に寄せる(`place_narrow_palette_boards`)ので、図の左端から数えると
+    # 寄せた分まで「超」に入る(パレット200×2100・製品170×1615 で、実際は
+    # 15mm 超なのに「丈+257mm超」と出た)。x=0 から置く配置では今までと同じ
     deficit_w = product_w - max_y
-    deficit_l = product_l - max_x
+    deficit_l = product_l - (max_x - (min_x or 0))
 
     if deficit_w > CUT_TOLERANCE:
         result_w = f"幅-{deficit_w}mm"

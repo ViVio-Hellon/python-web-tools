@@ -95,6 +95,9 @@ from . import placement_algorithm as place
 from .placement_types import CUT_UPPER_MINUS
 from .board_selection_algorithm import (TAG_CUT_PREMISE, TAG_LENGTH_FILL,
                                         TAG_MAIN, TAG_WIDTH_FILL)
+from .board_selection_common import (SC_1X2_BOARD_L, SC_1X2_L_MAX,
+                                     SC_4X8_BOARD_L, SC_4X8_L_MAX,
+                                     SC_5X8_L_MAX, SC_5X8_U_MAIN_L)
 from .board_selection_service import Palette, ProductSize, SelectedBoard
 from .logging_utils import get_logger
 from .models import BoardModel
@@ -123,7 +126,15 @@ MAX_B_EXTRA = 3
 # 20mm の根拠: 補填板の最小幅が30mmなので、30mm未満の不足は埋めても
 # 無駄になる。上限は30未満であるべき、という在庫側からの導出
 UPPER_W_MINUS = 80
-UPPER_L_MINUS = 20
+# 上用の丈は**業界シリーズ(1×2・4×8・5×8・5×10)と同じ許容**にする
+# (現場の指示。上用は丈のマイナスがNG)。シリーズは「製品丈がボードより
+# 最大5mm長い」ところまで1枚で覆ってよいとしている(1×2: 製品丈〜2005 に
+# ボード2000 / 4×8・5×8: 製品丈〜2505 にボード2500)ので、その5mmを使う。
+# 以前は下用と同じ20mm で、製品丈より20mm短い別案が出ていた。
+# 5×10 はシリーズ判定の定数を持たないので、ほかの3つに合わせる
+UPPER_L_MINUS = max(SC_1X2_L_MAX - SC_1X2_BOARD_L,
+                    SC_4X8_L_MAX - SC_4X8_BOARD_L,
+                    SC_5X8_L_MAX - SC_5X8_U_MAIN_L)
 UPPER_L_PLUS = 50
 LOWER_W_MINUS = 20
 LOWER_W_PLUS = 50

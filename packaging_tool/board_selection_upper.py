@@ -51,6 +51,13 @@ from .board_selection_protec import (PROTEC_1P1216_TOLERANCE,
 
 log = get_logger("board_selection.upper")
 
+# 上用の主ボードにできる最小の有効幅(製品幅に対する割合)。これより細い板は
+# 主ボードにせず、補填で足す
+UPPER_MAIN_MIN_WIDTH_RATIO = 0.5
+# 上用の主ボードの枚数を決めるとき、製品丈からこれだけ引いて数える(mm)。
+# 製品丈2505 にボード2500 を1枚で済ませるため(業界シリーズと同じ5mm)
+UPPER_MAIN_LENGTH_SLACK = 5
+
 
 
 # ==================================================================
@@ -344,7 +351,7 @@ def select_upper_boards(
         if eff_w > product.width:
             log.debug("却下(幅超過): %sx%s effW=%s", b.width, b.length, eff_w)
             continue
-        if eff_w < product.width * 0.5:
+        if eff_w < product.width * UPPER_MAIN_MIN_WIDTH_RATIO:
             log.debug("却下(幅不足): %sx%s effW=%s", b.width, b.length, eff_w)
             continue
         if b.width <= 100 or b.length <= 100:
@@ -352,7 +359,7 @@ def select_upper_boards(
             continue
 
         if eff_l > 0:
-            adjusted_len = max(0, product.length - 5)
+            adjusted_len = max(0, product.length - UPPER_MAIN_LENGTH_SLACK)
             cnt = max(1, adjusted_len // eff_l)
         else:
             cnt = 1

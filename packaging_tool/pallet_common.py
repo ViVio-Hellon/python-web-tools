@@ -258,19 +258,27 @@ class _PassDef:
     label: str
 
 
+# パレット検索の「±5」のパス(厳密で見つからなければ許容差をこれだけ広げる)。
+# 一覧の絞り込み(`list_pallets_for_product`)も同じ値を使う
+PASS_LOOSE_TOLERANCE = 5
+
+# 丈2山に必要な脚数(脚2本で丈方向に2枚置くと中央に脚がなく割れる)
+LEN2_MIN_LEGS = 3
+
+
 def _build_pass_defs(max_pass: int) -> list[_PassDef]:
     defs: list[_PassDef] = []
     n = 1
     for category in ("特定業界", "一般", "タイト", "全面"):
-        for tol in (0, 5):
+        for tol in (0, PASS_LOOSE_TOLERANCE):
             for orient, orient_label in (("normal", "通常"), ("rotated", "回転")):
-                tol_label = "厳密" if tol == 0 else "±5"
+                tol_label = "厳密" if tol == 0 else f"±{tol}"
                 defs.append(_PassDef(n, tol, category, orient, f"{orient_label}({category}/{tol_label})"))
                 n += 1
     if max_pass > 16:
-        for tol in (0, 5):
+        for tol in (0, PASS_LOOSE_TOLERANCE):
             for orient, orient_label in (("normal_len2", "通常"), ("rotated_len2", "回転")):
-                tol_label = "厳密" if tol == 0 else "±5"
+                tol_label = "厳密" if tol == 0 else f"±{tol}"
                 defs.append(_PassDef(n, tol, "丈2山", orient, f"{orient_label}(丈2山/スカシ・タイト/{tol_label})"))
                 n += 1
     return defs
@@ -302,7 +310,7 @@ def _keta_ok(pass_def: _PassDef, two_stack: bool, industry: str, keta: int, leg:
             return True
         return keta > 0 and keta % 2 == 1
     if pass_def.orientation in ("normal_len2", "rotated_len2"):  # 丈2山
-        return leg >= 3
+        return leg >= LEN2_MIN_LEGS
     return True
 
 
@@ -322,7 +330,7 @@ def _two_stack_ok(kind: str, industry: str, keta: int, leg: int) -> bool:
     if kind == KIND_WIDTH2:
         return industry == "スカシ" or (keta > 0 and keta % 2 == 1)
     if kind == KIND_LEN2:
-        return industry in ("スカシ", "タイト") and leg >= 3
+        return industry in ("スカシ", "タイト") and leg >= LEN2_MIN_LEGS
     return True                                   # 2山積ではない(通常/回転)
 
 

@@ -97,9 +97,25 @@ class ListPalletSizesTests(BoardSelectionTestCase):
         self.assertEqual(rows[0].width, 1100)
 
     def test_show_all_includes_ex(self):
-        insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, symbol="EXﾀｲﾄ", unit="枚")
+        insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, symbol="EXﾀｲﾄ", unit="台")
         rows = svc.list_pallet_sizes(self.conn, show_all=True)
         self.assertEqual(len(rows), 1)
+
+    def test_show_all_keeps_the_unit_filter(self):
+        """「EXまで表示」が外すのはEX除外だけ。単位の条件は残す(現場の指示)。"""
+        insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, symbol="EXﾀｲﾄ", unit="枚")
+        insert_pallet(self.conn, width=1100, length=2100, w_min=1000, w_max=1200, l_min=2000, l_max=2200, unit="枚")
+        self.assertEqual(svc.list_pallet_sizes(self.conn, show_all=True), [])
+        self.assertEqual(svc.search_pallet_direct(
+            self.conn, pallet_width_text="1000", show_all=True), [])
+        self.assertEqual(svc.list_pallets_for_product(
+            self.conn, product_width=1000, product_length=2000, show_all=True), [])
+        self.assertFalse(svc.auto_select_pallet(
+            self.conn, product_width_text="1000", product_length_text="2000",
+            show_all=True).ok)
+        # 保護材が確定していれば(上下共用)枚も出る
+        self.assertEqual(len(svc.list_pallet_sizes(self.conn, show_all=True,
+                                                   last_hosozai="厚紙")), 2)
 
     def test_unit_filter_default_only_dai(self):
         insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="枚")
@@ -117,8 +133,9 @@ class ListPalletSizesTests(BoardSelectionTestCase):
         「台・組」「台・枚」とずれていた。"""
         insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="組")
         self.assertEqual(len(svc.list_pallet_sizes(self.conn, last_hosozai="厚紙")), 0)
+        # 「EXまで表示」でも単位の条件は残る(以前は全部出していた)
         self.assertEqual(len(svc.list_pallet_sizes(self.conn, last_hosozai="厚紙",
-                                                   show_all=True)), 1)
+                                                   show_all=True)), 0)
 
     def test_ex_only_mode_requires_is_ex_order(self):
         insert_pallet(self.conn, width=1000, length=2000, w_min=900, w_max=1100, l_min=1900, l_max=2100, symbol="EXﾀｲﾄ", unit="台")
@@ -373,7 +390,8 @@ class AutoSelectPalletTests(BoardSelectionTestCase):
         self.assertEqual((got.width, got.length), (1100, 2100))      # 台・枚(組は選ばない)
         got = svc.auto_select_pallet(self.conn, product_width_text="1000",
                                      product_length_text="2000", show_all=True)
-        self.assertEqual((got.width, got.length), (1050, 2050))      # 全件表示なら単位を問わない
+        # 「EXまで表示」でも単位の条件は残る(以前は単位を問わず 1050×2050 の組を選んでいた)
+        self.assertEqual((got.width, got.length), (1200, 2200))
 
     def test_1p1185_mode_only_matches_tight_1300x1300(self):
         # 特定業界の1300x1300は幅丈こそ合うが業界がタイトでないため
@@ -501,14 +519,15 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
             last_hosozai="アングル")
         self.assertEqual([r.unit for r in rows], ["台"])
 
-    def test_全件表示なら単位で絞らない(self):
+    def test_全件表示でも単位で絞る(self):
+        """「EXまで表示」が外すのはEX除外だけ(現場の指示)。"""
         for unit in ("台", "本"):
             insert_pallet(self.conn, width=1150, length=2650,
                           w_min=900, w_max=1200, l_min=2400, l_max=2700,
                           unit=unit, code=unit)
         rows = svc.list_pallets_for_product(
             self.conn, product_width=1000, product_length=2500, show_all=True)
-        self.assertEqual(len(rows), 2)
+        self.assertEqual([r.unit for r in rows], ["台"])
 
     def test_excludes_pallets_outside_the_fit_range(self):
         insert_pallet(self.conn, width=1150, length=2650,

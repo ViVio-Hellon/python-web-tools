@@ -141,9 +141,10 @@ class ListTests(SelectionWebTestCase):
         """VBA の既定。単位=台 だけ、記号にEXを含む行は出さない。"""
         self.assertEqual(self.widths(self.get()), [1100, 1200])
 
-    def test_EXまで表示で全部出る(self) -> None:
+    def test_EXまで表示でEXが出る_単位の条件は残る(self) -> None:
+        """「EXまで表示」が外すのはEX除外だけ。単位「組」の1400 は出さない(現場の指示)。"""
         state = self.post("/api/selection/toggle/show_all")
-        self.assertEqual(self.widths(state), [1100, 1200, 1300, 1400])
+        self.assertEqual(self.widths(state), [1100, 1200, 1300])
         self.assertTrue(state["show_all"])
 
     def test_EX行だと分かる(self) -> None:

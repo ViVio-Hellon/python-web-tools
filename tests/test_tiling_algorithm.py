@@ -85,6 +85,19 @@ class 許容範囲(unittest.TestCase):
             self.assertLess(cand.tot_w, 1505,
                             "上用は保護材なので製品幅より必ずマイナス")
 
+    def test_上用の丈は業界シリーズと同じ5mmまでしか短くならない(self) -> None:
+        """上用は丈のマイナスがNG。許容は1×2・4×8・5×8 と同じ(製品丈2005 にボード2000)。"""
+        cands, _, bounds = solve(1540, 2550, 1505, 2502, upper=True)
+        self.assertEqual(bounds.l_lo, 2497)   # 製品丈-5
+        self.assertTrue(cands)
+        for cand in cands:
+            self.assertGreaterEqual(cand.tot_l, 2497)
+
+    def test_上用の丈の許容はシリーズの定数から決まる(self) -> None:
+        from packaging_tool import board_selection_common as C
+        self.assertEqual(T.UPPER_L_MINUS, C.SC_1X2_L_MAX - C.SC_1X2_BOARD_L)
+        self.assertEqual(T.UPPER_L_MINUS, C.SC_4X8_L_MAX - C.SC_4X8_BOARD_L)
+
     def test_上下共用の上蓋は下用と同じ扱い(self) -> None:
         """保護材ではないのでプラス禁止が外れる。"""
         product = ProductSize(width=1505, length=2502)

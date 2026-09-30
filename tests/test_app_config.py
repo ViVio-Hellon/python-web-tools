@@ -160,6 +160,27 @@ class VersionTests(_ConfigTestCase):
         line = next(l for l in text.splitlines() if "**実績パターン" in l)
         self.assertIn("[VER2.85.0](#ver2850)", line)
 
+    def test_決め打ちの値一覧がプログラムと合っている(self) -> None:
+        """許容値などを直したのに説明書の一覧を作り直し忘れた、を機械で止める。
+
+        一覧は `scripts/make_constants_doc.py` がプログラムから値を読んで作る。
+        落ちたら `python3 scripts/make_constants_doc.py` を流す。
+        """
+        import importlib.util
+        from pathlib import Path as _Path
+        root = _Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "make_constants_doc", root / "scripts" / "make_constants_doc.py")
+        doc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(doc)
+        text = (root / "docs" / "決め打ちの値一覧.md").read_text(encoding="utf-8")
+        self.assertEqual(doc.build(), text,
+                         "docs/決め打ちの値一覧.md が古いままです。"
+                         "python3 scripts/make_constants_doc.py を流してください")
+        # 説明書から引けること(一覧だけあっても、見つけられなければ意味が無い)
+        manual = (root / "docs" / "はじめに読む_起動と使い方.md").read_text(encoding="utf-8")
+        self.assertIn("決め打ちの値一覧.md", manual)
+
 
 class FallbackTests(_ConfigTestCase):
     """壊れた設定でも起動できること(基盤仕様書 ステップ5)。"""

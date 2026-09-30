@@ -20,6 +20,7 @@ from . import config, db, material_service
 from . import special_packaging as spk
 from .logging_utils import get_logger
 from .pallet_common import (KIND_LEN2, KIND_WIDTH2, MAX_NEAR_MISS_LOGS,
+                            PASS_LOOSE_TOLERANCE,
                             UNITS_DEFAULT, UNITS_WITH_HOSOZAI,
                             AutoSelectPalletResult,
                             PalletSizeRow, _build_pass_defs, _category_ok,
@@ -62,10 +63,10 @@ def list_pallet_sizes(
     フィルタ規則(元VBAと同一):
         - 幅・丈が0の行は常に除外
         - EXオンリーモード(is_ex_order かつ ex_only)は 記号にEXを含む行のみ
-        - show_all=Trueなら(EXオンリーでない限り)フィルタ無しで全件
-        - それ以外は「単位フィルタ」と「EX除外」を両方適用:
+        - それ以外は「単位フィルタ」を必ず適用し、show_all=False なら「EX除外」も:
             単位フィルタ: `unit_allowed`(保護材が確定していれば
-              台/枚/組、それ以外は台のみ)
+              台/枚、それ以外は台のみ)。**「EXまで表示」でも外さない**
+              (現場の指示。以前は show_all=True で単位の条件まで外れていた)
             EX除外: 記号に"EX"を含む行(大文字小文字問わず)は除外
         - is_1p1185_mode=Trueなら業界=タイト・幅=1300・丈=1300以外を除外
         - 幅|丈が同じで実コードを持つ行がある「単価表のマトリックス」行は除外
@@ -89,9 +90,9 @@ def list_pallet_sizes(
         if ex_only_mode:
             if not is_ex:
                 continue
-        elif not show_all:
-            if not unit_allowed(row["単位"], last_hosozai) or is_ex:
-                continue
+        elif not unit_allowed(row["単位"], last_hosozai) or (is_ex and not show_all):
+            # 「EXまで表示」が外すのはEX除外だけ。単位の条件は残す
+            continue
 
         result.append(_row_to_pallet_size_row(row))
     return result
@@ -131,9 +132,9 @@ def search_pallet_direct(
 
         symbol = (row["記号"] or "").strip()
         is_ex = "EX" in symbol.upper()
-        if not show_all:
-            if not unit_allowed(row["単位"], last_hosozai) or is_ex:
-                continue
+        # 「EXまで表示」が外すのはEX除外だけ。単位の条件は残す
+        if not unit_allowed(row["単位"], last_hosozai) or (is_ex and not show_all):
+            continue
 
         result.append(_row_to_pallet_size_row(row))
     return result
@@ -188,7 +189,7 @@ def list_pallets_for_product(
     """
     # auto_select_pallet の各パスは厳密/±5mmの許容差を使う。ここも同じ
     # 5mmにして、決定されたパレットが検索結果から漏れないようにする
-    tol = 5
+    tol = PASS_LOOSE_TOLERANCE
     ulog = user_log if user_log is not None else UserLog()   # 未指定なら捨てバッファ
     rejects = RejectLog(ulog)
     rows = db.fetch_all(conn, "SELECT * FROM PalletMaster ORDER BY 管理番号",
@@ -282,7 +283,8 @@ def list_pallets_for_product(
         # 製品サイズを入れたあとの一覧は、サイズで当たる行が単位に
         # 関わらず全部出ていた(現場の声:「単位"台"での絞り込みのはずが
         # サイズでヒットするものすべて表示している」)
-        if not show_all and not unit_allowed(row["単位"], last_hosozai):
+        # 「EXまで表示」でも外さない(現場の指示)。
+        if not unit_allowed(row["単位"], last_hosozai):
             rejects.log(f"  ×除外: {label} 単位が{row['単位'] or '(なし)'}です"
                         f"(出すのは{'/'.join(UNITS_WITH_HOSOZAI if last_hosozai and last_hosozai not in (material_service.HOSOZAI_ANGLE, '一致なし') else UNITS_DEFAULT)})")
             continue

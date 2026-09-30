@@ -43,9 +43,8 @@ def _listable(row: sqlite3.Row, *, ex_only_mode: bool, show_all: bool,
     is_ex = "EX" in (row["記号"] or "").strip().upper()
     if ex_only_mode:
         return is_ex
-    if show_all:
-        return True
-    return not is_ex and unit_allowed(row["単位"], last_hosozai)
+    # 「EXまで表示」が外すのはEX除外だけ。**単位の条件は残す**(現場の指示)
+    return (show_all or not is_ex) and unit_allowed(row["単位"], last_hosozai)
 
 
 def auto_select_pallet(

@@ -534,6 +534,18 @@ class CoverageDeficitTextTests(unittest.TestCase):
         self.assertEqual(
             render.coverage_deficit_text(boards, LOWER, 1150, 2650), "幅+50mm超  丈OK")
 
+    def test_length_is_counted_from_where_the_boards_start(self):
+        """狭幅の下用は帯を丈方向の中央に寄せる。寄せた分を「超」に数えない。
+
+        実例: パレット200×2100・製品170×1615。帯は x=242 から。100の帯は1615、
+        50の帯は1600 + 丈補填30(端は 1872)。
+        左端から数えていたころは「丈+257mm超」、本当は 15mm 超。
+        """
+        boards = [placed(242, 10, 100, 1615), placed(242, 110, 50, 1600),
+                  placed(1842, 110, 50, 30)]
+        self.assertTrue(render.coverage_deficit_text(boards, LOWER, 170, 1615)
+                        .endswith("丈+15mm超"))
+
     def test_base_is_always_product_size_even_for_the_lower_category(self):
         """下用でもパレットサイズではなく製品サイズと比較する(VBA原文どおり)。"""
         boards = [placed(0, 0, 1150, 2650)]
