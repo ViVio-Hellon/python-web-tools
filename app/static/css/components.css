@@ -960,3 +960,11 @@ tr[data-row-action] td:last-child > .elapsed {
 /* 横に8つ並ぶので**幅だけ**詰める。高さは縮めない ── ボタンは最小44px
    (指で押すため。上の「ボタン」の約束) */
 .btn--sm { padding: 8px 11px; font-size: var(--fs-sm); }
+
+/* 文を入れる表(設定の「保存場所」)。既定の表は数字を右に寄せて折り返さない
+   ので、長いパスや説明が右へはみ出していた。左寄せで折り返す */
+.table--wrap tbody td, .table--wrap thead th { text-align: left; white-space: normal; vertical-align: top; }
+.table--wrap tbody td:first-child { white-space: nowrap; width: 11em; }
+.table--wrap code.path { display: block; word-break: break-all; font-size: var(--fs-2xs); }
+.storage__line { display: block; line-height: 1.45; }
+.storage__carry { color: var(--muted); }

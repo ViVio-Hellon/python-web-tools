@@ -757,6 +757,60 @@
     </div>
   </section>
       </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-storage" role="tabpanel" aria-labelledby="tab-storage" hidden>
+  <!-- 7. 保存場所 -->
+  {# **このPCだけのもの**と**全PC共通のもの**を分けて書く(現場の声)。
+     場所はいまの設定から引いた実際のパス(`storage_places`) #}
+  <section class="card">
+    <header><i class="ib ib--sm ib--accent" aria-hidden="true">端</i><h3>このPCだけに保存して、このPCで引き継ぐもの</h3></header>
+    <div class="pad">
+      <p class="why">
+        ここにあるものは<b>ほかのPCには届きません</b>。PCを替える・新しい版に入れ替えるときは、
+        このPCから<b>持っていく</b>必要があります(とくに設定ファイル・配置図の入っている <b>data フォルダ</b>)。
+        バックアップも data フォルダごと取ってください。
+      </p>
+      <div class="tablewrap">
+        <table class="table table--wrap" id="storageLocal">
+          <thead><tr><th>何か</th><th>いまの場所 / 中に入っているもの / 無くなったら・引き継ぎ方</th></tr></thead>
+          <tbody>
+          {% for row in storage.local %}
+            <tr><td><b>{{ row.what }}</b></td>
+                <td><code class="path">{{ row.where }}</code>
+                    <span class="storage__line">{{ row.contents }}</span>
+                    <span class="storage__line storage__carry">→ {{ row.carry }}</span></td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  <section class="card">
+    <header><i class="ib ib--sm" aria-hidden="true">共</i><h3>複数のPCで共有するもの(取り込み元)</h3></header>
+    <div class="pad">
+      <p class="why">
+        共有フォルダにあり、<b>どのPCからも同じもの</b>を見ます。PCを替えても引き継ぐ必要はありません
+        (新しいPCで「取り込み元」の場所を合わせるだけ)。場所は「取り込み元」の面で変えられます。
+      </p>
+      <div class="tablewrap">
+        <table class="table table--wrap" id="storageShared">
+          <thead><tr><th>何か</th><th>いまの場所 / 中に入っているもの / このPCとのやり取り</th></tr></thead>
+          <tbody>
+          {% for row in storage.shared %}
+            <tr><td><b>{{ row.what }}</b></td>
+                <td><code class="path">{{ row.where }}</code>
+                    <span class="storage__line">{{ row.contents }}</span>
+                    <span class="storage__line storage__carry">→ {{ row.carry }}</span></td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="why">
+        CSVの<b>書き出し先</b>は <code>{{ storage.export }}</code> です。既定はこのツールのフォルダの中(このPCだけ)で、
+        共有に置きたいときは「取り込み元」の面で共有フォルダを指してください。
+      </p>
+    </div>
+  </section>
+      </section>
     </div>
   </div>
 </div>

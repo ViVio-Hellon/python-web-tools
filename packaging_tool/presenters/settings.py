@@ -79,6 +79,9 @@ TABS: tuple[tuple[str, str], ...] = (
     # 同じ語を2か所で違う意味に使うと、どちらの話か読めなくなる
     ("boards", "ボード人気度"),
     ("history", "最近の結果"),
+    # どのファイルが**このPCだけ**で、どれが**全PC共通**か(現場の声)。
+    # 引き継ぎ・バックアップのときに見る面
+    ("storage", "保存場所"),
 )
 TAB_KEYS = frozenset(key for key, _ in TABS)
 # 最初に開く面。**毎日押すもの**を既定にする
@@ -1095,6 +1098,76 @@ def tab_badges(view: SettingsViewModel) -> dict[str, dict[str, str]]:
 def _distribution_summary() -> dict[str, Any]:
     from .. import distribution
     return distribution.summary()
+
+
+# ------------------------------------------------------------------
+# 保存場所(このPCだけのもの / 複数PCで共有するもの)
+# ------------------------------------------------------------------
+# 現場の声:「ローカルに保存してそのPCで引き継いで使うものは、設定に
+# そういうファイルがあると明記してほしい。複数PCで共有するものと、
+# そのPCで引き継ぐものは違う」。**場所はいまの設定から引く**(書き写すと
+# 設定を変えた日に食い違う)。
+@dataclass(frozen=True)
+class StoragePlace:
+    what: str        # 何か
+    where: str       # いまの場所(実際のパス)
+    contents: str    # 中に入っているもの
+    carry: str       # 無くなったら / 引き継ぎ方
+
+
+def storage_places() -> dict[str, list[dict[str, str]]]:
+    """「保存場所」の面に出す2つの表。`local` はこのPCだけ、`shared` は全PC共通。"""
+    from .. import app_config, pallet_map, selection_log_store
+
+    master = config.master_db_dir() / config.MATERIAL_DB_NAME
+    local = [
+        StoragePlace(
+            "設定ファイル", str(config.USER_CONFIG_PATH),
+            "取り込み元・書き出し先の場所、拠点、自動取り込み、図面URL、"
+            "管理者パスワード(撹拌した値)、よく使う条件",
+            "設定し直し。新しい版に入れ替えるときは data フォルダごと持っていく"),
+        StoragePlace(
+            "手元のDB", str(config.DB_PATH),
+            "取り込んだマスタ・仕掛台帳の写し、選定の記録、"
+            "発注・受払・使用実績・コメントの控え(まだ共有へ送れていないものも)、"
+            "コメントの既読",
+            "取り込めば戻る。ただし、まだ共有へ送れていないものは戻らない"),
+        StoragePlace(
+            "棚検索の配置図", str(floor_plan.USER_PATH),
+            "配置編集で動かした置き場と背景の写真",
+            "配置編集をやり直し(無ければ出荷時の配置で動く)"),
+        StoragePlace(
+            "簡易在庫の保管位置マップ", str(pallet_map.USER_PATH),
+            "配置編集で動かした保管位置と背景の写真",
+            "配置編集をやり直し(無ければ出荷時の配置で動く)"),
+        StoragePlace(
+            "動作ログ・選定ログ", str(config.LOG_DIR),
+            f"動作の記録と、選定ログ(日ごと。{selection_log_store.KEEP_DAYS}日で消える)",
+            "無くても動く。困ったときに開発担当へ送るもの"),
+        StoragePlace(
+            "作業用フォルダ", str(app_config.local_root()),
+            "一時ファイル、表を持ってくる前のバックアップ など",
+            "無くても動く"),
+    ]
+    shared = [
+        StoragePlace(
+            "梱包資材マスタ", str(master),
+            "マスタ(ボード・パレット・資材など)、倉庫への発注、受払の履歴、"
+            "ボード使用実績、発注コメント、実績パターン",
+            "各PCが書き戻しで送り、取り込みで受け取る"),
+        StoragePlace(
+            "仕掛台帳", str(config.lot_db_dir()),
+            "仕掛ロット・仕掛引当・仕掛受注", "読むだけ"),
+        StoragePlace(
+            "看板マスタ", str(config.kanban_db_dir() / config.KANBAN_DB_NAME),
+            "在庫(看板)の表", "読むだけ"),
+        StoragePlace(
+            "パレット閾値マスタ",
+            str(config.threshold_db_dir() / config.THRESHOLD_DB_NAME),
+            "パレット選定の閾値", "読むだけ"),
+    ]
+    return {"local": [vars(p) for p in local], "shared": [vars(p) for p in shared],
+            "export": str(config.export_dir())}
 
 
 def to_dict(view: SettingsViewModel) -> dict[str, Any]:

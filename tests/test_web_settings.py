@@ -679,6 +679,22 @@ class DataWebTestCase(PresenterTestCase):
 
 
 class DataPageTests(DataWebTestCase):
+    def test_保存場所の面でこのPCだけのものと共有のものを分けて出す(self) -> None:
+        """現場の声:「ローカルに保存してそのPCで引き継ぐものは、設定にそういう
+        ファイルがあると明記して。複数PCで共有するものとは違う」。
+        場所はいまの設定から引いた実際のパスで出す。"""
+        from packaging_tool import config, floor_plan, pallet_map
+        html = self.client.get("/settings").get_data(as_text=True)
+        self.assertIn('id="panel-storage"', html)
+        local = html[html.index('id="storageLocal"'):html.index('id="storageShared"')]
+        shared = html[html.index('id="storageShared"'):]
+        for path in (config.USER_CONFIG_PATH, config.DB_PATH,
+                     floor_plan.USER_PATH, pallet_map.USER_PATH):
+            self.assertIn(str(path), local)
+        self.assertIn(config.MATERIAL_DB_NAME, shared)
+        self.assertIn(str(config.lot_db_dir()), shared)
+        self.assertNotIn(str(config.USER_CONFIG_PATH), shared)
+
     def test_開ける(self) -> None:
         res = self.client.get("/settings")
         self.assertEqual(res.status_code, 200)

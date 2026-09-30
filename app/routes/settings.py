@@ -75,6 +75,8 @@ def page():
         level_label=settings_presenter.LEVEL_LABEL,
         tabs=settings_presenter.TABS,
         default_tab=default_tab,
+        # 保存場所の面(このPCだけ / 全PC共通)。いまの設定から引く
+        storage=settings_presenter.storage_places(),
         # **面の印も初回から出す。** 開いていない面の問題を、JSが動くのを
         # 待たずに読めるようにする
         tab_badges=settings_presenter.tab_badges(view),
