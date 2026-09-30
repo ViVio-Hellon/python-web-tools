@@ -692,22 +692,36 @@ def _total_text(count: int, total_packages: int) -> str:
     return str(count * total_packages if total_packages > 0 else count)
 
 
-def _cut_block(info: CutSizeInfo, total_packages: int, *, show_orig: bool,
+def _cut_block(info: CutSizeInfo, total_packages: int, *, per_prefix: str = "",
                ed=None, prefix: str = "") -> tuple[str, str]:
     """切断サイズ欄(B:C)と総枚数欄(D)の2段組みを作る。
 
     `ed` を渡すと、寸法と枚数を**紙面で直せる**ようにする(現場の声:
     「サイズを微調整したい」)。空の行にも欄だけ出しておく ── 計算に
     出てこなかった切り出しを手で足せるようにするため。
+
+    **元のサイズ(切る前の板)は、切断サイズのすぐ後ろ(同じ行)に出す。**
+    プロテックでも出す(現場の声:「切断サイズにはボードの元のサイズも記載して」。
+    以前はプロテックだけ出していなかった)。元のサイズも紙面で直せる ──
+    空の行に手で足した切り出しにも、元の板を書き添えられるように。
+    `per_prefix` は1梱あたりの枚数の頭(プロテックは上下2セットぶんなので「上下」)。
     """
     def line(size: str, orig: str, count: int, name: str) -> str:
         cell = (printing.escape(size) if ed is None
                 else ed(f"{prefix}{name}_size", size, placeholder="幅x丈"))
         if ed is None and not size:
             return "<div></div>"
-        orig_html = (f'<span class="orig">（元: {printing.escape(orig)}）</span>'
-                     if show_orig and orig else "")
-        per = (f'<span class="per">1梱{count}枚</span>' if count > 0 else "")
+        if ed is None:
+            orig_html = (f'<span class="orig">（元: {printing.escape(orig)}）</span>'
+                         if orig else "")
+        elif orig:
+            orig_html = (f'<span class="orig">（元: '
+                         f'{ed(f"{prefix}{name}_orig", orig)}）</span>')
+        else:
+            # 空の行。案内(「元のサイズ」)は画面だけに出て、紙には何も出ない
+            orig_html = (f'<span class="orig">'
+                         f'{ed(f"{prefix}{name}_orig", "", placeholder="元のサイズ")}</span>')
+        per = (f'<span class="per">{per_prefix}1梱{count}枚</span>' if count > 0 else "")
         return (f'<div><span class="cutline">'
                 f'<span class="cutsize">{cell}</span>'
                 f"{orig_html}{per}</span></div>")
@@ -772,14 +786,16 @@ def build_cut_request_sheet(data: CutRequestData) -> str:
                 '<td class="head center">枚数</td></tr>')
 
     # 切断サイズ本体。プロテックは上下を分けないので見出しの「上」「下」を出さない
+    # 1梱あたりの枚数は、プロテックは上下2セットぶんなので「上下1梱N枚」と書く
+    # (VBA の紙面と同じ)
     if data.is_protec:
         sections = [("", data.upper), ("", CutSizeInfo())]
-        show_orig = False
+        per_prefix = "上下"
     else:
         sections = [("上", data.upper), ("下", data.lower)]
-        show_orig = True
+        per_prefix = ""
     for index, (side, info) in enumerate(sections):
-        sizes, totals = _cut_block(info, data.total_packages, show_orig=show_orig,
+        sizes, totals = _cut_block(info, data.total_packages, per_prefix=per_prefix,
                                    ed=ed, prefix=f"cut{index}_")
         rows.append(f'<tr><td class="side" style="height:31.8mm">{esc(side)}</td>'
                     f'<td class="pack" colspan="2">{sizes}</td>'

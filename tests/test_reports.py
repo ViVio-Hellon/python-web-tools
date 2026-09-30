@@ -499,13 +499,47 @@ class CutRequestSheetTests(unittest.TestCase):
             upper=reports.CutSizeInfo(size_width_only="1221x2500", count_width_only=2)))
         self.assertIn(">2</span>", html)
 
-    def test_original_size_is_shown_only_in_normal_mode(self):
-        info = reports.CutSizeInfo(size_width_only="1221x2500", count_width_only=2,
-                                   orig_width_only="1250×2500")
-        self.assertIn("（元: 1250×2500）",
-                      reports.build_cut_request_sheet(_cut(upper=info)))
-        self.assertNotIn("（元:",
-                         reports.build_cut_request_sheet(_cut(upper=info, is_protec=True)))
+    def test_original_size_is_shown_in_both_modes(self):
+        """切断サイズには元のサイズ(切る前の板)も書く。プロテックでも(現場の声)。
+
+        以前はプロテックだけ出していなかった。"""
+        info = reports.CutSizeInfo(size_width_only="1257x1030", count_width_only=4,
+                                   orig_width_only="1030×1520")
+        for is_protec in (False, True):
+            with self.subTest(is_protec=is_protec):
+                html = reports.build_cut_request_sheet(_cut(upper=info, is_protec=is_protec))
+                self.assertIn("（元: ", html)
+                self.assertIn("1030×1520", html)
+
+    def test_original_size_sits_right_after_the_cut_size(self):
+        """元のサイズは下の行ではなく、切断サイズの後ろ(同じ行)に書く。"""
+        info = reports.CutSizeInfo(size_width_only="1257x1030", count_width_only=4,
+                                   orig_width_only="1030×1520")
+        html = reports.build_cut_request_sheet(_cut(upper=info))
+        line = html[html.index("1257x1030"):]
+        line = line[:line.index("</div>")]          # 同じ1行(.cutline)の中
+        self.assertIn("1030×1520", line)
+        self.assertIn("1梱4枚", line)
+
+    def test_original_size_can_be_edited_and_added_on_empty_rows(self):
+        """「幅x丈」の空欄(手で足す行)は残す。元のサイズも手で書き添えられる。"""
+        info = reports.CutSizeInfo(size_width_only="1257x1030", count_width_only=4,
+                                   orig_width_only="1030×1520")
+        html = reports.build_cut_request_sheet(_cut(upper=info))
+        self.assertIn('data-edit="cut0_w_orig"', html)
+        self.assertIn('data-edit="cut0_b_size" data-placeholder="幅x丈"', html)
+        self.assertIn('data-edit="cut0_b_orig" data-placeholder="元のサイズ"', html)
+        # 直した元のサイズが紙面に出る
+        edited = reports.build_cut_request_sheet(
+            _cut(upper=info, edits={"cut0_w_orig": "1030×1600"}))
+        self.assertIn("1030×1600", edited)
+
+    def test_protec_count_says_upper_and_lower(self):
+        """プロテックは上下2セットぶんなので「上下1梱N枚」(VBA の紙面と同じ)。"""
+        info = reports.CutSizeInfo(size_width_only="1257x1030", count_width_only=4,
+                                   orig_width_only="1030×1520")
+        self.assertIn("上下1梱4枚", reports.build_cut_request_sheet(_cut(upper=info, is_protec=True)))
+        self.assertNotIn("上下1梱", reports.build_cut_request_sheet(_cut(upper=info)))
 
     def test_report_is_portrait_with_1cm_margins(self):
         css = reports.build_cut_request_report(_cut()).setup.to_css()
