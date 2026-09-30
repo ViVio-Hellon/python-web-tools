@@ -1652,7 +1652,7 @@ class NarrowPaletteSelectionTests(unittest.TestCase):
     def test_count_covers_product_length(self):
         available = [board(500, 900)]
         boards = alg.select_boards_for_narrow_palette(available, self.palette, self.product)
-        # ceil(1800/900) = 2枚
+        # 1800/900 = 2枚ちょうど(丸ごと使える枚数)
         self.assertEqual(boards[0].count, 2)
 
     def test_excludes_boards_wider_than_pallet(self):
@@ -1666,48 +1666,115 @@ class NarrowPaletteSelectionTests(unittest.TestCase):
         boards = alg.select_boards_for_narrow_palette(available, self.palette, self.product)
         self.assertEqual(len(boards), 0)
 
-    def test_upper_variant_caps_length_by_pallet(self):
-        # 上用は有効長を Min(長辺, パレット丈) で頭打ちにする
-        palette = make_palette(600, 500)   # パレット丈500
-        available = [board(500, 900)]      # 長辺900 → 500で頭打ち
-        boards = alg.select_boards_for_narrow_palette_upper(available, palette, self.product)
-        # ceil(1800/500) = 4枚 (頭打ちしなければ ceil(1800/900)=2枚)
-        self.assertEqual(boards[0].count, 4)
+    def test_count_is_whole_boards_only(self):
+        """枚数は丸ごと使える分だけ(VBA の仕様更新)。
+
+        以前は「製品丈÷板の長さ」の切り上げで、15mm 足りないだけで
+        2枚目を丸ごと使い、ほとんどがはみ出していた。
+        """
+        product = ProductSize(width=50, length=1615)
+        boards = alg.select_boards_for_narrow_palette(
+            [board(50, 1600)], make_palette(200, 2100), product)
+        self.assertEqual(boards[0].count, 1)
+
+    def test_upper_adds_thinnest_length_fill(self):
+        """上用: 50×1600 で製品丈1615 → 不足15mm → 30mm補填を1枚(以前は50×1600をもう1枚)。"""
+        palette = make_palette(200, 2100)
+        product = ProductSize(width=50, length=1615)
+        available = [board(50, 1600), board(30, 2500), board(50, 2000), board(100, 2000)]
+        boards = alg.select_boards_for_narrow_palette_upper(available, palette, product)
+        self.assertEqual([(b.width, b.length, b.count, b.tag) for b in boards],
+                         [(50, 1600, 1, alg.TAG_MAIN), (30, 2500, 1, alg.TAG_LENGTH_FILL)])
+
+    def test_upper_length_fill_must_cover_the_shortage(self):
+        # 不足40mm → 30mm は届かないので 50mm
+        palette = make_palette(200, 2100)
+        product = ProductSize(width=120, length=1640)
+        available = [board(120, 1600), board(30, 2500), board(50, 2000)]
+        boards = alg.select_boards_for_narrow_palette_upper(available, palette, product)
+        self.assertEqual((boards[1].width, boards[1].length, boards[1].tag),
+                         (50, 2000, alg.TAG_LENGTH_FILL))
+
+    def test_upper_length_fill_must_not_exceed_pallet(self):
+        # 帯の端1600 + 補填30 = 1630 > パレット丈1620 → 補填は使えず同じ板を継ぎ足す
+        palette = make_palette(200, 1620)
+        product = ProductSize(width=50, length=1615)
+        available = [board(50, 1600), board(30, 2500)]
+        boards = alg.select_boards_for_narrow_palette_upper(available, palette, product)
+        self.assertEqual([(b.width, b.length, b.count, b.tag) for b in boards],
+                         [(50, 1600, 2, alg.TAG_MAIN)])
+
+    def test_upper_length_fill_must_be_cuttable_to_lane_width(self):
+        # 補填の長辺(100)が帯の幅(120)に届かない → 使えない
+        palette = make_palette(200, 2100)
+        product = ProductSize(width=120, length=1615)
+        available = [board(120, 1600), board(30, 100)]
+        boards = alg.select_boards_for_narrow_palette_upper(available, palette, product)
+        self.assertEqual([(b.width, b.length, b.count) for b in boards], [(120, 1600, 2)])
 
 
 class NarrowPaletteFillTests(unittest.TestCase):
+    """VBA `RunNarrowPaletteLowerFill`(パレット以下・製品以上)。"""
+
     def setUp(self) -> None:
         self.palette = make_palette(600, 2000)
         self.product = ProductSize(width=500, length=1800)
 
-    def test_fills_y_gap_with_small_sizes(self):
-        boards = [SelectedBoard(width=500, length=900, count=2, tag=alg.TAG_MAIN)]
-        available = [board(100, 900), board(50, 900)]
-        alg.run_narrow_palette_lower_fill(boards, self.palette, self.product, available)
-        fills = [b for b in boards if b.tag == alg.TAG_WIDTH_FILL]
-        # Y方向gap = 600-500 = 100 → 30/50/100の順に試し、50と100が入りうる
-        self.assertTrue(fills)
-        self.assertTrue(all(min(b.width, b.length) in (30, 50, 100) for b in fills))
+    def test_fills_y_gap_up_to_product_width_only(self):
+        # 製品幅170 に帯150(100+50) → 不足20 → 30 を1本。パレット幅200 までは埋めない
+        palette = make_palette(200, 2100)
+        product = ProductSize(width=170, length=1600)
+        boards = [SelectedBoard(width=100, length=1600, count=1, tag=alg.TAG_MAIN),
+                  SelectedBoard(width=50, length=1600, count=1, tag=alg.TAG_MAIN)]
+        available = [board(30, 1600), board(50, 1600)]
+        alg.run_narrow_palette_lower_fill(boards, palette, product, available)
+        fills = [(b.width, b.length) for b in boards if b.tag == alg.TAG_WIDTH_FILL]
+        self.assertEqual(fills, [(30, 1600)])
+
+    def test_y_fill_never_exceeds_pallet_width(self):
+        # 帯590 + 30 = 620 > パレット幅600 → 足さない
+        boards = [SelectedBoard(width=590, length=1800, count=1, tag=alg.TAG_MAIN)]
+        product = ProductSize(width=620, length=1800)
+        alg.run_narrow_palette_lower_fill(boards, self.palette, product, [board(30, 1800)])
+        self.assertEqual(len([b for b in boards if b.tag == alg.TAG_WIDTH_FILL]), 0)
 
     def test_skips_y_fill_within_tolerance(self):
-        boards = [SelectedBoard(width=595, length=900, count=2, tag=alg.TAG_MAIN)]
-        available = [board(100, 900)]
+        boards = [SelectedBoard(width=495, length=1800, count=1, tag=alg.TAG_MAIN)]
+        available = [board(100, 1800)]
         alg.run_narrow_palette_lower_fill(boards, self.palette, self.product, available)
         self.assertEqual(len([b for b in boards if b.tag == alg.TAG_WIDTH_FILL]), 0)
 
-    def test_tops_up_x_direction_count(self):
-        # 長辺900 x 1枚 = 900 だが製品丈1800 → +1枚
+    def test_tops_up_x_direction_count_when_no_fill_fits(self):
+        # 長辺900 x 1枚 = 900 だが製品丈1800 → 補填で埋まらないので +1枚
         boards = [SelectedBoard(width=500, length=900, count=1, tag=alg.TAG_MAIN)]
         alg.run_narrow_palette_lower_fill(boards, self.palette, self.product, [])
         self.assertEqual(boards[0].count, 2)
 
-    def test_width_fill_rows_excluded_from_x_topup(self):
+    def test_length_fill_goes_right_after_its_lane(self):
+        # 1790 + 補填30 = 1820 ≦ 製品丈1800 + 片側の余白100 = 1900
+        boards = [SelectedBoard(width=500, length=1790, count=1, tag=alg.TAG_MAIN)]
+        alg.run_narrow_palette_lower_fill(boards, self.palette, self.product, [board(30, 2500)])
+        self.assertEqual([(b.width, b.length, b.tag) for b in boards],
+                         [(500, 1790, alg.TAG_MAIN), (30, 2500, alg.TAG_LENGTH_FILL)])
+
+    def test_length_fill_limit_is_the_centered_pallet_end(self):
+        # 余白 (2000-1800)//2 = 100。帯の端1790 + 補填100 = 1890 は入るが、
+        # 帯の端1700 + 100 = 1800 も入る。1795 のように端が近い帯は薄い30で済む
+        palette = make_palette(600, 1810)       # 余白5 → 上限1805
+        boards = [SelectedBoard(width=500, length=1790, count=1, tag=alg.TAG_MAIN)]
+        alg.run_narrow_palette_lower_fill(boards, palette, self.product, [board(30, 2500)])
+        # 1790 + 30 = 1820 > 1805 → 補填は使えず同じ板を継ぎ足す
+        self.assertEqual([(b.count, b.tag) for b in boards], [(2, alg.TAG_MAIN)])
+
+    def test_width_fill_lanes_also_get_length_cover(self):
+        """幅補填で足した帯も丈を覆う(以前は幅補填を丈の確認から外していた)。"""
         boards = [
-            SelectedBoard(width=500, length=900, count=2, tag=alg.TAG_MAIN),
-            SelectedBoard(width=50, length=100, count=1, tag=alg.TAG_WIDTH_FILL),
+            SelectedBoard(width=500, length=1800, count=1, tag=alg.TAG_MAIN),
+            SelectedBoard(width=50, length=1790, count=1, tag=alg.TAG_WIDTH_FILL),
         ]
-        alg.run_narrow_palette_lower_fill(boards, self.palette, self.product, [])
-        self.assertEqual(boards[1].count, 1)  # 幅補填は枚数追加されない
+        alg.run_narrow_palette_lower_fill(boards, self.palette, self.product, [board(30, 2500)])
+        self.assertEqual(boards[1].count, 1)
+        self.assertEqual(boards[2].tag, alg.TAG_LENGTH_FILL)   # 幅補填の帯のすぐ後ろ
 
 
 class WideCutSelectionTests(unittest.TestCase):

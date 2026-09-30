@@ -718,11 +718,15 @@ class PlaceNarrowPaletteBoardsTests(unittest.TestCase):
         self.assertEqual([p.y for p in ctx.placed], [75, 175])
         self.assertEqual([p.width for p in ctx.placed], [100, 50])
 
-    def test_length_is_clipped_to_palette_length(self):
+    def test_lower_is_cut_at_product_length_and_centered(self):
+        """下用の帯は製品丈で切り、パレット丈の中央に寄せる(VBA の仕様更新)。
+
+        以前は x=0 からパレット丈まで置いていたので、帯ごとに丈がばらついていた。
+        """
         ctx = make_ctx(pal_w=300, pal_l=1000, prod_w=280, prod_l=950)
         boards = [SelectedBoard(100, 1900, 1, "主")]
         pl.place_narrow_palette_boards(ctx, boards, LOWER)
-        self.assertEqual(ctx.placed[0].length, 1000)
+        self.assertEqual((ctx.placed[0].x, ctx.placed[0].length), (25, 950))
 
     def test_upper_clips_to_product_length(self):
         ctx = make_ctx(pal_w=300, pal_l=2000, prod_w=280, prod_l=900)
@@ -734,8 +738,29 @@ class PlaceNarrowPaletteBoardsTests(unittest.TestCase):
         ctx = make_ctx(pal_w=300, pal_l=2000, prod_w=280, prod_l=500)
         boards = [SelectedBoard(100, 400, 5, "主")]
         pl.place_narrow_palette_boards(ctx, boards, LOWER)
-        # x=0, 400 で置いたあと x=800 >= 500 なので打ち切り
-        self.assertEqual([p.x for p in ctx.placed], [0, 400])
+        # 中央寄せで x=750 から。400 を置き、最後の1枚は製品丈の位置(100)で切って打ち切り
+        self.assertEqual([(p.x, p.length) for p in ctx.placed], [(750, 400), (1150, 100)])
+
+    def test_length_fill_sits_at_the_end_of_the_previous_lane(self):
+        """丈補填は新しい帯にせず、直前の帯の端に帯の幅に切って置く(厚みが丈方向)。"""
+        ctx = make_ctx(pal_w=200, pal_l=2100, prod_w=50, prod_l=1615)
+        boards = [SelectedBoard(50, 1600, 1, "主"), SelectedBoard(30, 2500, 1, "丈補填")]
+        pl.place_narrow_palette_boards(ctx, boards, UPPER)
+        lane, fill = ctx.placed
+        self.assertEqual((lane.x, lane.length), (0, 1600))
+        self.assertEqual((fill.x, fill.y, fill.width, fill.length),
+                         (1600, lane.y, 50, 30))
+        self.assertTrue(fill.is_fill_board)
+        self.assertFalse(lane.is_fill_board)
+
+    def test_length_fill_is_not_counted_as_a_lane_width(self):
+        # 丈補填の短辺30 を帯の幅に数えると中央寄せがずれる
+        ctx = make_ctx(pal_w=300, pal_l=2000, prod_w=280, prod_l=1900)
+        boards = [SelectedBoard(100, 1800, 1, "主"), SelectedBoard(100, 2500, 1, "丈補填")]
+        pl.place_narrow_palette_boards(ctx, boards, LOWER)
+        self.assertEqual(ctx.placed[0].y, (300 - 100) // 2)
+        # 下用: 帯は x=(2000-1900)//2=50 から 1800、丈補填はその端 x=1850
+        self.assertEqual(ctx.placed[1].x, 50 + 1800)
 
     def test_no_negative_start_when_boards_exceed_width(self):
         ctx = make_ctx(pal_w=300, pal_l=2000, prod_w=280, prod_l=1900)

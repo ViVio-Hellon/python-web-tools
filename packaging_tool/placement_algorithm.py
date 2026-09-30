@@ -83,6 +83,7 @@ from .board_selection_algorithm import (PROTEC_1P1216_TOLERANCE,
                                         TAG_CUT_PREMISE, TAG_LENGTH_FILL,
                                         TAG_WIDTH_FILL, ProtecCutResult)
 from .board_selection_service import Palette, ProductSize, SelectedBoard
+from .board_selection_narrow import narrow_lower_x_start
 from .logging_utils import get_logger
 from .models import BoardModel, PlacedBoardModel
 
@@ -460,38 +461,67 @@ def place_narrow_palette_boards(
     """VBA `PlaceNarrowPaletteBoards` / `PlaceNarrowPaletteBoardsUpper` の移植。
 
     狭幅パレットで選定されたボードは、短辺をY方向(幅)・長辺をX方向(丈)に
-    寝かせて幅方向に積み重ねる。通常の位置探索(`try_place_inside_palette`)は
-    使わず、Y座標を順に積み上げていく。開始Y座標は全体の合計幅を基準に
-    センタリングする。
-    """
-    # 全ボードの短辺合計を基準にセンタリング
-    total_narrow_w = sum(min(b.width, b.length) for b in boards)
-    center_base = ctx.product.width if category == CATEGORY_UPPER else ctx.palette.width
-    y_off = max((center_base - total_narrow_w) // 2, 0)
-    log.debug("PlaceNarrowPaletteBoards(%s): totalNarrowW=%s yStart=%s",
-              category, total_narrow_w, y_off)
+    寝かせて幅方向に積み重ねる(1行=1本の帯)。通常の位置探索
+    (`try_place_inside_palette`)は使わず、Y座標を順に積み上げていく。
 
-    # 長辺のクリップ先: 下用はパレット丈、上用は製品丈
-    clip_length = ctx.product.length if category == CATEGORY_UPPER else ctx.palette.length
+    考え方は「パレット以下・製品以上」(VBA の仕様更新):
+      ・幅方向: 帯の合計幅で中央寄せ(上用は製品幅、下用はパレット幅が基準)
+      ・丈方向: 上用は x=0 から製品丈まで。下用は帯を**製品丈で切り**、
+                パレット丈の中央に寄せる(以前は x=0 からパレット丈まで置いて
+                いたので、帯ごとに丈がばらついていた)
+      ・「丈補填」の行は新しい帯にせず、直前の帯の丈方向の端に、帯の幅に
+        切って置く(厚みが丈方向)
+    """
+    upper = category == CATEGORY_UPPER
+    # 丈補填の行は帯ではないので、幅の合計に数えない
+    total_narrow_w = sum(min(b.width, b.length) for b in boards if b.tag != TAG_LENGTH_FILL)
+    center_base = ctx.product.width if upper else ctx.palette.width
+    y_off = max((center_base - total_narrow_w) // 2, 0)
+    x_start = 0 if upper else narrow_lower_x_start(ctx.palette, ctx.product)
+    log.debug("PlaceNarrowPaletteBoards(%s): totalNarrowW=%s yStart=%s xStart=%s",
+              category, total_narrow_w, y_off, x_start)
+
+    # 直前の帯の位置・幅・丈方向の端(次の行が丈補填ならここに足す)
+    lane_y = lane_w = lane_end_x = 0
 
     for i, b in enumerate(boards):
-        model = _make_model(b, i, category, prefix="N_")
         b_short = min(b.width, b.length)
         b_long = max(b.width, b.length)
-        eff_l = min(b_long, clip_length)
         rot_flag = b.length > b.width
 
-        x_pos = 0
+        if b.tag == TAG_LENGTH_FILL:
+            if lane_w > 0:
+                model = _make_model(b, i, category, prefix="NF_")
+                place_board_at(
+                    ctx, lane_end_x, lane_y, model, rot_flag,
+                    bypass_check=True, custom_width=lane_w, custom_length=b_short,
+                    is_fill=True)
+                log.debug("  %s丈補填: %sx%s at(%s,%s) 幅%sに切って厚み%s",
+                          category, b.width, b.length, lane_end_x, lane_y, lane_w, b_short)
+            else:
+                log.debug("  %s丈補填: 直前の帯が無いため配置しません %sx%s",
+                          category, b.width, b.length)
+            continue
+
+        model = _make_model(b, i, category, prefix="N_")
+        x_pos = x_start
         for _ in range(b.count):
-            if x_pos >= ctx.product.length:
+            laid = x_pos - x_start
+            if laid >= ctx.product.length:
                 break
+            if upper:
+                piece_l = min(b_long, ctx.product.length)
+            else:
+                # 最後の1枚は製品丈の位置で切る(はみ出させない)
+                piece_l = min(b_long, ctx.product.length - laid)
             place_board_at(
                 ctx, x_pos, y_off, model, rot_flag,
-                bypass_check=True, custom_width=b_short, custom_length=eff_l,
+                bypass_check=True, custom_width=b_short, custom_length=piece_l,
             )
-            log.debug("  配置: %sx%s at(%s,%s) effL=%s", b.width, b.length, x_pos, y_off, eff_l)
-            x_pos += eff_l
+            log.debug("  配置: %sx%s at(%s,%s) 丈=%s", b.width, b.length, x_pos, y_off, piece_l)
+            x_pos += piece_l
 
+        lane_y, lane_w, lane_end_x = y_off, b_short, x_pos
         y_off += b_short
 
 

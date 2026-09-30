@@ -175,11 +175,13 @@ def recalc_length_cut_info(
                           key, b.count, eff_l * b.count, palette.length)
 
     for b in upper:
-        # 幅補填は丈カット対象外。カット前提の丈カットは選定側
-        # (`select_upper_boards_wide_cut`)が別途記録し、
-        # `UpperSelectionResult.length_cut_info` として渡る
+        # 幅補填・丈補填は丈カット対象外(下用と同じ)。丈補填を外していなかった
+        # ので、狭幅上用の丈補填(30×2500 を帯の幅に切ったもの)が普通の板として
+        # 丈カットに記録され、ボードMAPの疲労度に乗っていた(VBA の仕様更新)。
+        # カット前提の丈カットは選定側(`select_upper_boards_wide_cut`)が
+        # 別途記録し、`UpperSelectionResult.length_cut_info` として渡る
         # (下用と対称。両方とも呼び出し元でマージされる)
-        if b.tag in (TAG_WIDTH_FILL, TAG_CUT_PREMISE):
+        if b.tag in (TAG_WIDTH_FILL, TAG_LENGTH_FILL, TAG_CUT_PREMISE):
             continue
         rot, eff_w, eff_l = _orient(b.width, b.length, product.width, category="上用")
         rot, eff_w, eff_l = adjust_orientation_for_coverage(

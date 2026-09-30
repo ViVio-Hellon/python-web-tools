@@ -35,11 +35,20 @@ log = get_logger("board_selection.narrow")
 # ==================================================================
 # 狭幅パレット選定 (VBA `SelectBoardsForNarrowPalette` /
 #                  `SelectBoardsForNarrowPaletteUpper` /
-#                  `RunNarrowPaletteLowerFill` の移植)
+#                  `RunNarrowPaletteLowerFill` /
+#                  `AddNarrowLengthFills` / `FindNarrowLengthFill` の移植)
 #
 # 通常のPASS群でボードを選べなかった場合の代替経路。
-# 各ボードを「短辺=幅方向、長辺=丈方向」に寝かせて幅方向に積み重ね、
-# 製品幅をカバーする。
+# 各ボードを「短辺=幅方向、長辺=丈方向」に寝かせて幅方向に積み重ね
+# (1行=1本の帯)、製品幅をカバーする。
+#
+# 考え方は**パレット以下・製品以上**(VBA の仕様更新)。
+#   ・幅: 帯の短辺合計で製品幅を覆う。足すとパレット幅を超える補填は使わない
+#   ・丈: 帯は丸ごと使える枚数だけ並べ、製品丈に足りない分は、いちばん薄い
+#         補填ボード(30→50→100)を「丈補填」として帯の端に1枚足す。
+#         補填してもパレットの端を超えるものは使わない
+# 以前は枚数を「製品丈÷板の長さ」の切り上げで決めていたので、50×1600 で
+# 製品丈1615 のとき、15mm のために2枚目を丸ごと使い 1585mm はみ出していた。
 # ==================================================================
 
 # 狭幅選定で候補にできる最小の短辺(mm)
@@ -48,16 +57,28 @@ NARROW_MIN_SHORT_SIDE = 10
 # 狭幅選定のループ上限
 NARROW_MAX_LOOPS = 10
 
+# 丈補填に使える薄物の上限(短辺 mm)
+NARROW_LENGTH_FILL_MAX_SHORT = 100
+
+
+def _whole_count(b_long: int, target_l: int) -> int:
+    """帯に丸ごと使える枚数。1枚で製品丈に届けば1枚(丈カット)。
+
+    足りない分は `add_narrow_length_fills` が丈補填で埋める。
+    """
+    if b_long <= 0 or b_long >= target_l:
+        return 1
+    return max(1, target_l // b_long)
+
 
 def _select_narrow_boards(
     boards: list[SelectedBoard], available: list[BoardModel],
-    target_w: int, target_l: int, product_width: int, eff_length_cap: Optional[int] = None,
+    target_w: int, target_l: int, product_width: int,
 ) -> int:
-    """狭幅選定の共通処理。カバーできた幅の合計を返す。
+    """狭幅選定の共通処理(帯の選び方)。カバーできた幅の合計を返す。
 
     残り幅以下で最大の短辺を持つ未使用ボードを繰り返し選び、
-    幅方向に積み重ねる。`eff_length_cap` を指定すると丈方向の
-    有効長をその値で頭打ちにする(上用がパレット丈で頭打ちにするため)。
+    幅方向に積み重ねる。枚数は丸ごと使える分だけ(`_whole_count`)。
     """
     covered_w = 0
     for _ in range(NARROW_MAX_LOOPS):
@@ -82,8 +103,7 @@ def _select_narrow_boards(
 
         b_short = min(best.width, best.length)
         b_long = max(best.width, best.length)
-        eff_l = min(b_long, eff_length_cap) if eff_length_cap else b_long
-        cnt = max(1, -(-target_l // eff_l)) if eff_l > 0 else 1
+        cnt = _whole_count(b_long, target_l)
 
         boards.append(SelectedBoard(width=best.width, length=best.length, count=cnt, tag=TAG_MAIN))
         covered_w += b_short
@@ -92,10 +112,82 @@ def _select_narrow_boards(
     return covered_w
 
 
+def find_narrow_length_fill(
+    need_l: int, lane_w: int, max_t: int, available: list[BoardModel],
+) -> Optional[BoardModel]:
+    """VBA `FindNarrowLengthFill`。狭幅の帯の丈補填に使う薄物を探す。
+
+    条件:
+      短辺 100mm 以下(補填用の薄物)
+      厚み(短辺) >= 不足量  … 製品丈をカバーする(製品以上)
+      厚み(短辺) <= max_t   … 補填してもパレットの端を超えない(パレット以下)
+      長辺 >= 帯の幅        … 帯の幅に切って使える
+    その中で、いちばん薄いもの(同じ厚みなら長辺が短いもの)。
+    """
+    best: Optional[BoardModel] = None
+    best_s = best_l = 0
+    if max_t >= need_l:
+        for ab in available:
+            s, lg = min(ab.width, ab.length), max(ab.width, ab.length)
+            if s > NARROW_LENGTH_FILL_MAX_SHORT or s < need_l or s > max_t or lg < lane_w:
+                continue
+            if best is None or s < best_s or (s == best_s and lg < best_l):
+                best, best_s, best_l = ab, s, lg
+    log.debug("FindNarrowLengthFill: 不足=%s 帯幅=%s 厚み上限=%s → %s", need_l, lane_w, max_t,
+              f"{best.width}x{best.length}" if best else "該当なし")
+    return best
+
+
+def add_narrow_length_fills(
+    boards: list[SelectedBoard], target_l: int, max_l: int,
+    available: list[BoardModel], category: str,
+) -> None:
+    """VBA `AddNarrowLengthFills`。帯ごとに製品丈を覆っているか見て、足りない帯に丈補填を足す。
+
+    補填の行はその帯の**すぐ後ろ**に「丈補填」として入れる(配置側が直前の
+    帯の端に置くため)。行を差し込むので後ろの帯から見る。補填で埋められない
+    (不足が大きい/パレットを超える)ときは、従来どおり同じ板を1枚継ぎ足す。
+    `max_l` は帯の始点から見たパレットの端(上用はパレット丈、下用は中央寄せ
+    したあとの端 = 製品丈 + 片側の余白)。
+    """
+    for li in range(len(boards) - 1, -1, -1):
+        lane = boards[li]
+        if lane.tag == TAG_LENGTH_FILL:
+            continue
+        l_short, l_long = min(lane.width, lane.length), max(lane.width, lane.length)
+        lane_end = min(l_long, max_l) * lane.count
+        short_l = target_l - lane_end
+        if short_l <= 0:
+            continue
+        fill = find_narrow_length_fill(short_l, l_short, max_l - lane_end, available)
+        if fill is not None:
+            boards.insert(li + 1, SelectedBoard(
+                width=fill.width, length=fill.length, count=1, tag=TAG_LENGTH_FILL))
+            log.debug("[%s狭幅 丈補填] %sx%s の帯が丈%smm不足 → %sx%s を1枚(帯の幅%smmに切って丈補填)",
+                      category, lane.width, lane.length, short_l, fill.width, fill.length, l_short)
+        else:
+            lane.count += 1
+            log.debug("[%s狭幅] 丈%smm不足を補填ボードで埋められないため %sx%s を1枚追加(計%s枚)",
+                      category, short_l, lane.width, lane.length, lane.count)
+
+
+def narrow_lower_x_start(palette: Palette, product: ProductSize) -> int:
+    """下用の狭幅の帯を置き始める丈方向の位置(製品丈をパレット丈の中央に寄せる)。
+
+    丈補填の上限(`run_narrow_palette_lower_fill`)と配置
+    (`place_narrow_palette_boards`)が同じ値を使う。
+    """
+    return max((palette.length - product.length) // 2, 0)
+
+
 def select_boards_for_narrow_palette(
     available: list[BoardModel], palette: Palette, product: ProductSize,
 ) -> list[SelectedBoard]:
-    """VBA `SelectBoardsForNarrowPalette` の移植(下用)。"""
+    """VBA `SelectBoardsForNarrowPalette` の移植(下用)。
+
+    帯の枚数は丸ごと使える分だけ。製品丈に足りない分は
+    `run_narrow_palette_lower_fill` が丈補填する。
+    """
     boards: list[SelectedBoard] = []
     covered = _select_narrow_boards(
         boards, available, palette.width, product.length, product.width,
@@ -110,14 +202,14 @@ def select_boards_for_narrow_palette_upper(
 ) -> list[SelectedBoard]:
     """VBA `SelectBoardsForNarrowPaletteUpper` の移植(上用)。
 
-    下用との違いは丈方向の有効長をパレット丈で頭打ちにする点のみ
-    (配置側が `Min(長辺, パレット丈)` で進むため枚数もそれに合わせる)。
+    上用は丈のマイナスがNGなので、帯ごとに製品丈を必ず覆う。帯の選び方は
+    下用と同じで、足りない帯には丈補填を足す(上限はパレット丈)。
     """
     boards: list[SelectedBoard] = []
     _select_narrow_boards(
         boards, available, palette.width, product.length, product.width,
-        eff_length_cap=palette.length,
     )
+    add_narrow_length_fills(boards, product.length, palette.length, available, "上用")
     return boards
 
 
@@ -129,47 +221,41 @@ def run_narrow_palette_lower_fill(
     `RunLowerFillPhase` とは完全に独立。前提として各ボードは
     「短辺=Y方向(幅)、長辺=X方向(丈)」で積み重ね配置される。
 
-        (1) Y方向: 短辺合計がパレット幅に足りなければ 30→50→100mm で補填
-        (2) X方向: 各ボードの 有効長×枚数 が製品丈に足りなければ枚数を追加
+        (1) 幅: 帯の短辺合計が**製品幅**に足りなければ 30→50→100 の順で帯を足す。
+            足すとパレット幅を超える補填は使わない(以前はパレット幅まで埋めようと
+            して、埋まらない分を「在庫不足」としていた)
+        (2) 丈: 帯ごとに製品丈を覆う(上用と共通の `add_narrow_length_fills`)。
+            幅補填で足した帯も対象。上限は中央寄せした帯の始点から見たパレットの端
     """
-    target_y = palette.width
     target_x = product.length
 
-    # (1) Y方向カバレッジ
+    # (1) 幅方向のカバー確認
     covered_y = sum(min(b.width, b.length) for b in boards)
-    y_gap = target_y - covered_y
-    log.debug("[狭幅下用補填] Y合計=%smm gap=%smm", covered_y, y_gap)
+    y_need = product.width - covered_y
+    log.debug("[狭幅下用補填] 幅合計=%smm 製品幅=%smm 不足=%smm(パレット幅%smm以下で補填)",
+              covered_y, product.width, y_need, palette.width)
 
-    if y_gap > PASS1_TOLERANCE:
+    if y_need > PASS1_TOLERANCE:
         for sz in (FILL_SIZE_30, FILL_SIZE_50, FILL_SIZE_100):
-            if y_gap <= PASS1_TOLERANCE:
+            if y_need <= PASS1_TOLERANCE:
                 break
-            if sz > y_gap + 10:
-                continue
+            if covered_y + sz > palette.width:
+                continue                  # 足すとパレット幅を超える(パレット以下)
             found = next((a for a in available if min(a.width, a.length) == sz), None)
             if found is None:
                 continue
-            fb_long = max(found.width, found.length)
-            x_cnt = max(1, -(-target_x // fb_long)) if fb_long > 0 else 1
+            x_cnt = _whole_count(max(found.width, found.length), target_x)
             boards.append(SelectedBoard(width=found.width, length=found.length, count=x_cnt, tag=TAG_WIDTH_FILL))
-            y_gap -= sz
-            log.debug("[狭幅Y補填] %sx%s %s枚 残gap=%smm", found.width, found.length, x_cnt, y_gap)
-        if y_gap > PASS1_TOLERANCE:
-            log.debug("[狭幅Y補填] gap残存=%smm (在庫不足)", y_gap)
+            covered_y += sz
+            y_need -= sz
+            log.debug("[狭幅Y補填] %sx%s %s枚 幅合計=%smm 不足=%smm",
+                      found.width, found.length, x_cnt, covered_y, y_need)
+        if y_need > PASS1_TOLERANCE:
+            log.debug("[狭幅Y補填] 製品幅に%smm不足(パレット幅内で補填できる在庫なし)", y_need)
 
-    # (2) X方向カバレッジ(幅補填は対象外)
-    for b in boards:
-        if b.tag == TAG_WIDTH_FILL:
-            continue
-        b_long = max(b.width, b.length)
-        eff_l = min(b_long, palette.length)
-        if eff_l <= 0:
-            continue
-        x_gap = target_x - eff_l * b.count
-        if x_gap > 3:
-            add_cnt = max(1, -(-x_gap // eff_l))
-            b.count += add_cnt
-            log.debug("[狭幅X補填] %sx%s +%s枚 (計%s枚)", b.width, b.length, add_cnt, b.count)
+    # (2) 丈方向: 帯ごとに製品丈をカバー(上用と共通)
+    x_margin = narrow_lower_x_start(palette, product)
+    add_narrow_length_fills(boards, target_x, target_x + x_margin, available, "下用")
 
 
 # ==================================================================

@@ -425,12 +425,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "下用",
@@ -3308,12 +3304,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "下用",
@@ -3964,12 +3956,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "下用",
@@ -4680,12 +4668,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "上用",
@@ -5865,12 +5849,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "上用",
@@ -6101,12 +6081,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "下用",
@@ -6485,12 +6461,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "下用",
@@ -7884,12 +7856,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "下用",
@@ -8500,12 +8468,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "上用",
@@ -8796,12 +8760,8 @@
         }
       ],
       "cut_info": {},
-      "length_cut_info": {
-        "U_100x2000": 100
-      },
-      "length_cut_count": {
-        "U_100x2000": 1
-      },
+      "length_cut_info": {},
+      "length_cut_count": {},
       "placed": [
         {
           "category": "上用",
