@@ -31,6 +31,18 @@ Windows のログインID と PC名 を条件に、その利用者が持つ**権
 「条件の無い行」として警告に出す(黙って無視すると、書いた人は
 効いているつもりのままになる)。
 
+【ほかのツールと同じ表を使う】
+この表は**ほかのツールも使う**(現場の運用)。権限の列には、本ツールが
+読まない文字列も入る。**本ツールの権限コード(`permissions()`)だけを読み、
+それ以外は黙って読み飛ばす** ── 警告にもしない(ほかのツールにとっては
+正しい値なので、直す必要が無い)。ただし本ツールのコードに**よく似た**
+文字列(`mode:materia` のような打ち間違い)は、今までどおり教える
+(`TYPO_CUTOFF`)。1つの欄に「,」などで区切って複数書かれていても、
+本ツールのコードだけを拾う(`Rule.own_codes`)。
+本ツールの権限の行が1行も無いときは「まだ登録されていない」と同じに扱う
+(`Grant.has_master`)── ほかのツールの行が先に入っていても、最初の1行を
+入れる入口(`master_common.can_edit`)を閉じない。
+
 【該当が無いとき】
 **現場モードだけ**を持つ。締め出さず、かつ勝手に強い権限も渡さない。
 
@@ -48,6 +60,7 @@ import difflib
 import getpass
 import os
 import platform
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,6 +176,15 @@ def _same(a: str, b: str) -> bool:
     return a.casefold() == b.casefold()
 
 
+# 権限の欄の区切り。ほかのツールが1つの欄に複数書くことがある
+_CODE_SEPARATORS = re.compile(r"[\s,、;；|｜]+")
+
+# 本ツールのコードの打ち間違いとみなす近さ(`difflib` の比)。
+# `mode:materia` → `mode:material` は 0.96。ほかのツールが `mode:admin` の
+# ような語を使っていても 0.6 程度なので、打ち間違いとは言わない
+TYPO_CUTOFF = 0.85
+
+
 # ==================================================================
 # マスタの1行
 # ==================================================================
@@ -178,6 +200,19 @@ class Rule:
 
     def has_condition(self) -> bool:
         return bool(self.login_id or self.pc_name)
+
+    def codes(self) -> list[str]:
+        """権限の欄に書かれたもの。区切りがあれば分ける(ほかのツールが
+        1つの欄に複数書いても読めるように)。"""
+        return [c for c in _CODE_SEPARATORS.split(self.permission) if c]
+
+    def own_codes(self) -> list[str]:
+        """そのうち**本ツールの**権限コード。"""
+        return [c for c in self.codes() if is_known(c)]
+
+    def other_codes(self) -> list[str]:
+        """本ツールでは読まないもの(ほかのツール用・打ち間違い)。"""
+        return [c for c in self.codes() if not is_known(c)]
 
     def matches(self, identity: Identity) -> bool:
         # 条件が1つも無い行は全員に効いてしまう。権限を設ける意味が
@@ -301,15 +336,23 @@ def resolve(conn: sqlite3.Connection,
         return Grant(identity=identity, codes=_fallback_codes(),
                      has_master=False,
                      reason=f"{TABLE} がまだ取り込まれていません")
+    # **本ツールの行だけを見る。** ほかのツールの行(本ツールの権限コードを
+    # 1つも持たない行)は、無いのと同じ
+    own_rules = [r for r in rules if r.own_codes()]
+    if not own_rules:
+        return Grant(identity=identity, codes=_fallback_codes(),
+                     has_master=False,
+                     reason=(f"{TABLE} に本ツールの権限の行がまだありません"
+                             "(ほかのツールの行だけです)"))
 
-    matched = [r for r in rules if r.matches(identity)]
-    codes = {r.permission for r in matched if is_known(r.permission)}
-    unknown = sorted({r.permission for r in matched
-                      if r.permission and not is_known(r.permission)})
-    if unknown:
-        # 知らない権限コードは黙って捨てない。マスタ側の打ち間違いは
-        # 「効かない」としか現れず、原因を探しようがない
-        log.warning("%s に未知の権限コードがあります: %s", TABLE, ", ".join(unknown))
+    matched = [r for r in own_rules if r.matches(identity)]
+    codes = {c for r in matched for c in r.own_codes()}
+    other = sorted({c for r in rules if r.matches(identity) for c in r.other_codes()})
+    if other:
+        # ほかのツールの権限。警告にはしない(そのツールにとっては正しい値)。
+        # 打ち間違いは設定画面(`problems`)が教える
+        log.debug("%s の本ツールでは読まない権限を読み飛ばしました: %s",
+                  TABLE, ", ".join(other))
 
     if not codes:
         return Grant(identity=identity, codes=_fallback_codes(),
@@ -427,21 +470,21 @@ def problems(conn: sqlite3.Connection) -> list[str]:
     if not rules:
         return []
     out: list[str] = []
-    known = {p.code for p in permissions()}
-    unknown = sorted({r.permission for r in rules
-                      if r.permission and r.permission not in known})
-    if unknown:
+    typos = typo_codes(rules)
+    if typos:
         # **打ち間違いは、指摘だけでは直せない。** `mode:materia` と
         # 書かれた行を「知らないコードです」と言われても、どこが違うのかは
         # 目で見比べるしかない(現場の声:1文字足りないことに気づけない)。
-        # 近いコードが1つに決まるなら、そのまま書き写せる形で出す
-        parts = []
-        for code in unknown:
-            near = difflib.get_close_matches(code, sorted(known), n=1, cutoff=0.6)
-            parts.append(f"{code} → {near[0]} のことですか?" if near else code)
-        out.append("知らない権限コードがあります(効きません): "
-                   + ", ".join(parts))
-    blank = sum(1 for r in rules if not r.has_condition())
+        # 近いコードをそのまま書き写せる形で出す。
+        # **本ツールのコードに似ていないものは言わない** ── ほかのツールの
+        # 権限で、そのツールにとっては正しい値だから(`foreign_codes`)
+        out.append("本ツールの権限コードの書き間違いと思われる行があります(効きません): "
+                   + ", ".join(f"{code} → {near} のことですか?"
+                               for code, near in typos.items()))
+    # 条件の無い行は、**本ツールの権限を持つ行(と打ち間違いの行)だけ**を数える。
+    # ほかのツールの行の書き方は、そのツールの決まりに従っている
+    blank = sum(1 for r in rules if not r.has_condition()
+                and (r.own_codes() or any(c in typos for c in r.other_codes())))
     if blank:
         # **何を書けば効くのか**まで出す。空欄のままにした人は、
         # たいてい「全員に効かせたい」つもりでいる
@@ -452,6 +495,28 @@ def problems(conn: sqlite3.Connection) -> list[str]:
                    f"ログインID = {me.login_id or '(空)'} / "
                    f"PC名 = {me.pc_name or '(空)'} です。")
     return out
+
+
+def typo_codes(rules: Iterable[Rule]) -> dict[str, str]:
+    """本ツールのコードの打ち間違いと思われるもの(書かれた値 → 近いコード)。"""
+    known = sorted(p.code for p in permissions())
+    out: dict[str, str] = {}
+    for code in sorted({c for r in rules for c in r.other_codes()}):
+        near = difflib.get_close_matches(code, known, n=1, cutoff=TYPO_CUTOFF)
+        if near:
+            out[code] = near[0]
+    return out
+
+
+def foreign_codes(conn: sqlite3.Connection) -> list[str]:
+    """本ツールでは読まない権限(ほかのツール用)。打ち間違いは含めない。
+
+    設定画面に**参考として**出す(警告ではない)── 「読み飛ばしている」
+    ことが見えないと、本ツールの権限を書いたつもりの人が気づけない。
+    """
+    rules = load_rules(conn)
+    typos = typo_codes(rules)
+    return sorted({c for r in rules for c in r.other_codes() if c not in typos})
 
 
 def grant_of(*codes: str, identity: Optional[Identity] = None) -> Grant:

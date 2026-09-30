@@ -233,7 +233,8 @@ def can_edit(conn: Optional[sqlite3.Connection], table: str = "") -> tuple[bool,
         return False, (
             "マスタを直すには管理者パスワードが要ります。"
             "設定画面の「マスタ編集の認証」でパスワードを入れてください"
-            f"({access_control.TABLE} がまだ無いので、資材モードは問いません)。")
+            f"({access_control.TABLE} に本ツールの権限の行がまだ無いので、"
+            "資材モードは問いません)。")
 
     if table == access_control.TABLE:
         # 資材モードを問わない復旧経路。パスワードだけが関門

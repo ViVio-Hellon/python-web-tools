@@ -857,7 +857,9 @@ def _access_section(conn, startup_modes=None) -> Section:
     else:
         section.checks.append(Check(
             "権限の出どころ", f"{access_control.TABLE} の {len(grant.matched)}行",
-            OK, " / ".join(f"{r.condition_label()} → {r.permission}"
+            # 本ツールが読んだコードだけを出す(ほかのツール用の値が同じ欄に
+            # 書かれていても、ここに並べると本ツールの権限に見える)
+            OK, " / ".join(f"{r.condition_label()} → {', '.join(r.own_codes())}"
                            for r in grant.matched)))
 
     # **1つしか使えるモードが無いのは、既定へ落ちたときだけではない。**
@@ -905,6 +907,16 @@ def _access_section(conn, startup_modes=None) -> Section:
     for problem in access_control.problems(conn):
         # 書いた人は効いているつもりでいる。黙って無視しない
         section.checks.append(Check("マスタの問題", "確認してください", WARN, problem))
+
+    # ほかのツールと同じ表を使っている。本ツールが読まない権限は**参考**として
+    # 出すだけ(警告にしない ── そのツールにとっては正しい値)
+    foreign = access_control.foreign_codes(conn)
+    if foreign:
+        section.checks.append(Check(
+            "ほかのツールの権限", f"{len(foreign)}種類を読み飛ばしています", INFO,
+            f"{access_control.TABLE} の権限の列には、本ツールでは読まない値があります"
+            "(ほかのツール用として読み飛ばしています。直す必要はありません): "
+            + ", ".join(foreign)))
 
     section.checks.append(Check(
         "使える権限コード", str(len(access_control.permissions())), INFO,

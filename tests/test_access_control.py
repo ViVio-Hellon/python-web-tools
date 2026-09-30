@@ -216,6 +216,79 @@ class ProblemTests(unittest.TestCase):
 
 
 # ==================================================================
+# ほかのツールと同じ表を使う
+# ==================================================================
+class ForeignToolTests(unittest.TestCase):
+    """アクセス権限の表は**ほかのツールも使う**(現場の運用)。
+
+    本ツールの権限コードはそのまま効かせ、関係ない文字列は読み飛ばす。
+    読み飛ばしたものを警告にしない(そのツールにとっては正しい値)。
+    """
+
+    def setUp(self) -> None:
+        self.conn = make_db()
+        self.addCleanup(self.conn.close)
+
+    def test_本ツールのコードはそのまま効く(self) -> None:
+        grant_row(self.conn, login="yamada", permission="mode:material")
+        grant_row(self.conn, login="yamada", permission="kensa:admin")
+        grant = ac.resolve(self.conn, YAMADA)
+        self.assertTrue(grant.allows_mode(modes.MATERIAL))
+        self.assertEqual(grant.codes, frozenset({"mode:material"}))
+        self.assertEqual(grant.reason, "")
+
+    def test_ほかのツールの行は権限の出どころに数えない(self) -> None:
+        grant_row(self.conn, login="yamada", permission="mode:material")
+        grant_row(self.conn, login="yamada", permission="kensa:admin")
+        grant = ac.resolve(self.conn, YAMADA)
+        self.assertEqual([r.permission for r in grant.matched], ["mode:material"])
+
+    def test_ほかのツールの文字列は警告にしない(self) -> None:
+        grant_row(self.conn, login="yamada", permission="mode:material")
+        for other in ("kensa:admin", "出荷担当", "ADMIN", "mode:admin", "view"):
+            grant_row(self.conn, pc="NLM-PC-099", permission=other)
+        self.assertEqual(ac.problems(self.conn), [])
+        self.assertEqual(ac.foreign_codes(self.conn),
+                         sorted(["kensa:admin", "出荷担当", "ADMIN", "mode:admin", "view"]))
+
+    def test_ほかのツールの条件の無い行は警告にしない(self) -> None:
+        """ほかのツールには「全員に効く行」という書き方があるかもしれない。"""
+        grant_row(self.conn, login="yamada", permission="mode:material")
+        grant_row(self.conn, permission="kensa:view")          # ID も PC名 も空
+        self.assertEqual(ac.problems(self.conn), [])
+
+    def test_本ツールの打ち間違いは今までどおり教える(self) -> None:
+        grant_row(self.conn, login="yamada", permission="mode:materia")
+        grant_row(self.conn, login="yamada", permission="kensa:admin")
+        said = " ".join(ac.problems(self.conn))
+        self.assertIn("mode:materia → mode:material", said)
+        self.assertNotIn("kensa:admin", said)
+        self.assertNotIn("mode:materia", ac.foreign_codes(self.conn))
+
+    def test_1つの欄に区切って書かれても本ツールのコードを拾う(self) -> None:
+        grant_row(self.conn, login="yamada", permission="kensa:admin, mode:material")
+        grant = ac.resolve(self.conn, YAMADA)
+        self.assertTrue(grant.allows_mode(modes.MATERIAL))
+        self.assertEqual(ac.problems(self.conn), [])
+
+    def test_ほかのツールの行だけならまだ登録されていないのと同じ(self) -> None:
+        """最初の1行を入れる入口(パスワードだけでマスタを直せる)を閉じない。"""
+        grant_row(self.conn, login="yamada", permission="kensa:admin")
+        grant = ac.resolve(self.conn, YAMADA)
+        self.assertFalse(grant.has_master)
+        self.assertEqual(grant.allowed_modes(), (modes.DEFAULT,))
+        self.assertIn("ほかのツールの行だけ", grant.reason)
+
+    def test_本ツールの行が別の人だけなら登録ありで現場だけ(self) -> None:
+        grant_row(self.conn, login="suzuki", permission="mode:material")
+        grant_row(self.conn, login="yamada", permission="kensa:admin")
+        grant = ac.resolve(self.conn, YAMADA)
+        self.assertTrue(grant.has_master)
+        self.assertEqual(grant.allowed_modes(), (modes.DEFAULT,))
+        self.assertIn("登録がありません", grant.reason)
+
+
+# ==================================================================
 # 身元
 # ==================================================================
 class IdentityTests(unittest.TestCase):

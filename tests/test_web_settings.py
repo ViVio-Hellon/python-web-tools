@@ -1243,6 +1243,28 @@ class SectionHeadlineTests(unittest.TestCase):
         rows = [c for c in section.checks if c.label == "開き直しが要ります"]
         self.assertEqual([c.value for c in rows], ["現場"])
 
+    def test_ほかのツールの権限は参考として出し警告にしない(self) -> None:
+        """アクセス権限の表はほかのツールも使う。本ツールが読まない値は
+        読み飛ばしていると書くだけで、「マスタの問題」にはしない。"""
+        from packaging_tool import access_control
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        self.addCleanup(conn.close)
+        me = access_control.current_identity()
+        for perm in ("mode:material", "mode:field", "kensa:admin", "出荷担当"):
+            conn.execute('INSERT INTO アクセス権限 ("ログインID","PC名","権限","有効","備考")'
+                         " VALUES (?, '', ?, 1, '')", (me.login_id or "someone", perm))
+        conn.commit()
+        section = presenter._access_section(conn, startup_modes=("field", "material"))
+        self.assertFalse([c for c in section.checks if c.label == "マスタの問題"],
+                         section.checks)
+        foreign = [c for c in section.checks if c.label == "ほかのツールの権限"]
+        self.assertEqual(len(foreign), 1)
+        self.assertEqual(foreign[0].level, presenter.INFO)
+        self.assertIn("kensa:admin", foreign[0].detail)
+        self.assertIn("出荷担当", foreign[0].detail)
+
     def test_開き直しが要るモードの表は1か所(self) -> None:
         """案内と実装が別々に持つと、直したのに案内だけ残る。"""
         from app import GATED_MODES

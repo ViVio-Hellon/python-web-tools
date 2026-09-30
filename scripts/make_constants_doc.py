@@ -149,6 +149,11 @@ SECTIONS: tuple[tuple[str, str, tuple[tuple[str, str, str, str], ...]], ...] = (
          ("angle_service", "FAT_SCORE_CAP", "スコアの上限", ""),
          ("angle_service", "FAT_DIST_DEFAULT", "距離が分からないときの距離スコア", ""),
      )),
+    ("アクセス権限",
+     "アクセス権限の表はほかのツールも使う。本ツールの権限コード(mode:field / mode:material)だけを読み、ほかは読み飛ばす。",
+     (
+         ("access_control", "TYPO_CUTOFF", "本ツールの権限コードの書き間違いとみなす近さ(これ以上似ていれば書き間違いとして教える。似ていなければほかのツール用として読み飛ばす)", "比"),
+     )),
     ("1P0113 裸梱包",
      "",
      (
