@@ -166,12 +166,14 @@ def build_map(conn: sqlite3.Connection, *,
 
 
 def position_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """棚ごとのパレットの種類数。図の濃淡に使う。"""
+    """棚ごとのパレットの種類数(**在庫のあるものだけ**)。図の濃淡に使う。
+
+    在庫0の行まで数えると、空になった棚が「在庫あり」の色のまま残る。"""
     from .. import db
     rows = db.fetch_all(
         conn,
         "SELECT TRIM(位置) AS 位置, COUNT(*) AS c FROM PalletMaster "
-        "WHERE TRIM(位置) <> '' GROUP BY TRIM(位置)",
+        f"WHERE TRIM(位置) <> '' AND {pallet_service.IN_STOCK} GROUP BY TRIM(位置)",
         caller_name="presenters.inventory.position_counts") or []
     return {_key(r["位置"]): r["c"] for r in rows}
 

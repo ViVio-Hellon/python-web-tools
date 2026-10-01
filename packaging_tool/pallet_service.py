@@ -578,6 +578,12 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
 # ------------------------------------------------------------------
 # 検索・位置表示
 # ------------------------------------------------------------------
+# 簡易在庫に出すのは**在庫のある行だけ**。マスタの行(そのサイズのパレットが
+# あること)と在庫は別の話なので、在庫数0・空の行は一覧にも図の濃淡にも出さない。
+# 受け入れはこの条件を通らない(0の行に足せば、また出てくる)
+IN_STOCK = "IFNULL(在庫数, 0) > 0"
+
+
 @dataclass
 class SearchResult:
     rows: list[sqlite3.Row]
@@ -585,13 +591,19 @@ class SearchResult:
 
 
 def search_pallets(conn: sqlite3.Connection, width: int, height: int, mode: str = "exact") -> SearchResult:
-    """VBA `SearchAndHighlight` の移植。mode: "exact" または "range"(±50mm)。"""
+    """VBA `SearchAndHighlight` の移植。mode: "exact" または "range"(±50mm)。
+
+    **在庫が0の行は出さない**(`IN_STOCK`)。払い出して0になった行が残ると、
+    「そのサイズのパレットが(マスタに)ある」ことと「在庫がある」ことが
+    混ざって見える(現場の声:「在庫0でリストに載るのは迷惑」)。
+    """
     if mode == "range":
         tol = config.SEARCH_RANGE_TOLERANCE
-        sql = "SELECT * FROM PalletMaster WHERE 位置 <> '' AND ABS(幅 - ?) <= ? AND ABS(丈 - ?) <= ?"
+        sql = ("SELECT * FROM PalletMaster WHERE 位置 <> '' AND ABS(幅 - ?) <= ? AND ABS(丈 - ?) <= ?"
+               f" AND {IN_STOCK}")
         params: tuple = (width, tol, height, tol)
     else:
-        sql = "SELECT * FROM PalletMaster WHERE 位置 <> '' AND 幅 = ? AND 丈 = ?"
+        sql = f"SELECT * FROM PalletMaster WHERE 位置 <> '' AND 幅 = ? AND 丈 = ? AND {IN_STOCK}"
         params = (width, height)
 
     rows = db.fetch_all(conn, sql, params, caller_name="search_pallets") or []
@@ -612,7 +624,7 @@ def pallets_at_position(conn: sqlite3.Connection, position: str) -> list[sqlite3
     """VBA `ShowInventoryByLocation` の移植(位置一致、前後空白・大小文字を無視)。"""
     return db.fetch_all(
         conn,
-        "SELECT * FROM PalletMaster WHERE TRIM(位置) = TRIM(?) COLLATE NOCASE",
+        f"SELECT * FROM PalletMaster WHERE TRIM(位置) = TRIM(?) COLLATE NOCASE AND {IN_STOCK}",
         (position,),
         caller_name="pallets_at_position",
     ) or []

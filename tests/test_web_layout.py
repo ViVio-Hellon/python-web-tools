@@ -459,6 +459,34 @@ class EditTests(LayoutWebTestCase):
         self.assertFalse(state["dirty"])
         self.assertTrue(floor_plan.USER_PATH.exists())
 
+    def test_編集を終えると保存する(self) -> None:
+        """現場の声:「配置編集を終了したら保存していると思ってた。
+        『配置を保存』を押してください ── そんなボタン存在しない」。"""
+        name = self.first_shelf()
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/move", {"name": name, "x": 40, "y": 60})
+        self.assertFalse(floor_plan.USER_PATH.exists())
+        state = self.post("/api/layout/edit", {"on": False})
+        self.assertFalse(state["editing"])
+        self.assertFalse(state["dirty"])
+        self.assertTrue(floor_plan.USER_PATH.exists())
+        self.assertIn("保存しました", state.get("message", ""))
+
+    def test_保存に失敗したら編集を続ける(self) -> None:
+        """終えてしまうと、保存し直すボタン(編集中にしか出ない)が見えなくなる。"""
+        from unittest import mock
+        name = self.first_shelf()
+        self.post("/api/layout/edit", {"on": True})
+        self.post("/api/layout/move", {"name": name, "x": 40, "y": 60})
+        with mock.patch.object(floor_plan, "save", return_value=False):
+            res = self.client.post("/api/layout/edit", json={"on": False}, headers=self.auth())
+        body = res.get_json()
+        self.assertNotEqual(res.status_code, 200)
+        from packaging_tool import layout_session
+        session = layout_session.get_session()
+        self.assertTrue(session.editing)
+        self.assertTrue(session.dirty)
+
     def test_図の外へは出せない(self) -> None:
         """外へ出すと二度と掴めない。"""
         name = self.first_shelf()

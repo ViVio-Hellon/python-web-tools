@@ -209,6 +209,68 @@ class ApplyTests(DistributionTestCase):
         self.assertEqual(user_settings.get(config.KEY_LOT_DB_DIR), r"\\x")
 
 
+class RedistributeTests(DistributionTestCase):
+    """現場の声:「配布先で設定しないことがある」。
+
+    以前の決まりは「すでにあるものは読み込まない」だけで、
+      ・空の値も「すでにある」と数え、いつまでも埋めなかった
+      ・設定を直して配り直しても、一度読んだ端末は前の値のままだった
+    """
+
+    def distributed(self) -> None:
+        self.configure_source()
+        self.assertTrue(self.export().ok)
+        self.dest.use()
+
+    def test_空の値は入っていないのと同じに扱って埋める(self) -> None:
+        self.distributed()
+        user_settings.save(config.KEY_MASTER_DB_DIR, "")       # 空欄のまま保存した
+        user_settings.save(admin_password.KEY, "")              # 既定に戻した
+        result = distribution.apply_on_start()
+        self.assertIn("梱包資材マスタの置き場所", result.applied)
+        self.assertEqual(user_settings.get(config.KEY_MASTER_DB_DIR), r"\\srv\共有\マスタ")
+        self.assertTrue(admin_password.verify(NEW_PW))
+
+    def test_配り直したら前の配布のまま変えていない項目は入れ替える(self) -> None:
+        self.distributed()
+        distribution.apply_on_start()
+        user_settings.save(config.KEY_LOT_DB_DIR, r"\\この端末\台帳")   # 端末で変えた
+        # 配る側で置き場所を直して配り直す
+        self.source.use()
+        user_settings.save(config.KEY_MASTER_DB_DIR, r"\\新srv\マスタ")
+        user_settings.save(config.KEY_LOT_DB_DIR, r"\\新srv\台帳")
+        self.assertTrue(self.export().ok)
+        self.dest.use()
+        result = distribution.apply_on_start()
+        self.assertIn("梱包資材マスタの置き場所", result.applied)
+        self.assertEqual(user_settings.get(config.KEY_MASTER_DB_DIR), r"\\新srv\マスタ")
+        # 端末で変えた項目はそのまま
+        self.assertIn("仕掛台帳の置き場所", result.kept)
+        self.assertEqual(user_settings.get(config.KEY_LOT_DB_DIR), r"\\この端末\台帳")
+        # 同じ配布設定は2度読まない
+        self.assertEqual(distribution.apply_on_start().applied, [])
+
+    def test_配り直した配置図は端末で保存していなければ入れ替える(self) -> None:
+        self.configure_source()
+        floor_plan.USER_PATH.write_text(json.dumps({"marker": "v1"}), encoding="utf-8")
+        pallet_map.USER_PATH.write_text(json.dumps({"marker": "p1"}), encoding="utf-8")
+        self.export(maps=["floor_plan", "pallet_map"])
+        self.dest.use()
+        distribution.apply_on_start()
+        pallet_map.USER_PATH.write_text(json.dumps({"marker": "端末で編集"}), encoding="utf-8")
+        self.source.use()
+        floor_plan.USER_PATH.write_text(json.dumps({"marker": "v2"}), encoding="utf-8")
+        pallet_map.USER_PATH.write_text(json.dumps({"marker": "p2"}), encoding="utf-8")
+        self.export(maps=["floor_plan", "pallet_map"])
+        self.dest.use()
+        result = distribution.apply_on_start()
+        self.assertEqual(json.loads(floor_plan.USER_PATH.read_text(encoding="utf-8")),
+                         {"marker": "v2"})
+        self.assertIn("簡易在庫の保管位置マップ", result.kept)
+        self.assertEqual(json.loads(pallet_map.USER_PATH.read_text(encoding="utf-8")),
+                         {"marker": "端末で編集"})
+
+
 class MapTests(DistributionTestCase):
     def test_保存した配置図が無い端末には入れる(self) -> None:
         self.configure_source()

@@ -27,14 +27,24 @@
 プログラム側(`packaging_tool\\*_default.json`)にあり、配布設定に配置図が
 無い端末はそれを使います。
 
-【読み込むときの決まり】**その端末にすでにあるものは読み込みません。**
+【読み込むときの決まり】**その端末で変えたものは上書きしません。**
 
-    設定     … その端末で値が入っている項目はそのまま。無い項目だけ埋める
-    配置図   … その端末で配置を保存してあれば(`data\\*.json`)そのまま
+    設定     … 無い項目・**空の項目**は埋める。その端末で入れた値はそのまま
+    配置図   … その端末で配置を保存していなければ入れる
 
-起動のたびに見に行きますが、埋まった項目は次から「すでにある」ので、
-端末で直した値が戻されることはありません。狙って揃えたいときは、
-設定画面の「配布設定を読み込み直す」(管理者パスワード)で上書きします。
+**新しい配布設定が置かれたら**(前に読んだものと中身が違えば)、
+**前の配布設定のまま変えていない項目**は新しい値で入れ替えます。
+端末で変えた項目だけはそのまま残します。
+
+(以前は「すでにあるものは読み込まない」だけだったので、2つの穴があった ──
+現場の声「配布先で設定しないことがある」:
+  ・空の値(空欄のまま保存した置き場所・既定に戻した管理者パスワード)も
+    「すでにある」と数え、いつまでも埋めなかった
+  ・設定を直して配り直しても、一度読んだ端末は前の値のままだった)
+
+起動のたびに見に行きますが、同じ配布設定は2度は読みません。端末で直した
+値が戻されることもありません。狙って揃えたいときは、設定画面の
+「配布設定を読み込み直す」(管理者パスワード)で上書きします。
 
 【パスワード】書き出す・消す・読み込み直すには管理者パスワードが要ります。
 起動時の読み込みには要りません ── `配布設定\\` を置いたのは、フォルダを
@@ -42,6 +52,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -131,6 +142,15 @@ class Bundle:
     maps: dict[str, Path]              # 鍵 → 配置図のファイル
     created_at: str = ""
     created_on: str = ""
+
+    def fingerprint(self) -> str:
+        """中身の指紋。書き出し直した・手で .json を差し替えた、で変わる。"""
+        h = hashlib.sha256(json.dumps(self.settings, sort_keys=True,
+                                      ensure_ascii=False).encode("utf-8"))
+        for key in sorted(self.maps):
+            h.update(key.encode("utf-8"))
+            h.update(_file_digest(self.maps[key]).encode("ascii"))
+        return h.hexdigest()
 
 
 def read() -> Optional[Bundle]:
@@ -248,7 +268,10 @@ def export(password: str, items: list[str], maps: list[str]) -> Result:
     except OSError as exc:
         shutil.rmtree(staging, ignore_errors=True)
         return Result(False, f"{DIR} に書けませんでした: {exc}", REFUSE_FAILED)
-    _mark_applied()
+    # 書き出した端末は、いまの値がそのまま配布設定の値
+    written = read()
+    _mark_applied(written, settings,
+                  {key: _file_digest(path) for key, path in (written.maps if written else {}).items()})
 
     names = [ITEM_LABELS[k] for k in settings] + [MAP_LABELS[k] for k in map_sources]
     message = (f"配布設定を書き出しました({len(names)}項目)。ツールの直下の「{DIR.name}」"
@@ -287,7 +310,8 @@ def _readme(meta: dict[str, Any], maps: list[str]) -> str:
         "",
         "配った先で起きること",
         "  起動したときにこのフォルダを読み込みます。",
-        "  その端末にすでにある設定・保存してある配置図は、読み込みません(上書きしない)。",
+        "  無い項目・空の項目は埋めます。書き出し直したものなら、前の配布のまま変えていない",
+        "  項目も新しい値に入れ替えます。その端末で変えた設定・保存した配置図は上書きしません。",
         "  揃えたいときは、設定画面の「配布設定」→「配布設定を読み込み直す」。",
         "",
         "配置図を差し替えたいとき",
@@ -314,24 +338,83 @@ def remove(password: str) -> Result:
 # ------------------------------------------------------------------
 # 読み込む(配られた側)
 # ------------------------------------------------------------------
-def _mark_applied() -> None:
-    user_settings.save(KEY_APPLIED, {"at": db.now_db_string()})
+def _mark_applied(bundle: Optional["Bundle"] = None, values: Optional[dict] = None,
+                  maps: Optional[dict] = None, *, touched: bool = True) -> None:
+    """読み込んだ(書き出した)ことを覚える。
+
+    `fingerprint` … どの配布設定を読んだか(中身から作る。手で .json を
+                     差し替えても変わる)
+    `values`      … そのとき配布設定から入った値(項目ごと)
+    `maps`        … そのとき入れた配置図の中身の指紋
+    次に**違う**配布設定が来たとき、端末の値がここと同じなら「配布のまま
+    変えていない」とみなして入れ替える。
+    """
+    prev = _applied_record()
+    record = {
+        "at": db.now_db_string() if touched else prev.get("at", ""),
+        "fingerprint": bundle.fingerprint() if bundle is not None else prev.get("fingerprint", ""),
+        "values": {**prev.get("values", {}), **(values or {})},
+        "maps": {**prev.get("maps", {}), **(maps or {})},
+    }
+    user_settings.save(KEY_APPLIED, record)
+
+
+def _applied_record() -> dict[str, Any]:
+    raw = user_settings.get(KEY_APPLIED)
+    if not isinstance(raw, dict):
+        return {}
+    return {"at": str(raw.get("at", "")), "fingerprint": str(raw.get("fingerprint", "")),
+            "values": dict(raw.get("values") or {}), "maps": dict(raw.get("maps") or {})}
+
+
+def _blank(value: Any) -> bool:
+    """空の値。**入っていないのと同じ**に扱う(空欄のまま保存した置き場所、
+    既定に戻した管理者パスワード)。`False` は「しない」という値なので空ではない。"""
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _file_digest(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
 
 
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
     current = user_settings.load_all()
+    record = _applied_record()
+    # 前に読んだものと違う配布設定か(初めてなら「前」は無い)
+    renewed = bool(record.get("fingerprint")) and record["fingerprint"] != bundle.fingerprint()
+    given: dict[str, Any] = {}
     for key, value in bundle.settings.items():
-        if key in current and not overwrite:
-            result.kept.append(ITEM_LABELS[key])        # すでにある
+        have = current.get(key)
+        if overwrite or key not in current or _blank(have):
+            take = True
+        elif have == value:
+            given[key] = value                          # もう同じ値
             continue
-        if user_settings.save(key, value):
+        elif renewed and key in record["values"] and have == record["values"][key]:
+            take = True                                 # 前の配布のまま変えていない
+        else:
+            take = False
+        if take and user_settings.save(key, value):
             result.applied.append(ITEM_LABELS[key])
+            given[key] = value
+        elif not take:
+            result.kept.append(ITEM_LABELS[key])        # この端末で入れた値
     from . import map_data
+    given_maps: dict[str, str] = {}
     for key, src in bundle.maps.items():
         dest = _terminal_map(key)
-        if dest.exists() and not overwrite:
-            result.kept.append(MAP_LABELS[key])
+        src_digest = _file_digest(src)
+        dest_digest = _file_digest(dest) if dest.exists() else ""
+        if dest_digest and dest_digest == src_digest:
+            given_maps[key] = src_digest                # もう同じ中身
+            continue
+        if not (overwrite or not dest.exists()
+                or (renewed and dest_digest and record["maps"].get(key) == dest_digest)):
+            result.kept.append(MAP_LABELS[key])         # この端末で保存した配置
             continue
         plan = map_data.read_json(src)
         if not isinstance(plan, dict):
@@ -339,8 +422,8 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
             continue
         if map_data.write_json(dest, plan):
             result.applied.append(MAP_LABELS[key])
-    if result.applied:
-        _mark_applied()
+            given_maps[key] = _file_digest(dest)
+    _mark_applied(bundle, given, given_maps, touched=bool(result.applied))
     return result
 
 

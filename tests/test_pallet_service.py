@@ -438,6 +438,29 @@ class SearchTests(PalletServiceTestCase):
         self.assertEqual(ranged.matched_positions, {"A-01", "A-02"})
 
 
+    def test_在庫0の行は検索にも位置の一覧にも出さない(self):
+        """払い出して0になった行(リスト管理=要なら行は残る)を一覧に出さない。
+
+        現場の声:「在庫0でリストに載るのは迷惑。そのサイズのパレットが
+        存在するのかと、在庫があるのかは別の話」。"""
+        insert_pallet(self.conn, width=1470, length=2700, position="A-01", qty=0, list_mgmt="要")
+        insert_pallet(self.conn, width=1490, length=2720, position="A-01", qty=3)
+        self.assertEqual(svc.search_pallets(self.conn, 1470, 2700, mode="exact").rows, [])
+        self.assertEqual(svc.search_pallets(self.conn, 1470, 2700, mode="exact").matched_positions, set())
+        ranged = svc.search_pallets(self.conn, 1470, 2700, mode="range")
+        self.assertEqual([r["幅"] for r in ranged.rows], [1490])
+        self.assertEqual([r["幅"] for r in svc.pallets_at_position(self.conn, "A-01")], [1490])
+
+    def test_払い出して0になったら一覧から消える(self):
+        insert_pallet(self.conn, width=500, length=440, position="P-01", qty=2, list_mgmt="要")
+        self.assertEqual(len(svc.pallets_at_position(self.conn, "P-01")), 1)
+        svc.issue(self.conn, width=500, length=440, position="P-01", qty=2)
+        self.assertEqual(svc.pallets_at_position(self.conn, "P-01"), [])
+        # 受け入れ直せばまた出る(行は残っているので足すだけ)
+        svc.receive(self.conn, width=500, length=440, position="P-01", qty=1)
+        self.assertEqual(len(svc.pallets_at_position(self.conn, "P-01")), 1)
+
+
 # ------------------------------------------------------------------
 # 受入
 # ------------------------------------------------------------------

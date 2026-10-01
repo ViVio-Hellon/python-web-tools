@@ -61,11 +61,20 @@ class PalletMapSession:
 
         通常は動かせません。図はよく押す(その位置の在庫を見る)ので、
         常時ドラッグできると**見るつもりの操作で位置がずれます**。
+
+        **編集を終えたら保存します**(棚検索 `layout_session.set_editing` と同じ)。
+        以前は終えても保存せず、編集中にしか出ない「配置を保存」を押すよう
+        案内していた(現場の声)。保存に失敗したときだけ編集を続けます。
         """
+        if not on and self.editing and self.dirty:
+            saved = self.save()
+            if not saved.ok:
+                return MapOpResult(
+                    False, saved.message + "編集はそのまま続けています。"
+                    "「配置を保存」をもう一度押してください。", saved.reason)
+            self.editing = False
+            return MapOpResult(True, "編集を終わりました。保管位置マップを保存しました")
         self.editing = bool(on)
-        if not self.editing and self.dirty:
-            return MapOpResult(
-                True, "編集を終わりました。変更はまだ保存していません。")
         return MapOpResult(True, "配置編集: " + ("ON" if self.editing else "OFF"))
 
     def _require_editing(self) -> Optional[MapOpResult]:
@@ -251,13 +260,20 @@ def has_unsaved() -> bool:
 
 
 def stop_editing() -> None:
-    """配置編集を切る(資材モードへ移ったとき)。**編集した中身は残す。**
+    """配置編集を切る(資材モードへ移ったとき)。**編集した中身は保存する**
+    (編集を終えるのと同じ。`set_editing`)。保存できなかったときは中身を
+    残したまま編集だけ切る ── 現場モードへ戻れば保存し直せる。
 
     作業状態が無ければ何もしない(聞いただけで図を読みに行かない)。
     """
     if _session is not None and _session.editing:
-        _session.editing = False
-        log.info("資材モードへ移ったため、保管位置マップの配置編集を切りました")
+        result = _session.set_editing(False)
+        if not result.ok:
+            _session.editing = False
+            log.warning("資材モードへ移るときに保管位置マップを保存できませんでした"
+                        "(中身は残しています): %s", result.message)
+        log.info("資材モードへ移ったため、保管位置マップの配置編集を切りました: %s",
+                 result.message)
 
 
 # 未保存を知らせるときの呼び名

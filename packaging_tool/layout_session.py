@@ -281,13 +281,24 @@ class LayoutSession:
         残るため現象は何も変わっていなかった(同じ指摘を3度受けた)。
         簡易在庫が `clearSelection()`(Shift複数選択)だけでなく
         `picked`(単発クリック)も一緒に捨てているのと同じ理由。
+
+        **編集を終えたら保存する。** 以前は終えても保存せず、「配置を保存を
+        押してください」と出していたが、そのボタンは編集中にしか出ない
+        (現場の声:「そんなボタン存在しない。配置編集を終了したら保存して
+        いると思ってた。せっかく配置したのに」)。保存に失敗したときだけ
+        編集を続ける ── 終えてしまうと、保存し直すボタンが見えなくなる。
         """
-        self.editing = bool(on)
         self.highlight.clear()
         self.selected = ""
-        if not self.editing and self.dirty:
-            return LayoutOpResult(
-                True, "編集を終わりました。変更はまだ保存していません。")
+        if not on and self.editing and self.dirty:
+            saved = self.save()
+            if not saved.ok:
+                return LayoutOpResult(
+                    False, saved.message + "編集はそのまま続けています。"
+                    "「配置を保存」をもう一度押してください。", saved.reason)
+            self.editing = False
+            return LayoutOpResult(True, "編集を終わりました。配置図を保存しました")
+        self.editing = bool(on)
         return LayoutOpResult(True, "配置編集: " + ("ON" if self.editing else "OFF"))
 
     def move(self, name: str, x: float, y: float) -> LayoutOpResult:

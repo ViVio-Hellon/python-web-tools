@@ -372,16 +372,18 @@ class MaterialModeTests(unittest.TestCase):
         a1 = next(p for p in body["map"]["positions"] if p["name"] == "A1")
         self.assertEqual((a1["x"], a1["y"]), (123, 45))
 
-    def test_編集中に資材へ移ると編集を切る_未保存は残す(self) -> None:
+    def test_編集中に資材へ移ると編集を切って保存する(self) -> None:
         """掴めるまま資材の画面になると、見るつもりで位置がずれる。
-        未保存は捨てない(現場へ戻れば保存できる。閉じるときは聞く)。"""
+        切るときは**保存する**(編集を終えるのと同じ)── 未保存のまま切ると、
+        保存するボタン(編集中にしか出ない)が見えなくなる(現場の声)。"""
         self.post("/api/inventory/map/edit", {"on": True})
         self.post("/api/inventory/map/move", {"name": "A1", "x": 100, "y": 40})
         self.to_material()
         session = pallet_map_session.get_session()
         self.assertFalse(session.editing)
-        self.assertTrue(session.dirty)
-        self.assertTrue(pallet_map_session.has_unsaved())
+        self.assertFalse(session.dirty)
+        self.assertFalse(pallet_map_session.has_unsaved())
+        self.assertTrue(pallet_map.USER_PATH.exists())
 
 
 class SearchApiTests(InventoryWebTestCase):
@@ -641,6 +643,20 @@ class MapEditTests(InventoryWebTestCase):
         state = self.edit("save")
         self.assertFalse(state["dirty"])
         self.assertTrue(pallet_map.USER_PATH.exists())
+
+    def test_編集を終えると保存する(self) -> None:
+        """現場の声:「配置編集を終了したら保存していると思ってた。
+        『配置を保存』を押してください ── そんなボタン存在しない」。"""
+        name = self.first()
+        self.edit("edit", {"on": True})
+        self.edit("move", {"name": name, "x": 40, "y": 60})
+        self.assertFalse(pallet_map.USER_PATH.exists())
+        state = self.edit("edit", {"on": False})
+        self.assertFalse(state["editing"])
+        self.assertFalse(state["dirty"])
+        self.assertTrue(pallet_map.USER_PATH.exists())
+        moved = self.find(state, name)
+        self.assertEqual((moved["x"], moved["y"]), (40, 60))
 
     def test_図の外へは出せない(self) -> None:
         """外へ出すと二度と掴めない。"""
