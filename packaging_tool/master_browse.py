@@ -206,7 +206,8 @@ def page(path: Optional[Path], table: str, *, query: str = "",
     if hidden > 0:
         # **黙って切らない。** 絞り込みの手があることまで言う
         view.note = (f"{view.total}件のうち {len(view.rows)}件を出しています"
-                     f"(ほか {hidden}件)。絞り込むと目当ての行が出ます。")
+                     f"(ほか {hidden}件)。絞り込むと目当ての行が出ます。"
+                     "見出しを押すと、出ていない行も含めた全件で並び替えます。")
     return view
 
 
@@ -219,9 +220,24 @@ def _order(names: list[str], sort: str, sort_dir: str) -> tuple[str, str]:
     """
     if sort and sort in names:
         direction = "DESC" if sort_dir == "desc" else "ASC"
-        quoted = source_db.quote_identifier(sort)
+        col = source_db.quote_identifier(sort)
+        # **数字は数の大きさで並べる。** Access から移した表は列に型が無く、
+        # 数字が文字のまま入っている(幅 '1000' と '999' など)。そのまま
+        # 並べると文字の順で '1000' < '999' になり、並べ替えが効いていない
+        # ように見える。同じ列に数と文字が混ざっていても(1行だけ数など)
+        # 数として揃える。数でない値は数の後ろに文字の順で、空は向きに
+        # 関わらずいちばん後ろ(空の行が先頭に並ぶと中身が見えない)
+        text = f"TRIM(CAST({col} AS TEXT))"
+        unsigned = f"LTRIM({text}, '+-')"
+        is_number = (f"(typeof({col}) IN ('integer', 'real') OR ("
+                     f"{unsigned} GLOB '[0-9]*' AND {unsigned} NOT GLOB '*[^0-9.]*'"
+                     f" AND LENGTH({text}) - LENGTH(REPLACE({text}, '.', '')) <= 1"
+                     f" AND LENGTH({text}) - LENGTH({unsigned}) <= 1))")
+        blank = f"({col} IS NULL OR {text} = '')"
         # 同値が並ぶと表示順がページごとに揺れるので、rowidで確定させる
-        return f"ORDER BY {quoted} {direction}, rowid ASC", sort
+        return (f"ORDER BY {blank} ASC, {is_number} DESC,"
+                f" CASE WHEN {is_number} THEN CAST({text} AS REAL) END {direction},"
+                f" {col} {direction}, rowid ASC"), sort
     return "ORDER BY rowid ASC", ""
 
 

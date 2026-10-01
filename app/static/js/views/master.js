@@ -151,15 +151,21 @@ function headerCell(name, page) {
   button.type = "button";
   button.className = "sortbtn";
   button.dataset.column = name;
+  button.title = `${name} で並び替える(押すたびに 小さい順 ⇔ 大きい順)`;
   button.append(name);
+  const mark = document.createElement("span");
+  mark.className = "sortmark";
   if (page.sort === name) {
-    const mark = document.createElement("span");
-    mark.className = "sortmark";
     // ▲▼は文字なので、色を拾えない環境でも並び順が読める
     mark.textContent = page.sort_dir === "asc" ? "▲" : "▼";
-    button.append(mark);
     th.setAttribute("aria-sort", page.sort_dir === "asc" ? "ascending" : "descending");
+  } else {
+    // 並べていない列にも薄い印。無いと、見出しを押せることに気づけない
+    mark.classList.add("sortmark--idle");
+    mark.setAttribute("aria-hidden", "true");
+    mark.textContent = "⇅";
   }
+  button.append(mark);
   th.append(button);
   return th;
 }

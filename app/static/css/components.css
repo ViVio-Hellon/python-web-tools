@@ -554,6 +554,8 @@ select.input { cursor: pointer; }
   outline: 2px solid var(--focus); outline-offset: 2px;
 }
 .sortmark { font-size: 9px; color: var(--accent); }
+/* まだ並べていない列にも薄く出す ── 印が無いと、見出しを押せることに気づけない */
+.sortmark--idle { color: var(--faint); }
 
 /* 文字の列は左寄せ。`.table` は既定で右寄せなので、明示して戻す */
 .table thead th.t, .table tbody td.t { text-align: left; }

@@ -132,6 +132,44 @@ class BrowseTests(MasterTestCase):
         self.assertIn("見つかりません", page.error)
 
 
+class SortTests(MasterTestCase):
+    """見出しクリックの並び替え。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # Access から移した表と同じく**型の無い列**に、数字を文字で入れる
+        conn = sqlite3.connect(self.src)
+        conn.execute("CREATE TABLE 移した表 (名前, 幅)")
+        conn.executemany("INSERT INTO 移した表 VALUES (?, ?)",
+                         [("a", "1000"), ("b", "999"), ("c", 50), ("d", ""),
+                          ("e", "12.5"), ("f", "-3"), ("g", "要確認"), ("h", None),
+                          ("i", "1-2")])
+        conn.commit()
+        conn.close()
+
+    def order(self, sort: str, sort_dir: str = "asc") -> list:
+        page = master_admin.page(self.src, "移した表", sort=sort, sort_dir=sort_dir)
+        self.assertEqual(page.sort, sort)
+        return [r["名前"] for r in page.rows]
+
+    def test_文字で入った数字も数の大きさで並ぶ(self) -> None:
+        """'1000' が '999' より前に来ると、並べ替えが効いていないように見える。"""
+        self.assertEqual(self.order("幅"), ["f", "e", "c", "b", "a", "i", "g", "d", "h"])
+
+    def test_降順も数の大きさ_空はいちばん後ろ(self) -> None:
+        self.assertEqual(self.order("幅", "desc"),
+                         ["a", "b", "c", "e", "f", "g", "i", "d", "h"])
+
+    def test_文字の列は文字の順(self) -> None:
+        self.assertEqual(self.order("名前", "desc"),
+                         ["i", "h", "g", "f", "e", "d", "c", "b", "a"])
+
+    def test_無い列は既定の順に戻す(self) -> None:
+        page = master_admin.page(self.src, "移した表", sort="謎")
+        self.assertEqual(page.sort, "")
+        self.assertEqual([r["名前"] for r in page.rows][:2], ["a", "b"])
+
+
 class ColumnTests(MasterTestCase):
     def test_型は手元のスキーマから来る(self) -> None:
         kinds = {c.name: c.kind
