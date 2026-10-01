@@ -220,9 +220,46 @@ def _order(names: list[str], sort: str, sort_dir: str) -> tuple[str, str]:
     if sort and sort in names:
         direction = "DESC" if sort_dir == "desc" else "ASC"
         quoted = source_db.quote_identifier(sort)
-        # 同値が並ぶと表示順がページごとに揺れるので、rowidで確定させる
-        return f"ORDER BY {quoted} {direction}, rowid ASC", sort
+        blank, numeric, text = _sort_parts(quoted)
+        # **数値は数値として、空欄は最後に並べる**(Excel と同じ並び)。
+        #
+        # 取り込み元の表は列に型が付いていないことが多い(変換ツールは
+        # `CREATE TABLE x ("幅", ...)` と型を書かずに作る)。値が文字で
+        # 入っているので、そのまま ORDER BY すると辞書順になり
+        #     (空) 1000 (空) 1100 1100.5 12A 200 95
+        # のように「200 が 1100 より後ろ」「空欄が途中に混ざる」並びに
+        # なっていた ── 見出しを押しても並び替わっていないように見える。
+        #
+        #   1. 空欄(NULL・空文字・空白だけ)は向きに関係なく最後
+        #   2. 数値と文字が混ざる列は、昇順で 数値→文字、降順で 文字→数値
+        #   3. 数値は大きさで、文字は文字で比べる
+        #   4. 同値が並ぶと表示順がページごとに揺れるので、rowidで確定させる
+        return (f"ORDER BY {blank} ASC,"
+                f" (CASE WHEN {numeric} THEN 0 ELSE 1 END) {direction},"
+                f" (CASE WHEN {numeric} THEN CAST({quoted} AS REAL) END) {direction},"
+                f" {text} {direction}, rowid ASC"), sort
     return "ORDER BY rowid ASC", ""
+
+
+def _sort_parts(quoted: str) -> tuple[str, str, str]:
+    """並び替えに使う式 3 つ(空欄か / 数値か / 比べる文字)。
+
+    「数値か」は、数値で入っている値に加え、**文字で入っていても数値の
+    形をしている値**(`1100`, `-5`, `0.25`)を数値とみなす。`12A`・
+    `1-2`・`1.2.3` のように数値以外が混ざるものは文字のまま。
+    """
+    # NULL も空文字として扱う(空欄どうしは取り込み順で並ぶ。NULL と空文字で
+    # 向きによって前後が入れ替わる、を起こさない)
+    text = f"COALESCE(TRIM(CAST({quoted} AS TEXT)), '')"
+    digits = f"LTRIM({text}, '+-')"
+    blank = f"({text} = '')"
+    numeric = (f"(typeof({quoted}) IN ('integer', 'real')"
+               f" OR ({digits} <> ''"
+               f" AND {digits} NOT GLOB '*[^0-9.]*'"
+               f" AND {digits} GLOB '*[0-9]*'"
+               f" AND {digits} NOT GLOB '*.*.*'"
+               f" AND LENGTH({text}) - LENGTH({digits}) <= 1))")
+    return blank, numeric, text
 
 
 def _filter(names: list[str], query: str) -> tuple[str, list[Any]]:
