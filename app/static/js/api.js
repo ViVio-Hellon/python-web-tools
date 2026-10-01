@@ -61,6 +61,8 @@ async function request(path, options = {}) {
         // どのタブからの要求か。サーバは**最後に開いたタブ**からの
         // ものだけを通す(`packaging_tool/screen_lock.py`)
         [screen.HEADER]: screen.id(),
+        // どの画面から押したか。ログに残し、後から追うときに使う
+        "X-Tool-Page": encodeURI(location.pathname + location.search).slice(0, 300),
         // ファイルを送るとき(FormData)は、ブラウザに区切りごと決めさせる
         ...(typeof options.body === "string" ? { "Content-Type": "application/json" } : {}),
         ...(options.headers || {}),

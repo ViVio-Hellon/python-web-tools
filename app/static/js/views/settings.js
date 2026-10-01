@@ -14,6 +14,7 @@ import { onLeave } from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as jobs from "../jobs.js";
 import * as tabs from "../tabs.js";
+import * as trace from "./trace.js";
 // `master.js` は静的 import ではなく、**自分と同じ版クエリを付けて**
 // 動的に読み込む。
 //
@@ -386,6 +387,10 @@ function watchMasterTab() {
   const tab = el.settingsTabs.querySelector('.tab[data-key="master"]');
   if (tab) tab.addEventListener("click", () => master.opened());
   if (tabs.current(el.settingsTabs) === "master") master.opened();
+  // ログの面も同じ。エラー記録は開いたときに読む
+  const logs = el.settingsTabs.querySelector('.tab[data-key="logs"]');
+  if (logs) logs.addEventListener("click", () => trace.opened());
+  if (tabs.current(el.settingsTabs) === "logs") trace.opened();
 }
 
 async function startJob(path, body) {
@@ -432,6 +437,9 @@ export function start(state, jobState, masterFrame) {
   master.start(masterFrame || {});
   tabs.attachAll();
   rememberLocked();
+  // ログの面を繋いでから、開いている面を見る(先に見ると、ログの面で
+  // 開いたときに一覧を読まない)
+  trace.start();
   watchMasterTab();
 
   for (const btn of document.querySelectorAll("[data-import]")) {
@@ -693,6 +701,8 @@ const browser = {};
 let browseTarget = null;
 // ファイルを選ぶ参照か(「表を持ってくる」)。置き場所の参照はフォルダを選ぶ
 let browseFile = false;
+// 選んだあと押してもらうボタンの名前(面ごとに違う)
+let browseSave = "この設定を保存";
 
 async function browseTo(path) {
   try {
@@ -750,6 +760,7 @@ function startBrowser() {
   for (const button of document.querySelectorAll("[data-browse]")) {
     button.addEventListener("click", () => {
       browseTarget = document.getElementById(button.dataset.browse);
+      browseSave = button.dataset.browseSave || "この設定を保存";
       browseFile = button.dataset.browseFile === "1";
       // ファイルを選ぶときはファイルの行を押して決める。「このフォルダにする」は出さない
       browser.pick.hidden = browseFile;
@@ -783,7 +794,7 @@ function startBrowser() {
     // 選んだだけでは保存しない。「この設定を保存」を押すまで効かない
     if (browseTarget) browseTarget.value = browser.path.value;
     browser.dialog.close();
-    toast("フォルダを入れました。「この設定を保存」を押すと効きます。", "info");
+    toast(`フォルダを入れました。「${browseSave}」を押すと効きます。`, "info");
   });
 }
 

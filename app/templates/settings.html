@@ -758,6 +758,102 @@
     </div>
   </section>
       </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-logs" role="tabpanel" aria-labelledby="tab-logs" hidden>
+  {# ログ(`packaging_tool/trace_log.py`)。エラーを後から追い、なぜなぜで
+     分析するための面。エラー記録は**この面を開いたときに読む** #}
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">誤</i>
+      <h3>エラー記録</h3>
+      <span class="st" id="errCount"></span>
+    </header>
+    <div class="pad">
+      <p class="why">
+        思わぬエラー・画面のエラー・処理の失敗を、<b>エラー番号</b>付きで残しています。
+        画面に出たエラー番号(例: <code>E261001-142233-a1</code>)で引けます。
+        行を押すと、<b>どの操作の途中だったか・直前の動き・エラーの中身</b>が出ます。
+        「なぜなぜの下書きをコピー」で、報告やなぜなぜ分析にそのまま貼れます。
+      </p>
+      <div class="btn-row">
+        <input class="input" id="errQuery" placeholder="エラー番号・文言・端末名" style="max-width:22em"
+               spellcheck="false" autocomplete="off">
+        <button class="btn btn--find" type="button" id="errFind">絞り込む</button>
+        <label id="errEveryoneWrap" {% if logs.source != "setting" %}hidden{% endif %}>
+          <input type="checkbox" id="errEveryone"> ほかの端末のぶんも見る</label>
+        <button class="btn" type="button" id="errReload">読み直す</button>
+      </div>
+      <div class="tablewrap" style="margin-top:8px">
+        <table class="table table--wrap">
+          <thead><tr>
+            <th class="t">いつ</th><th class="t">エラー番号</th><th class="t">端末</th>
+            <th class="t">どの操作で</th><th class="t">起きたこと</th>
+          </tr></thead>
+          <tbody id="errRows"></tbody>
+        </table>
+      </div>
+      <p class="why" id="errEmpty" hidden>エラーの記録はありません。</p>
+    </div>
+  </section>
+
+  <section class="card" id="errDetailCard" hidden>
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">詳</i>
+      <h3 id="errDetailTitle">エラーの中身</h3>
+      <button class="btn" type="button" id="errCopy">なぜなぜの下書きをコピー</button>
+    </header>
+    <div class="pad">
+      <dl class="errfacts" id="errFacts"></dl>
+      <h4>直前の動き(新しいものが下)</h4>
+      <pre class="logtext" id="errRecent"></pre>
+      <h4>この操作の全部の行(操作番号 <code id="errOpId"></code>)</h4>
+      <pre class="logtext" id="errOpLines"></pre>
+      <h4>エラーの中身(開発担当向け)</h4>
+      <pre class="logtext" id="errDetail"></pre>
+    </div>
+  </section>
+
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">録</i>
+      <h3>ログの出力先</h3>
+    </header>
+    <div class="pad">
+      <p class="why">いま書いている場所: <code id="logDirNow">{{ logs.path }}</code>
+        <br><small id="logDirSource">{{ logs.source_label }}</small></p>
+      <p class="status status--ng" id="logDirWarn" {% if not logs.warn %}hidden{% endif %}>{{ logs.warn }}</p>
+      <div class="field">
+        <label for="logDir">出力先のフォルダ(空にすると既定 <code>{{ logs.default }}</code>)</label>
+        <span class="pathrow">
+          <input class="input" id="logDir" value="{{ logs.configured }}"
+                 spellcheck="false" autocomplete="off" {% if logs.locked %}disabled{% endif %}>
+          <button class="btn btn--find" type="button" data-browse="logDir"
+                  data-browse-save="出力先を保存" {% if logs.locked %}disabled{% endif %}>
+            <span class="gl">▸</span>参照…</button>
+        </span>
+      </div>
+      <div class="field" style="margin-top:8px">
+        <label for="logDirPassword">管理者パスワード</label>
+        <input class="input" id="logDirPassword" type="password"
+               autocomplete="current-password" style="max-width:16em">
+      </div>
+      <p class="status status--ng" id="logDirWhy" hidden></p>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn btn--commit" type="button" id="logDirSave" {% if logs.locked %}disabled{% endif %}>出力先を保存</button>
+      </div>
+      <p class="why">
+        指定したフォルダの下に<b>この端末の名前のフォルダ</b>(<code>{{ logs.pc }}</code>)を作って書きます。
+        共有フォルダを全端末で指しても混ざらず、上の一覧で<b>ほかの端末のぶん</b>も見られます。
+        <b>書けないフォルダは保存しません。</b>起動したときに書けなければ(共有に届かない日など)、
+        既定の場所に書いて、ここに理由を出します。<b>この端末だけ</b>の設定です(配布設定には入りません)。
+      </p>
+      <p class="why">
+        入っているもの: 動作ログ <code>packaging_tool_日付.log</code>(操作ごとの1行と、その操作番号の付いた細かい行)・
+        エラー記録 <code>エラー記録_年月.jsonl</code>・取り込み診断。
+        動作ログは {{ logs.keep_days }}日、エラー記録は {{ logs.keep_months }}か月で消えます。
+      </p>
+    </div>
+  </section>
+      </section>
       <section class="tabpanel tabpanel--scroll" id="panel-storage" role="tabpanel" aria-labelledby="tab-storage" hidden>
   <!-- 7. 保存場所 -->
   {# **このPCだけのもの**と**全PC共通のもの**を分けて書く(現場の声)。
@@ -1093,6 +1189,17 @@
   .browser__head .input { flex:1; min-width:12em; }
   .tablewrap--browse { max-height:46vh; overflow:auto; }
   .browser .table td { cursor:pointer; }
+
+  /* ---- ログ(エラー記録) ---------------------------------------- */
+  #errRows tr { cursor:pointer; }
+  #errRows tr:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
+  .errfacts { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; margin:0 0 12px; }
+  .errfacts dt { color:var(--muted); font-weight:600; }
+  .errfacts dd { margin:0; overflow-wrap:anywhere; }
+  #panel-logs h4 { margin:12px 0 4px; font-size:var(--fs-sm); color:var(--muted); }
+  .logtext { font-family:var(--mono); font-size:var(--fs-xs); background:var(--sunken);
+             padding:8px; border-radius:6px; max-height:24em; overflow:auto;
+             white-space:pre-wrap; overflow-wrap:anywhere; margin:0; }
   .browser .gl { color:var(--muted); margin-right:6px; }
 </style>
 {% endblock %}

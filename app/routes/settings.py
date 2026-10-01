@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from flask import Blueprint, Response, jsonify, render_template, request
 
-from packaging_tool import data_sync, db, jobs, modes, source_db
+from packaging_tool import data_sync, db, jobs, modes, source_db, trace_log
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import settings as settings_presenter
 from packaging_tool.presenters import fs_browse
@@ -77,6 +77,8 @@ def page():
         default_tab=default_tab,
         # 保存場所の面(このPCだけ / 全PC共通)。いまの設定から引く
         storage=settings_presenter.storage_places(),
+        # ログの面(出力先)。エラー記録は面を開いたときに読む
+        logs=trace_log.state(),
         # **面の印も初回から出す。** 開いていない面の問題を、JSが動くのを
         # 待たずに読めるようにする
         tab_badges=settings_presenter.tab_badges(view),

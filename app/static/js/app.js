@@ -8,6 +8,7 @@ import { api } from "./api.js";
 import { startHeartbeat } from "./health.js";
 import { toast, toastError } from "./toast.js";
 import * as busy from "./busy.js";
+import * as errorlog from "./errorlog.js";
 import * as nav from "./nav.js";
 import * as running from "./running.js";
 import * as unsaved from "./unsaved.js";
@@ -15,6 +16,9 @@ import * as unsaved from "./unsaved.js";
 // **押されたボタンを覚えておく。** `api.js` が送信を始めるときに、
 // そのボタンを待機の姿にする(無言で待たせない)
 busy.watchClicks();
+
+// 画面の中のエラーをサーバのログへ(後から追えるように)
+errorlog.start();
 
 startHeartbeat();
 // 長い処理は帯に出す。**画面を離れても見える**ようにするため

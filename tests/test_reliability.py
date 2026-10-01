@@ -294,14 +294,17 @@ class WriteLockOrderTests(unittest.TestCase):
         import app
 
         from app.routes import inventory as routes
+        # 思わぬ例外は、エラー番号を付けた 500 で返す(VER3.6.0〜。以前は
+        # そのまま投げ上げていた)。どちらでも錠は返っていなければならない
         with mock.patch.object(routes.pallet_service, "receive",
                                side_effect=RuntimeError("わざと")):
-            with self.assertRaises(RuntimeError):
-                self.client.post(
-                    "/api/inventory/receive",
-                    json={"width": 1100, "length": 1100, "qty": 1,
-                          "position": "A-1"},
-                    headers=_web.auth())
+            res = self.client.post(
+                "/api/inventory/receive",
+                json={"width": 1100, "length": 1100, "qty": 1,
+                      "position": "A-1"},
+                headers=_web.auth())
+        self.assertEqual(res.status_code, 500)
+        self.assertTrue(res.get_json()["error"]["ref"].startswith("E"))
         self.assertTrue(app._WRITE_LOCK.acquire(blocking=False))
         app._WRITE_LOCK.release()
 

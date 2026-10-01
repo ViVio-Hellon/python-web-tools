@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import app_config
+from . import app_config, logging_utils
 from .logging_utils import get_logger
 
 log = get_logger("jobs")
@@ -170,18 +170,35 @@ class JobRegistry:
             self._running = job
             self._persist()
 
-        log.info("開始: %s (%s) id=%s", label, kind, job.id)
+        # **どの操作から始まったか**を持たせる。処理は別のスレッドで走るので、
+        # 操作番号は引き継がれない ── 処理の行には処理の番号を付け、
+        # 始めた操作の番号は1行目に残す
+        parent = (logging_utils.current_operation() or {}).get("id", "")
+        log.info("開始: %s (%s) id=%s%s", label, kind, job.id,
+                 f" 始めた操作 [{parent}]" if parent else "")
         threading.Thread(target=self._run, args=(job, work),
                          name=f"job-{kind}", daemon=True).start()
         return job
 
     def _run(self, job: Job, work) -> None:
+        token = logging_utils.begin_operation(
+            {"id": job.id[:6], "job": job.label, "kind": job.kind})
+        try:
+            self._run_inner(job, work)
+        finally:
+            logging_utils.end_operation(token)
+
+    def _run_inner(self, job: Job, work) -> None:
         try:
             result = work(lambda pct, message, ok=True:
                           self._progress(job, pct, message, ok))
         except Exception as exc:                  # noqa: BLE001 - 画面に出して続ける
-            log.exception("失敗: %s id=%s", job.label, job.id)
-            self._finish(job, STATE_FAILED, ok=False, summary="", error=str(exc),
+            # 画面に出す文にも**エラー番号**を付ける。番号を聞けば
+            # エラー記録(トレースバック・直前の動き)にたどり着ける
+            ref = logging_utils.new_error_ref()
+            log.exception("失敗: %s id=%s", job.label, job.id, extra={"ref": ref})
+            self._finish(job, STATE_FAILED, ok=False, summary="",
+                         error=f"{exc}(エラー番号 {ref})",
                          mark_last_step_failed=True)
         else:
             summary = (result.summary() if hasattr(result, "summary")

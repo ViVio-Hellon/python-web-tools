@@ -25,11 +25,12 @@ import threading
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote
 
 from flask import Flask, g, jsonify, request
 
-from packaging_tool import (access_control, app_config, db, idle_exit, modes,
-                            screen_lock)
+from packaging_tool import (access_control, app_config, config, db, idle_exit,
+                            logging_utils, modes, screen_lock, trace_log)
 from packaging_tool.logging_utils import get_logger
 
 # **起動時の権限で登録するかどうかが決まるモード。**
@@ -77,7 +78,14 @@ TOKEN_EXEMPT_PATHS = frozenset({"/api/health", "/api/alive"})
 # 断ってしまうと伝わらない(応答の `screen_ok` がその知らせ)。
 # `/api/alive` も同じ理由 ── 心拍を断ると、開いているタブが死んだ扱いに
 # なって自動終了が誤る。どちらも業務データを含まない。
-SCREEN_EXEMPT_PATHS = frozenset({"/api/health", "/api/alive"})
+SCREEN_EXEMPT_PATHS = frozenset({"/api/health", "/api/alive", "/api/client-error"})
+
+# 操作の足跡(1要求1行)に**書かない**もの。数秒〜1分おきに来る見張り・
+# 進捗の問い合わせで、書くと肝心の操作が押し流される。
+# 前方一致で見る。`only_if_changed=1` の見張り(倉庫)も同じ扱い
+QUIET_PREFIXES = ("/static/", "/api/alive", "/api/health", "/api/jobs",
+                  "/api/client-error")
+QUIET_GET_PREFIXES = ("/api/log",)
 
 
 def create_app(mode: str = modes.FIELD, *,
@@ -144,6 +152,10 @@ def create_app(mode: str = modes.FIELD, *,
         SECRET_KEY=secrets.token_hex(16),
     )
 
+    # **ログの出力先を決めてから**動き出す(設定画面で指定があればそこへ)
+    trace_log.apply_log_dir()
+    trace_log.prune()
+    _register_trace(app)
     _register_security(app)
     _register_db(app)
     _register_static_version(app)
@@ -152,6 +164,10 @@ def create_app(mode: str = modes.FIELD, *,
     log.info("create_app: mode=%s port=%s 権限=%s (%s)",
              requested, app.config["PORT"], sorted(grant.codes),
              grant.identity.label())
+    # 後から追うときの前提。**どの版・どの置き場所で動いていたか**
+    log.info("起動: 版 %s / 手元のDB %s / マスタ %s / ログ %s",
+             app.config["VERSION"], config.DB_PATH, config.master_db_dir(),
+             config.log_dir())
     return app
 
 
@@ -271,6 +287,86 @@ def _refuse_foreign_page():
     log.warning("ほかのページからの画面の読み込みを断りました: %s (%s)",
                 request.path, site)
     return FOREIGN_PAGE_HTML, 403, {"Content-Type": "text/html; charset=utf-8"}
+
+
+def _register_trace(app: Flask) -> None:
+    """**後から追えるように**、要求ごとに操作番号を振って足跡を残す。
+
+    - 要求1つに操作番号。その要求の間に出た行の頭に `[番号]` が付く
+    - 終わったら1行: 何を(方法・経路)・入力(パスワードは伏せる)・
+      結果(状態番号)・かかった時間。**断ったときは理由も**
+      (「押したのに何も起きない」の大半は、断りの理由で説明がつく)
+    - 思わぬ例外は**エラー番号**付きで、トレースバックごとエラー記録へ。
+      画面にも同じ番号を出す ── 現場から番号を聞けば、その1件に
+      たどり着ける(`logging_utils` の説明)
+    """
+    def _quiet() -> bool:
+        path = request.path
+        if path.startswith(QUIET_PREFIXES):
+            return True
+        if request.method == "GET" and path.startswith(QUIET_GET_PREFIXES):
+            return True
+        return request.args.get("only_if_changed") == "1"
+
+    @app.before_request
+    def _begin_operation():                     # noqa: ANN202 - Flaskのフック
+        if request.path.startswith("/static/"):
+            return
+        info = {"id": logging_utils.new_operation_id(),
+                "method": request.method, "path": request.path,
+                "page": unquote(request.headers.get("X-Tool-Page", ""))[:300]}
+        if request.query_string:
+            info["query"] = request.query_string.decode("utf-8", "replace")[:300]
+        if request.method == "POST" and request.is_json:
+            info["input"] = trace_log.describe_input(request.get_json(silent=True))
+        g.trace_started = time.perf_counter()
+        g.trace_token = logging_utils.begin_operation(info)
+
+    @app.after_request
+    def _footprint(response):                   # noqa: ANN202 - Flaskのフック
+        op = logging_utils.current_operation()
+        if op is None or _quiet():
+            return response
+        took = (time.perf_counter() - g.get("trace_started", time.perf_counter())) * 1000
+        what = f"{request.method} {request.full_path.rstrip('?')}"
+        tail = f" 入力 {op['input']}" if op.get("input") else ""
+        if response.status_code >= 400 and response.is_json:
+            body = response.get_json(silent=True) or {}
+            info = body.get("error") if isinstance(body.get("error"), dict) else {}
+            why = info.get("message") or body.get("message") or ""
+            log.warning("断り %s → %s %s「%s」(%dms)%s", what, response.status_code,
+                        info.get("code", ""), why, took, tail)
+        else:
+            log.info("操作 %s → %s (%dms)%s", what, response.status_code, took, tail)
+        return response
+
+    @app.teardown_request
+    def _end_operation(_exc):                   # noqa: ANN202 - Flaskのフック
+        token = g.pop("trace_token", None)
+        if token is not None:
+            try:
+                logging_utils.end_operation(token)
+            except ValueError:                  # 別の文脈で終わった(試験など)
+                pass
+
+    @app.errorhandler(Exception)
+    def _unexpected(exc):                       # noqa: ANN202 - Flaskのフック
+        from werkzeug.exceptions import HTTPException
+        if isinstance(exc, HTTPException):
+            return exc                          # 404 などは今までどおり
+        ref = logging_utils.new_error_ref()
+        log.error("思わぬエラー: %s %s: %s", request.method, request.path, exc,
+                  exc_info=exc, extra={"ref": ref})
+        message = (f"思わぬエラーが起きました(エラー番号 {ref})。"
+                   "もう一度試しても同じなら、この番号を担当に伝えてください"
+                   "(設定 →「ログ」で中身を見られます)。")
+        if request.path.startswith("/api/"):
+            body = _error("internal", message)
+            body["error"]["ref"] = ref
+            return jsonify(body), 500
+        return (f"<!doctype html><meta charset=\"utf-8\"><title>エラー</title>"
+                f"<body style=\"font-family:sans-serif;padding:2em\"><p>{message}</p>",
+                500, {"Content-Type": "text/html; charset=utf-8"})
 
 
 def _register_security(app: Flask) -> None:
@@ -422,7 +518,8 @@ _WRITE_LOCK = threading.RLock()
 #   /api/mode      … 画面の切り替え。DBを書かない
 # 前方一致で見る
 #   /api/alive     … 心拍。20秒ごとに来るので、待たせると自動終了が誤る
-_NO_LOCK_PREFIXES = ("/api/jobs", "/api/mode", "/api/log", "/api/alive")
+_NO_LOCK_PREFIXES = ("/api/jobs", "/api/mode", "/api/log", "/api/alive",
+                     "/api/client-error")
 
 
 def _is_write(req) -> bool:
@@ -528,7 +625,8 @@ def get_db():
 def _register_routes(app: Flask) -> None:
     # このモジュールの `log` はロガーなので、画面のモジュールは別名で入れる
     from .routes import (catalog, health, inventory, layout, lot, master,
-                         pending, selection, settings, spec_sheet, warehouse)
+                         pending, selection, settings, spec_sheet, trace,
+                         warehouse)
     from .routes import log as log_routes
 
     app.register_blueprint(health.bp)
@@ -537,6 +635,9 @@ def _register_routes(app: Flask) -> None:
     # 設定画面は**どのモードでも**開ける。取り込みと書き戻し、そして
     # 「なぜこのモードしか選べないのか」を確かめる場所になる
     app.register_blueprint(settings.bp)
+    # ログ(設定画面の「ログ」の面・画面のエラーの受け口)。後から追う手段は
+    # どのモードでも要る
+    app.register_blueprint(trace.bp)
     # マスタ管理は設定画面の中にある。**どのモードでも登録する** ──
     # 直せるかどうかはアクセス権限マスタの中身で決まり、その中身は
     # 動いている最中に変わる(この画面から入れられる)。起動時に決めて

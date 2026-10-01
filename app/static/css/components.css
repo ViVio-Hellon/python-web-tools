@@ -635,6 +635,9 @@ select.input { cursor: pointer; }
 .tabpanel[hidden] { display: none; }
 /* 入りきらないぶんは**その面の中だけ**が動く。画面ごと動かさない */
 .tabpanel--scroll { overflow: auto; }
+/* 流す面のカードは**縮めない**(`.card` は min-height:0 なので、面の高さに
+   収めようと縮み、中身が次のカードに重なる。ログの面で出た) */
+.tabpanel--scroll > .card { flex-shrink: 0; }
 
 /* ================================================================
    セグメント — 面の中の切り替え

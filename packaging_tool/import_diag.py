@@ -44,7 +44,7 @@ SAMPLE = 10
 
 
 def path_for(day: Optional[date] = None) -> Path:
-    return config.LOG_DIR / f"取り込み診断_{(day or date.today()):%Y%m%d}.log"
+    return config.log_dir() / f"取り込み診断_{(day or date.today()):%Y%m%d}.log"
 
 
 def latest_path() -> Optional[Path]:

@@ -5,23 +5,193 @@ VBA版はFileSystemObjectで手動追記し、さらに端末のライン名を
 Python版ではファイル配置の複雑さの割に価値が薄いため、標準の
 `logging` モジュールに置き換える。
 
-- 出力先: config.LOG_DIR 配下に `packaging_tool_YYYYMMDD.log`
+- 出力先: `config.log_dir()` 配下に `packaging_tool_YYYYMMDD.log`
+  (設定画面で変えられる。決め方は `trace_log.apply_log_dir`)
 - コンソール(Debug.Printのイミディエイト相当)にも同時出力
+
+【後から追えるようにする仕掛け】(現場の声:「エラー等の後追いが現状
+できない。ログを残し、なぜなぜで分析できるようにしてほしい」)
+
+- **操作番号**: 画面からの要求1つごとに番号を振り、その要求の間に
+  出た行すべての頭に `[番号]` を付ける。同じ番号で引けば、1つの操作で
+  何が起きたかが(選定の細かい判断まで)まとめて読める
+- **エラー記録**: ERROR 以上の行には**エラー番号**を振り、
+  `エラー記録_YYYYMM.jsonl` に1件1行で残す。どの操作の途中だったか、
+  その直前に何をしていたか(直近の行)、エラーの中身(トレースバック)、
+  端末・利用者・版を一緒に入れる ── 「なぜ」を1段ずつ遡る材料を、
+  起きたその場で揃えておく。画面のエラー表示にも同じ番号を出すので、
+  現場から番号を聞けば、その1件にたどり着ける
 """
 from __future__ import annotations
 
+import collections
+import contextvars
+import json
 import logging
-from datetime import date
+import os
+import secrets
+import threading
+from datetime import date, datetime
 from pathlib import Path
+from typing import Any, Optional
 
 from . import config
 
 _configured = False
 
+# 行の形。`op` は操作番号(`_OpFilter` が埋める)
+LINE_FORMAT = "%(asctime)s | %(name)s | %(levelname)s | %(op)s%(message)s"
+DATE_FORMAT = "%Y/%m/%d %H:%M:%S"
+
+# エラー記録に添える「直前の動き」の行数
+RECENT_LINES = 40
+
 
 def log_path_for(day: date) -> "Path":
     """その日のログファイル。**名前の作り方はここ1か所**。"""
-    return config.LOG_DIR / f"packaging_tool_{day:%Y%m%d}.log"
+    return config.log_dir() / f"packaging_tool_{day:%Y%m%d}.log"
+
+
+def error_path_for(when: datetime) -> Path:
+    """その月のエラー記録。月ごとに分ける(1件1行の JSON)。"""
+    return config.log_dir() / f"エラー記録_{when:%Y%m}.jsonl"
+
+
+# ------------------------------------------------------------------
+# 操作番号
+# ------------------------------------------------------------------
+_operation: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "trace_operation", default=None)
+
+
+def new_operation_id() -> str:
+    """操作番号。ログを番号で引くので、**同じ日に重ならない**長さにする。"""
+    return secrets.token_hex(3)
+
+
+def new_error_ref(now: Optional[datetime] = None) -> str:
+    """エラー番号。**番号を見ただけで、いつのことか分かる**形にする
+    (現場から口頭で聞いても、どの日のどのあたりかが分かる)。"""
+    now = now or datetime.now()
+    return f"E{now:%y%m%d-%H%M%S}-{secrets.token_hex(1)}"
+
+
+def begin_operation(info: dict) -> contextvars.Token:
+    """ここから先の行に、この操作の番号を付ける。`end_operation` と対で使う。"""
+    return _operation.set(dict(info))
+
+
+def end_operation(token: contextvars.Token) -> None:
+    _operation.reset(token)
+
+
+def current_operation() -> Optional[dict]:
+    """いま処理している操作(無ければ None)。"""
+    return _operation.get()
+
+
+class _OpFilter(logging.Filter):
+    """行に操作番号を付け、ERROR 以上にはエラー番号を振る。
+
+    **どのハンドラが先に呼ばれても同じ番号になる**よう、番号はここで
+    1度だけ振る(付いていれば触らない)。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        op = _operation.get()
+        if not hasattr(record, "op_id"):
+            record.op_id = (op or {}).get("id", "")
+        if record.levelno >= logging.ERROR and not getattr(record, "ref", ""):
+            record.ref = new_error_ref(datetime.fromtimestamp(record.created))
+        head = f"[{record.op_id}] " if record.op_id else ""
+        if getattr(record, "ref", ""):
+            head += f"<{record.ref}> "
+        record.op = head
+        return True
+
+
+# ------------------------------------------------------------------
+# 直前の動き(エラー記録に添える)
+# ------------------------------------------------------------------
+_recent: collections.deque = collections.deque(maxlen=RECENT_LINES * 2)
+_recent_lock = threading.Lock()
+
+
+class _RecentHandler(logging.Handler):
+    """INFO 以上の行を、直近の分だけ覚えておく。
+
+    DEBUG(選定の細かい判断)は入れない ── 数千行出るので、直前に
+    **何の操作をしたか**が押し流される。細かい行は操作番号で
+    ログファイルから引ける。
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            # **1件1行。** トレースバックはエラー記録の「中身」に入るので、
+            # ここでは頭の1行だけにする(直前の動きが読めなくなる)
+            line = self.format(record).split("\n", 1)[0]
+        except Exception:                       # noqa: BLE001 - ログで止めない
+            return
+        with _recent_lock:
+            _recent.append(line)
+
+
+def recent_lines() -> list[str]:
+    with _recent_lock:
+        return list(_recent)
+
+
+# ------------------------------------------------------------------
+# エラー記録
+# ------------------------------------------------------------------
+_error_lock = threading.Lock()
+
+
+def _who() -> dict[str, str]:
+    """端末・利用者・版。**取れなくても記録は残す。**"""
+    found: dict[str, str] = {}
+    try:
+        from . import access_control
+        ident = access_control.current_identity()
+        found["pc"], found["login"] = ident.pc_name, ident.login_id
+    except Exception:                           # noqa: BLE001
+        pass
+    try:
+        from . import app_config
+        found["version"] = app_config.version()
+    except Exception:                           # noqa: BLE001
+        pass
+    return found
+
+
+class _ErrorRecordHandler(logging.Handler):
+    """ERROR 以上を `エラー記録_YYYYMM.jsonl` へ1件1行で残す。"""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            when = datetime.fromtimestamp(record.created)
+            detail = getattr(record, "detail", "") or ""
+            if record.exc_info:
+                detail = (detail + "\n" if detail else "") + logging.Formatter().formatException(record.exc_info)
+            ref = getattr(record, "ref", "")
+            entry: dict[str, Any] = {
+                "ref": ref,
+                "at": when.strftime(DATE_FORMAT),
+                "level": record.levelname,
+                "where": record.name,
+                "message": record.getMessage(),
+                "detail": detail,
+                "operation": current_operation() or {},
+                "recent": [line for line in recent_lines() if ref not in line][-RECENT_LINES:],
+                **_who(),
+            }
+            path = error_path_for(when)
+            with _error_lock:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:                       # noqa: BLE001 - ログで業務を止めない
+            self.handleError(record)
 
 
 class DailyFileHandler(logging.FileHandler):
@@ -42,14 +212,42 @@ class DailyFileHandler(logging.FileHandler):
         super().__init__(log_path_for(day), **kwargs)
 
     def emit(self, record: logging.LogRecord) -> None:
-        # **書く直前に見る。** 日付が変わったことは、次の1行で気づく
-        today = date.today()
-        if today != self._day:
-            self._day = today
+        # **書く直前に見る。** 日付が変わったこと・設定画面で出力先を
+        # 変えたことは、次の1行で気づく
+        self._day = date.today()
+        target = os.path.abspath(log_path_for(self._day))
+        if target != self.baseFilename:
             self.close()
-            self.baseFilename = str(log_path_for(today))
+            self.baseFilename = target
             self.stream = None                    # 次の emit で開き直す
+            try:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+            except OSError:
+                pass                              # 書けなければ handleError へ
         super().emit(record)
+
+    def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802
+        """**指定の出力先に書けなくなったら、既定の場所へ戻して書き直す。**
+
+        共有フォルダを指していて、途中でネットワークが切れた ── そのまま
+        だとそこから先のログが全部失われる(追いたいのはまさにその時間)。
+        """
+        if config._active_log_dir is not None:
+            global fallback_why
+            fallback_why = (f"{config._active_log_dir} に書けなくなったので、"
+                            f"{config.LOG_DIR} に書いています"
+                            f"({datetime.now():%Y/%m/%d %H:%M})")
+            config._active_log_dir = None
+            try:
+                self.emit(record)
+                return
+            except Exception:                   # noqa: BLE001
+                pass
+        super().handleError(record)
+
+
+# 指定の出力先に書けず、既定の場所へ戻したときの理由(画面に出す)
+fallback_why = ""
 
 
 def configure_logging() -> None:
@@ -63,12 +261,24 @@ def configure_logging() -> None:
     root = logging.getLogger("packaging_tool")
     root.setLevel(logging.DEBUG)
 
-    formatter = logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-                                   datefmt="%Y/%m/%d %H:%M:%S")
+    formatter = logging.Formatter(LINE_FORMAT, datefmt=DATE_FORMAT)
+    op_filter = _OpFilter()
+
+    # エラー記録を先に置く ── 「直前の動き」にエラーの行そのものが
+    # まだ入っていないうちに写す
+    error_handler = _ErrorRecordHandler(level=logging.ERROR)
+    error_handler.addFilter(op_filter)
+    root.addHandler(error_handler)
 
     file_handler = DailyFileHandler(date.today(), encoding="utf-8")
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(op_filter)
     root.addHandler(file_handler)
+
+    recent_handler = _RecentHandler(level=logging.INFO)
+    recent_handler.setFormatter(formatter)
+    recent_handler.addFilter(op_filter)
+    root.addHandler(recent_handler)
 
     # コンソールが無いときは付けない。
     # **`pythonw.exe` では `sys.stderr` が `None`** になる(Start.vbs は
@@ -80,6 +290,7 @@ def configure_logging() -> None:
     if _has_console():
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
+        console_handler.addFilter(op_filter)
         root.addHandler(console_handler)
 
     _configured = True
@@ -115,7 +326,7 @@ def silence_console() -> None:
     以降の追加も弾くように `addHandler` を包む。
 
     ファイルへの出力は残すので、調査に必要な情報は失われない。
-    出力先は `PACKAGING_TOOL_LOG_DIR` で変えられる。
+    出力先は `PACKAGING_TOOL_LOG_DIR`(または設定画面)で変えられる。
     """
     logger = logging.getLogger("packaging_tool")
 

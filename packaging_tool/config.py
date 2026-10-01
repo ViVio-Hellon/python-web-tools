@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
 from . import app_config
 
@@ -44,6 +45,18 @@ DB_PATH = Path(os.environ.get("PACKAGING_TOOL_DB_PATH", str(BASE_DIR / "data" / 
 # 環境変数 `PACKAGING_TOOL_LOG_DIR` で従来どおりの場所にも戻せる。
 LOG_DIR = Path(os.environ.get("PACKAGING_TOOL_LOG_DIR",
                               str(app_config.local_dir("logs"))))
+# 環境変数で決めたときは、設定画面の値より**環境変数が勝つ**(試験・診断用)
+LOG_DIR_FROM_ENV = "PACKAGING_TOOL_LOG_DIR" in os.environ
+
+# 設定画面で指定したログの出力先のうち、**書けることを確かめたもの**。
+# 決めるのは `trace_log.apply_log_dir()` だけ。ログを書くたびに設定
+# ファイルを読みに行かないよう(読むとそれ自体がログを書く)、ここに置く
+_active_log_dir: Optional[Path] = None
+
+
+def log_dir() -> Path:
+    """いまログを書いているフォルダ。設定画面で指定があればそちら。"""
+    return _active_log_dir or LOG_DIR
 
 # ローカル設定ファイル(レジストリ代替: ライン選択などの永続化に使用)
 USER_CONFIG_PATH = Path(os.environ.get("PACKAGING_TOOL_CONFIG_PATH", str(BASE_DIR / "data" / "user_config.json")))
@@ -232,6 +245,8 @@ KEY_EXPORT_DIR = "export_dir"
 # 「表を持ってくる」で Access を変換するツール(accdb_converter)のフォルダ
 KEY_CONVERTER_DIR = "converter_dir"
 KEY_AUTO_IMPORT = "auto_import_on_start"
+# ログの出力先(空なら既定 = この端末のローカル領域)。**この端末だけ**の設定
+KEY_LOG_DIR = "log_dir"
 
 # 包装仕様書の図面を返すURLのひな形(`{no}` が包装仕様NOに置き換わる)。
 # 既定は空 ── 社内の閲覧システムのエンドポイントはこのリポジトリからは
@@ -302,5 +317,5 @@ RETRY_BASE_WAIT_SEC = 1.0  # VBA: Sleep 1000 * retryCount (ミリ秒) を秒に�
 def ensure_dirs() -> None:
     """DB/ログ/設定ファイル用のディレクトリが無ければ作成する。"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_dir().mkdir(parents=True, exist_ok=True)
     USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

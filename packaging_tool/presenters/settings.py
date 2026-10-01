@@ -79,6 +79,9 @@ TABS: tuple[tuple[str, str], ...] = (
     # 同じ語を2か所で違う意味に使うと、どちらの話か読めなくなる
     ("boards", "ボード人気度"),
     ("history", "最近の結果"),
+    # エラーを後から追う面(エラー記録・ログの出力先)。現場の声:
+    # 「エラー等の後追いが現状できない。なぜなぜで分析できるように」
+    ("logs", "ログ"),
     # どのファイルが**このPCだけ**で、どれが**全PC共通**か(現場の声)。
     # 引き継ぎ・バックアップのときに見る面
     ("storage", "保存場所"),
@@ -936,7 +939,7 @@ def _terminal_section() -> Section:
 
     section = Section("この端末", mark="端")
     section.checks.append(Check("手元のデータベース", str(config.DB_PATH), INFO))
-    section.checks.append(Check("ログ", str(config.LOG_DIR), INFO))
+    section.checks.append(Check("ログ", str(config.log_dir()), INFO))
     section.checks.append(Check("読み取り方式", data_sync.backend_name(), OK,
                                 "取り込み元が sqlite3 なので、"
                                 "追加のドライバは要りません"))
@@ -1135,7 +1138,7 @@ def storage_places() -> dict[str, list[dict[str, str]]]:
     local = [
         StoragePlace(
             "設定ファイル", str(config.USER_CONFIG_PATH),
-            "取り込み元・書き出し先の場所、拠点、自動取り込み、図面URL、"
+            "取り込み元・書き出し先・ログの出力先の場所、拠点、自動取り込み、図面URL、"
             "管理者パスワード(撹拌した値)、よく使う条件",
             "設定し直し。新しい版に入れ替えるときは data フォルダごと持っていく"),
         StoragePlace(
@@ -1153,9 +1156,14 @@ def storage_places() -> dict[str, list[dict[str, str]]]:
             "配置編集で動かした保管位置と背景の写真",
             "配置編集をやり直し(無ければ出荷時の配置で動く)"),
         StoragePlace(
-            "動作ログ・選定ログ", str(config.LOG_DIR),
-            f"動作の記録と、選定ログ(日ごと。{selection_log_store.KEEP_DAYS}日で消える)",
+            "動作ログ・エラー記録", str(config.log_dir()),
+            "操作ごとの記録とエラー記録(設定の「ログ」の面で出力先を変えられる。"
+            "共有フォルダを指せば、ほかのPCからも見られる)",
             "無くても動く。困ったときに開発担当へ送るもの"),
+        StoragePlace(
+            "選定ログ", str(selection_log_store.directory()),
+            f"選定ログ(日ごと。{selection_log_store.KEEP_DAYS}日で消える)",
+            "無くても動く"),
         StoragePlace(
             "作業用フォルダ", str(app_config.local_root()),
             "一時ファイル、表を持ってくる前のバックアップ など",
