@@ -617,6 +617,8 @@ function startDistribution() {
     } catch (err) {
       el.distWhy.hidden = false;
       el.distWhy.textContent = err.message;
+      // 下の小さい字だけだと見落とす(「押したのにフォルダが無い」の元)ので、通知にも出す。
+      toastError(err);
     }
   };
   const checked = (attr) => [...document.querySelectorAll(`[${attr}]`)]

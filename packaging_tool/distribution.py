@@ -57,6 +57,7 @@ import json
 import os
 import platform
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -244,44 +245,80 @@ def export(password: str, items: list[str], maps: list[str]) -> Result:
     defaults = [ITEM_LABELS[k] for k in items if k not in current]
     map_sources = {key: _map_source(key) for key in maps}
     if not settings and not map_sources:
-        return Result(False, "書き出せる設定がありません(" + "・".join(defaults)
-                      + " はこの端末で変えていないため既定のままです)。",
-                      REFUSE_BAD_INPUT)
+        return Result(False, "書き出せる設定が無いので、フォルダは作っていません("
+                      + "・".join(defaults)
+                      + " はこの端末で変えていないため既定のままです。配置図を選べば、"
+                      "配置図だけでも書き出せます)。", REFUSE_BAD_INPUT)
 
-    # **作ってから入れ替える。** 途中で失敗して、半分だけ新しい配布設定を
-    # 残さない(配った先がそれを読んでしまう)
-    staging = DIR.with_name(DIR.name + ".作成中")
+    # **フォルダの中へ直接書き、ファイルごとに置き換える。**
+    # 以前は「別名で作る → 前のフォルダを消す → 名前を付け替える」だったが、
+    # Windows では作った直後のフォルダをウイルス対策・検索の索引が掴んでいて
+    # 付け替えが失敗することがある。そのときは前のフォルダだけ消えて
+    # 新しいものもできない(現場の声:「配布先設定をしたのにフォルダが
+    # できていなかった」)。ファイル単位の置き換え(`os.replace`)なら、
+    # 失敗しても前のファイルが残る。設定.json は最後に書く ── 配った先は
+    # 設定.json を見て読むので、途中で止まっても半端な設定は読まれない
+    meta = {"format": FORMAT, "created_at": db.now_db_string(),
+            "created_on": platform.node(), "settings": settings}
     try:
-        shutil.rmtree(staging, ignore_errors=True)
-        (staging / MAPS_DIRNAME).mkdir(parents=True)
-        meta = {"format": FORMAT, "created_at": db.now_db_string(),
-                "created_on": platform.node(), "settings": settings}
-        settings_path(staging).write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        for key, src in map_sources.items():
-            shutil.copyfile(src, map_file(key, staging))
-        (staging / README_NAME).write_text(_readme(meta, list(map_sources)),
-                                           encoding="utf-8-sig")
-        if DIR.exists():
-            shutil.rmtree(DIR)
-        staging.rename(DIR)
+        (DIR / MAPS_DIRNAME).mkdir(parents=True, exist_ok=True)
+        for key in MAP_KEYS:
+            target = map_file(key)
+            if key in map_sources:
+                _replace_file(target, map_sources[key].read_bytes())
+            elif target.exists():
+                target.unlink()                 # 今回は配らない配置図
+        _replace_file(DIR / README_NAME,
+                      _readme(meta, list(map_sources)).encode("utf-8-sig"))
+        _replace_file(settings_path(),
+                      json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
     except OSError as exc:
-        shutil.rmtree(staging, ignore_errors=True)
-        return Result(False, f"{DIR} に書けませんでした: {exc}", REFUSE_FAILED)
-    # 書き出した端末は、いまの値がそのまま配布設定の値
+        log.warning("配布設定を書き出せませんでした: %s", exc)
+        return Result(False, f"配布設定を書き出せませんでした: {DIR.resolve()} ({exc})。"
+                             "フォルダに書く権限があるか、開いているファイルが無いか"
+                             "確かめてください。", REFUSE_FAILED)
+    # **書けたことを読んで確かめる。** 書いたつもりで無い、を黙って通さない
     written = read()
+    if written is None:
+        return Result(False, f"配布設定を書いたはずの {DIR.resolve()} から読み直せませんでした。",
+                      REFUSE_FAILED)
+    # 書き出した端末は、いまの値がそのまま配布設定の値
     _mark_applied(written, settings,
-                  {key: _file_digest(path) for key, path in (written.maps if written else {}).items()})
+                  {key: _file_digest(path) for key, path in written.maps.items()})
 
     names = [ITEM_LABELS[k] for k in settings] + [MAP_LABELS[k] for k in map_sources]
-    message = (f"配布設定を書き出しました({len(names)}項目)。ツールの直下の「{DIR.name}」"
-               "フォルダに入っています。配るときは scripts\\make_dist.bat で"
+    message = (f"配布設定を書き出しました({len(names)}項目): {DIR.resolve()} 。"
+               "配るときは scripts\\make_dist.bat で"
                "配布用フォルダを作ってください(このフォルダも入ります)。")
     if defaults:
         message += (" 既定のままなので入れていないもの(配った先も既定で動きます): "
                     + "・".join(defaults) + "。")
     log.info("配布設定を書き出しました: %s", ", ".join(names))
     return Result(True, message, applied=names)
+
+
+def _replace_file(target: Path, data: bytes, *, tries: int = 5) -> None:
+    """`target` を中身ごと置き換える。**Windows で一時的に掴まれていたら待ってやり直す。**
+
+    いったん隣に書いてから `os.replace` で差し替えるので、途中で失敗しても
+    前のファイルは壊れない。
+    """
+    tmp = target.with_name(target.name + ".書き出し中")
+    for attempt in range(1, tries + 1):
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt == tries:
+                raise
+            time.sleep(0.2 * attempt)
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
 
 
 def _map_source(key: str) -> Path:

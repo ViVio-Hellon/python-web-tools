@@ -129,6 +129,54 @@ class ExportTests(DistributionTestCase):
         self.export(maps=[])
         self.assertFalse(distribution.map_file("floor_plan").exists())
 
+    def test_フォルダが既にあっても中へ書き_出来た場所を伝える(self) -> None:
+        """フォルダを消して付け替えない(Windows で付け替えに失敗するとフォルダが
+        無くなっていた)。中に人が置いたファイルも消さない。"""
+        self.configure_source()
+        distribution.DIR.mkdir(parents=True)
+        (distribution.DIR / "メモ.txt").write_text("置いたもの", encoding="utf-8")
+        result = self.export()
+        self.assertTrue(result.ok, result.message)
+        self.assertTrue(distribution.settings_path().exists())
+        self.assertTrue((distribution.DIR / "メモ.txt").exists())
+        self.assertIn(str(distribution.DIR.resolve()), result.message)
+        self.assertEqual([p for p in distribution.DIR.rglob("*.書き出し中")], [])
+
+    def test_一時的に掴まれていてもやり直して書く(self) -> None:
+        self.configure_source()
+        real = distribution.os.replace
+        calls = []
+
+        def flaky(src, dst):
+            calls.append(dst)
+            if len(calls) == 1:
+                raise PermissionError("使用中")
+            return real(src, dst)
+
+        with mock.patch.object(distribution.os, "replace", flaky), \
+                mock.patch.object(distribution.time, "sleep"):
+            result = self.export()
+        self.assertTrue(result.ok, result.message)
+        self.assertTrue(distribution.settings_path().exists())
+
+    def test_書けなければ場所と理由を返す(self) -> None:
+        self.configure_source()
+        with mock.patch.object(distribution.os, "replace",
+                               side_effect=PermissionError("使用中")), \
+                mock.patch.object(distribution.time, "sleep"):
+            result = self.export()
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, distribution.REFUSE_FAILED)
+        self.assertIn(str(distribution.DIR.resolve()), result.message)
+        self.assertEqual([p for p in distribution.DIR.rglob("*.書き出し中")], [])
+
+    def test_書き出せる物が無ければフォルダを作らないと言う(self) -> None:
+        self.configure_source()                 # 看板の置き場所は変えていない
+        result = distribution.export(NEW_PW, [config.KEY_KANBAN_DB_DIR], [])
+        self.assertFalse(result.ok)
+        self.assertIn("フォルダは作っていません", result.message)
+        self.assertFalse(distribution.DIR.exists())
+
     def test_画面にパスワードの値を出さない(self) -> None:
         self.configure_source()
         self.export()
