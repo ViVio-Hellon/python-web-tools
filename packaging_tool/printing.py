@@ -152,11 +152,60 @@ table.form th { background: #f0f0f0; font-weight: bold; }
 """
 
 # 画面で見たときだけ出る操作案内(印刷はされない)
-_PRINT_HINT = (
-    '<p class="screen-only">この画面で <b>Ctrl+P</b> を押すと印刷できます。'
-    "印刷ダイアログで用紙・余白がページ設定どおりか確認してください"
-    "(「背景のグラフィック」を有効にすると網掛けも印刷されます)。</p>"
-)
+_PRINT_NOTE = ("印刷ダイアログで用紙・余白がページ設定どおりか確認してください"
+               "(「背景のグラフィック」を有効にすると網掛けも印刷されます)。")
+
+
+def print_bar(note: str = _PRINT_NOTE) -> str:
+    """プレビューの上に出す**「印刷する」「閉じる」**。紙には出ない。
+
+    以前は「Ctrl+P を押すと印刷できます」の案内だけで、押すボタンが
+    無かった(現場の声:「すべての印刷プレビュー画面に印刷するボタンが
+    あるか」)。帳票の窓は独立したページ(アプリ本体のJSは動いていない)
+    なので、見た目も動きもここだけで完結させる。どの帳票も同じものを使う。
+
+    直している途中の欄があれば、**先に確定させてから**印刷する ──
+    打ち終わってすぐ押しても、直した内容が送り返されるように
+    (欄から出ると保存する仕掛けは `_EDIT_SCRIPT`)。
+    """
+    return f"""<style>
+@media screen {{
+  .printbar {{ position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap;
+               align-items: center; gap: 8px 12px; margin: -12px -12px 12px;
+               padding: 10px 16px; background: #1f2937; color: #f9fafb;
+               font-family: "Meiryo UI", "Yu Gothic UI", sans-serif; font-size: 12px; }}
+  .printbar button {{ font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+                      border-radius: 6px; padding: 8px 18px; border: 1px solid #9ca3af;
+                      background: #f9fafb; color: #111827; }}
+  .printbar button.printbar__go {{ background: #1d4ed8; border-color: #1d4ed8; color: #fff; }}
+  .printbar button:focus-visible {{ outline: 3px solid #fbbf24; outline-offset: 2px; }}
+  .printbar__note {{ flex: 1 1 20em; line-height: 1.6; }}
+}}
+@media print {{ .printbar {{ display: none !important; }} }}
+</style>
+<div class="printbar" role="toolbar" aria-label="印刷">
+  <button type="button" class="printbar__go" id="printNow">⎙ 印刷する</button>
+  <button type="button" id="printClose">閉じる</button>
+  <span class="printbar__note">{escape(note)}(<b>Ctrl+P</b> でも印刷できます)
+    <span id="printCloseNote"></span></span>
+</div>
+<script>
+(function () {{
+  document.getElementById("printNow").addEventListener("click", function () {{
+    var editing = document.activeElement;
+    if (editing && editing.closest && editing.closest("[data-edit]")) editing.blur();
+    window.print();
+  }});
+  document.getElementById("printClose").addEventListener("click", function () {{
+    window.close();
+    // 自分で開いたタブ(アドレス欄から開いた等)はブラウザが閉じさせない
+    window.setTimeout(function () {{
+      if (!window.closed) document.getElementById("printCloseNote").textContent =
+        "この窓はブラウザの × で閉じてください。";
+    }}, 300);
+  }});
+}}());
+</script>"""
 
 
 def escape(value: object) -> str:
@@ -266,7 +315,7 @@ def render_html(report: Report, *, edit_url: str = "") -> str:
         f"<style>{report.setup.to_css()}\n{BASE_CSS}\n"
         f"{report.setup.screen_css()}\n{extra_css}\n"
         f"{report.setup.extra_css}</style>"
-        f"</head><body>{_PRINT_HINT}{hint}{sheets}{script}</body></html>"
+        f"</head><body>{print_bar()}{hint}{sheets}{script}</body></html>"
     )
 
 

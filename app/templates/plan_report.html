@@ -43,13 +43,11 @@
     body { background: #e5e7eb; padding: 12px; }
     .sheet { background: var(--surface); margin: 0 auto; max-width: 297mm;
              padding: 8mm; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
-    .print-hint { max-width: 297mm; margin: 0 auto 12px; color: var(--muted); font-size: var(--fs-sm); }
   }
-  @media print { .print-hint { display: none; } }
 </style>
 </head>
 <body>
-<p class="print-hint">この画面で <b>Ctrl+P</b> を押すと印刷できます(A4横)。</p>
+{{ print_bar | safe }}
 <div class="sheet">
   <h1>配置図</h1>
   <p class="meta">{{ view.lot_caption }}　出力: <span id="printedAt"></span></p>

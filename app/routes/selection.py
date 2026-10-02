@@ -678,6 +678,9 @@ def _report_plan(session):
     session.presenter.user_log.log("配置図を出力しました", emphasis=True)
     return render_template(
         "plan_report.html", view=view, plan=plan,
+        # 「印刷する」「閉じる」。ほかの帳票と同じもの(`printing.print_bar`)
+        print_bar=printing.print_bar(
+            "用紙は A4横 です。印刷ダイアログで向きと余白を確認してください。"),
         selected_columns=presenter.SELECTED_COLUMNS)
 
 

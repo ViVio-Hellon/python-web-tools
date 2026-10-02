@@ -59,6 +59,18 @@ def insert_pallet(conn, *, width, length, symbol="", unit="台",
 
 
 @unittest.skipUnless(HAS_WEB, _SKIP)
+
+def assert_print_bar(case, html: str) -> None:
+    """印刷プレビューには**押せる「印刷する」と「閉じる」**がある(紙には出ない)。
+
+    以前は「Ctrl+P を押すと印刷できます」の案内だけでボタンが無かった。
+    """
+    case.assertIn('id="printNow"', html)
+    case.assertIn("印刷する</button>", html)
+    case.assertIn("window.print()", html)
+    case.assertIn('id="printClose"', html)
+    case.assertIn("@media print { .printbar { display: none !important; } }", html)
+
 class SelectionWebTestCase(unittest.TestCase):
     def setUp(self) -> None:
         from app.routes import selection as routes
@@ -2417,6 +2429,7 @@ class SendTests(SelectionWebTestCase):
         body = res.get_data(as_text=True)
         self.assertIn("1234567", body)
         self.assertIn("<style>", body)          # 印刷用CSSごと入っている
+        assert_print_bar(self, body)
 
     def _cut_scenario(self) -> None:
         """カット前提の板を実際に切る配置(上用=製品幅−20、下用=パレット幅で切る)。
@@ -2504,6 +2517,7 @@ class SendTests(SelectionWebTestCase):
             with self.subTest(key=key):
                 self.assertIn(f'data-edit="{key}"', html)
         self.assertIn("/api/selection/report/cut-request/edits", html)
+        assert_print_bar(self, html)
 
     def test_見出しに拠点名を付けない(self) -> None:
         """現場の指示で拠点名の自動付与をやめた。要るときだけ人が入れる。"""
@@ -2678,6 +2692,8 @@ class SendTests(SelectionWebTestCase):
         self.assertEqual(res.mimetype, "text/html")
         body = res.get_data(as_text=True)
         self.assertIn("1234567", body)
+        assert_print_bar(self, body)
+        self.assertIn("A4横", body)
         self.assertIn("svgplan.js", body)
         self.assertIn("下用", body)
 

@@ -69,6 +69,17 @@ class RenderTests(unittest.TestCase):
         self.assertIn("screen-only", html)
         self.assertIn("@media print { .screen-only { display: none; } }", html)
 
+    def test_印刷するボタンと閉じるボタンがあり紙には出ない(self):
+        html = p.render_html(p.Report(title="t"))
+        self.assertIn('<button type="button" class="printbar__go" id="printNow">', html)
+        self.assertIn('id="printClose"', html)
+        self.assertIn("@media print { .printbar { display: none !important; } }", html)
+        # 直している途中の欄は、確定させてから印刷する(直した内容を取りこぼさない)
+        self.assertIn('closest("[data-edit]")) editing.blur();', html)
+        # 帳票の先頭(紙より前)に置く
+        self.assertLess(html.index('id="printNow"'), html.index('<div class="sheet">')
+                        if '<div class="sheet">' in html else len(html))
+
 
 class EscapeTests(unittest.TestCase):
     def test_escapes_markup(self):
