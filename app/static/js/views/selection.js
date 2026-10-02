@@ -11,6 +11,7 @@
   押させる条件が別々に育つ。
 */
 
+import { openWindow } from "../desktop.js";
 import { api, tokenUrl } from "../api.js";
 import * as nav from "../nav.js";
 import { pageSignal } from "../nav.js";
@@ -80,8 +81,8 @@ function showAsk(ask, onPick) {
 }
 
 function openReport(url) {
-  const win = window.open(url, "_blank");
-  if (!win) toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
+  // デスクトップ版は外枠が窓を開く(`desktop.js`)。ブラウザ版は今までどおり
+  if (!openWindow(url)) toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
 }
 
 /**

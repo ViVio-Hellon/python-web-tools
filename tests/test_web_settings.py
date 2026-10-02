@@ -1456,6 +1456,11 @@ class RepoRootTests(unittest.TestCase):
         "app", "config", "docs", "packaging_tool", "scripts", "tests",
         # 同梱した変換ツールの読み取り部品(「表を持ってくる」で Access を読む)
         "vendor",
+        # デスクトップ版(Tauri)の入口。外枠の exe がこれを子として起動する
+        "bridge.py",
+        # デスクトップ版の外枠の**ソース**と、それを作る GitHub Actions。
+        # 配るのは作った exe だけ(`make_dist.DEV_ONLY`)
+        "src-tauri", ".github",
     }
 
     def test_直下には配るものだけ(self) -> None:

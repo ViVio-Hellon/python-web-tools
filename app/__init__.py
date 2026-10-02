@@ -376,7 +376,12 @@ def _register_security(app: Flask) -> None:
         # 攻撃者のドメインを 127.0.0.1 に向けられても、Hostヘッダが
         # 一致しないので弾ける
         host = (request.host or "").split(":")[0]
-        if host not in ("127.0.0.1", "localhost"):
+        allowed = ("127.0.0.1", "localhost")
+        if app.config.get("BRIDGE"):
+            # デスクトップ版: 外枠(Tauri)の窓の宛先。TCP を通らないので
+            # リバインディングの心配は無いが、知らない宛先は今までどおり断る
+            allowed = allowed + app_config.BRIDGE_HOSTS
+        if host not in allowed:
             log.warning("Host不一致で拒否: %s", request.host)
             return jsonify(_error("bad_host", "このアドレスからは利用できません")), 400
 

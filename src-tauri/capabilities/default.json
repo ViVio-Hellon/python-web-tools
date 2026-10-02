@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "業務画面(Python が返す画面)から呼んでよいもの。帳票の窓を開く・閉じる・社内サイトを既定のブラウザで開く だけ",
+  "windows": ["main", "report-*"],
+  "remote": {
+    "urls": ["http://app.localhost/*", "app://localhost/*"]
+  },
+  "permissions": ["core:default"]
+}

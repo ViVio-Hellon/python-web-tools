@@ -1,13 +1,19 @@
-# 梱包資材総合ツール (Python / SQLite版) — VER3.6.1
+# 梱包資材総合ツール (Python / SQLite版) — VER4.0.0
 
 Excel VBA + Access で作られていた梱包資材管理ツールの Python 移植版です。
 画面は **Flask + HTML/CSS/JS**、業務ロジックは Python、データは SQLite。
 追加で入れるのは `Flask` と `waitress` の2つだけで、フロント側のビルド工程
 (npm / webpack)は持ちません。
 
+VER4.0.0 から **デスクトップ版**(`梱包資材総合ツール.exe`、Rust/Tauri の外枠)で動きます。
+**ポートを使わず**、窓の中の画面と Python を標準入出力でつなぎます。業務ロジックは
+Python のまま。ブラウザ版(`Start.vbs`)も予備として残っています。
+作りは [`docs/デスクトップ版.md`](docs/デスクトップ版.md)。
+
 | 文書 | 中身 |
 |---|---|
 | [`docs/設計.md`](docs/設計.md) | アーキテクチャ・API・守っている約束 |
+| [`docs/デスクトップ版.md`](docs/デスクトップ版.md) | デスクトップ版(Tauri)の作り・ポートを使わない仕組み・作り方 |
 | [`docs/UIUX設計指針.md`](docs/UIUX設計指針.md) | 画面を作るときの判断基準(認知心理学・情報構造・配色) |
 | [`docs/はじめに読む_起動と使い方.md`](docs/はじめに読む_起動と使い方.md) | 現場向けの手順書 |
 | [`docs/決め打ちの値一覧.md`](docs/決め打ちの値一覧.md) | DBで管理していない許容値などの一覧(`scripts/make_constants_doc.py` がプログラムから作る) |

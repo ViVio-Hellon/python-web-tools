@@ -78,8 +78,23 @@ class MakeDistTests(unittest.TestCase):
     def test_直下の一覧と食い違わない(self) -> None:
         """直下に何かを足したら、**配るかどうかを決めさせる**。"""
         from tests.test_web_settings import RepoRootTests
-        dev_only = {"tests", ".gitignore", ".gitattributes"}
+        dev_only = {"tests", ".gitignore", ".gitattributes"} | set(make_dist.DEV_ONLY)
         self.assertEqual(set(make_dist.INCLUDE), RepoRootTests.ALLOWED - dev_only)
+
+    def test_デスクトップ版のexeは作ってあれば入れる(self) -> None:
+        exe = self.tmp / "PackagingTool.exe"
+        exe.write_bytes(b"MZ")
+        out, lines = make_dist.build(self.out, with_settings=False, exe=exe)
+        self.assertEqual((out / make_dist.EXE_NAME).read_bytes(), b"MZ")
+        self.assertTrue((out / "bridge.py").exists())
+        memo = (out / "配布メモ.txt").read_text(encoding="utf-8-sig")
+        self.assertIn(make_dist.EXE_NAME, memo)
+        self.assertFalse((out / "src-tauri").exists())
+
+    def test_exeが無ければブラウザ版だけと書く(self) -> None:
+        out, lines = make_dist.build(self.out, with_settings=False, exe=self.tmp / "無い.exe")
+        self.assertFalse((out / make_dist.EXE_NAME).exists())
+        self.assertIn("デスクトップ版(exe)は入っていません", "\n".join(lines))
 
     def test_バッチは英字だけ(self) -> None:
         """cmd.exe はコンソールのコードページで読むので、日本語を入れない。"""

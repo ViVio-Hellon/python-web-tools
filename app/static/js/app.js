@@ -8,6 +8,7 @@ import { api } from "./api.js";
 import { startHeartbeat } from "./health.js";
 import { toast, toastError } from "./toast.js";
 import * as busy from "./busy.js";
+import * as desktop from "./desktop.js";
 import * as errorlog from "./errorlog.js";
 import * as nav from "./nav.js";
 import * as running from "./running.js";
@@ -19,6 +20,8 @@ busy.watchClicks();
 
 // 画面の中のエラーをサーバのログへ(後から追えるように)
 errorlog.start();
+// デスクトップ版: 別窓で開くリンクを外枠に頼む(ブラウザ版では何もしない)
+desktop.watchLinks();
 
 startHeartbeat();
 // 長い処理は帯に出す。**画面を離れても見える**ようにするため

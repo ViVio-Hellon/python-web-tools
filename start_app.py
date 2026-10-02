@@ -71,11 +71,20 @@ def check_python_version() -> None:
             "https://www.python.org/downloads/ から新しいPythonを入れてください。")
 
 
-def check_packages() -> None:
-    """必須パッケージの有無。**入れ方まで示す**(基盤仕様書 ステップ5)。"""
+# デスクトップ版(`bridge.py`)は待ち受けないので waitress は要らない
+BRIDGE_PACKAGES = (("flask", "Flask"),)
+
+
+def check_packages(packages=None) -> None:
+    """必須パッケージの有無。**入れ方まで示す**(基盤仕様書 ステップ5)。
+
+    既定(`None`)はブラウザ版の一覧。呼ぶたびに引く(定義のときに決めない)。
+    """
     import importlib.util
 
-    missing = [pip_name for module, pip_name in REQUIRED_PACKAGES
+    if packages is None:
+        packages = REQUIRED_PACKAGES
+    missing = [pip_name for module, pip_name in packages
                if importlib.util.find_spec(module) is None]
     if missing:
         raise StartupError(
@@ -172,10 +181,10 @@ def check_config() -> None:
         log().warning("%s", problem)
 
 
-def run_environment_checks() -> Path:
+def run_environment_checks(*, bridge: bool = False) -> Path:
     """順に確認する。落ちたところで理由が分かるように分けてある。"""
     check_python_version()
-    check_packages()
+    check_packages(BRIDGE_PACKAGES if bridge else None)
     root = check_writable()
     check_config()
     return root
@@ -387,7 +396,37 @@ def _hard_exit() -> None:
     os._exit(0)
 
 
-def _initialize(srv) -> None:
+def start_bridge(mode: str, *, token: str = "", server_factory) -> int:
+    """デスクトップ版の起動(`bridge.py` から)。**ポートもロックも使わない。**
+
+    多重起動の防止・窓・終了は外枠(Rust/Tauri)が持つ。ここでするのは
+    ブラウザ版と同じ「待機画面 → 本体を組み立てる → 重い初期化」だけで、
+    その中身(`_initialize`)は共有する ── 2本持つと片方だけ直すことになる。
+    """
+    import secrets
+
+    import server as server_module
+
+    mode = resolve_mode(mode)
+    log_environment(mode)
+    srv = server_factory(mode, token or secrets.token_urlsafe(24))
+    thread = server_module.run_in_background(srv)
+    log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)
+    try:
+        srv.build()
+    except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
+        log().exception("アプリを組み立てられませんでした")
+        srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+        _hold_until_stopped(srv, thread)
+        return 1
+    # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない
+    _initialize(srv, watch_idle=False)
+    _hold_until_stopped(srv, thread)
+    log().info("終了しました: mode=%s(デスクトップ版)", mode)
+    return 0
+
+
+def _initialize(srv, *, watch_idle: bool = True) -> None:
     """重い初期化。サーバが立ってから行う。
 
     ここで失敗しても**サーバは落とさない**。落とすと利用者のブラウザには
@@ -424,7 +463,8 @@ def _initialize(srv) -> None:
     # **窓が無いアプリなので、タブを閉じたら終わったつもりになる。**
     # 残っていると、次の起動が「すでに起動しています」と判定して
     # 入れ替えた新しい版が動かない
-    _watch_for_idle(srv)
+    if watch_idle:
+        _watch_for_idle(srv)
 
     # 取り込み元の自己診断。**結果はログに残す。**
     # 「読めません」の問い合わせが来たとき、ここを見れば原因が分かる

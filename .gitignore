@@ -53,3 +53,9 @@ export/
 .coverage.*
 htmlcov/
 .pytest_cache/
+
+# デスクトップ版(Tauri)を作ったときにできるもの。`cargo build` で作り直せる
+src-tauri/target/
+src-tauri/gen/
+# GitHub Actions から取ってきて直下に置いた exe(配布のときに make_dist が入れる)
+/PackagingTool.exe

@@ -42,7 +42,22 @@ INCLUDE: tuple[str, ...] = (
     "Start.vbs", "start.bat", "stop.bat",
     "start_app.py", "server.py", "boot_server.py", "launch_guard.py",
     "process_manager.py",
+    # デスクトップ版の入口(exe が子として起動する)
+    "bridge.py",
     "app", "config", "docs", "packaging_tool", "scripts", "vendor",
+)
+
+# リポジトリには置くが配らないもの(デスクトップ版の外枠のソースと、それを作る仕組み)。
+# 配るのは作った exe だけ(下の `EXE_NAME`)
+DEV_ONLY: tuple[str, ...] = ("src-tauri", ".github")
+
+# デスクトップ版の exe。GitHub Actions(Windows)が作る `PackagingTool.exe` を、
+# 配るときはこの名前でフォルダの直下に置く(押す物が分かる名前にする)
+EXE_NAME = "梱包資材総合ツール.exe"
+# exe を探す場所(先に見つかったもの)。`--exe` で指定もできる
+EXE_CANDIDATES: tuple[str, ...] = (
+    "PackagingTool.exe",
+    "src-tauri/target/release/PackagingTool.exe",
 )
 
 # 中にあっても写さないもの(名前で見る。フォルダならその下ごと)
@@ -107,8 +122,16 @@ def _settings_lines(folder: Path) -> list[str]:
     return lines or ["  (中身がありません)"]
 
 
+def find_exe() -> Path | None:
+    for name in EXE_CANDIDATES:
+        path = ROOT / name
+        if path.is_file():
+            return path
+    return None
+
+
 def build(out: Path, *, with_settings: bool = True, force: bool = False,
-          make_zip: bool = False) -> tuple[Path, list[str]]:
+          make_zip: bool = False, exe: Path | None = None) -> tuple[Path, list[str]]:
     """配布用フォルダを作る。戻り値は (できたフォルダ, 画面に出す行)。
 
     断るときは `SystemExit`(理由の文つき)。
@@ -140,6 +163,17 @@ def build(out: Path, *, with_settings: bool = True, force: bool = False,
     # 配布設定: 入れる/入れないを**はっきり決める**(--no-settings)
     settings_src = ROOT / SETTINGS
     lines = [f"配布用フォルダを作りました: {out}", f"版: VER{_version()}"]
+
+    # デスクトップ版の exe(あれば)。無くてもブラウザ版(Start.vbs)で動く
+    exe = exe if exe is not None else find_exe()
+    if exe is not None and exe.is_file():
+        shutil.copy2(exe, out / EXE_NAME)
+        lines.append(f"デスクトップ版を入れました: {EXE_NAME}(元: {exe})")
+    else:
+        lines.append("デスクトップ版(exe)は入っていません。GitHub Actions の"
+                     "「デスクトップ版(Windows)」で作った PackagingTool.exe を、"
+                     "ツールのフォルダの直下に置いてから作り直してください"
+                     "(無くてもブラウザ版の Start.vbs で動きます)。")
     if with_settings and settings_src.is_dir():
         shutil.copytree(settings_src, out / SETTINGS, ignore=_ignore)
         lines.append(f"{SETTINGS} フォルダを入れました(配った先が起動時に読み込みます):")
@@ -180,7 +214,9 @@ def _memo(lines: list[str]) -> str:
         "  1. このフォルダを好きな場所に置く(以前の版のフォルダに上書きしない)",
         "  2. Python 3.9 以降と、Flask・waitress が入っているか確かめる",
         "     (入っていなければ: python -m pip install -r requirements.txt)",
-        "  3. Start.vbs で起動する。配布設定があれば、このとき読み込みます",
+        f"  3. {EXE_NAME} で起動する(デスクトップ版。ポートを使いません)。",
+        "     exe が無いとき・動かないときは Start.vbs(ブラウザ版)で起動できます。",
+        "     配布設定があれば、このとき読み込みます",
         "  4. 設定画面の「動作」で拠点を選ぶ(拠点はラインごとに違います)",
         "",
         "以前の版から入れ替えるとき(上の1〜4の代わり)",
@@ -190,7 +226,7 @@ def _memo(lines: list[str]) -> str:
         "            user_config.json … 置き場所・拠点などの設定",
         "            floor_plan.json / pallet_map.json … 配置図)",
         "     一部だけ写すと、写さなかったものは出荷時に戻ります",
-        "  3. 新しいフォルダの Start.vbs で起動する。拠点も設定も前のまま使えます",
+        f"  3. 新しいフォルダの {EXE_NAME}(または Start.vbs)で起動する。拠点も設定も前のまま使えます",
         "  4. 別の端末の data は写さない(その端末の未送信分を持ち込みます)",
         "",
         "入れていないもの: data(端末ごとの中身)・tests・logs・export",
@@ -206,12 +242,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true",
                         help="作る場所に中身があれば消して作り直す")
     parser.add_argument("--zip", action="store_true", help="zip も作る")
+    parser.add_argument("--exe", help="入れるデスクトップ版の exe(既定: 直下の PackagingTool.exe など)")
     args = parser.parse_args(argv)
 
     out = Path(args.out) if args.out else ROOT.parent / f"梱包資材総合ツール_VER{_version()}"
     try:
         _out, lines = build(out, with_settings=not args.no_settings,
-                            force=args.force, make_zip=args.zip)
+                            force=args.force, make_zip=args.zip,
+                            exe=Path(args.exe) if args.exe else None)
     except SystemExit as exc:
         print(exc, file=sys.stderr)
         return 1

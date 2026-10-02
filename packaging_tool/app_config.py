@@ -229,6 +229,12 @@ def host() -> str:
     return str(load()["server"]["host"])
 
 
+# デスクトップ版(Tauri)の窓が画面を読み込む宛先のホスト名。外枠
+# (`src-tauri/src/main.rs` の `SCHEME`)と揃える。Windows の WebView2 は
+# `http://app.localhost/`、ほかの OS は `app://localhost/` になる
+BRIDGE_HOSTS = ("app.localhost", "localhost")
+
+
 def _mode_conf(mode: str) -> dict[str, Any]:
     """設定ファイルのモード別の節。旧名(`warehouse`)でも引ける。
 

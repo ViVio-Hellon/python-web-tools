@@ -9,6 +9,7 @@
   片方だけ古い、が起こる(設計.md §1)。ここは受け取る側に回る。
 */
 
+import { openWindow } from "../desktop.js";
 import { api, tokenUrl } from "../api.js";
 import { onLeave } from "../nav.js";
 import { toast, toastError } from "../toast.js";
@@ -451,7 +452,7 @@ export function start(state, jobState, masterFrame) {
   startBring();
   // 取り込みの記録。ログフォルダは隠しフォルダの中なので、画面から開く
   el.importDiag.addEventListener("click", () =>
-    window.open(tokenUrl("/report/import-diag"), "_blank", "noopener"));
+    openWindow(tokenUrl("/report/import-diag"), "取り込みの記録"));
   el.importDiagSave.addEventListener("click", () => {
     window.location.href = tokenUrl("/report/import-diag?save=1");
   });

@@ -197,6 +197,9 @@ def print_bar(note: str = _PRINT_NOTE) -> str:
     window.print();
   }});
   document.getElementById("printClose").addEventListener("click", function () {{
+    // デスクトップ版は外枠が開いた窓なので、外枠に閉じてもらう
+    var desk = window.__TAURI__ && window.__TAURI__.core;
+    if (desk) {{ desk.invoke("close_window"); return; }}
     window.close();
     // 自分で開いたタブ(アドレス欄から開いた等)はブラウザが閉じさせない
     window.setTimeout(function () {{
