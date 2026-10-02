@@ -293,6 +293,25 @@ def _connect(path: Path, *, read_only: bool) -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def _opened(path: Path, *, read_only: bool) -> Iterator[sqlite3.Connection]:
+    """開いて、**使い終わったら必ず閉じる。**
+
+    `with sqlite3.connect(...) as conn:` は確定(commit)するだけで**閉じない**。
+    以前はそう書いていたので、取り込み元(共有フォルダの梱包資材マスタ)を
+    読むたびに、閉じていない接続が後片付けまで残っていた。Linux では
+    気づかないが、**Windows では開いているファイルは消すことも置き換える
+    こともできない**(Windows で試験を流して見つけた: 「別のプロセスが
+    使用中」)。共有の元ファイルを、こちらの端末が握り続けることになる。
+    """
+    conn = _connect(path, read_only=read_only)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 def _open(path: Path, *, read_only: bool,
           attempts: Optional[list[tuple[str, str]]] = None,
           ) -> tuple[sqlite3.Connection, str]:
@@ -590,7 +609,7 @@ def is_readable(path: Path) -> bool:
     Access ファイル等)。開いてテーブル一覧が引けるかで判定する。
     """
     try:
-        with _connect(Path(path), read_only=True) as conn:
+        with _opened(Path(path), read_only=True) as conn:
             conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
         return True
     except (SourceError, sqlite3.Error):
@@ -708,7 +727,7 @@ def probe(path: Path) -> Probe:
 def list_tables(path: Path) -> list[str]:
     """このファイルにあるテーブルの一覧(sqlite の内部表は除く)。"""
     try:
-        with _connect(Path(path), read_only=True) as conn:
+        with _opened(Path(path), read_only=True) as conn:
             with identifiers_as_utf8(conn):
                 rows = conn.execute(
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
@@ -722,7 +741,7 @@ def list_tables(path: Path) -> list[str]:
 def columns(path: Path, table: str) -> list[str]:
     """テーブルの列名。取り込み前に「その列があるか」を見るのに使う。"""
     try:
-        with _connect(Path(path), read_only=True) as conn:
+        with _opened(Path(path), read_only=True) as conn:
             with identifiers_as_utf8(conn):
                 rows = conn.execute(
                     f"PRAGMA table_info({quote_identifier(table)})").fetchall()
@@ -740,7 +759,7 @@ def read_query(path: Path, sql: str, params: Iterable[Any] = ()) -> list[dict[st
     """
     path = Path(path)
     try:
-        with _connect(path, read_only=True) as conn:
+        with _opened(path, read_only=True) as conn:
             cursor = conn.execute(sql, tuple(params))
             names = [d[0] for d in cursor.description or []]
             return [dict(zip(names, row)) for row in cursor.fetchall()]
@@ -759,7 +778,7 @@ def table_counts(path: Path) -> dict[str, int]:
     path = Path(path)
     counts: dict[str, int] = {}
     try:
-        with _connect(path, read_only=True) as conn:
+        with _opened(path, read_only=True) as conn:
             with identifiers_as_utf8(conn):
                 names = [r["name"] for r in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
@@ -787,7 +806,7 @@ def read_table(path: Path, table: str) -> list[dict[str, Any]]:
     """
     path = Path(path)
     try:
-        with _connect(path, read_only=True) as conn:
+        with _opened(path, read_only=True) as conn:
             cursor = conn.execute(
                 f"SELECT * FROM {quote_identifier(table)}")
             names = [d[0] for d in cursor.description]

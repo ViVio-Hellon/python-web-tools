@@ -762,7 +762,9 @@ class ListenDiagnosisTests(unittest.TestCase):
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.bind(("127.0.0.1", 0))
-            listener.listen(1)
+            # 待ち行列は多めに。1だと、応答を待つ問い合わせが席を埋め、
+            # Windows は次の「繋がるか」を断る(TCP が通らない扱いになる)
+            listener.listen(16)
             port = listener.getsockname()[1]
 
             saved = os.environ.get("http_proxy")

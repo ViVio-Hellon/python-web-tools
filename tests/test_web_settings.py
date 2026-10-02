@@ -1472,7 +1472,9 @@ class RepoRootTests(unittest.TestCase):
         try:
             out = subprocess.run(
                 ["git", "-c", "core.quotepath=false", "ls-files"],
-                cwd=root, capture_output=True, text=True, check=True).stdout
+                cwd=root, capture_output=True, text=True, check=True,
+                # git は UTF-8 で返す(Windows の既定の文字コードでは日本語の名前を読めない)
+                encoding="utf-8").stdout
         except (OSError, subprocess.CalledProcessError):
             self.skipTest("git の作業フォルダではありません")
         tracked = {line.split("/")[0] for line in out.splitlines() if line}

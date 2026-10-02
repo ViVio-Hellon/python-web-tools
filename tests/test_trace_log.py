@@ -38,10 +38,20 @@ PW = config.ADMIN_PASSWORD
 log = logging_utils.get_logger("試験.trace")
 
 
+def _close_log_files() -> None:
+    """日ごとのログファイルを閉じる(次の1行で開き直される)。"""
+    for handler in logging.getLogger("packaging_tool").handlers:
+        if isinstance(handler, logging_utils.DailyFileHandler):
+            handler.close()
+
+
 class TraceTestCase(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        # **一時フォルダを片付ける前に、ログのファイルを閉じる**(後に積んだものが
+        # 先に走る)。Windows は開いているファイルを消せない
+        self.addCleanup(_close_log_files)
         self.root = Path(tmp.name)
         self.default = self.root / "既定"
         self.default.mkdir()

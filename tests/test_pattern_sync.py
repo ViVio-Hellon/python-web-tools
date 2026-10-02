@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 import sys
 import tempfile
 import unittest
@@ -47,7 +48,9 @@ class SyncTestCase(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = Path(tmp.name) / "梱包資材マスタ.sqlite3"
-        with sqlite3.connect(self.path) as raw:
+        # **閉じる。** `with sqlite3.connect()` は閉じないので、Windows では
+        # 一時フォルダを片付けるときに「使用中」で消せなかった
+        with closing(sqlite3.connect(self.path)) as raw, raw:
             raw.execute("CREATE TABLE PalletMaster (管理番号 INTEGER)")
         self.a = terminal()
         self.b = terminal()
@@ -56,7 +59,7 @@ class SyncTestCase(unittest.TestCase):
         return sync.push_to(conn, self.path)
 
     def source(self, sql, params=()) -> list:
-        with sqlite3.connect(self.path) as raw:
+        with closing(sqlite3.connect(self.path)) as raw, raw:
             return raw.execute(sql, params).fetchall()
 
 
@@ -93,7 +96,7 @@ class PushImportTests(SyncTestCase):
 
     def test_明細が入らなければヘッダも入れない(self) -> None:
         """1組まとめて。取り込み元にヘッダだけ残る、を作らない。"""
-        with sqlite3.connect(self.path) as raw:
+        with closing(sqlite3.connect(self.path)) as raw, raw:
             # 列の足りない明細の表(誰かが先に違う形で作った)
             raw.execute(f'CREATE TABLE "{config.TBL_PT_PLACE}" '
                         "(明細ID INTEGER PRIMARY KEY, 実績ID INTEGER)")
@@ -212,7 +215,7 @@ class ImportGateTests(SyncTestCase):
         save(self.a)
         self.push(self.a)
         self.path.unlink()
-        with sqlite3.connect(self.path) as raw:
+        with closing(sqlite3.connect(self.path)) as raw, raw:
             raw.execute("CREATE TABLE PalletMaster (管理番号 INTEGER)")
         outcome = sync.import_from(self.a, self.path)
         self.assertTrue(outcome.missing)
@@ -224,7 +227,7 @@ class ImportGateTests(SyncTestCase):
 class VbaTableTests(SyncTestCase):
     def test_VBAが作った表に送信IDが無ければ足す(self) -> None:
         cols = ", ".join(f'"{n}" {t}' for n, t in ps.HEADER_COLUMNS if n != "送信ID")
-        with sqlite3.connect(self.path) as raw:
+        with closing(sqlite3.connect(self.path)) as raw, raw:
             raw.execute(f'CREATE TABLE "{H}" (実績ID INTEGER PRIMARY KEY AUTOINCREMENT, {cols})')
         save(self.a)
         self.assertEqual(self.push(self.a).sent, 1)
@@ -293,7 +296,7 @@ class VbaSourceTests(SyncTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        with sqlite3.connect(self.path) as raw:
+        with closing(sqlite3.connect(self.path)) as raw, raw:
             for sql in VBA_SCHEMA:
                 raw.execute(sql)
             raw.execute(f'INSERT INTO "{H}" VALUES (1, 2, "2026-09-23T17:54:13",'

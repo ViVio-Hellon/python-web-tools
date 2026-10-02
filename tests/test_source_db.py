@@ -22,7 +22,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest import mock
 from urllib.parse import urlsplit
 
@@ -72,7 +72,8 @@ class UncUriTests(unittest.TestCase):
         """ドライブ名の道・Linux の道は今までどおり。"""
         self.assertEqual(source_db.to_uri(PureWindowsPath(r"C:\data\x.sqlite3")),
                          "file:///C:/data/x.sqlite3")
-        self.assertEqual(source_db.to_uri(Path("/tmp/x.sqlite3")),
+        # Linux の道は Linux の形で渡す(Windows で `Path("/tmp/…")` はドライブが無く URI にできない)
+        self.assertEqual(source_db.to_uri(PurePosixPath("/tmp/x.sqlite3")),
                          "file:///tmp/x.sqlite3")
 
 

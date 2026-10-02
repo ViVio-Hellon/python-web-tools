@@ -788,7 +788,7 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
 def _column_types(path: Path, table: str) -> dict[str, str]:
     """列の宣言した型(`PRAGMA table_info` の type)。型の無い列は空。"""
     try:
-        with source_db._connect(Path(path), read_only=True) as conn:
+        with source_db._opened(Path(path), read_only=True) as conn:
             with source_db.identifiers_as_utf8(conn):
                 rows = conn.execute(
                     f"PRAGMA table_info({source_db.quote_identifier(table)})").fetchall()
