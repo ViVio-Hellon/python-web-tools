@@ -64,6 +64,18 @@ def browse():
     return jsonify(master_presenter.to_dict(view))
 
 
+@bp.get("/api/master/access")
+def access():
+    """**直せるかどうかだけ**(`?table=`)。共有フォルダを読まないので一瞬で返る。
+
+    認証が変わったとき、画面はまずこれで「直せる/直せない」を描き直し、
+    表の中身の読み直し(共有を読むので1秒以上かかることがある)は後から行う
+    (現場の声:「パスワード認証してもマスタ編集がすぐできない」)。
+    """
+    allowed, why = master_admin.can_edit(get_db(), request.args.get("table", ""))
+    return jsonify({"can_edit": bool(allowed), "edit_why": why})
+
+
 @bp.post("/api/master/row/save")
 def save_row():
     """1行を書き換える。`{"table":…, "key":…, "values":{…}, "was":{…}}`

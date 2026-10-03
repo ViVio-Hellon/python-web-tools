@@ -319,6 +319,19 @@ CREATE TABLE IF NOT EXISTS 発注コメント既読 (
     コメントID  TEXT PRIMARY KEY
 );
 
+-- 発注コメント閲覧: **相手がコメントを見たか**(`order_comments.mark_read`)。
+-- 相手が書いたコメントを開いたとき、1件につき1行足す。全端末で共有する
+-- (書き戻しで送り、取り込みで受け取る)。書いた人の画面に
+-- 「倉庫 ○○ が 10/03 14:22 に見ました」/「相手はまだ見ていません」を出す
+CREATE TABLE IF NOT EXISTS 発注コメント閲覧 (
+    管理番号    INTEGER PRIMARY KEY AUTOINCREMENT,
+    コメントID  TEXT NOT NULL DEFAULT '',
+    見た端末    TEXT NOT NULL DEFAULT '',
+    見た側      TEXT NOT NULL DEFAULT '',
+    見た日時    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_order_comment_seen ON 発注コメント閲覧(コメントID);
+
 CREATE INDEX IF NOT EXISTS idx_warehouse_order_lotno ON 資材パレット注文管理(LotNo);
 CREATE INDEX IF NOT EXISTS idx_warehouse_order_status ON 資材パレット注文管理(取り消し済, 確認済み);
 

@@ -51,6 +51,10 @@ class RecordsMixin:
         # 変えられるようになったので、ここで `config` を直接読まない
         from . import admin_password
         ok = admin_password.verify(password)
+        if bool(getattr(self, "admin", False)) != ok:
+            # **変わったことを知らせる**(開いているほかの画面が描き直す)
+            from . import auth_state
+            auth_state.changed()
         self.admin = ok
         if not ok:
             log.warning("管理者認証に失敗しました")

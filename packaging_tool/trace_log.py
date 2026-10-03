@@ -432,3 +432,109 @@ def describe_input(value: Any) -> str:
     if len(text) > INPUT_LIMIT:
         text = text[:INPUT_LIMIT] + f"…({len(text)}文字)"
     return text
+
+
+# ==================================================================
+# 時間のかかった操作(「毎回なのか、初回だけなのか」を、その端末のログで答える)
+# ==================================================================
+# 現場の声:「倉庫連携の読み込みに時間がかかった。毎回なのか初回だけなのか知りたい」。
+# 操作の足跡(`操作 GET /warehouse → 200 (1234ms)`)は VER3.6.0 から全部残っている。
+# それを読み、遅かった操作ごとに**起動から何秒後か・その画面を何回目に開いたときか**
+# を添える。1回目だけ遅いなら初回だけ、2回目以降も遅いなら毎回。
+
+SLOW_MS = 1000
+
+_OP_LINE = re.compile(
+    r"^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \| \S+ \| \w+ \| (?:\[\w+\] )?"
+    r"(?:操作|断り) (GET|POST) (\S+) → (\d+)[^(]*\((\d+)ms\)")
+_START_LINE = re.compile(r"^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \| .* \| 起動: 版 ")
+
+# 経路 → 画面での呼び名(前方一致。長いものから)
+_LABELS: tuple[tuple[str, str], ...] = (
+    ("/api/warehouse/refresh", "倉庫連携: 取り込み元を見る(読み直す・見張り)"),
+    ("/api/warehouse/comments", "倉庫連携: コメントを開く"),
+    ("/api/warehouse", "倉庫連携の操作"),
+    ("/warehouse", "倉庫連携の画面"),
+    ("/api/selection", "資材選択の操作"),
+    ("/selection", "資材選択の画面"),
+    ("/api/inventory", "簡易在庫の操作"),
+    ("/inventory", "簡易在庫の画面"),
+    ("/api/layout", "棚検索の操作"),
+    ("/layout", "棚検索の画面"),
+    ("/api/lot", "ロット検索の操作"),
+    ("/lot", "ロット検索の画面"),
+    ("/api/master", "マスタ管理"),
+    ("/api/settings", "設定の操作"),
+    ("/settings", "設定の画面"),
+    ("/report", "帳票"),
+)
+
+
+def _label(path: str) -> str:
+    for prefix, label in _LABELS:
+        if path == prefix or path.startswith(prefix + "/") or path.startswith(prefix + "?"):
+            return label
+    return path
+
+
+def slow_operations(day: Optional[date] = None, *, threshold_ms: int = SLOW_MS,
+                    limit: int = 200) -> dict[str, Any]:
+    """その日の、時間のかかった操作と、画面ごとのまとめ。"""
+    day = day or date.today()
+    path = config.log_dir() / f"packaging_tool_{day:%Y%m%d}.log"
+    items: list[dict[str, Any]] = []
+    totals: dict[str, dict[str, Any]] = {}
+    started: Optional[datetime] = None
+    nth: dict[str, int] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        found = _START_LINE.match(line)
+        if found:
+            started = datetime.strptime(found.group(1), "%Y/%m/%d %H:%M:%S")
+            nth = {}
+            continue
+        found = _OP_LINE.match(line)
+        if not found:
+            continue
+        at_text, method, target, status, ms = found.groups()
+        route = target.split("?", 1)[0]
+        key = f"{method} {route}"
+        nth[key] = nth.get(key, 0) + 1
+        at = datetime.strptime(at_text, "%Y/%m/%d %H:%M:%S")
+        total = totals.setdefault(key, {"label": _label(route), "count": 0, "slow": 0,
+                                        "slow_nth": [], "max_ms": 0})
+        total["count"] += 1
+        took = int(ms)
+        total["max_ms"] = max(total["max_ms"], took)
+        if took < threshold_ms:
+            continue
+        total["slow"] += 1
+        total["slow_nth"].append(nth[key])
+        items.append({
+            "at": at_text[11:], "label": _label(route), "what": f"{method} {target[:120]}",
+            "ms": took, "status": int(status), "nth": nth[key],
+            "since_start": int((at - started).total_seconds()) if started else None,
+        })
+    summary = []
+    for key, total in totals.items():
+        if not total["slow"]:
+            continue
+        first_only = all(n == 1 for n in total["slow_nth"])
+        summary.append({
+            "label": total["label"], "what": key, "count": total["count"],
+            "slow": total["slow"], "max_ms": total["max_ms"], "first_only": first_only,
+            "text": (f"{total['label']}: 今日 {total['count']}回のうち "
+                     f"{total['slow']}回が{threshold_ms // 1000}秒以上"
+                     f"(いちばん長くて {total['max_ms'] / 1000:.1f}秒)── "
+                     + ("起動して最初の1回だけです"
+                        if first_only else
+                        "2回目以降にもあります(初回だけではありません)")),
+        })
+    summary.sort(key=lambda s: -s["max_ms"])
+    items.reverse()                                 # 新しい順
+    return {"day": f"{day:%Y/%m/%d}", "threshold_ms": threshold_ms,
+            "items": items[:limit], "summary": summary,
+            "found_log": bool(lines)}

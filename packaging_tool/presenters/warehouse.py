@@ -228,6 +228,8 @@ class OrderRow:
     # コメント(`order_comments`)。件数・この端末で未読の数・いちばん新しい1件
     comments: int = 0
     unread: int = 0
+    # 自分が書いたのに、相手がまだ見ていないもの
+    unseen_mine: int = 0
     latest_comment: str = ""
     # まだ書けるか(未確認のあいだだけ)。書けないなら理由
     comment_why: str = ""
@@ -311,6 +313,7 @@ def _row(item: dict, *, is_material: bool, terminal: str = "",
     return OrderRow(
         comments=note.count if note else 0,
         unread=note.unread if note else 0,
+        unseen_mine=note.unseen_mine if note else 0,
         latest_comment=note.latest if note else "",
         comment_why=order_comments.closed_why(item),
         mgr_no=item.get("管理番号", 0),
@@ -454,6 +457,7 @@ def row_dict(row: OrderRow) -> dict[str, Any]:
         "why": row.why,
         "comments": row.comments,
         "unread": row.unread,
+        "unseen_mine": row.unseen_mine,
         "latest_comment": row.latest_comment,
         "comment_why": row.comment_why,
         "lot_no": row.lot_no,

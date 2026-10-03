@@ -73,6 +73,11 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   access_table=config.TBL_ORDER_COMMENT,
                   key_column="管理番号",
                   number_column="管理番号"),
+    # 相手がコメントを見たか(誰が・いつ)。足すだけ
+    WriteBackSpec(sqlite_table=config.TBL_ORDER_COMMENT_SEEN,
+                  access_table=config.TBL_ORDER_COMMENT_SEEN,
+                  key_column="管理番号",
+                  number_column="管理番号"),
 ]
 
 # 共有にまだ無ければ、**最初に送る端末が作る**表。
@@ -98,6 +103,11 @@ SHARED_TABLE_DDL: dict[str, str] = {
         " 発注キー TEXT NOT NULL DEFAULT '', コメントID TEXT NOT NULL DEFAULT '',"
         " 書いた端末 TEXT NOT NULL DEFAULT '', 書いた側 TEXT NOT NULL DEFAULT '',"
         " 本文 TEXT NOT NULL DEFAULT '', 書いた日時 TEXT NOT NULL DEFAULT '')"),
+    config.TBL_ORDER_COMMENT_SEEN: (
+        f'CREATE TABLE IF NOT EXISTS "{config.TBL_ORDER_COMMENT_SEEN}" ('
+        " 管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " コメントID TEXT NOT NULL DEFAULT '', 見た端末 TEXT NOT NULL DEFAULT '',"
+        " 見た側 TEXT NOT NULL DEFAULT '', 見た日時 TEXT NOT NULL DEFAULT '')"),
 }
 
 

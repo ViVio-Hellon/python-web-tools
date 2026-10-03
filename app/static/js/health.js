@@ -6,6 +6,7 @@
   黙って古い表示を出し続けるほうが危険。
 */
 
+import * as authsync from "./authsync.js";
 import { api } from "./api.js";
 import * as nav from "./nav.js";
 import * as screen from "./screen.js";
@@ -70,6 +71,8 @@ async function beat() {
     if (body && body.screen_ok === false) screen.showTaken();
     else if (body && body.screen_ok === true) screen.clearTaken();
     if (body && Array.isArray(body.modes)) followModes(body.modes);
+    // 管理者認証が変わっていたら、認証に関わるところを描き直させる
+    if (body && body.auth) authsync.announce(body.auth);
     // 保存していない図。タブを閉じるときに聞くため(`unsaved.js`)
     if (body && body.unsaved && typeof body.unsaved === "object") {
       unsaved.fromServer(body.unsaved);

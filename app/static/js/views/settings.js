@@ -9,6 +9,7 @@
   片方だけ古い、が起こる(設計.md §1)。ここは受け取る側に回る。
 */
 
+import * as authsync from "../authsync.js";
 import { openWindow } from "../desktop.js";
 import { api, tokenUrl } from "../api.js";
 import { onLeave } from "../nav.js";
@@ -234,8 +235,7 @@ function renderStatus(state) {
   // マスタ編集の認証。プロセスに1つの状態なので、他画面で通しても
   // ここに反映される
   if (el.masterAuthState) {
-    el.masterAuthState.className = `st st--${state.admin_authenticated ? "ok" : "warn"}`;
-    el.masterAuthState.textContent = state.admin_authenticated ? "認証済み" : "未認証";
+    showAuthState(Boolean(state.admin_authenticated));
   }
   for (const btn of document.querySelectorAll("[data-import]")) {
     btn.disabled = !state.can_import;
@@ -442,6 +442,11 @@ export function start(state, jobState, masterFrame) {
   // 開いたときに一覧を読まない)
   trace.start();
   watchMasterTab();
+  // 認証が変わったら(この画面で通した・ほかで通した)、認証に関わる所を描き直す
+  authsync.onChange(() => {
+    refreshStatus();
+    master.authChanged();
+  });
 
   for (const btn of document.querySelectorAll("[data-import]")) {
     btn.addEventListener("click", () =>
@@ -652,6 +657,12 @@ function startDistribution() {
    状態なので、ここでは `admin.authenticated` だけを見て、設定側の
    表示は取り直す(2つの画面で同じ事実を別々に持たない)。
    ================================================================ */
+function showAuthState(authenticated) {
+  if (!el.masterAuthState) return;
+  el.masterAuthState.className = `st st--${authenticated ? "ok" : "warn"}`;
+  el.masterAuthState.textContent = authenticated ? "認証済み" : "未認証";
+}
+
 function startMasterAuth() {
   if (!el.masterAuthBtn) return;
 
@@ -663,6 +674,11 @@ function startMasterAuth() {
       const res = await api.post("/api/settings/admin-auth",
         { password: el.masterAuthPass.value });
       el.masterAuthPass.value = "";
+      // **その場で全部に伝える**(マスタ管理の「直せる」・表の作り直し など)
+      authsync.announce(res.auth);
+      // 隣の「認証済み/未認証」も応答から直接描く。状態の取り直し(共有の
+      // 表を数えるので1秒ほどかかる)を待つと、通ったのに「未認証」が残って見える
+      showAuthState(Boolean(res.admin && res.admin.authenticated));
       if (res.admin && res.admin.authenticated) {
         toast("認証しました", "ok");
       } else {

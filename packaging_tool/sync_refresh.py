@@ -126,6 +126,10 @@ def refresh_orders(conn: sqlite3.Connection,
     imported.imported.pop(config.TBL_BOARD_USAGE, None)
     # コメントは入れ直すが、発注の件数には数えない
     comments = imported.imported.pop(config.TBL_ORDER_COMMENT, None)
+    # 「相手が見た」も同じ(届いたら画面を出し直して「見ました」を出す)
+    seen = imported.imported.pop(config.TBL_ORDER_COMMENT_SEEN, None)
+    if comments is None and seen is not None:
+        comments = seen
     stock = imported.imported.pop(config.TBL_PALLET_MASTER, None)
     if stock:
         # 取り込みと同じく、入れ直したら適合範囲を計算し直す

@@ -418,7 +418,10 @@ def admin_auth():
     body = request.get_json(silent=True) or {}
     session = selection_session.get_session(get_db())
     result = session.authenticate(str(body.get("password", "")))
-    payload = {"admin": {"authenticated": bool(session.admin)}, "message": result.message}
+    from packaging_tool import auth_state
+    payload = {"admin": {"authenticated": bool(session.admin)}, "message": result.message,
+               # 画面はこれを見て、認証に関わるところをその場で描き直す
+               "auth": auth_state.snapshot()}
     if result.ok:
         return jsonify(payload)
     return jsonify({**payload, "error": {"code": "denied", "message": result.message}}), 422

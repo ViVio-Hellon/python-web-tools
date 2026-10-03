@@ -49,6 +49,12 @@ def error_detail(ref: str):
     return jsonify(found)
 
 
+@bp.get("/api/trace/slow")
+def slow():
+    """今日の、時間のかかった操作(起動から何秒後・何回目か付き)。"""
+    return jsonify(trace_log.slow_operations())
+
+
 @bp.post("/api/trace/log-dir")
 def set_log_dir():
     body = request.get_json(silent=True) or {}

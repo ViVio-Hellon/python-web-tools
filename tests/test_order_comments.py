@@ -79,6 +79,69 @@ class ExchangeTests(CommentTestBase):
         self.assertEqual(self.unread(self.b, "NEW", "SOUKO"), 0)
 
 
+class SeenTests(CommentTestBase):
+    """**相手がコメントを見たか**(現場の声:「見たか見てないかを分かるようにしてほしい」)。
+
+    倉庫(B)が開いたら「見た」が共有へ届き、書いた現場(A)の画面に出る。
+    """
+
+    def mine(self, conn, lot: str, who: str) -> list:
+        return [c for c in oc.comments_for(conn, self.local_no(conn, lot), terminal=who) if c.mine]
+
+    def unseen(self, conn, lot: str, who: str) -> int:
+        row = conn.execute(f'SELECT * FROM "{ORDER}" WHERE LotNo = ?', (lot,)).fetchone()
+        got = oc.summaries(conn, terminal=who).get(oc.order_key(row))
+        return got.unseen_mine if got else 0
+
+    def test_倉庫が開くと書いた現場に見ましたが出る(self):
+        self.order("NEW")
+        self.write(self.a, "NEW", "至急でお願いします", "GENBA-1", oc.SIDE_FIELD)
+        self.send(self.a)
+        [c] = self.mine(self.a, "NEW", "GENBA-1")
+        self.assertEqual(oc.seen_text(c), "相手はまだ見ていません")
+        self.assertEqual(self.unseen(self.a, "NEW", "GENBA-1"), 1)
+
+        self.refresh(self.b)
+        added = oc.mark_read(self.b, self.local_no(self.b, "NEW"),
+                             terminal="SOUKO", side=oc.SIDE_MATERIAL)
+        self.assertEqual(added, 1)
+        self.send(self.b)
+        self.refresh(self.a)
+        [c] = self.mine(self.a, "NEW", "GENBA-1")
+        self.assertRegex(oc.seen_text(c), r"^倉庫 SOUKO が \d\d/\d\d \d\d:\d\d に見ました$")
+        self.assertEqual(self.unseen(self.a, "NEW", "GENBA-1"), 0)
+        self.assertEqual(oc.to_dict(c)["seen_by"][0]["terminal"], "SOUKO")
+
+    def test_同じ側や自分が開いても相手が見たことにしない(self):
+        self.order("NEW")
+        self.write(self.a, "NEW", "よろしく", "GENBA-1", oc.SIDE_FIELD)
+        no = self.local_no(self.a, "NEW")
+        self.assertEqual(oc.mark_read(self.a, no, terminal="GENBA-1", side=oc.SIDE_FIELD), 0)
+        self.assertEqual(oc.mark_read(self.a, no, terminal="GENBA-2", side=oc.SIDE_FIELD), 0)
+        [c] = self.mine(self.a, "NEW", "GENBA-1")
+        self.assertEqual(c.seen_by, [])
+
+    def test_何度開いても見たは1回だけ残す(self):
+        self.order("NEW")
+        self.write(self.a, "NEW", "よろしく", "GENBA-1", oc.SIDE_FIELD)
+        self.send(self.a)
+        self.refresh(self.b)
+        no = self.local_no(self.b, "NEW")
+        self.assertEqual(oc.mark_read(self.b, no, terminal="SOUKO", side=oc.SIDE_MATERIAL), 1)
+        self.assertEqual(oc.mark_read(self.b, no, terminal="SOUKO", side=oc.SIDE_MATERIAL), 0)
+
+    def test_取り込みをまたいでも見たは消えない(self):
+        self.order("NEW")
+        self.write(self.a, "NEW", "よろしく", "GENBA-1", oc.SIDE_FIELD)
+        self.send(self.a)
+        self.refresh(self.b)
+        oc.mark_read(self.b, self.local_no(self.b, "NEW"), terminal="SOUKO", side=oc.SIDE_MATERIAL)
+        self.send(self.b)
+        data_sync.import_master(self.a, self.src)        # 総入れ替え
+        [c] = self.mine(self.a, "NEW", "GENBA-1")
+        self.assertEqual(len(c.seen_by), 1)
+
+
 class ClosedTests(CommentTestBase):
     def test_確認済みの発注には書けないが読める(self):
         self.write(self.a, "L1", "前のひとこと", "GENBA-1", oc.SIDE_FIELD)

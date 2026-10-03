@@ -23,7 +23,8 @@ export function start() {
                     "errEveryoneWrap", "errReload", "errDetailCard", "errDetailTitle", "errFacts",
                     "errRecent", "errOpLines", "errOpId", "errDetail", "errCopy",
                     "logDir", "logDirPassword", "logDirSave", "logDirWhy", "logDirNow",
-                    "logDirSource", "logDirWarn"]) {
+                    "logDirSource", "logDirWarn",
+                    "slowRows", "slowSummary", "slowEmpty", "slowReload"]) {
     el[id] = $(id);
   }
   if (!el.errRows) return;
@@ -39,6 +40,33 @@ export function start() {
   });
   el.errCopy.addEventListener("click", copyWhyWhy);
   el.logDirSave.addEventListener("click", saveLogDir);
+  if (el.slowReload) el.slowReload.addEventListener("click", loadSlow);
+}
+
+/** 時間のかかった操作(今日)。**数えるのはサーバ**(`trace_log.slow_operations`)。 */
+async function loadSlow() {
+  if (!el.slowRows) return;
+  let body;
+  try {
+    body = await api.get("/api/trace/slow");
+  } catch (err) {
+    toastError(err);
+    return;
+  }
+  el.slowSummary.replaceChildren(...(body.summary || []).map((s) => {
+    const li = document.createElement("li");
+    li.textContent = s.text;
+    return li;
+  }));
+  el.slowRows.replaceChildren(...(body.items || []).map((it) => {
+    const tr = document.createElement("tr");
+    tr.append(cell(it.at), cell(`${it.label}(${it.what})`),
+              cell(`${(it.ms / 1000).toFixed(1)}秒`, "n"),
+              cell(it.since_start === null ? "" : `${it.since_start}秒後`, "n"),
+              cell(`${it.nth}回目`, "n"));
+    return tr;
+  }));
+  el.slowEmpty.hidden = (body.items || []).length > 0;
 }
 
 /** 面が開かれた。**最初の1回だけ**読む(読み直しはボタンで)。 */
@@ -46,6 +74,7 @@ export function opened() {
   if (loaded || !el.errRows) return;
   loaded = true;
   load();
+  loadSlow();
 }
 
 async function load() {

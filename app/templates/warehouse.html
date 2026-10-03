@@ -264,6 +264,11 @@
   .comments__write { display:flex; gap:8px; align-items:flex-end; margin-top:8px; }
   .comments__write textarea { flex:1; resize:vertical; }
   .btn .newmark { color:var(--warn-fg); font-weight:bold; margin-left:2px; }
+  /* 自分が書いたのに相手がまだ見ていない(「新」=自分が見ていない とは別) */
+  .btn .waitmark { color:var(--muted); margin-left:4px; }
+  .comments__seen { font-size:.8em; margin-top:2px; }
+  .comments__seen[data-seen="yes"] { color:var(--state-ok); }
+  .comments__seen[data-seen="no"] { color:var(--muted); }
   /* 既定は2対。**列の幅で決める**(画面幅ではない) ── 一覧が16列あって
      結果側を広く取っているので、画面が1920でもこの列は 660px しかない。
      4対に詰めると入力欄が 70px になり、LotNo が読めなくなる */

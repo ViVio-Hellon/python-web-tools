@@ -163,6 +163,13 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("本文", "本文", to_text),
         ("書いた日時", "書いた日時", to_text),
     ],
+    # 相手がコメントを見たか。全端末が書き戻しで足していく
+    config.TBL_ORDER_COMMENT_SEEN: [
+        ("コメントID", "コメントID", to_text),
+        ("見た端末", "見た端末", to_text),
+        ("見た側", "見た側", to_text),
+        ("見た日時", "見た日時", to_text),
+    ],
     "CornerboardMaster": [
         ("アングル丈", "アングル丈", to_int),
         ("データラベル", "データラベル", to_text),
@@ -403,7 +410,8 @@ BLANK_IS_MISSING: dict[str, tuple[str, ...]] = {
 # (`sync_writeback.ensure_shared_tables`)。作られるまでは取り込まない
 # (手元の記録はそのまま残る)
 OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_BOARD_USAGE,
-                                               config.TBL_ORDER_COMMENT})
+                                               config.TBL_ORDER_COMMENT,
+                                               config.TBL_ORDER_COMMENT_SEEN})
                                    | frozenset(THRESHOLD_TABLES))
 
 # **取り込み元に無くても知らせない列**(表 → 取り込み元の列名)。

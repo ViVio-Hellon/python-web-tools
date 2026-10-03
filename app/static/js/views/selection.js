@@ -11,6 +11,7 @@
   押させる条件が別々に育つ。
 */
 
+import * as authsync from "../authsync.js";
 import { openWindow } from "../desktop.js";
 import { api, tokenUrl } from "../api.js";
 import * as nav from "../nav.js";
@@ -679,6 +680,14 @@ async function handoff(path) {
 }
 
 export function start(initial) {
+  // 管理者認証が変わったら(設定画面で通した等)、実績の保存などをその場で描き直す
+  authsync.onChange(async () => {
+    try {
+      render(await api.get("/api/selection/state"));
+    } catch {
+      // 描き直せなくても次の操作で最新になる
+    }
+  });
   for (const id of ["lotCaption", "banner", "listNote", "palletRows", "rowNote",
                     "palWidth", "palLength", "prodWidth", "prodLength",
                     "sizeStatus", "decideWhy", "productFrom", "exOnlyWhy",

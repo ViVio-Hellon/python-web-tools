@@ -305,6 +305,54 @@ class ReadTests(TraceTestCase):
         self.assertEqual(len(trace_log.list_errors()), 1)
 
 
+class SlowOperationTests(TraceTestCase):
+    """時間のかかった操作(現場の声:「倉庫連携の読み込みに時間がかかった。毎回か初回だけか」)。"""
+
+    def write_log(self, lines: list[str]) -> None:
+        logging_utils.log_path_for(date(2026, 10, 3)).write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_初回だけ遅いのか毎回遅いのかを言い分ける(self) -> None:
+        start = "2026/10/03 08:00:00 | packaging_tool.app | INFO | 起動: 版 4.0.0 / 手元のDB x"
+        op = "2026/10/03 {t} | packaging_tool.app | INFO | [ab12cd] 操作 GET {p} → 200 ({ms}ms)"
+        self.write_log([
+            start,
+            op.format(t="08:00:05", p="/warehouse", ms=4200),     # 起動直後の1回目が遅い
+            op.format(t="08:05:00", p="/warehouse", ms=40),
+            op.format(t="08:10:00", p="/warehouse", ms=35),
+            op.format(t="08:20:00", p="/api/warehouse/refresh?only_if_changed=1", ms=2500),
+            op.format(t="08:21:00", p="/api/warehouse/refresh?only_if_changed=1", ms=6),
+            op.format(t="08:30:00", p="/api/warehouse/refresh?only_if_changed=1", ms=3100),
+            "2026/10/03 09:00:00 | packaging_tool.app | WARNING | [ff00ff] 断り POST /api/x → 409 busy「待って」(1500ms)",
+        ])
+        got = trace_log.slow_operations(date(2026, 10, 3))
+        texts = {s["label"]: s for s in got["summary"]}
+        page = texts["倉庫連携の画面"]
+        self.assertTrue(page["first_only"])
+        self.assertIn("今日 3回のうち 1回が1秒以上", page["text"])
+        self.assertIn("起動して最初の1回だけ", page["text"])
+        watch = texts["倉庫連携: 取り込み元を見る(読み直す・見張り)"]
+        self.assertFalse(watch["first_only"])
+        self.assertIn("2回目以降にもあります", watch["text"])
+        newest = got["items"][0]
+        self.assertEqual((newest["at"], newest["ms"]), ("09:00:00", 1500))
+        first = [i for i in got["items"] if i["what"] == "GET /warehouse"][0]
+        self.assertEqual((first["nth"], first["since_start"]), (1, 5))
+
+    def test_起動し直したら数え直す(self) -> None:
+        op = "2026/10/03 {t} | packaging_tool.app | INFO | [ab12cd] 操作 GET /warehouse → 200 ({ms}ms)"
+        start = "2026/10/03 {t} | packaging_tool.app | INFO | 起動: 版 4.0.0"
+        self.write_log([start.format(t="08:00:00"), op.format(t="08:00:03", ms=3000),
+                        start.format(t="13:00:00"), op.format(t="13:00:04", ms=3500)])
+        got = trace_log.slow_operations(date(2026, 10, 3))
+        self.assertEqual([i["nth"] for i in got["items"]], [1, 1])
+        self.assertTrue(got["summary"][0]["first_only"])
+
+    def test_ログが無い日は空(self) -> None:
+        got = trace_log.slow_operations(date(2020, 1, 1))
+        self.assertEqual((got["items"], got["summary"], got["found_log"]), ([], [], False))
+
+
 class MaskTests(unittest.TestCase):
     def test_パスワードは伏せ_長いものは縮める(self) -> None:
         text = trace_log.describe_input({"password": "秘密", "admin_pw": "x",

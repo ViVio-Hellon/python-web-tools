@@ -355,7 +355,11 @@ def comments():
                                   "message": "対象が指定されていません"}}), 400
     conn = get_db()
     body = _comments_body(conn, mgr_no)
-    order_comments.mark_read(conn, mgr_no)
+    # 相手のコメントを初めて開いたなら「見た」を残し、**すぐ共有へ送る**
+    # (書いた人の画面に「見ました」が出るまでを短くする)
+    if order_comments.mark_read(conn, mgr_no, terminal=svc.this_terminal(),
+                                side=_side()):
+        data_sync.write_back_in_background()
     return jsonify(body)
 
 
@@ -384,7 +388,8 @@ def comment():
     if not result.ok:
         return jsonify(_comments_body(conn, mgr_no, error={
             "code": "rejected", "message": result.message})), 422
-    order_comments.mark_read(conn, mgr_no)
+    # 返事を書いた = 相手のコメントも見ている
+    order_comments.mark_read(conn, mgr_no, terminal=svc.this_terminal(), side=_side())
     # 相手に届けるのが目的なので、書いた直後に送りにいく(画面には出さない)
     data_sync.write_back_in_background()
     return jsonify(_comments_body(conn, mgr_no, message=result.message))

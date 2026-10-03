@@ -18,6 +18,13 @@
 相手(自分の端末以外)が書いたもので、この端末でまだ開いていないもの。
 どれを読んだかは端末ごとの表(`発注コメント既読`)に `コメントID` で残す。
 共有へは送らない ── 読んだかどうかは人ごと(端末ごと)の話。
+
+【相手が見たか】(現場の声:「コメントを見たか見てないかを分かるようにしてほしい」)
+相手(現場⇔倉庫)が書いたコメントを開いたら、`発注コメント閲覧` に「誰が・
+いつ見たか」を1行足して**全端末で共有する**。書いた人の画面には、自分の
+コメントごとに「倉庫 ○○ が 10/03 14:22 に見ました」/「相手はまだ見ていません」
+を出す。**同じ側(現場どうし)が開いても「相手が見た」にはしない** ── 知りたいのは
+やり取りの相手に届いたかどうか。
 """
 from __future__ import annotations
 
@@ -33,6 +40,7 @@ log = get_logger("order_comments")
 
 TABLE = config.TBL_ORDER_COMMENT
 READ_TABLE = config.TBL_ORDER_COMMENT_READ
+SEEN_TABLE = config.TBL_ORDER_COMMENT_SEEN
 ORDER_TABLE = config.TBL_WAREHOUSE_ORDER
 
 # 1件の長さの上限。**やり取りのための欄**で、長い文を置く場所ではない
@@ -51,6 +59,8 @@ class Comment:
     written_at: str
     mine: bool = False
     unread: bool = False
+    # 相手が見た(自分のコメントだけ)。(端末, 側, 日時) の古い順
+    seen_by: list = field(default_factory=list)
 
 
 @dataclass
@@ -60,6 +70,8 @@ class Summary:
     count: int = 0
     unread: int = 0
     latest: str = ""
+    # 自分が書いたのに、相手がまだ見ていないもの
+    unseen_mine: int = 0
 
 
 @dataclass
@@ -115,6 +127,7 @@ def _comments(conn: sqlite3.Connection, key: str, terminal: str) -> list[Comment
     if not key:
         return []
     read = _read_ids(conn)
+    seen = _seen_by(conn)
     rows = conn.execute(
         f"SELECT コメントID, 書いた端末, 書いた側, 本文, 書いた日時 FROM {TABLE}"
         " WHERE 発注キー = ? ORDER BY 書いた日時, 管理番号", (key,)).fetchall()
@@ -123,20 +136,71 @@ def _comments(conn: sqlite3.Connection, key: str, terminal: str) -> list[Comment
         mine = _same(who, terminal)
         out.append(Comment(comment_id=cid, terminal=who, side=side, text=text,
                            written_at=at, mine=mine,
-                           unread=not mine and cid not in read))
+                           unread=not mine and cid not in read,
+                           seen_by=_other_side(seen.get(cid, []), side) if mine else []))
     return out
 
 
-def mark_read(conn: sqlite3.Connection, mgr_no: int) -> None:
-    """その発注のコメントを、この端末で読んだことにする。"""
+def _seen_by(conn: sqlite3.Connection) -> dict[str, list[tuple[str, str, str]]]:
+    """コメントIDごとの「見た」(端末, 側, 日時) の古い順。"""
+    out: dict[str, list[tuple[str, str, str]]] = {}
+    try:
+        rows = conn.execute(
+            f"SELECT コメントID, 見た端末, 見た側, 見た日時 FROM {SEEN_TABLE}"
+            " ORDER BY 見た日時, 管理番号").fetchall()
+    except sqlite3.Error:
+        return out                     # 表がまだ無い(古い手元DB)
+    for cid, who, side, at in rows:
+        out.setdefault(cid, []).append((who, side, at))
+    return out
+
+
+def _other_side(seen: list[tuple[str, str, str]], writer_side: str) -> list[tuple[str, str, str]]:
+    """書いた側と違う側が見たものだけ。同じ端末が2回見ても1つにまとめる。"""
+    out, terminals = [], set()
+    for who, side, at in seen:
+        key = (who or "").strip().casefold()
+        if side == writer_side or key in terminals:
+            continue
+        terminals.add(key)
+        out.append((who, side, at))
+    return out
+
+
+def mark_read(conn: sqlite3.Connection, mgr_no: int, *,
+              terminal: str = "", side: str = "") -> int:
+    """その発注のコメントを、この端末で読んだことにする。
+
+    `terminal` と `side` を渡すと、**相手が書いたコメント**を初めて開いたぶんだけ
+    「見た」を残す(`発注コメント閲覧`。共有へ送る)。戻り値は残した件数
+    (呼び手は 1 件以上なら書き戻しを走らせる)。
+    """
     row = _order(conn, mgr_no)
     if row is None or not order_key(row):
-        return
+        return 0
+    key = order_key(row)
+    added = 0
     with conn:
+        if terminal and side:
+            read = _read_ids(conn)
+            fresh = conn.execute(
+                f"SELECT コメントID, 書いた端末, 書いた側 FROM {TABLE}"
+                " WHERE 発注キー = ? AND コメントID <> ''", (key,)).fetchall()
+            now = db.now_db_string()
+            for cid, who, writer_side in fresh:
+                if cid in read or _same(who, terminal) or writer_side == side:
+                    continue               # 読んだことがある・自分の・同じ側の
+                conn.execute(
+                    f"INSERT INTO {SEEN_TABLE} (コメントID, 見た端末, 見た側, 見た日時)"
+                    " VALUES (?, ?, ?, ?)", (cid, terminal, side, now))
+                added += 1
         conn.execute(
             f"INSERT OR IGNORE INTO {READ_TABLE} (コメントID)"
             f" SELECT コメントID FROM {TABLE} WHERE 発注キー = ? AND コメントID <> ''",
-            (order_key(row),))
+            (key,))
+    if added:
+        log.info("相手のコメントを見ました: 発注キー=%s %s件(%s %s)", key, added, side, terminal)
+    return added
 
 
 def add(conn: sqlite3.Connection, mgr_no: int, text: str, *,
@@ -168,19 +232,23 @@ def add(conn: sqlite3.Connection, mgr_no: int, text: str, *,
 def summaries(conn: sqlite3.Connection, *, terminal: str) -> dict[str, Summary]:
     """発注キーごとのまとめ(件数・未読・いちばん新しい1件)。一覧に添える。"""
     read = _read_ids(conn)
+    seen = _seen_by(conn)
     out: dict[str, Summary] = {}
     try:
         rows = conn.execute(
-            f"SELECT 発注キー, コメントID, 書いた端末, 本文 FROM {TABLE}"
+            f"SELECT 発注キー, コメントID, 書いた端末, 書いた側, 本文 FROM {TABLE}"
             " ORDER BY 書いた日時, 管理番号").fetchall()
     except sqlite3.Error:
         return out                     # 表がまだ無い(古い手元DB)
-    for key, cid, who, text in rows:
+    for key, cid, who, side, text in rows:
         got = out.setdefault(key, Summary())
         got.count += 1
         got.latest = text
-        if not _same(who, terminal) and cid not in read:
-            got.unread += 1
+        if not _same(who, terminal):
+            if cid not in read:
+                got.unread += 1
+        elif not _other_side(seen.get(cid, []), side):
+            got.unseen_mine += 1
     return out
 
 
@@ -202,4 +270,23 @@ def to_dict(comment: Comment) -> dict:
             "side_key": "material" if comment.side == SIDE_MATERIAL else "field",
             "text": comment.text,
             "written_at": comment.written_at, "mine": comment.mine,
-            "unread": comment.unread}
+            "unread": comment.unread,
+            # 自分のコメントだけ: 相手が見たか(文はここで決める。画面で組み立てない)
+            "seen": seen_text(comment) if comment.mine else "",
+            "seen_by": [{"terminal": t, "side": s, "at": a} for t, s, a in comment.seen_by]}
+
+
+def seen_text(comment: Comment) -> str:
+    """「倉庫 SOUKO-1 が 10/03 14:22 に見ました」/「相手はまだ見ていません」。"""
+    if not comment.seen_by:
+        return "相手はまだ見ていません"
+    parts = [f"{side} {who} が {_short_time(at)} に見ました" for who, side, at in comment.seen_by]
+    return "・".join(parts)
+
+
+def _short_time(text: str) -> str:
+    """`2026/10/03 14:22:05` → `10/03 14:22`(年と秒は落とす)。"""
+    text = (text or "").strip()
+    if len(text) >= 16 and text[4] in "/-":
+        return text[5:16].replace("-", "/")
+    return text

@@ -24,6 +24,7 @@ const el = {};
 let view = null;          // サーバが返した最後の状態。**画面の唯一の出どころ**
 let loaded = false;
 let editing = null;       // いま開いている行(足すときは null)
+let authPending = false;  // 1行の窓を開いている間に認証が変わった(閉じたら読み直す)
 
 const IDS = ["mTables", "mMark", "mTitle", "mCan", "mCount", "mQuery", "mFind",
              "mAdd", "mCreate", "mRebuild", "mDrop", "mReload", "mWhy", "mError", "mHead",
@@ -41,6 +42,17 @@ export function start(frame) {
   // 権限は最初の描画で分かっている(共有に触らずに出せる)
   view = frame;
   showWhy();
+
+  // **1行の窓を閉じたら、開いていた印も外す。** 以前は外していなかったので、
+  // 一度でも行を開くと、そのあとの読み直し(取り込みのあと・認証のあと)が
+  // 全部「編集中だから触らない」で止まり、古い一覧のまま残っていた
+  el.mEdit.addEventListener("close", () => {
+    editing = null;
+    if (authPending) {
+      authPending = false;
+      authChanged();
+    }
+  });
 
   el.mFind.addEventListener("click", () => loadKeepSort(view && view.table));
   el.mQuery.addEventListener("keydown", (event) => {
@@ -97,7 +109,42 @@ export function opened() {
  * 内容を、本人の操作でもないもので消さない。
  */
 export function reload() {
-  if (!loaded || editing) return;
+  if (!loaded || dialogOpen()) return;
+  loadKeepSort(view && view.table);
+}
+
+/** 1行の窓(見る・直す・足す)を開いているか。 */
+function dialogOpen() {
+  return Boolean(el.mEdit && el.mEdit.open);
+}
+
+/**
+ * **管理者認証が変わった**(`authsync.js`)。直せるかどうか・「取り込み元に作る」の
+ * 出る出ないは認証で変わるので、その場で読み直す。
+ *
+ * 現場の声:「パスワード認証してもマスタ編集がすぐできない。タブを切り替えて
+ * 戻ってもまだ無い」── 認証の応答を受けても、この面は最初に読んだときの
+ * 「直せない」のまま描き直していなかった。
+ *
+ * 1行の窓を開いているときは、打ちかけを消さないよう閉じたあとに読み直す。
+ * まだ一度も開いていない面は、開いたときに読むので何もしない。
+ */
+export async function authChanged() {
+  if (!el.mTables || !loaded) return;
+  if (dialogOpen()) {
+    authPending = true;
+    return;
+  }
+  // **まず「直せる/直せない」だけを描き直す。** これは認証と権限だけで決まり、
+  // 共有フォルダを読まないので一瞬で返る。表の中身の読み直し(共有を読むので
+  // 1秒以上かかることがある)はそのあと ── 待たせると「認証したのに直せない」に見える
+  try {
+    const table = (view && view.table) || "";
+    const access = await api.get(`/api/master/access?table=${encodeURIComponent(table)}`);
+    if (view) render({ ...view, can_edit: access.can_edit, edit_why: access.edit_why });
+  } catch {
+    // 描き直せなくても、下の読み直しで最新になる
+  }
   loadKeepSort(view && view.table);
 }
 
@@ -110,7 +157,7 @@ export function reload() {
  * タブを押したとき、足した表がもう出ている。編集の途中なら触らない。
  */
 export function show(table) {
-  if (editing) return;
+  if (dialogOpen()) return;
   loaded = true;
   load(table);
 }

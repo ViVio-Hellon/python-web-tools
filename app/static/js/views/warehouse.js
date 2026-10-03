@@ -187,6 +187,14 @@ function renderComments(body) {
     text.className = "comments__text";
     text.textContent = c.text;
     li.append(meta, text);
+    // 自分のコメント: 相手が見たか(文はサーバが決める)
+    if (c.mine && c.seen) {
+      const seen = document.createElement("div");
+      seen.className = "comments__seen";
+      seen.dataset.seen = c.seen_by && c.seen_by.length ? "yes" : "no";
+      seen.textContent = (c.seen_by && c.seen_by.length ? "✔ " : "… ") + c.seen;
+      li.append(seen);
+    }
     return li;
   });
   el.commentList.replaceChildren(...items);
@@ -292,6 +300,14 @@ function actionsCell(row) {
       mark.className = "newmark";
       mark.textContent = `新${row.unread}`;
       b.appendChild(mark);
+    }
+    if (row.unseen_mine) {
+      // 自分が書いたのに、相手がまだ見ていない
+      const wait = document.createElement("span");
+      wait.className = "waitmark";
+      wait.textContent = `未読${row.unseen_mine}`;
+      wait.title = "あなたが書いたコメントのうち、相手がまだ見ていないもの";
+      b.appendChild(wait);
     }
     if (row.latest_comment) b.title = `最新: ${row.latest_comment}`;
     box.appendChild(b);

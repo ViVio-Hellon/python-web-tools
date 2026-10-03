@@ -138,6 +138,10 @@ def health():
         # 閉じさせない(現場の声:「配置編集保存されてないよ」)。
         # どの画面にいても分かるよう、棚検索・簡易在庫の両方を返す
         "unsaved": _screen_unsaved(),
+        # **管理者認証の世代。** 画面が開いたときの世代と違えば、認証に
+        # 関わるところ(マスタ管理の「直せる/直せない」など)を描き直す
+        # (`auth_state` の説明。現場の声:「認証系はすぐにどこにでも反映」)
+        "auth": _screen_auth(),
         # いま走っているものの一言。**起動待機画面はこれを読む** ──
         # 取り込みが終わるまで待たせるので、何をどこまでやっているかを
         # 出さないと「止まっている」と受け取られる
@@ -183,6 +187,14 @@ def unsaved_edits() -> dict[str, str]:
     if pallet_map_session.has_unsaved():
         out["inventory"] = pallet_map_session.UNSAVED_LABEL
     return out
+
+
+def _screen_auth() -> Optional[dict]:
+    """画面からの問い合わせなら、管理者認証の状態と世代。"""
+    if not request.headers.get(screen_lock.HEADER):
+        return None
+    from packaging_tool import auth_state
+    return auth_state.snapshot()
 
 
 def _screen_unsaved() -> Optional[dict[str, str]]:

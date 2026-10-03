@@ -795,6 +795,31 @@
     </div>
   </section>
 
+  <section class="card">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">遅</i>
+      <h3>時間のかかった操作(今日)</h3>
+      <button class="btn" type="button" id="slowReload">読み直す</button>
+    </header>
+    <div class="pad">
+      <p class="why">
+        1秒以上かかった操作です。<b>起動から何秒後</b>・<b>その画面を何回目に開いたときか</b>が出るので、
+        「初回だけ遅いのか、毎回遅いのか」が分かります(この端末のログから数えます)。
+      </p>
+      <ul class="slowsum" id="slowSummary"></ul>
+      <div class="tablewrap">
+        <table class="table table--wrap">
+          <thead><tr>
+            <th class="t">時刻</th><th class="t">何の操作</th><th class="n">かかった時間</th>
+            <th class="n">起動から</th><th class="n">何回目</th>
+          </tr></thead>
+          <tbody id="slowRows"></tbody>
+        </table>
+      </div>
+      <p class="why" id="slowEmpty" hidden>今日は1秒以上かかった操作はありません。</p>
+    </div>
+  </section>
+
   <section class="card" id="errDetailCard" hidden>
     <header>
       <i class="ib ib--sm" aria-hidden="true">詳</i>
@@ -1197,6 +1222,8 @@
   .errfacts dt { color:var(--muted); font-weight:600; }
   .errfacts dd { margin:0; overflow-wrap:anywhere; }
   #panel-logs h4 { margin:12px 0 4px; font-size:var(--fs-sm); color:var(--muted); }
+  .slowsum { margin:0 0 8px; padding-left:1.2em; }
+  .slowsum li { margin:2px 0; }
   .logtext { font-family:var(--mono); font-size:var(--fs-xs); background:var(--sunken);
              padding:8px; border-radius:6px; max-height:24em; overflow:auto;
              white-space:pre-wrap; overflow-wrap:anywhere; margin:0; }
