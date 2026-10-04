@@ -117,6 +117,31 @@ def brought_tables(path: Optional[Path]) -> frozenset[str]:
     return frozenset(str(r["表"]) for r in rows if r.get("表"))
 
 
+# マスタ管理の「列を足す」で足した列の記録。これも**梱包資材マスタの中に置く**
+# ── どの端末からでも、足した列を直せる列として出すため。
+#   資材課の表(PalletMaster など)は、直せる列が取り込みの列(`import_specs`)に
+#   決まっている。足した列はそこに無いので、この記録を見て直せる列に加える
+#   「表を持ってくる」で Access の最新にするとき、Access に無いこの列を
+#   「消えた列」と見て表を作り直さない(列を残す。値は空になるので先に言う)
+ADDED_REGISTRY = "ツールで足した列"
+
+# 記録の表。**マスタ管理の一覧にも、持ってくる表にも出さない**
+REGISTRIES = (BROUGHT_REGISTRY, ADDED_REGISTRY)
+
+
+def added_columns(path: Optional[Path], table: str) -> dict[str, str]:
+    """「列を足す」で足した列 {列名: 型("int"/"real"/"text")}。足した順。"""
+    if path is None or not table:
+        return {}
+    try:
+        rows = source_db.read_query(
+            path, f"SELECT 列, 型 FROM {source_db.quote_identifier(ADDED_REGISTRY)}"
+                  " WHERE 表 = ? ORDER BY rowid", [table])
+    except source_db.SourceError:
+        return {}                               # まだ1つも足していない
+    return {str(r["列"]): str(r.get("型") or "text") for r in rows if r.get("列")}
+
+
 def view_only_why(table: str) -> str:
     """その表を直せない理由。直せる表なら空。"""
     if table in BY_TABLE:
@@ -137,6 +162,7 @@ REFUSE_NO_ROW = "no_row"                # その行がもう無い
 REFUSE_WRITE_FAILED = "write_failed"    # 書けなかった
 REFUSE_NOT_CREATABLE = "not_creatable"  # この表は作る表ではない
 REFUSE_ALREADY = "already"              # もうある
+REFUSE_NEED_CONFIRM = "need_confirm"    # 押す前に確かめてもらうことがある
 
 
 # ==================================================================

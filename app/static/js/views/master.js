@@ -27,11 +27,13 @@ let editing = null;       // いま開いている行(足すときは null)
 let authPending = false;  // 1行の窓を開いている間に認証が変わった(閉じたら読み直す)
 
 const IDS = ["mTables", "mMark", "mTitle", "mCan", "mCount", "mQuery", "mFind",
-             "mAdd", "mCreate", "mRebuild", "mDrop", "mReload", "mWhy", "mError", "mHead",
+             "mAdd", "mAddCol", "mCreate", "mRebuild", "mDrop", "mReload", "mWhy", "mError", "mHead",
              "mRows", "mNote", "mSource",
              "mEdit", "mEditTitle", "mEditKind", "mEditWhy", "mEditError",
              "mFields", "mFoot", "mSave", "mDelete", "mConfirm",
-             "mDeleteYes", "mDeleteNo"];
+             "mDeleteYes", "mDeleteNo",
+             "mCol", "mColTitle", "mColNote", "mColError", "mColName", "mColKind",
+             "mColInitial", "mColSave"];
 
 // ------------------------------------------------------------------
 export function start(frame) {
@@ -48,11 +50,9 @@ export function start(frame) {
   // 全部「編集中だから触らない」で止まり、古い一覧のまま残っていた
   el.mEdit.addEventListener("close", () => {
     editing = null;
-    if (authPending) {
-      authPending = false;
-      authChanged();
-    }
+    afterDialog();
   });
+  el.mCol.addEventListener("close", afterDialog);
 
   el.mFind.addEventListener("click", () => loadKeepSort(view && view.table));
   el.mQuery.addEventListener("keydown", (event) => {
@@ -63,6 +63,13 @@ export function start(frame) {
   el.mCreate.addEventListener("click", createTable);
   el.mRebuild.addEventListener("click", rebuildTable);
   el.mDrop.addEventListener("click", dropTable);
+  el.mAddCol.addEventListener("click", openAddColumn);
+  el.mColSave.addEventListener("click", addColumn);
+  // 打ち直したら前の断りは消す(直した名前に対する断りに見える)
+  el.mColName.addEventListener("input", () => { el.mColError.hidden = true; });
+  el.mColName.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); addColumn(); }
+  });
 
   el.mRows.addEventListener("click", (event) => {
     const tr = event.target.closest("tr[data-key]");
@@ -113,9 +120,17 @@ export function reload() {
   loadKeepSort(view && view.table);
 }
 
-/** 1行の窓(見る・直す・足す)を開いているか。 */
+/** 窓(1行を見る・直す・足す / 列を足す)を開いているか。 */
 function dialogOpen() {
-  return Boolean(el.mEdit && el.mEdit.open);
+  return Boolean((el.mEdit && el.mEdit.open) || (el.mCol && el.mCol.open));
+}
+
+/** 窓を閉じた。開いている間に認証が変わっていたら、ここで描き直す。 */
+function afterDialog() {
+  if (authPending && !dialogOpen()) {
+    authPending = false;
+    authChanged();
+  }
 }
 
 /**
@@ -285,6 +300,9 @@ function render(next) {
   // 表を消す。このツールが使わない表だけ(サーバが決める)
   el.mDrop.hidden = !page.droppable;
   el.mDrop.disabled = !view.can_edit;
+  // 列を足す。直せる表だけ(サーバが決める)。権限が無ければ押せない形で出す
+  el.mAddCol.hidden = !page.can_add_column;
+  el.mAddCol.disabled = !view.can_edit;
 
   showWhy();
   el.mError.hidden = !page.error;
@@ -565,5 +583,59 @@ async function dropTable() {
     el.mError.hidden = false;
     el.mError.textContent = err.message;
     toastError(err);
+  }
+}
+
+// ------------------------------------------------------------------
+// 列を足す
+// ------------------------------------------------------------------
+/** 列を足す窓を開く。足した列が何に効くか(`add_column_note`)を先に言う。 */
+function openAddColumn() {
+  const page = (view && view.page) || {};
+  if (!view || !view.table || !page.can_add_column) return;
+  el.mColTitle.textContent = `${view.table} に列を足す`;
+  el.mColNote.textContent = page.add_column_note || "";
+  el.mColNote.hidden = !page.add_column_note;
+  el.mColError.hidden = true;
+  el.mColName.value = "";
+  el.mColKind.value = "text";
+  el.mColInitial.value = "";
+  el.mCol.showModal();
+  el.mColName.focus();
+}
+
+/** 足す。断られたら窓の中に理由を出す(打った名前は残す)。 */
+async function addColumn() {
+  const table = view && view.table;
+  if (!table) return;
+  const name = el.mColName.value.trim();
+  if (!name) {
+    el.mColError.hidden = false;
+    el.mColError.textContent = "列の名前を入れてください。";
+    el.mColName.focus();
+    return;
+  }
+  const kind = el.mColKind.value;
+  const initial = el.mColInitial.value.trim();
+  const page = view.page || {};
+  // **戻せない。** 押す前に一度だけ、何をするかを言う
+  if (!window.confirm(
+    `${table} に列「${name}」(${el.mColKind.selectedOptions[0].textContent})を足します。\n`
+    + (initial ? `いまある ${page.total || 0}行 に「${initial}」を入れます。\n` : "")
+    + "足した列は消せません。よろしいですか？")) return;
+  el.mColSave.disabled = true;
+  try {
+    render(await api.post("/api/master/column/add", {
+      table, name, kind, initial, q: el.mQuery.value.trim(),
+      sort: page.sort || "", sort_dir: page.sort_dir || "asc",
+    }));
+    el.mCol.close();
+  } catch (err) {
+    if (err.body && err.body.page) render({ ...err.body, message: "" });
+    el.mColError.hidden = false;
+    el.mColError.textContent = err.message;
+    toastError(err);
+  } finally {
+    el.mColSave.disabled = false;
   }
 }

@@ -1898,6 +1898,102 @@ class TableRefreshTests(TableBringTests):
         self.refresh(["BoardMaster"], expect=403)
         self.assertEqual(self.master_rows("SELECT ボード幅 FROM BoardMaster"), [(1100,)])
 
+    # -- マスタ管理で足した列(`master_schema.add_column`) --------------------
+    def add_column(self, table, name, kind="text", initial=""):
+        from unittest import mock
+        from packaging_tool import master_admin, master_schema
+        # 権限は別の試験で見る(ここでは足せる状態から)
+        import sqlite3
+        from packaging_tool import db
+        local = sqlite3.connect(":memory:")       # 足したあとの取り込み直しの先
+        local.row_factory = sqlite3.Row
+        db.apply_schema(local)
+        self.addCleanup(local.close)
+        with mock.patch.object(master_schema, "can_edit", return_value=(True, "")):
+            result = master_admin.add_column(local, table, name, kind, initial,
+                                             path=self.master)
+        self.assertTrue(result.ok, result.message)
+
+    def refresh_ok(self, tables, expect=200) -> dict:
+        res = self.client.post("/api/settings/table-refresh", headers=self.auth(),
+                               json={"path": str(self.converted), "tables": tables,
+                                     "empty_ok": True})
+        self.assertEqual(res.status_code, expect, res.get_json())
+        return res.get_json()
+
+    def test_足した列は消える列に数えず作り直さない(self) -> None:
+        """数えると、列を1つ足しただけの表が作り直され、足した列ごと消える。"""
+        self.add_column("BoardMaster", "棚メモ", initial="奥")
+        board = {t["name"]: t for t in self.plan()["tables"]}["BoardMaster"]
+        self.assertEqual(board["action"], "refresh")
+        self.assertEqual(board["removed_columns"], [])
+        self.assertEqual(board["tool_columns"], ["棚メモ"])
+        self.assertEqual(board["emptied"], [{"name": "棚メモ", "rows": 1}])
+
+    def test_足した列に値があれば確かめるまで入れ替えない(self) -> None:
+        self.session.admin = True
+        self.add_column("BoardMaster", "棚メモ", initial="奥")
+        body = self.refresh(["BoardMaster"], expect=409)
+        self.assertEqual(body["error"]["code"], "need_confirm")
+        self.assertIn("棚メモ 1行", body["message"])
+        self.assertEqual(self.master_rows("SELECT ボード幅, 棚メモ FROM BoardMaster"),
+                         [(1100, "奥")])
+
+    def test_確かめたら入れ替えて列は残し値は空にする(self) -> None:
+        self.session.admin = True
+        self.add_column("BoardMaster", "棚メモ", initial="奥")
+        body = self.refresh_ok(["BoardMaster"])
+        self.assertTrue(body["ok"], body)
+        self.assertIn("足した列 棚メモ の値は空にしました", body["message"])
+        self.assertEqual(self.master_rows("SELECT ボード幅, 棚メモ FROM BoardMaster"),
+                         [(1200, None), (1300, None)])
+        board = {t["name"]: t for t in body["plan"]["tables"]}["BoardMaster"]
+        self.assertEqual(board["emptied"], [])       # もう空。次は確かめない
+
+    def test_足した列に値が無ければ確かめない(self) -> None:
+        self.session.admin = True
+        self.add_column("BoardMaster", "棚メモ")
+        body = self.refresh(["BoardMaster"])
+        self.assertTrue(body["ok"], body)
+        self.assertIn("棚メモ", [r[1] for r in self.master_rows("PRAGMA table_info(BoardMaster)")])
+
+    def test_作り直す表でも足した列は足し直す(self) -> None:
+        import sqlite3
+        conn = sqlite3.connect(self.master)
+        conn.execute("ALTER TABLE BoardMaster ADD COLUMN Accessで消した列 TEXT")
+        conn.commit()
+        conn.close()
+        self.session.admin = True
+        self.add_column("BoardMaster", "年次", "int", "2")
+        board = {t["name"]: t for t in self.plan()["tables"]}["BoardMaster"]
+        self.assertEqual(board["action"], "rebuild")
+        self.assertEqual(board["removed_columns"], ["Accessで消した列"])
+        body = self.refresh_ok(["BoardMaster"])
+        self.assertTrue(body["ok"], body)
+        self.assertIn("足した列 年次 は作り直した表にも足しました", body["message"])
+        info = {r[1]: r[2] for r in self.master_rows("PRAGMA table_info(BoardMaster)")}
+        self.assertEqual(info.get("年次"), "INTEGER")
+        self.assertNotIn("Accessで消した列", info)
+
+    def test_パレットの在庫の行は足した列の値も残す(self) -> None:
+        """在庫の行は入れ替えでも残す(`KEEPS`)ので、その行の値は空にならない。"""
+        self.session.admin = True
+        self.add_column("PalletMaster", "棚メモ", initial="奥")
+        pallet = {t["name"]: t for t in self.plan()["tables"]}["PalletMaster"]
+        self.assertEqual(pallet["emptied"], [{"name": "棚メモ", "rows": 2}])  # 型録の2行だけ
+        self.refresh_ok(["PalletMaster"])
+        self.assertEqual(self.master_rows(
+            "SELECT 位置, 棚メモ FROM PalletMaster WHERE 位置 = 'A1'"), [("A1", "奥")])
+
+    def test_足した列の記録は持ってくる表に出さない(self) -> None:
+        import sqlite3
+        conn = sqlite3.connect(self.converted)
+        conn.execute('CREATE TABLE "ツールで足した列" (表 TEXT, 列 TEXT)')
+        conn.commit()
+        conn.close()
+        names = [t["name"] for t in self.plan()["tables"]]
+        self.assertNotIn("ツールで足した列", names)
+
     def rename_in_access(self, table: str, create: str, rows: list[tuple]) -> None:
         """Access 側で列を消した・名前を変えた表にする。"""
         import sqlite3

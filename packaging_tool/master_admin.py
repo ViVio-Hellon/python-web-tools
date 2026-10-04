@@ -35,7 +35,7 @@ sqlite3 の暗黙の `rowid` を使います。取り込みのとき管理番号
     master_common   どの表を、誰が、どこで直せるか。書いたあとの
                     取り込み直しまで
     master_columns  列の形。何を打ち込めるか、列名が合っているか
-    master_schema   表そのものを作る・作り直す
+    master_schema   表そのものを作る・作り直す・列を足す
     master_browse   中身を見る(表の一覧と1ページぶんの行)
     ここ            行を直す・足す・消す
 
@@ -61,7 +61,7 @@ from .logging_utils import get_logger
 #     master_common   どの表を、誰が、どこで直せるか。書いたあとの
 #                     取り込み直しまで
 #     master_columns  列の形。何を打ち込めるか、列名が合っているか
-#     master_schema   表そのものを作る・作り直す
+#     master_schema   表そのものを作る・作り直す・列を足す
 #     master_browse   中身を見る(表の一覧と1ページぶんの行)
 #     ここ            行を直す・足す・消す
 #
@@ -70,7 +70,8 @@ from .logging_utils import get_logger
 # ------------------------------------------------------------------
 from . import master_browse, master_columns, master_common, master_schema
 from .master_common import (  # noqa: F401
-    BY_TABLE, DEFAULT_VIEW_ONLY, MANAGED, REFUSE_ALREADY, REFUSE_BAD_VALUE,
+    ADDED_REGISTRY, BY_TABLE, DEFAULT_VIEW_ONLY, MANAGED, REFUSE_ALREADY,
+    REFUSE_BAD_VALUE, REFUSE_NEED_CONFIRM, added_columns,
     REFUSE_NOT_ALLOWED, REFUSE_NOT_CREATABLE, REFUSE_NOT_EDITABLE,
     REFUSE_NO_ROW, REFUSE_NO_SOURCE, REFUSE_WRITE_FAILED, ROW_KEY, ROW_LIMIT,
     STAMP_COLUMNS, VIEW_ONLY_WHY, Managed, Result, _follow, _label,
@@ -80,8 +81,9 @@ from .master_columns import (  # noqa: F401
     KIND_LABEL, Column, column_mismatch_why, columns,
     expected_column_names)
 from .master_schema import (  # noqa: F401
-    can_create, can_rebuild, create_table, creatable_tables, drop_note,
-    drop_table, drop_why, rebuild_table, tool_tables)
+    ADD_KINDS, add_column, add_column_note, add_column_why, can_create,
+    can_rebuild, create_table, creatable_tables, drop_note, drop_table,
+    drop_why, rebuild_table, tool_tables)
 from .master_browse import Page, TableInfo, page, tables  # noqa: F401
 
 log = get_logger("master_admin")

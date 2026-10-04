@@ -95,14 +95,14 @@ def tables(path: Optional[Path],
             table=managed.table, label=managed.table, mark=managed.mark,
             note=managed.note, rows=counts[managed.table], editable=True))
     # 「表を持ってくる」で足した表は、直せる表として資材課の表のすぐ後に出す。
-    # 記録の表そのもの(`BROUGHT_REGISTRY`)は出さない(中身は表の名前だけ)
+    # 記録の表そのもの(`REGISTRIES`: 足した表・足した列)は出さない
     brought = master_common.brought_tables(path)
     for name in sorted(n for n in counts if n in brought and n not in BY_TABLE):
         out.append(TableInfo(
             table=name, label=name, mark="足", note="Access から持ってきた表",
             rows=counts[name], editable=True))
     for name in sorted(n for n in counts if n not in BY_TABLE and n not in brought
-                       and n != master_common.BROUGHT_REGISTRY):
+                       and n not in master_common.REGISTRIES):
         out.append(TableInfo(
             table=name, label=name, mark="他", note="", rows=counts[name],
             editable=False, why=view_only_why(name)))
@@ -131,6 +131,9 @@ class Page:
     # この表を消せるか(このツールが使わない表だけ)と、消す前に言うこと
     droppable: bool = False
     drop_note: str = ""
+    # 列を足せるか(直せる表だけ)と、足す前に言うこと(`master_schema.add_column`)
+    can_add_column: bool = False
+    add_column_note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {"table": self.table, "label": self.label,
@@ -141,7 +144,9 @@ class Page:
                 "missing": self.missing, "rebuildable": self.rebuildable,
                 "row_key": ROW_KEY,
                 "sort": self.sort, "sort_dir": self.sort_dir,
-                "droppable": self.droppable, "drop_note": self.drop_note}
+                "droppable": self.droppable, "drop_note": self.drop_note,
+                "can_add_column": self.can_add_column,
+                "add_column_note": self.add_column_note}
 
 
 def page(path: Optional[Path], table: str, *, query: str = "",
@@ -183,6 +188,11 @@ def page(path: Optional[Path], table: str, *, query: str = "",
     if not master_schema.drop_why(table, path):
         view.droppable = True
         view.drop_note = master_schema.drop_note(table, path)
+    if view.editable:
+        # 直せる表で、表がある(ここまで来た)。`add_column_why` と同じ答え
+        # (共有を読み直さないよう、ここで分かっていることで決める)
+        view.can_add_column = True
+        view.add_column_note = master_schema.add_column_note(table)
 
     where, params = _filter(names, query)
     order, sort_col = _order(names, sort, sort_dir)

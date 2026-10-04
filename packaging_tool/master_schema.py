@@ -291,7 +291,7 @@ def tool_tables() -> frozenset[str]:
             | frozenset(master_common.VIEW_ONLY_WHY)
             | frozenset({config.TBL_PT_HEADER, config.TBL_PT_SELECT,
                          config.TBL_PT_PLACE, config.TBL_PT_CUT,
-                         master_common.BROUGHT_REGISTRY}))
+                         *master_common.REGISTRIES}))
 
 
 def drop_why(table: str, path: Optional[Path] = None) -> str:
@@ -338,14 +338,17 @@ def drop_table(conn: sqlite3.Connection, table: str, *, confirm: str,
     except OSError as exc:
         return Result(False, f"消す前の控えを取れませんでした({exc})。何も消していません。",
                       REFUSE_WRITE_FAILED)
-    registry = source_db.quote_identifier(master_common.BROUGHT_REGISTRY)
     try:
         with source_db.connect(found) as src:
             with src.transaction() as tx:
                 tx.execute(f"DROP TABLE {source_db.quote_identifier(table)}")
-                if tx.query("SELECT 1 FROM sqlite_master WHERE type = 'table'"
-                            " AND name = ?", [master_common.BROUGHT_REGISTRY]):
-                    tx.execute(f"DELETE FROM {registry} WHERE 表 = ?", [table])
+                # 足した表・足した列の記録からも外す(同じ名前で持ってきたとき、
+                # 前の表の列が「足した列」として残らないように)
+                for registry in master_common.REGISTRIES:
+                    if tx.query("SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                                " AND name = ?", [registry]):
+                        tx.execute(f"DELETE FROM {source_db.quote_identifier(registry)}"
+                                   " WHERE 表 = ?", [table])
     except source_db.SourceError as exc:
         return _write_failed(table, exc)
 
@@ -353,3 +356,139 @@ def drop_table(conn: sqlite3.Connection, table: str, *, confirm: str,
     import_diag.write(f"■ 表を消した: {table}({found}) 消す前の控え: {backup}")
     return Result(True, f"{table} を梱包資材マスタから消しました。"
                         f"消す前の控え: {backup}")
+
+
+# ==================================================================
+# 列を足す
+# ==================================================================
+# 現場の声:「マスタの編集で列を追加が欲しい」(まず 班員名簿)。
+#
+# **足せるのは、マスタ管理で直せる表だけ**(資材課の表・持ってきた表)。
+# このツールが書き戻す表や上流の設備が書く表は、書く側が列を知らないので
+# 足しても誰も埋めない。
+#
+# 【足した列にできること】
+# マスタ管理で見る・直すだけ。選定や配置の計算・帳票は、どの列を読むかが
+# プログラムに決まっているので、足した列は使わない(使うにはプログラムを直す)。
+#
+# 【戻せない】
+# 列を消す口は作らない(ほかの道具が同じ表を読んでいることがある)。
+# なので管理者認証を通し、型と最初の値まで決めてから足す。
+ADD_KINDS = {"text": "TEXT", "int": "INTEGER", "real": "REAL"}
+COLUMN_NAME_LIMIT = 40
+# 名前に使わせない文字。列名は `[...]` や `"..."` で囲んで文へ組み込むので、
+# 囲みの記号が混ざると文が壊れる。`.` は Access へ戻すときに断られる
+_BAD_NAME_CHARS = set('[]"`\'.') | {chr(c) for c in range(32)} | {chr(127)}
+# sqlite3 が行番号として扱う名前。列にすると rowid の代わりに読まれてしまう
+_RESERVED_NAMES = {"rowid", "oid", "_rowid_"}
+
+
+def add_column_why(table: str, path: Optional[Path] = None) -> str:
+    """その表に列を足せない理由。足せるなら空(権限は見ない ── `can_edit` の話)。"""
+    if not table:
+        return "表を選んでください。"
+    found = path or source_for(table)
+    if table not in BY_TABLE and table not in master_common.brought_tables(found):
+        return ("マスタ管理で直す表にだけ列を足せます。"
+                + (view_only_why(table) or ""))
+    if found is None:
+        return f"{source_label(table)}が見つかりません。"
+    if not source_db.columns(found, table):
+        return f"{table} は取り込み元にまだありません。"
+    return ""
+
+
+def add_column_note(table: str) -> str:
+    """足す前に言っておくこと。**足した列が何に効くか**。"""
+    if table in import_specs.IMPORT_SPECS:
+        return ("足した列はマスタ管理で見る・直すだけです。選定や配置の計算・帳票には"
+                "使われません(使うにはプログラムを直します)。列は消せません。")
+    return ("足した列は、ほかの列と同じようにマスタ管理で直せます。"
+            "「表を持ってくる」で Access の最新に入れ替えると、この列は残りますが"
+            "値は空になります(入れ替える前に確かめます)。列は消せません。")
+
+
+def _name_why(name: str, have: Iterable[str]) -> str:
+    if not name:
+        return "列の名前を入れてください。"
+    if len(name) > COLUMN_NAME_LIMIT:
+        return f"列の名前は{COLUMN_NAME_LIMIT}文字までにしてください。"
+    bad = sorted({c for c in name if c in _BAD_NAME_CHARS})
+    if bad:
+        shown = "".join(c if c.isprintable() else "(改行など)" for c in bad)
+        return f"列の名前に {shown} は使えません。"
+    if name.lower() in _RESERVED_NAMES or name.startswith("__"):
+        return f"「{name}」はこのツールが内部で使う名前なので使えません。"
+    # sqlite3 の列名は大文字・小文字(英字)を区別しない。区別して比べると、
+    # 「Code」があるのに「code」を足そうとして、書く瞬間に断られる
+    for column in have:
+        if column.lower() == name.lower():
+            return f"「{column}」という列がもうあります。"
+    return ""
+
+
+def _terminal() -> str:
+    from . import access_control
+    return access_control.current_identity().pc_name
+
+
+def add_column(conn: sqlite3.Connection, table: str, name: Any, kind: Any = "text",
+               initial: Any = "", *, path: Optional[Path] = None) -> Result:
+    """取り込み元の表に列を1つ足す。`initial` はいまある行に入れる最初の値(空なら空のまま)。
+
+    列を足す・最初の値を入れる・記録する、を**1回で確定**する。途中で
+    落ちたら列も足されない(半分だけ足された表を作らない)。
+    """
+    allowed, why = can_edit(conn, table)
+    if not allowed:
+        return Result(False, why, REFUSE_NOT_ALLOWED)
+    found = path or source_for(table)
+    reason = add_column_why(table, found)
+    if reason:
+        return Result(False, reason, REFUSE_NOT_EDITABLE)
+
+    name = str(name or "").strip()
+    kind = str(kind or "text")
+    if kind not in ADD_KINDS:
+        return Result(False, "列の型は 文字 / 整数 / 小数 から選んでください。", REFUSE_BAD_VALUE)
+    problem = _name_why(name, source_db.columns(found, table))
+    if problem:
+        return Result(False, problem, REFUSE_BAD_VALUE)
+    raw = str(initial if initial is not None else "").strip()
+    value: Any = None
+    if raw:
+        try:
+            value = (int(float(raw)) if kind == "int"
+                     else float(raw) if kind == "real" else raw)
+        except (ValueError, OverflowError):
+            return Result(False, f"最初の値は{master_columns.KIND_LABEL[kind]}で入れてください。",
+                          REFUSE_BAD_VALUE)
+
+    q = source_db.quote_identifier
+    registry = q(master_common.ADDED_REGISTRY)
+    filled = 0
+    try:
+        with source_db.connect(found) as src:
+            with src.transaction() as tx:
+                have = [r["name"] for r in tx.query(f"PRAGMA table_info({q(table)})")]
+                problem = _name_why(name, have)
+                if problem:                     # 確かめたあとに、ほかの端末が足した
+                    return Result(False, problem, REFUSE_ALREADY)
+                tx.execute(f"ALTER TABLE {q(table)} ADD COLUMN {q(name)} {ADD_KINDS[kind]}")
+                if value is not None:
+                    filled = tx.execute(f"UPDATE {q(table)} SET {q(name)} = ?", [value])
+                tx.execute(f"CREATE TABLE IF NOT EXISTS {registry}"
+                           " (表 TEXT, 列 TEXT, 型 TEXT, 足した端末 TEXT, 足した日時 TEXT,"
+                           " PRIMARY KEY (表, 列))")
+                tx.execute(f"INSERT OR REPLACE INTO {registry}"
+                           " (表, 列, 型, 足した端末, 足した日時) VALUES (?, ?, ?, ?, ?)",
+                           [table, name, kind, _terminal(), db.now_db_string()])
+    except source_db.SourceError as exc:
+        return _write_failed(table, exc)
+
+    log.info("取り込み元の表に列を足しました: %s.%s (%s) 最初の値=%r %s行 (%s)",
+             table, name, kind, value, filled, found)
+    said = f"{table} に列「{name}」({master_columns.KIND_LABEL[kind]})を足しました"
+    if value is not None:
+        said += f"。いまある {filled}行 に {raw} を入れました"
+    return Result(True, said + _follow(conn, found, table))

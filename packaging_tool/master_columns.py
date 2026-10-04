@@ -145,6 +145,15 @@ def columns(conn: sqlite3.Connection, table: str,
         out.append(Column(
             name=local, kind=kind, required=required, stamp=stamp,
             note="空欄なら今の日時が入ります" if stamp else ""))
+    # マスタ管理で足した列(`master_schema.add_column`)。取り込みは読まないが、
+    # 足した人が直すために足した列なので直せる列に出す。型は足したときの型
+    if source_path is not None:
+        have = {c.name for c in out}
+        for name, kind in master_common.added_columns(source_path, table).items():
+            if name in have or (allowed is not None and name not in allowed):
+                continue
+            out.append(Column(name=name, kind=kind if kind in KIND_LABEL else "text",
+                              note="マスタ管理で足した列(計算・帳票には使われません)"))
     return out
 
 

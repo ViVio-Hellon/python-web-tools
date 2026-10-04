@@ -447,7 +447,9 @@ def table_refresh_run():
     tables = body.get("tables")
     if not isinstance(tables, list):
         return jsonify(_error("bad_tables", "入れ替える表の指定が正しくありません")), 400
-    result = table_bring.refresh(conn, str(body.get("path", "")), [str(t) for t in tables])
+    # `empty_ok`: マスタ管理で足した列の値が空になることを確かめた(画面の確認を通った)
+    result = table_bring.refresh(conn, str(body.get("path", "")), [str(t) for t in tables],
+                                 empty_ok=body.get("empty_ok") is True)
     payload = {"ok": result.ok, "message": result.message,
                "refreshed": [{"name": n, "before": b, "after": a}
                              for n, b, a in result.refreshed],
@@ -457,7 +459,8 @@ def table_refresh_run():
     if result.ok:
         return jsonify(payload)
     payload["error"] = {"code": result.reason, "message": result.message}
-    status = {table_bring.REFUSE_NOTHING: 400}.get(result.reason, 422)
+    status = {table_bring.REFUSE_NOTHING: 400,
+              table_bring.REFUSE_NEED_CONFIRM: 409}.get(result.reason, 422)
     return jsonify(payload), status
 
 

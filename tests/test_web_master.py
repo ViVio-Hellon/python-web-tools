@@ -527,3 +527,48 @@ class RebuildTableApiTests(MasterApiTests):
 
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
+
+
+@unittest.skipUnless(HAS_WEB, _SKIP)
+class AddColumnApiTests(MasterApiTests):
+    """列を足す(`/api/master/column/add`)。"""
+
+    def test_直せる表には足せるボタンの札が付く(self) -> None:
+        page = self.browse(table="BoardMaster")["page"]
+        self.assertTrue(page["can_add_column"])
+        self.assertIn("計算・帳票には使われません", page["add_column_note"])
+        self.assertFalse(self.browse(table="PalletPatterns")["page"]["can_add_column"])
+
+    def test_足すと画面ぜんぶが返り足した列が出る(self) -> None:
+        res = self.post("column/add", {"table": "BoardMaster", "name": "備考2",
+                                       "kind": "real", "initial": "1.5"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertIn("備考2", body["page"]["columns"])
+        self.assertIn("備考2", [c["name"] for c in body["columns"]])
+        self.assertEqual({r["備考2"] for r in body["page"]["rows"]}, {1.5})
+        self.assertIn("列「備考2」", body["message"])
+
+    def test_名前が悪ければ400で画面ぜんぶを返す(self) -> None:
+        res = self.post("column/add", {"table": "BoardMaster", "name": "ボード幅"})
+        self.assertEqual(res.status_code, 400)
+        body = res.get_json()
+        self.assertEqual(body["error"]["code"], master_admin.REFUSE_BAD_VALUE)
+        self.assertIn("もうあります", body["error"]["message"])
+        self.assertEqual(body["table"], "BoardMaster")
+
+    def test_認証が無ければ403(self) -> None:
+        self.only_material()
+        res = self.post("column/add", {"table": "BoardMaster", "name": "メモ"})
+        self.assertEqual(res.status_code, 403)
+        self.assertNotIn("メモ", self.browse(table="BoardMaster")["page"]["columns"])
+
+    def test_直せない表は422(self) -> None:
+        res = self.post("column/add", {"table": "PalletPatterns", "name": "メモ"})
+        self.assertEqual(res.status_code, 422)
+
+    def test_画面に列を足す窓がある(self) -> None:
+        html = self.client.get("/settings", headers=self.auth).get_data(as_text=True)
+        for needle in ('id="mAddCol"', 'id="mCol"', 'id="mColName"', 'id="mColKind"',
+                       'id="mColInitial"', 'id="mColSave"'):
+            self.assertIn(needle, html)

@@ -223,6 +223,8 @@
              列が合わないとき) #}
           <button class="btn btn--danger" type="button" id="mRebuild" hidden>
             列名を直して作り直す</button>
+          {# 列を足す。**マスタ管理で直せる表だけ**に出す。戻せない #}
+          <button class="btn btn--run" type="button" id="mAddCol" hidden>+ 列を足す…</button>
           <button class="btn btn--find" type="button" id="mReload">
             <span class="gl">⟳</span>読み直す</button>
           {# 表そのものを消す。**このツールが使わない表だけ**に出す
@@ -271,6 +273,40 @@
         取り込み元から消します。戻せません。</span>
       <button class="btn btn--danger" type="button" id="mDeleteYes">消す</button>
       <button class="btn" type="button" id="mDeleteNo">やめる</button>
+    </div>
+  </dialog>
+
+  {# 列を1つ足す。名前・型・いまある行に入れる最初の値を決めてから足す
+     (列は消せないので、足す前に何に効くかを言う: `mColNote`) #}
+  <dialog id="mCol" class="browser meditor">
+    <form method="dialog" class="browser__head">
+      <b id="mColTitle"></b>
+      <button class="btn btn--danger" value="cancel">閉じる</button>
+    </form>
+    <p class="status status--warn" id="mColNote"></p>
+    <p class="status status--ng" id="mColError" hidden></p>
+    <div class="mfields">
+      <label for="mColName" class="req">列の名前</label>
+      <div>
+        <input class="input" id="mColName" spellcheck="false" autocomplete="off"
+               maxlength="40" placeholder="例: 電話番号">
+      </div>
+      <label for="mColKind">型</label>
+      <div>
+        <select class="input" id="mColKind">
+          <option value="text">文字</option>
+          <option value="int">整数</option>
+          <option value="real">小数</option>
+        </select>
+      </div>
+      <label for="mColInitial">最初の値</label>
+      <div>
+        <input class="input" id="mColInitial" spellcheck="false" autocomplete="off">
+        <small class="mhint">いまある行すべてに入れます。空なら空のまま</small>
+      </div>
+    </div>
+    <div class="btn-row mfoot">
+      <button class="btn btn--commit" type="button" id="mColSave">取り込み元に列を足す</button>
     </div>
   </dialog>
       </section>

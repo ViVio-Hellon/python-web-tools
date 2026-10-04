@@ -54,6 +54,7 @@ REFUSE_NOTHING = "nothing"
 REFUSE_EXISTS = "exists"
 REFUSE_WRITE_FAILED = "write_failed"
 REFUSE_CONVERT = "convert_failed"
+REFUSE_NEED_CONFIRM = "need_confirm"   # 足した列の値が空になる。確かめてから
 
 # もうある表にすること
 ACTION_REFRESH = "refresh"        # 中身を入れ替える(Access にだけある列は足す)
@@ -61,6 +62,8 @@ ACTION_REBUILD = "rebuild"        # 作り直す(列が消えた・名前が変�
 
 # 足した表の記録(梱包資材マスタの中)。マスタ管理が同じ名前で読む
 from .master_common import BROUGHT_REGISTRY as REGISTRY  # noqa: E402
+# 記録の表(足した表・足した列)。持ってくる表にも入れ替える表にもしない
+from .master_common import ADDED_REGISTRY, REGISTRIES  # noqa: E402
 
 # Access のファイル。これを選んだら変換ツールで sqlite3 にしてから読む
 ACCESS_SUFFIXES = (".accdb", ".mdb")
@@ -88,6 +91,11 @@ class Candidate:
     added_columns: list[str] = field(default_factory=list)
     removed_columns: list[str] = field(default_factory=list)
     import_loses: list[str] = field(default_factory=list)  # 消える列のうち、取り込みで読む列
+    # マスタ管理で足した列(`master_schema.add_column`)のうち Access に無いもの。
+    # 「消える列」には数えない(表を作り直さず、列は残す)。ただし値は空になる
+    tool_columns: list[str] = field(default_factory=list)
+    # そのうち値の入っている列と行数 [(列, 行数)]。入れ替える前に確かめる
+    emptied: list[tuple[str, int]] = field(default_factory=list)
 
     @property
     def action(self) -> str:
@@ -419,7 +427,7 @@ def plan(source_path: str) -> Plan:
         out.message = f"ファイルを読めません: {exc}"
         return out
     internal = [n for n in names if is_access_internal(n)]
-    names = [n for n in names if not is_access_internal(n) and n != REGISTRY]
+    names = [n for n in names if not is_access_internal(n) and n not in REGISTRIES]
     dest_counts = source_db.table_counts(dest)
     for name in names:
         columns = source_db.columns(readable, name)
@@ -430,7 +438,7 @@ def plan(source_path: str) -> Plan:
             exists=here is not None, suspect=_suspect_rows(readable, name, columns))
         if here is not None:
             found.current_rows = max(dest_counts.get(here, 0), 0)
-            _compare_columns(found, source_db.columns(dest, here), here)
+            _compare_columns(found, source_db.columns(dest, here), here, dest)
             found.keeps = KEEPS.get(here, "")
         out.candidates.append(found)
     out.ok = True
@@ -608,6 +616,7 @@ def _tool_owned() -> dict[str, str]:
         owned[table] = "このツールが書き込む表です(パレット実績)"
     owned[access_control.TABLE] = "マスタ管理で直す表です(書き間違えると誰も入れなくなるため)"
     owned[REGISTRY] = "このツールの控えの表です"
+    owned[ADDED_REGISTRY] = "このツールの控えの表です"
     return owned
 
 
@@ -625,16 +634,58 @@ def _import_columns(table: str) -> list[str]:
     return [source for _local, source, _conv in import_specs.IMPORT_SPECS.get(table, [])]
 
 
-def _compare_columns(found: "Candidate", have: list[str], table: str) -> None:
+def _compare_columns(found: "Candidate", have: list[str], table: str,
+                     dest: Optional[Path] = None) -> None:
     """Access の列と梱包資材マスタの列を比べて、足す列・消える列・できない理由を入れる。
 
     `table` は梱包資材マスタでの表の名前。
+
+    **マスタ管理で足した列は「消える列」に数えない。** 数えると、列を1つ足した
+    だけの表が「Access に無い列がある」として作り直され、足した列ごと
+    消えてしまう。列は残し、値は空になる(`emptied` で先に言う)。
     """
+    from .master_common import added_columns
+    mine = {c.lower() for c in added_columns(dest, table)} if dest is not None else set()
+    access = {c.lower() for c in found.columns}
     found.added_columns = [c for c in found.columns if c not in have]
-    found.removed_columns = [c for c in have if c not in found.columns]
+    found.tool_columns = [c for c in have if c.lower() in mine and c.lower() not in access]
+    found.removed_columns = [c for c in have
+                             if c not in found.columns and c not in found.tool_columns]
+    found.emptied = _filled_counts(dest, table, found.tool_columns, have) if dest else []
     reads = _import_columns(table)
     found.import_loses = [c for c in found.removed_columns if c in reads]
     found.refresh_why = refresh_why(table, found)
+
+
+def _filled_counts(dest: Path, table: str, columns: list[str],
+                   have: list[str]) -> list[tuple[str, int]]:
+    """入れ替えると値が空になる列と、いま値の入っている行数。値の無い列は出さない。
+
+    PalletMaster の在庫の行(位置のある行)は入れ替えでも残すので数えない(`KEEPS`)。
+    """
+    if not columns:
+        return []
+    q = source_db.quote_identifier
+    kept = ""
+    if table == "PalletMaster" and all(k in have for k in KEYS_PALLET_STOCK):
+        kept = " AND TRIM(COALESCE(位置, '')) = ''"
+    out = []
+    for column in columns:
+        try:
+            rows = source_db.read_query(
+                dest, f"SELECT COUNT(*) AS n FROM {q(table)} WHERE {q(column)} IS NOT NULL"
+                      f" AND TRIM(CAST({q(column)} AS TEXT)) <> ''{kept}")
+        except source_db.SourceError:
+            continue
+        n = int(rows[0]["n"]) if rows else 0
+        if n:
+            out.append((column, n))
+    return out
+
+
+def emptied_text(found: "Candidate") -> str:
+    """値が空になる列の言い方。「班員名簿(電話 12行・メモ 3行)」。"""
+    return f"{found.name}(" + "・".join(f"{c} {n}行" for c, n in found.emptied) + ")"
 
 
 def refresh_why(table: str, found: "Candidate") -> str:
@@ -651,7 +702,7 @@ def refresh_why(table: str, found: "Candidate") -> str:
 
 
 def refresh(conn: Optional[sqlite3.Connection], source_path: str,
-            tables: list[str]) -> BringResult:
+            tables: list[str], *, empty_ok: bool = False) -> BringResult:
     """もうある表を Access(変換したもの)の最新にする。表ごとに2通り。
 
     - **入れ替える**(列が同じか、Access で列を足しただけ): Access にだけある
@@ -673,6 +724,9 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
       を1回で確定**。途中で落ちたら元のまま
     - 書く前に梱包資材マスタを手元の `backup` へ写す
     - 書いたら手元も取り込み直す(マスタ管理と同じ)
+    - マスタ管理で足した列は残す(作り直しでも足し直す)。ただし Access に無い
+      列なので値は空になる。値の入っている列があれば、`empty_ok` で確かめて
+      もらうまで書かない(画面は確かめの文を出してから送り直す)
     """
     src = Path(str(source_path or "").strip())
     if not src.is_file():
@@ -696,6 +750,7 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     existing = _by_fold(source_db.list_tables(dest))
     refusals = []
     actions: dict[str, str] = {}
+    found_by: dict[str, Candidate] = {}
     # ここから先は**梱包資材マスタでの名前**で扱う(大文字・小文字だけ違う
     # "palletmaster" が来ても PalletMaster として在庫の行を残すため)。
     # sqlite3 の文は名前の大文字・小文字を区別しないので、Access 側もこれで読める
@@ -711,14 +766,22 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
             columns = source_db.columns(src, table)
             found = Candidate(name=table, columns=columns, exists=True,
                               suspect=_suspect_rows(src, table, columns))
-            _compare_columns(found, source_db.columns(dest, table), table)
+            _compare_columns(found, source_db.columns(dest, table), table, dest)
             if found.refresh_why:
                 refusals.append(f"{table}({found.refresh_why})")
             actions[table] = found.action
+            found_by[table] = found
     if refusals:
         return BringResult(False, "入れ替えられない表があります: " + "、".join(refusals)
                            + "。何も変えていません。", REFUSE_NOTHING)
     wanted = list(dict.fromkeys(named))
+    emptied = [found_by[t] for t in wanted if found_by[t].emptied]
+    if emptied and not empty_ok:
+        return BringResult(False, "マスタ管理で足した列の値が空になります: "
+                           + "、".join(emptied_text(f) for f in emptied)
+                           + "。Access に無い列なので、入れ替えると値は残りません(列は残ります)。"
+                           "よければ確かめてからもう一度押してください。何も変えていません。",
+                           REFUSE_NEED_CONFIRM)
 
     try:
         backup = _backup(dest, "中身を入れ替える前")
@@ -740,11 +803,15 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
             verb = "作り直した" if rebuild else "入れ替えた"
             try:
                 if rebuild:
-                    before, after, note, old = _rebuild_one(dst, src, table, stamp)
+                    before, after, note, old = _rebuild_one(
+                        dst, src, table, stamp, keep_columns=found_by[table].tool_columns)
                     kept_old.append((table, old))
                 else:
                     before, after, note = _refresh_one(dst, src, table)
                 done.append((table, before, after))
+                if found_by[table].emptied:
+                    gone = "・".join(c for c, _n in found_by[table].emptied)
+                    note = "、".join(x for x in (note, f"足した列 {gone} の値は空にしました") if x)
                 if note:
                     notes.append(f"{table}: {note}")
                 import_diag.write(f"  {verb}: {table} {before:,}行 → {after:,}行"
@@ -856,10 +923,12 @@ def _refresh_one(dst: "source_db.SourceConnection", src: Path,
 
 
 def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
-                 stamp: str) -> tuple[int, int, str, str]:
+                 stamp: str, *, keep_columns: Optional[list[str]] = None,
+                 ) -> tuple[int, int, str, str]:
     """1つの表を Access の定義で作り直す。(前の行数, 後の行数, 添える一言, 残した名前)。
 
     いまの表は `表_作り直す前_日時` という名前に変えて残す(中身もそのまま)。
+    `keep_columns`(マスタ管理で足した列)は作り直した表にも足し直す(値は空)。
     その表の索引は外す ── 索引の名前はファイルの中で1つしか使えず、
     作り直した表に同じ名前の索引を作れなくなるため。
     """
@@ -870,6 +939,10 @@ def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
     rows = source_db.read_table(src, table)
     old = f"{table}_作り直す前_{stamp}"
     notes = []
+    from .master_common import added_columns
+    from .master_schema import ADD_KINDS
+    # 書く前に読む(書いている最中に別の接続で読みに行かない)
+    kinds = added_columns(dst.path, table) if keep_columns else {}
     with dst.transaction() as tx:
         if tx.query("SELECT 1 FROM sqlite_master WHERE name = ?", [old]):
             raise source_db.SourceError(f"{old} という表がもうあります")
@@ -888,6 +961,12 @@ def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
             # 名前に戻す(sqlite3 は大文字・小文字だけの付け替えを断るので2段で)
             tx.execute(f"ALTER TABLE {q(made)} RENAME TO {q(old + '_作りかけ')}")
             tx.execute(f"ALTER TABLE {q(old + '_作りかけ')} RENAME TO {q(table)}")
+        if keep_columns:
+            for column in keep_columns:
+                kind = ADD_KINDS.get(kinds.get(column, "text"), "TEXT")
+                tx.execute(f"ALTER TABLE {q(table)} ADD COLUMN {q(column)} {kind}")
+            notes.append(f"足した列 {'・'.join(keep_columns)} は作り直した表にも足しました")
+        columns_after = columns + list(keep_columns or [])
 
         stock: list[dict[str, Any]] = []
         if (table == "PalletMaster" and all(k in old_columns for k in KEYS_PALLET_STOCK)
@@ -900,7 +979,7 @@ def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
         for row in rows:
             tx.insert(table, {c: row.get(c) for c in columns})
         if stock:
-            common = [c for c in old_columns if c in columns]
+            common = [c for c in old_columns if c in columns_after]
             used = set()
             if "管理番号" in common:
                 used = {str(r["n"]) for r in tx.query(
@@ -945,5 +1024,8 @@ def plan_dict(p: Plan) -> dict[str, Any]:
                     "can_refresh": c.can_refresh, "keeps": c.keeps,
                     "action": c.action, "added_columns": c.added_columns,
                     "removed_columns": c.removed_columns,
-                    "import_loses": c.import_loses} for c in p.candidates],
+                    "import_loses": c.import_loses,
+                    "tool_columns": c.tool_columns,
+                    "emptied": [{"name": n, "rows": r} for n, r in c.emptied]}
+                   for c in p.candidates],
     }

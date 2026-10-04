@@ -129,6 +129,19 @@ def rebuild_table():
     return _write(master_admin.rebuild_table(get_db(), _table(body)), body)
 
 
+@bp.post("/api/master/column/add")
+def add_column():
+    """取り込み元の表に列を1つ足す。`{"table":…, "name":…, "kind":…, "initial":…}`
+
+    足せるのはマスタ管理で直せる表だけ(`master_admin.add_column_why`)。
+    列は消せないので、管理者認証(`can_edit`)を通す。
+    """
+    body = request.get_json(silent=True) or {}
+    return _write(master_admin.add_column(
+        get_db(), _table(body), body.get("name", ""), body.get("kind", "text"),
+        body.get("initial", "")), body)
+
+
 @bp.post("/api/master/table/drop")
 def drop_table():
     """取り込み元から表を消す。`{"table":…, "confirm":…}`

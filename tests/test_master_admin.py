@@ -848,3 +848,147 @@ class RebuildTableTests(MasterTestCase):
 
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
+
+
+# ==================================================================
+# 列を足す
+# ==================================================================
+class AddColumnTests(MasterTestCase):
+    """マスタ管理で列を足す(`master_schema.add_column`)。
+
+    現場の声:「マスタの編集で列を追加が欲しい」(まず 班員名簿)。
+    **足せるのは直せる表だけ**、**列は戻せない**ので管理者認証を通す。
+    """
+
+    TABLE = "班員名簿"
+
+    def setUp(self) -> None:
+        super().setUp()
+        # 「表を持ってくる」で足した表(Access の型のまま)
+        conn = sqlite3.connect(self.src)
+        conn.execute(f'CREATE TABLE "{self.TABLE}" (ID INTEGER PRIMARY KEY, 氏名 TEXT, 班 TEXT)')
+        conn.executemany(f'INSERT INTO "{self.TABLE}" (氏名, 班) VALUES (?, ?)',
+                         [("山田", "A"), ("佐藤", "B")])
+        conn.execute('CREATE TABLE "ツールで足した表" (表 TEXT PRIMARY KEY, 足した日時 TEXT,'
+                     ' 元のファイル TEXT)')
+        conn.execute('INSERT INTO "ツールで足した表" VALUES (?, ?, ?)',
+                     (self.TABLE, "2026-10-01 00:00:00", "班員.accdb"))
+        conn.commit()
+        conn.close()
+
+    def add(self, name, kind="text", initial="", table=None):
+        return master_admin.add_column(self.conn, table or self.TABLE, name, kind, initial,
+                                       path=self.src)
+
+    def source_columns(self, table=None) -> list[tuple[str, str]]:
+        conn = sqlite3.connect(self.src)
+        try:
+            return [(r[1], r[2]) for r in
+                    conn.execute(f'PRAGMA table_info("{table or self.TABLE}")')]
+        finally:
+            conn.close()
+
+    def test_足した列は一覧に出てそのまま直せる(self) -> None:
+        result = self.add("電話番号")
+        self.assertTrue(result.ok, result.message)
+        self.assertIn(("電話番号", "TEXT"), self.source_columns())
+        page = master_admin.page(self.src, self.TABLE)
+        self.assertIn("電話番号", page.columns)
+        names = [c.name for c in master_admin.columns(self.conn, self.TABLE, page.columns,
+                                                      source_path=self.src)]
+        self.assertIn("電話番号", names)
+        key = page.rows[0][master_admin.ROW_KEY]
+        saved = master_admin.save_row(self.conn, self.TABLE, key,
+                                      {"電話番号": "090-1234"}, path=self.src)
+        self.assertTrue(saved.ok, saved.message)
+        self.assertEqual(self.source_rows(self.TABLE)[0]["電話番号"], "090-1234")
+
+    def test_最初の値をいまある行すべてに入れる(self) -> None:
+        result = self.add("年次", "int", "3")
+        self.assertTrue(result.ok, result.message)
+        self.assertIn("いまある 2行 に 3 を入れました", result.message)
+        self.assertEqual([r["年次"] for r in self.source_rows(self.TABLE)], [3, 3])
+        self.assertIn(("年次", "INTEGER"), self.source_columns())
+
+    def test_最初の値が空なら空のまま(self) -> None:
+        self.assertTrue(self.add("メモ").ok)
+        self.assertEqual([r["メモ"] for r in self.source_rows(self.TABLE)], [None, None])
+
+    def test_同じ名前は大文字小文字が違っても断る(self) -> None:
+        """sqlite3 の列名は英字の大文字・小文字を区別しない。書く瞬間に断られる前に言う。"""
+        for name in ("氏名", "id"):
+            result = self.add(name)
+            self.assertFalse(result.ok, name)
+            self.assertEqual(result.reason, master_admin.REFUSE_BAD_VALUE)
+            self.assertIn("もうあります", result.message)
+
+    def test_使えない名前を断る(self) -> None:
+        for name, said in (("", "名前を入れて"), ("  ", "名前を入れて"),
+                           ("a]b", "使えません"), ('a"b', "使えません"), ("a.b", "使えません"),
+                           ("改\n行", "使えません"), ("rowid", "内部で使う"),
+                           ("__行", "内部で使う"), ("あ" * 41, "40文字")):
+            result = self.add(name)
+            self.assertFalse(result.ok, name)
+            self.assertIn(said, result.message, name)
+        self.assertEqual(len(self.source_columns()), 3)       # 1つも足していない
+
+    def test_型に合わない最初の値は断り列も足さない(self) -> None:
+        result = self.add("年次", "int", "三")
+        self.assertFalse(result.ok)
+        self.assertIn("整数", result.message)
+        self.assertNotIn("年次", [n for n, _t in self.source_columns()])
+
+    def test_知らない型は断る(self) -> None:
+        result = self.add("年次", "date")
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, master_admin.REFUSE_BAD_VALUE)
+
+    def test_管理者認証が無ければ足さない(self) -> None:
+        selection_session.get_session(self.conn).admin = False
+        result = self.add("電話番号")
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_ALLOWED)
+        self.assertNotIn("電話番号", [n for n, _t in self.source_columns()])
+
+    def test_直せない表には足せない(self) -> None:
+        """書き戻す表・実績の表は、書く側が列を知らないので足しても誰も埋めない。"""
+        result = self.add("メモ", table="PalletPatterns")
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_EDITABLE)
+        self.assertNotIn("メモ", [n for n, _t in self.source_columns("PalletPatterns")])
+        self.assertFalse(master_admin.page(self.src, "PalletPatterns").can_add_column)
+        self.assertTrue(master_admin.page(self.src, self.TABLE).can_add_column)
+
+    def test_資材課の表に足した列も直せる列に出る(self) -> None:
+        """資材課の表は直せる列が取り込みの列に決まっている。足した列は記録を見て加える。"""
+        result = self.add("棚メモ", table="PalletMaster")
+        self.assertTrue(result.ok, result.message)
+        page = master_admin.page(self.src, "PalletMaster")
+        cols = {c.name: c for c in master_admin.columns(self.conn, "PalletMaster",
+                                                        page.columns, source_path=self.src)}
+        self.assertIn("棚メモ", cols)
+        self.assertIn("計算・帳票には使われません", cols["棚メモ"].note)
+        # 取り込みが読まない列(管理番号)は、これまでどおり出さない
+        self.assertNotIn("管理番号", cols)
+        key = page.rows[0][master_admin.ROW_KEY]
+        saved = master_admin.save_row(self.conn, "PalletMaster", key, {"棚メモ": "奥"},
+                                      path=self.src)
+        self.assertTrue(saved.ok, saved.message)
+        self.assertEqual(self.source_rows("PalletMaster")[0]["棚メモ"], "奥")
+        self.assertIn("計算・帳票には使われません",
+                      master_admin.add_column_note("PalletMaster"))
+
+    def test_足した列の記録は一覧に出さず消させない(self) -> None:
+        self.assertTrue(self.add("電話番号").ok)
+        names = [t.table for t in master_admin.tables(self.src)]
+        self.assertNotIn(master_admin.ADDED_REGISTRY, names)
+        self.assertIn("使っている表", master_admin.drop_why(master_admin.ADDED_REGISTRY, self.src))
+        self.assertEqual(master_admin.added_columns(self.src, self.TABLE), {"電話番号": "text"})
+
+    def test_表を消すと足した列の記録も外す(self) -> None:
+        """同じ名前で持ってき直したとき、前の表の列が「足した列」に残らないように。"""
+        self.assertTrue(self.add("電話番号").ok)
+        dropped = master_admin.drop_table(self.conn, self.TABLE, confirm=self.TABLE,
+                                          path=self.src)
+        self.assertTrue(dropped.ok, dropped.message)
+        self.assertEqual(master_admin.added_columns(self.src, self.TABLE), {})
