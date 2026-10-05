@@ -170,6 +170,24 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("見た側", "見た側", to_text),
         ("見た日時", "見た日時", to_text),
     ],
+    # 現場が倉庫へ送った切断依頼(紙面ごと)と、その状態。全端末が書き戻しで足していく
+    config.TBL_CUT_REQUEST: [
+        ("依頼ID", "依頼ID", to_text),
+        ("LotNo", "LotNo", to_text),
+        ("要約", "要約", to_text),
+        ("送った端末", "送った端末", to_text),
+        ("送った日時", "送った日時", to_text),
+        ("題名", "題名", to_text),
+        ("紙面", "紙面", to_text),
+        ("差し替え元", "差し替え元", to_text),
+    ],
+    config.TBL_CUT_REQUEST_EVENT: [
+        ("依頼ID", "依頼ID", to_text),
+        ("状態", "状態", to_text),
+        ("端末", "端末", to_text),
+        ("側", "側", to_text),
+        ("日時", "日時", to_text),
+    ],
     "CornerboardMaster": [
         ("アングル丈", "アングル丈", to_int),
         ("データラベル", "データラベル", to_text),
@@ -411,7 +429,9 @@ BLANK_IS_MISSING: dict[str, tuple[str, ...]] = {
 # (手元の記録はそのまま残る)
 OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_BOARD_USAGE,
                                                config.TBL_ORDER_COMMENT,
-                                               config.TBL_ORDER_COMMENT_SEEN})
+                                               config.TBL_ORDER_COMMENT_SEEN,
+                                               config.TBL_CUT_REQUEST,
+                                               config.TBL_CUT_REQUEST_EVENT})
                                    | frozenset(THRESHOLD_TABLES))
 
 # **取り込み元に無くても知らせない列**(表 → 取り込み元の列名)。

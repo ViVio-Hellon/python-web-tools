@@ -33,12 +33,12 @@ from urllib.parse import quote
 from flask import Blueprint, Response, jsonify, render_template, request
 
 from packaging_tool import board_selection_service as svc
-from packaging_tool import printing, selection_session, work_context
+from packaging_tool import modes, printing, selection_session, work_context
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import outputs
 from packaging_tool.presenters import selection as presenter
 
-from .. import get_db
+from .. import current_mode, get_db
 from ..shell import shell_context
 
 log = get_logger("app.routes.selection")
@@ -624,8 +624,68 @@ def report(name: str):
     edit_url = f"/api/selection/report/{name}/edits"
     if token:
         edit_url += f"?t={quote(token)}"
-    return Response(printing.render_html(built, edit_url=edit_url),
+    # 切断依頼は**倉庫へ送れる**(現場モードのとき)。丈カットの選択も一緒に送る
+    send_url = ""
+    if name == outputs.REPORT_CUT and current_mode() == modes.FIELD:
+        send_url = (f"/api/selection/report/{name}/send"
+                    f"?use_len_cut={'1' if use_len_cut else '0'}")
+        if token:
+            send_url += f"&t={quote(token)}"
+    return Response(printing.render_html(built, edit_url=edit_url, send_url=send_url),
                     mimetype="text/html")
+
+
+@bp.post("/api/selection/report/cut-request/send")
+def send_cut_request():
+    """切断依頼を倉庫へ送る(`cut_requests.send`)。`{"edits":{…}, "replace":…, "again":…}`
+
+    **紙面はここで作り直して固める。** 画面(帳票の窓)で直した内容を先に覚えてから
+    作るので、見ていた紙面と同じものが届く。同じロットをもう送ってあれば、
+    訊く文と、確かめたときに付け直す値(`retry`)を 409 で返す。
+    """
+    from packaging_tool import cut_requests, data_sync
+    from packaging_tool import warehouse_service
+
+    if current_mode() != modes.FIELD:
+        return jsonify(_error("wrong_mode", "切断依頼を送れるのは現場モードだけです。")), 403
+    body = request.get_json(silent=True) or {}
+    session = _session()
+    edits = body.get("edits")
+    if isinstance(edits, dict) and edits:
+        session.set_report_edits(outputs.REPORT_CUT, edits)
+    refusal = outputs.cut_request_refusal(session)
+    if refusal is not None:
+        return jsonify(_error("refused", refusal.message)), 422
+    use_len_cut = request.args.get("use_len_cut", "1") != "0"
+    built, refusal = outputs.build_cut_request(session, use_len_cut=use_len_cut)
+    if built is None:
+        return jsonify(_error("refused", refusal.message)), 422
+    conn = get_db()
+    # 同じロットの前の依頼が、倉庫でもう受け取られていないかを最新で見る
+    try:
+        data_sync.refresh_orders(conn, only_if_changed=True)
+    except Exception:                               # noqa: BLE001 - 送る操作は止めない
+        log.exception("切断依頼を送る前の取り込み直しに失敗(手元の状態で続けます)")
+    lot_no = session.presenter.lot_result.lot.lot_no
+    result = cut_requests.send(
+        conn, built, lot_no=lot_no, summary=outputs.cut_request_summary(session),
+        terminal=warehouse_service.this_terminal(),
+        replace=body.get("replace") is True, again=body.get("again") is True)
+    if not result.ok:
+        payload = _error(result.reason, result.message)
+        if result.reason == cut_requests.REFUSE_NEED_CONFIRM:
+            # 確かめたら何を付けて送り直すか(倉庫がまだ開いていない → 差し替え)
+            previous = cut_requests.get(conn, result.request_id)
+            payload["error"]["retry"] = (
+                {"replace": True} if previous and previous.state == cut_requests.SENT
+                else {"again": True})
+            return jsonify(payload), 409
+        return jsonify(payload), 422
+    session.presenter.user_log.log(result.message, emphasis=True)
+    # 倉庫に届けるのが目的なので、すぐ送りにいく
+    data_sync.write_back_in_background()
+    return jsonify({"ok": True, "message": result.message + "倉庫連携の「切断依頼」で状態を見られます。",
+                    "id": result.request_id})
 
 
 @bp.post("/api/selection/report/<name>/edits")

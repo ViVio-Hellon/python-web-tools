@@ -130,6 +130,11 @@ def refresh_orders(conn: sqlite3.Connection,
     seen = imported.imported.pop(config.TBL_ORDER_COMMENT_SEEN, None)
     if comments is None and seen is not None:
         comments = seen
+    # 切断依頼とその状態も同じ(発注の件数には数えないが、届いたら画面を出し直す)
+    for table in (config.TBL_CUT_REQUEST, config.TBL_CUT_REQUEST_EVENT):
+        got = imported.imported.pop(table, None)
+        if comments is None and got is not None:
+            comments = got
     stock = imported.imported.pop(config.TBL_PALLET_MASTER, None)
     if stock:
         # 取り込みと同じく、入れ直したら適合範囲を計算し直す

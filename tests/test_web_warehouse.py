@@ -1038,5 +1038,100 @@ class OrderDetailTests(WarehouseWebTestCase):
             self.assertIn(field["key"], row["values"], field)
 
 
+class CutRequestWebTests(WarehouseWebTestCase):
+    """切断依頼(`cut_requests`)。倉庫連携の画面で、送った / 届いた依頼を見る・開く・切った・取り消し。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from packaging_tool import cut_requests, printing
+        report = printing.Report(title="ハードボード切断依頼書")
+        report.add_sheet("<p>幅カットのみ 1030×1500 3枚</p>")
+        self.rid = cut_requests.send(self.conn, report, lot_no="1234567",
+                                     summary="ハードボード / 製品 3×1100×2000",
+                                     terminal=svc.this_terminal()).request_id
+
+    def cuts(self, mode: str) -> dict:
+        res = self.clients[mode].get("/api/cut-requests", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        return res.get_json()
+
+    def view(self, mode: str):
+        return self.clients[mode].get(f"/report/cut-sent/{self.rid}", headers=self.auth())
+
+    def test_両方の画面に段がある(self) -> None:
+        for mode, title in (("field", "送った切断依頼"), ("material", "届いた切断依頼")):
+            with self.subTest(mode=mode):
+                html = self.clients[mode].get("/warehouse", headers=self.auth()).get_data(as_text=True)
+                self.assertIn('id="cutRows"', html)
+                self.assertIn(title, html)
+
+    def test_倉庫の一覧には新として出て切ったを押せる(self) -> None:
+        body = self.cuts("material")
+        [item] = body["items"]
+        self.assertEqual((item["state"], item["can_cut"], item["can_cancel"]), ("未読", True, False))
+        self.assertEqual(body["unread"], 1)
+
+    def test_現場の一覧では送った端末が取り消せる(self) -> None:
+        [item] = self.cuts("field")["items"]
+        self.assertEqual((item["can_cut"], item["can_cancel"], item["mine"]), (False, True, True))
+
+    def test_倉庫が開くと受け取ったになり現場は取り消せなくなる(self) -> None:
+        res = self.view("material")
+        self.assertEqual(res.status_code, 200)
+        html = res.get_data(as_text=True)
+        self.assertIn("幅カットのみ 1030×1500 3枚", html)
+        self.assertIn('id="printNow"', html)               # 印刷する
+        self.assertNotIn('id="printSend"', html)           # 送り直す口は出さない
+        [item] = self.cuts("field")["items"]
+        self.assertEqual(item["state"], "受け取った")
+        self.assertFalse(item["can_cancel"])
+        res = self.clients["field"].post("/api/cut-requests/cancel", json={"id": self.rid},
+                                         headers=self.auth())
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("受け取っている", res.get_json()["error"]["message"])
+
+    def test_現場が開いても受け取ったにはならない(self) -> None:
+        self.assertEqual(self.view("field").status_code, 200)
+        self.assertEqual(self.cuts("material")["items"][0]["state"], "未読")
+
+    def test_現場は受け取られる前なら取り消せる(self) -> None:
+        res = self.clients["field"].post("/api/cut-requests/cancel", json={"id": self.rid},
+                                         headers=self.auth())
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()["items"][0]["state"], "取り消し")
+        html = self.view("material").get_data(as_text=True)
+        self.assertIn("取り消されています", html)
+
+    def test_倉庫が切ったを押す(self) -> None:
+        res = self.clients["material"].post("/api/cut-requests/cut", json={"id": self.rid},
+                                            headers=self.auth())
+        self.assertEqual(res.status_code, 200, res.get_json())
+        [item] = res.get_json()["items"]
+        self.assertEqual(item["state"], "切った")
+        self.assertFalse(item["can_cut"])
+        self.assertEqual(self.cuts("field")["items"][0]["state"], "切った")
+
+    def test_役割が違えば断る(self) -> None:
+        """切ったは倉庫(資材モード)だけ、取り消しは現場モードだけ。"""
+        res = self.clients["field-allowed"].post("/api/cut-requests/cut", json={"id": self.rid},
+                                                 headers=self.auth())
+        self.assertEqual(res.status_code, 403)
+        res = self.clients["material"].post("/api/cut-requests/cancel", json={"id": self.rid},
+                                            headers=self.auth())
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(self.cuts("material")["items"][0]["state"], "未読")
+
+    def test_無い依頼は404(self) -> None:
+        res = self.clients["material"].get("/report/cut-sent/nai", headers=self.auth())
+        self.assertEqual(res.status_code, 404)
+        res = self.clients["material"].post("/api/cut-requests/cut", json={"id": "nai"},
+                                            headers=self.auth())
+        self.assertEqual(res.status_code, 404)
+
+    def test_倉庫のレールに未読の数を出す(self) -> None:
+        html = self.clients["material"].get("/warehouse", headers=self.auth()).get_data(as_text=True)
+        self.assertIn("切1", html)
+
+
 if __name__ == "__main__":
     unittest.main()

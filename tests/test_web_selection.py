@@ -2504,6 +2504,59 @@ class SendTests(SelectionWebTestCase):
         self.assertEqual(res.status_code, 200, res.get_data(as_text=True)[:200])
         return res.get_data(as_text=True)
 
+    # --- 倉庫へ送る(`cut_requests`) ---------------------------------
+    def _send_cut(self, body=None, expect=200, use_len_cut="1"):
+        res = self.client.post(f"/api/selection/report/cut-request/send?use_len_cut={use_len_cut}",
+                               json=body or {}, headers=self.auth())
+        self.assertEqual(res.status_code, expect, res.get_json())
+        return res.get_json()
+
+    def test_切断依頼のプレビューに倉庫へ送るがある(self) -> None:
+        html = self._cut_sheet()
+        self.assertIn('id="printSend"', html)
+        self.assertIn("/api/selection/report/cut-request/send?use_len_cut=1", html)
+        # Lot印刷には出さない
+        label = self.client.get("/report/label", headers=self.auth()).get_data(as_text=True)
+        self.assertNotIn('id="printSend"', label)
+
+    def test_倉庫へ送ると直した内容ごと固めて残る(self) -> None:
+        from packaging_tool import cut_requests
+        self._cut_sheet()
+        body = self._send_cut({"edits": {"tantou": "送る前に直した"}})
+        self.assertIn("倉庫へ送りました", body["message"])
+        [req] = cut_requests.recent(self.conn)
+        self.assertEqual(req.lot_no, "1234567")
+        # 製品は紙面の「製品サイズ」と同じ(ロットの厚×幅×丈。".0" は付けない)
+        self.assertRegex(req.summary, r"製品 [\d.]+×\d+×\d+ /")
+        self.assertNotIn(".0×", req.summary)
+        self.assertIn("パレット 1150×2650", req.summary)
+        sheet = cut_requests.report_of(self.conn, req.request_id).sheets[0]
+        self.assertIn("送る前に直した", sheet)
+        self.assertNotIn("contenteditable", sheet)
+        # 別のロットに移っても送った紙面は残る
+        self.session().clear_for_new_lot()
+        self.assertIn("送る前に直した",
+                      cut_requests.report_of(self.conn, req.request_id).sheets[0])
+
+    def test_同じロットを送り直すと訊いてから差し替える(self) -> None:
+        from packaging_tool import cut_requests
+        self._cut_sheet()
+        first = self._send_cut()["id"]
+        asked = self._send_cut(expect=409)
+        self.assertEqual(asked["error"]["code"], "need_confirm")
+        self.assertEqual(asked["error"]["retry"], {"replace": True})
+        second = self._send_cut({"replace": True})["id"]
+        self.assertEqual(cut_requests.get(self.conn, first).state, cut_requests.CANCELLED)
+        self.assertEqual(cut_requests.get(self.conn, second).replaces, first)
+
+    def test_送れないときは送らない(self) -> None:
+        """選定・配置していないと切断依頼そのものが作れない。理由を言って、何も送らない。"""
+        from packaging_tool import cut_requests
+        self.post("/api/selection/pallet/apply", {"width": "1150", "length": "2650"})
+        body = self._send_cut(expect=422)
+        self.assertIn("先に", body["error"]["message"])
+        self.assertEqual(cut_requests.recent(self.conn), [])
+
     def test_帳票は紙面で直せる(self) -> None:
         """VBA版は帳票がExcelシートで出ていたので、気に入らなければ
 

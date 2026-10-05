@@ -156,7 +156,7 @@ _PRINT_NOTE = ("印刷ダイアログで用紙・余白がページ設定どお�
                "(「背景のグラフィック」を有効にすると網掛けも印刷されます)。")
 
 
-def print_bar(note: str = _PRINT_NOTE) -> str:
+def print_bar(note: str = _PRINT_NOTE, *, send_url: str = "") -> str:
     """プレビューの上に出す**「印刷する」「閉じる」**。紙には出ない。
 
     以前は「Ctrl+P を押すと印刷できます」の案内だけで、押すボタンが
@@ -167,7 +167,14 @@ def print_bar(note: str = _PRINT_NOTE) -> str:
     直している途中の欄があれば、**先に確定させてから**印刷する ──
     打ち終わってすぐ押しても、直した内容が送り返されるように
     (欄から出ると保存する仕掛けは `_EDIT_SCRIPT`)。
+
+    `send_url` を渡すと**「倉庫へ送る」**も出す(切断依頼。`cut_requests`)。
+    押すと、画面で直した内容ごと送る。同じロットをもう送ってあれば、サーバが
+    訊く文を返す(`need_confirm`)ので、確かめてから送り直す。
     """
+    send_button = ('<button type="button" class="printbar__send" id="printSend">'
+                   "⇪ 倉庫へ送る</button>") if send_url else ""
+    send_script = (_SEND_SCRIPT % {"url": json.dumps(send_url)}) if send_url else ""
     return f"""<style>
 @media screen {{
   .printbar {{ position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap;
@@ -178,6 +185,11 @@ def print_bar(note: str = _PRINT_NOTE) -> str:
                       border-radius: 6px; padding: 8px 18px; border: 1px solid #9ca3af;
                       background: #f9fafb; color: #111827; }}
   .printbar button.printbar__go {{ background: #1d4ed8; border-color: #1d4ed8; color: #fff; }}
+  .printbar button.printbar__send {{ background: #047857; border-color: #047857; color: #fff; }}
+  .printbar button:disabled {{ opacity: .6; cursor: wait; }}
+  .printbar__sent {{ flex-basis: 100%; font-size: 13px; font-weight: 600; }}
+  .printbar__sent[data-kind="ok"] {{ color: #86efac; }}
+  .printbar__sent[data-kind="ng"] {{ color: #fca5a5; }}
   .printbar button:focus-visible {{ outline: 3px solid #fbbf24; outline-offset: 2px; }}
   .printbar__note {{ flex: 1 1 20em; line-height: 1.6; }}
 }}
@@ -185,10 +197,13 @@ def print_bar(note: str = _PRINT_NOTE) -> str:
 </style>
 <div class="printbar" role="toolbar" aria-label="印刷">
   <button type="button" class="printbar__go" id="printNow">⎙ 印刷する</button>
+  {send_button}
   <button type="button" id="printClose">閉じる</button>
   <span class="printbar__note">{escape(note)}(<b>Ctrl+P</b> でも印刷できます)
     <span id="printCloseNote"></span></span>
+  <span class="printbar__sent" id="printSent" role="status" aria-live="polite"></span>
 </div>
+{send_script}
 <script>
 (function () {{
   document.getElementById("printNow").addEventListener("click", function () {{
@@ -208,6 +223,49 @@ def print_bar(note: str = _PRINT_NOTE) -> str:
     }}, 300);
   }});
 }}());
+</script>"""
+
+
+# 「倉庫へ送る」。**画面で直した内容も一緒に送る**(保存の行き違いで直す前の紙面を
+# 送らないように、直した欄をここで集め直す)。訊かれたら確かめて送り直す
+_SEND_SCRIPT = """<script>
+(function () {
+  var url = %(url)s, button = document.getElementById("printSend"),
+      said = document.getElementById("printSent");
+  function edits() {
+    var out = {};
+    document.querySelectorAll("[data-edit]").forEach(function (n) {
+      out[n.dataset.edit] = n.textContent.trim();
+    });
+    return out;
+  }
+  function say(text, kind) { said.textContent = text; said.dataset.kind = kind; }
+  function send(extra) {
+    var body = { edits: edits() };
+    for (var k in extra) body[k] = extra[k];
+    button.disabled = true;
+    say("送っています…", "");
+    fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                 body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (b) { return [r, b]; }); })
+      .then(function (got) {
+        var r = got[0], b = got[1], err = b.error || {};
+        button.disabled = false;
+        if (r.ok) { say("✔ " + b.message, "ok"); return; }
+        if (err.code === "need_confirm" && window.confirm(err.message)) {
+          send(err.retry || {}); return;
+        }
+        say(err.code === "need_confirm" ? "送るのをやめました。" : ("✕ " + (err.message || "送れませんでした")),
+            err.code === "need_confirm" ? "" : "ng");
+      })
+      .catch(function () { button.disabled = false; say("✕ 送れませんでした(アプリに届きません)", "ng"); });
+  }
+  button.addEventListener("click", function () {
+    var editing = document.activeElement;
+    if (editing && editing.closest && editing.closest("[data-edit]")) editing.blur();
+    send({});
+  });
+}());
 </script>"""
 
 
@@ -301,11 +359,13 @@ _EDIT_SCRIPT = """
 """
 
 
-def render_html(report: Report, *, edit_url: str = "") -> str:
+def render_html(report: Report, *, edit_url: str = "", send_url: str = "",
+                note: str = "") -> str:
     """帳票をHTML文字列にする。
 
     `edit_url` を渡すと、`editable()` で作った欄がその場で直せるように
     なる(直した内容はそのURLへ送り返す)。渡さなければ読むだけ。
+    `send_url` を渡すと「倉庫へ送る」も出す(`print_bar`)。`note` は帯の案内を差し替える。
     """
     sheets = "\n".join(f'<div class="sheet">{s}</div>' for s in report.sheets)
     extra_css = _EDIT_CSS if edit_url else ""
@@ -318,7 +378,8 @@ def render_html(report: Report, *, edit_url: str = "") -> str:
         f"<style>{report.setup.to_css()}\n{BASE_CSS}\n"
         f"{report.setup.screen_css()}\n{extra_css}\n"
         f"{report.setup.extra_css}</style>"
-        f"</head><body>{print_bar()}{hint}{sheets}{script}</body></html>"
+        f"</head><body>{print_bar(note or _PRINT_NOTE, send_url=send_url)}"
+        f"{hint}{sheets}{script}</body></html>"
     )
 
 

@@ -332,6 +332,40 @@ CREATE TABLE IF NOT EXISTS 発注コメント閲覧 (
 );
 CREATE INDEX IF NOT EXISTS idx_order_comment_seen ON 発注コメント閲覧(コメントID);
 
+-- ------------------------------------------------------------------
+-- 切断依頼: 現場が倉庫へ送った切断依頼書(`cut_requests.py`)。
+--
+-- **1行 = 1回送ったもの。** 紙面(`紙面`: 題名・ページ・紙の設定の JSON)をそのまま
+-- 固めて持つので、あとで資材選択をやり直しても中身は変わらない。`依頼ID` は送ったときに
+-- 振る世界で1つの番号(手元の管理番号は取り込みで振り直される)。`差し替え元` は、
+-- 倉庫が開く前に送り直したとき、取り消した前の依頼の `依頼ID`。
+-- ------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS 切断依頼 (
+    管理番号    INTEGER PRIMARY KEY AUTOINCREMENT,
+    依頼ID      TEXT NOT NULL DEFAULT '',
+    LotNo       TEXT NOT NULL DEFAULT '',
+    要約        TEXT NOT NULL DEFAULT '',
+    送った端末  TEXT NOT NULL DEFAULT '',
+    送った日時  TEXT NOT NULL DEFAULT '',
+    題名        TEXT NOT NULL DEFAULT '',
+    紙面        TEXT NOT NULL DEFAULT '',
+    差し替え元  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_cut_request_id ON 切断依頼(依頼ID);
+CREATE INDEX IF NOT EXISTS idx_cut_request_lot ON 切断依頼(LotNo);
+
+-- 切断依頼状態: 受け取った / 切った / 取り消し。**押すたびに1行足す**(書き直さない)。
+-- いまの状態は、どの端末も同じ規則で古い順に読んで決める(`cut_requests._fold`)
+CREATE TABLE IF NOT EXISTS 切断依頼状態 (
+    管理番号    INTEGER PRIMARY KEY AUTOINCREMENT,
+    依頼ID      TEXT NOT NULL DEFAULT '',
+    状態        TEXT NOT NULL DEFAULT '',
+    端末        TEXT NOT NULL DEFAULT '',
+    側          TEXT NOT NULL DEFAULT '',
+    日時        TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_cut_request_event ON 切断依頼状態(依頼ID);
+
 CREATE INDEX IF NOT EXISTS idx_warehouse_order_lotno ON 資材パレット注文管理(LotNo);
 CREATE INDEX IF NOT EXISTS idx_warehouse_order_status ON 資材パレット注文管理(取り消し済, 確認済み);
 

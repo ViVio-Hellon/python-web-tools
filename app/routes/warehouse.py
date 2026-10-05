@@ -162,17 +162,29 @@ def page():
         can_expand_here=False,
         lot_peek_why=LOT_PEEK_WHY,
         expand_absent_why=LOT_PEEK_WHY,
-        **shell_context("warehouse", badges=_rail_badge(view)),
+        cut_state=_cut_list(get_db()),
+        **shell_context("warehouse", badges=_rail_badge(view, _cut_unread(mode))),
     )
 
 
-def _rail_badge(view):
-    """レールの印。未確認の件数と、相手が書いた未読コメントの数。"""
+def _cut_unread(mode: str) -> int:
+    """レールに出す、倉庫がまだ開いていない切断依頼の数(資材モードだけ)。"""
+    if mode != modes.MATERIAL:
+        return 0
+    from packaging_tool import cut_requests
+    return cut_requests.unread_count(get_db())
+
+
+def _rail_badge(view, cut_unread: int = 0):
+    """レールの印。未確認の件数と、相手が書いた未読コメントの数と、
+    倉庫がまだ開いていない切断依頼の数(資材モードだけ)。"""
     parts = []
     if view.pending:
         parts.append(str(view.pending))
     if view.unread_comments:
         parts.append(f"新{view.unread_comments}")
+    if cut_unread:
+        parts.append(f"切{cut_unread}")
     return {"warehouse": ("・".join(parts), "todo")} if parts else None
 
 
@@ -472,3 +484,97 @@ def _action(func, label: str):
     # もう終わっており、届かなくても次の反映でまとめて送られる)
     data_sync.write_back_in_background()
     return jsonify(presenter.action_dict(result))
+
+
+# ------------------------------------------------------------------
+# 切断依頼(`cut_requests`)。現場が資材選択の切断依頼のプレビューから送り、
+# 倉庫はここで一覧・開いて印刷・「切った」。現場はここで状態を見て、
+# 倉庫が受け取る前なら取り消せる
+# ------------------------------------------------------------------
+def _cut_list(conn) -> dict:
+    from packaging_tool import cut_requests
+    material = _mode() == modes.MATERIAL
+    terminal = svc.this_terminal()
+    items = [cut_requests.to_dict(r, terminal=terminal, material=material)
+             for r in cut_requests.recent(conn)]
+    return {"items": items, "material": material,
+            # 倉庫がまだ開いていない数(倉庫では「新」、現場では「未読」)
+            "unread": sum(1 for i in items if i["state"] == cut_requests.SENT
+                          and not i["replaced"])}
+
+
+@bp.get("/api/cut-requests")
+def cut_request_list():
+    """送った / 届いた切断依頼(手元から。共有は見張りが取り込む)。"""
+    return jsonify(_cut_list(get_db()))
+
+
+def _cut_mark(state: str):
+    from packaging_tool import cut_requests
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    # 押す前に共有の変化を取り込む(相手が先に受け取った・取り消した、を知るため)
+    try:
+        data_sync.refresh_orders(conn, only_if_changed=True)
+    except Exception:                               # noqa: BLE001 - 押す操作は止めない
+        log.exception("切断依頼の前の取り込み直しに失敗(手元の状態で続けます)")
+    side = (cut_requests.SIDE_MATERIAL if _mode() == modes.MATERIAL
+            else cut_requests.SIDE_FIELD)
+    result = cut_requests.mark(conn, str(body.get("id") or ""), state,
+                               terminal=svc.this_terminal(), side=side)
+    payload = _cut_list(conn)
+    if not result.ok:
+        payload["error"] = {"code": result.reason, "message": result.message}
+        return jsonify(payload), (404 if result.reason == cut_requests.REFUSE_NOT_FOUND
+                                  else 409)
+    data_sync.write_back_in_background()
+    payload["message"] = result.message
+    return jsonify(payload)
+
+
+@field_only.post("/api/cut-requests/cancel")
+def cut_request_cancel():
+    """取り消す。**送った端末だけ、倉庫が受け取る前だけ**。`{"id":…}`"""
+    from packaging_tool import cut_requests
+    return _cut_mark(cut_requests.CANCELLED)
+
+
+@material_only.post("/api/cut-requests/cut")
+def cut_request_cut():
+    """切った。`{"id":…}`(まだ開いていなければ、受け取ったことにもなる)"""
+    from packaging_tool import cut_requests
+    return _cut_mark(cut_requests.CUT)
+
+
+@bp.get("/report/cut-sent/<request_id>")
+def cut_request_view(request_id: str):
+    """送った切断依頼の紙面(読むだけ)。**倉庫(資材モード)が開いたら「受け取った」**。
+
+    印刷はこの窓の「印刷する」から。現場も、送ったあと(別のロットに移ったあとでも)
+    ここから開き直して印刷できる。
+    """
+    from flask import Response
+    from packaging_tool import cut_requests, printing
+    conn = get_db()
+    report = cut_requests.report_of(conn, request_id)
+    req = cut_requests.get(conn, request_id)
+    if report is None or req is None:
+        return Response(
+            '<!doctype html><html lang="ja"><head><meta charset="utf-8">'
+            "<title>切断依頼が見つかりません</title></head><body>"
+            "<p>この切断依頼は見つかりません。倉庫連携の画面を更新してください。</p>"
+            "</body></html>", status=404, mimetype="text/html")
+    if _mode() == modes.MATERIAL and req.state == cut_requests.SENT:
+        got = cut_requests.mark(conn, request_id, cut_requests.RECEIVED,
+                                terminal=svc.this_terminal(), side=cut_requests.SIDE_MATERIAL)
+        if got.ok:
+            # 現場の画面に「受け取った」が早く出るよう、すぐ送る
+            data_sync.write_back_in_background()
+            req = cut_requests.get(conn, request_id) or req
+    note = (f"Lot {req.lot_no} の切断依頼({req.terminal} が {req.sent_at} に送ったもの)。"
+            f"いまの状態: {cut_requests.state_text(req)}。")
+    if req.state == cut_requests.CANCELLED:
+        note = "⚠ この切断依頼は取り消されています。" + note
+    elif req.replaced_by:
+        note = "⚠ この切断依頼は送り直されています(新しいほうを使ってください)。" + note
+    return Response(printing.render_html(report, note=note), mimetype="text/html")

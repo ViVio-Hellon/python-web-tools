@@ -78,6 +78,15 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   access_table=config.TBL_ORDER_COMMENT_SEEN,
                   key_column="管理番号",
                   number_column="管理番号"),
+    # 切断依頼(送った紙面)と、その状態(受け取った・切った・取り消し)。どちらも足すだけ
+    WriteBackSpec(sqlite_table=config.TBL_CUT_REQUEST,
+                  access_table=config.TBL_CUT_REQUEST,
+                  key_column="管理番号",
+                  number_column="管理番号"),
+    WriteBackSpec(sqlite_table=config.TBL_CUT_REQUEST_EVENT,
+                  access_table=config.TBL_CUT_REQUEST_EVENT,
+                  key_column="管理番号",
+                  number_column="管理番号"),
 ]
 
 # 共有にまだ無ければ、**最初に送る端末が作る**表。
@@ -108,6 +117,19 @@ SHARED_TABLE_DDL: dict[str, str] = {
         " 管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,"
         " コメントID TEXT NOT NULL DEFAULT '', 見た端末 TEXT NOT NULL DEFAULT '',"
         " 見た側 TEXT NOT NULL DEFAULT '', 見た日時 TEXT NOT NULL DEFAULT '')"),
+    config.TBL_CUT_REQUEST: (
+        f'CREATE TABLE IF NOT EXISTS "{config.TBL_CUT_REQUEST}" ('
+        " 管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " 依頼ID TEXT NOT NULL DEFAULT '', LotNo TEXT NOT NULL DEFAULT '',"
+        " 要約 TEXT NOT NULL DEFAULT '', 送った端末 TEXT NOT NULL DEFAULT '',"
+        " 送った日時 TEXT NOT NULL DEFAULT '', 題名 TEXT NOT NULL DEFAULT '',"
+        " 紙面 TEXT NOT NULL DEFAULT '', 差し替え元 TEXT NOT NULL DEFAULT '')"),
+    config.TBL_CUT_REQUEST_EVENT: (
+        f'CREATE TABLE IF NOT EXISTS "{config.TBL_CUT_REQUEST_EVENT}" ('
+        " 管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " 依頼ID TEXT NOT NULL DEFAULT '', 状態 TEXT NOT NULL DEFAULT '',"
+        " 端末 TEXT NOT NULL DEFAULT '', 側 TEXT NOT NULL DEFAULT '',"
+        " 日時 TEXT NOT NULL DEFAULT '')"),
 }
 
 

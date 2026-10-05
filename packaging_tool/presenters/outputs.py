@@ -538,3 +538,26 @@ def build_cut_request(session: Any, *, use_len_cut: bool = True) -> tuple[
         upper=upper, lower=lower,
     )
     return reports.build_cut_request_report(data), None
+
+
+def cut_request_summary(session: Any) -> str:
+    """倉庫へ送る切断依頼の一行(一覧に出す)。「ハードボード / 製品 111.2×1362×2534 / パレット 1150×2650」。
+
+    製品は**紙面の「製品サイズ」と同じ**(ロットの厚×幅×丈)。一覧と紙面で違う数を出さない。
+    """
+    def num(value: Any) -> str:
+        try:
+            return f"{float(value):g}"
+        except (TypeError, ValueError):
+            return str(value or "")
+
+    lot = session.presenter.lot_result.lot
+    parts = []
+    if session.board_type:
+        parts.append(str(session.board_type))
+    if session.presenter.protec.is_protec:
+        parts.append("プロテック")
+    parts.append(f"製品 {num(lot.thickness)}×{num(lot.width)}×{num(lot.length)}")
+    if session.palette.is_set:
+        parts.append(f"パレット {session.palette.width}×{session.palette.length}")
+    return " / ".join(parts)

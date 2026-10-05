@@ -170,6 +170,36 @@
       <p class="why" id="listNote">{{ state.message }}</p>
     </div>
   </section>
+
+  {# 切断依頼(`cut_requests`)。現場は資材選択の切断依頼のプレビューから「倉庫へ送る」。
+     **発注とは別の段**(現場の判断)。できることはサーバが決める(`can_cut` / `can_cancel`) #}
+  <section class="card" id="cutCard">
+    <header>
+      <i class="ib ib--sm ib--accent" aria-hidden="true">切</i>
+      <h3>{{ '届いた切断依頼' if is_material else '送った切断依頼' }}</h3>
+      <span class="badge badge--todo" id="cutUnread" hidden></span>
+    </header>
+    <div class="pad">
+      <p class="why" style="margin-top:0">
+        {% if is_material %}
+        「開く」で紙面を開いて印刷します。<b>開くと「受け取った」</b>になり、現場からは取り消せなくなります。
+        切り終えたら「切った」を押します。
+        {% else %}
+        資材選択の「切断依頼」のプレビューで<b>「倉庫へ送る」</b>を押すと、ここに並びます。
+        別のロットに移っても、ここから開き直して印刷できます。倉庫が受け取る前なら取り消せます。
+        {% endif %}
+      </p>
+      <div class="tablewrap">
+        <table class="table cuts">
+          <thead><tr>
+            <th>送った日時</th><th>LotNo</th><th>中身</th><th>送った端末</th><th>状態</th><th>操作</th>
+          </tr></thead>
+          <tbody id="cutRows"></tbody>
+        </table>
+      </div>
+      <p class="why" id="cutEmpty" hidden>まだ切断依頼はありません。</p>
+    </div>
+  </section>
   </div>
 </div>
 
@@ -295,6 +325,9 @@
      この画面にしか無い「取消済」だけを足す ── 取り消したものは
      線を引いて、色を知覚できなくても分かるようにする */
   .st--off { text-decoration:line-through; }
+  /* 切断依頼: 取り消した・送り直した依頼は薄く(状態の字も出している) */
+  .cuts tr.is-cancelled td { color:var(--muted); }
+  .cuts td { vertical-align:top; }
 
   /* **折り返す。** ボタンが3つ(Lotを開く・確認・取り消し)並ぶことが
      あり、折り返さないと列幅を分け合って互いに重なる(実機で重なった)。

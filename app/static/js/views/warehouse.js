@@ -9,7 +9,8 @@
   仮にここでボタンを描いても 404 になる ── 守りは1枚ではない。
 */
 
-import { api } from "../api.js";
+import { api, tokenUrl } from "../api.js";
+import { openWindow } from "../desktop.js";
 import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as toggles from "../toggles.js";
@@ -61,6 +62,102 @@ function render(view) {
     ? `倉庫がまだ確認していない発注が ${view.pending} 件あります`
     : `送った発注のうち、倉庫がまだ確認していないものが ${view.pending} 件`
       + "(この間は取り消せます)";
+  // 一覧を出し直すときは切断依頼も(見張りの取り込みで届いた分を出す)
+  loadCuts();
+}
+
+/* ================================================================
+   切断依頼(`cut_requests`)。発注とは別の段。
+   **できることはサーバが決める**(`can_cut` / `can_cancel`)
+   ================================================================ */
+async function loadCuts() {
+  if (!el.cutRows) return;
+  try {
+    renderCuts(await api.get("/api/cut-requests"));
+  } catch {
+    // 一覧の本体(発注)は出ている。切断依頼が引けなくても赤い帯は出さない
+  }
+}
+
+function renderCuts(body) {
+  const items = body.items || [];
+  el.cutRows.replaceChildren(...items.map(cutRow));
+  el.cutEmpty.hidden = items.length > 0;
+  el.cutUnread.hidden = !body.unread;
+  el.cutUnread.textContent = body.material ? `新${body.unread}` : `倉庫未読 ${body.unread}`;
+  el.cutUnread.title = body.material
+    ? "まだ開いていない切断依頼の数"
+    : "送った切断依頼のうち、倉庫がまだ開いていないもの(この間は取り消せます)";
+}
+
+function cutRow(item) {
+  const tr = document.createElement("tr");
+  tr.dataset.id = item.id;
+  if (item.state === "取り消し" || item.replaced) tr.classList.add("is-cancelled");
+  const td = (text, title = "") => {
+    const cell = document.createElement("td");
+    cell.textContent = text;
+    if (title) cell.title = title;
+    return cell;
+  };
+  const state = document.createElement("td");
+  const mark = document.createElement("span");
+  mark.className = `st st--${item.state_kind}`;
+  mark.textContent = item.state_text;
+  state.appendChild(mark);
+  if (item.replaced) {
+    const note = document.createElement("div");
+    note.className = "why";
+    note.textContent = "送り直し済み(新しいほうを使います)";
+    state.appendChild(note);
+  }
+  if (item.late) {
+    const note = document.createElement("div");
+    note.className = "why";
+    note.textContent = item.late;
+    state.appendChild(note);
+  }
+  const acts = document.createElement("td");
+  const box = document.createElement("div");
+  box.className = "rowacts";
+  box.appendChild(button("開く", "btn--find", () => openCut(item)));
+  if (item.can_cut) {
+    box.appendChild(button("切った", "btn--commit", () => markCut(item, "cut")));
+  }
+  if (item.can_cancel) {
+    box.appendChild(button("取り消し", "btn--danger", () => markCut(item, "cancel")));
+  }
+  acts.appendChild(box);
+  tr.append(td(item.sent_short, item.sent_at), td(item.lot_no), td(item.summary),
+            td(item.terminal), state, acts);
+  return tr;
+}
+
+/** 紙面を別の窓で開く(印刷はその窓の「印刷する」)。倉庫が開くと「受け取った」になる。 */
+function openCut(item) {
+  if (!openWindow(tokenUrl(`/report/cut-sent/${encodeURIComponent(item.id)}`),
+                  `切断依頼 ${item.lot_no}`)) {
+    toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
+    return;
+  }
+  // 倉庫が開いたら状態が変わる。少し待ってから出し直す
+  window.setTimeout(loadCuts, 800);
+}
+
+async function markCut(item, action) {
+  const ask = action === "cut"
+    ? `Lot ${item.lot_no} の切断依頼を「切った」にします。よろしいですか？`
+    : `Lot ${item.lot_no} の切断依頼を取り消します。倉庫の一覧では「取り消し」と出ます。よろしいですか？`;
+  if (!window.confirm(ask)) return;
+  try {
+    const body = await api.post(`/api/cut-requests/${action}`, { id: item.id });
+    renderCuts(body);
+    toast(body.message, "ok");
+  } catch (err) {
+    // 断られても一覧は返る(相手が先に動かした結果も見える)
+    if (err.body && err.body.items) renderCuts(err.body);
+    toastError(err);
+  }
 }
 
 /**
@@ -667,7 +764,7 @@ export function start(state, material, lotPeekWhy) {
                     "sendComment",
                     "send", "clearForm", "sendStatus", "cancelled", "exNote",
                     "drafts", "draftPrev", "draftNext", "draftPos", "draftNote",
-                    "draftNotice"]) {
+                    "draftNotice", "cutRows", "cutEmpty", "cutUnread"]) {
     el[id] = document.getElementById(id);
   }
   // 発注フォームは現場モードにしか無い
