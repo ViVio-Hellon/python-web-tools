@@ -13,6 +13,7 @@ import { api, tokenUrl } from "../api.js";
 import { openWindow } from "../desktop.js";
 import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
+import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
 // ロットの詳細はロット検索と同じものを出す(`../lotdetail.js`)。
 // 動的に読むのは版クエリを合わせるため(`views/lot.js` と同じ理由)
@@ -56,6 +57,8 @@ function render(view) {
     el.unreadComments.textContent = `新しいコメント ${view.unread_comments}`;
     el.unreadComments.title = "相手が書いたコメントのうち、この端末でまだ開いていないもの";
   }
+  // 発注のタブ: 相手が書いた、まだ開いていないコメントがあれば光る
+  setTabNews(el.ordersTabBadge, view.unread_comments ? `新${view.unread_comments}` : "");
   // 数字だけでは何の数か読めない(現場の声:「未確認 4とはなんだ」)。
   // 見えている一覧のうち、倉庫がまだ受けていない件数
   el.pending.title = isMaterial
@@ -79,7 +82,88 @@ async function loadCuts() {
   }
 }
 
+// ------------------------------------------------------------------
+// タブの「まだ見ていないもの」(光る)
+//
+//   倉庫 … まだ開いていない切断依頼(サーバが数える `unread`)
+//   現場 … 自分が送った依頼のうち、**状態が変わったのにまだ見ていない**もの
+//          (受け取った・切った・取り消しが間に合わなかった)。どこまで見たかは
+//          この端末の中だけの話なので、ブラウザに覚える(業務の事実ではない)
+// ------------------------------------------------------------------
+const CUT_SEEN_KEY = "warehouse:cutSeen";
+let lastCuts = null;
+
+function readSeen() {
+  try {
+    const raw = localStorage.getItem(CUT_SEEN_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSeen(map) {
+  try {
+    localStorage.setItem(CUT_SEEN_KEY, JSON.stringify(map));
+  } catch {
+    // 覚えられない環境(プライベートモード等)。光り方が少し変わるだけ
+  }
+}
+
+function seenKey(item) {
+  return `${item.state}${item.late ? "!" : ""}`;
+}
+
+/** 現場: いま見えている自分の依頼を「見た」にする。 */
+function markCutsSeen() {
+  if (!lastCuts || lastCuts.material) return;
+  const seen = readSeen() || {};
+  for (const item of lastCuts.items || []) if (item.mine) seen[item.id] = seenKey(item);
+  writeSeen(seen);
+}
+
+function cutNews(body) {
+  if (body.material) return body.unread || 0;
+  const mine = (body.items || []).filter((item) => item.mine);
+  const seen = readSeen();
+  if (seen === null) {
+    // 初めて開いた端末。これまでの分を「新しい」と光らせない
+    writeSeen(Object.fromEntries(mine.map((item) => [item.id, seenKey(item)])));
+    return 0;
+  }
+  return mine.filter((item) => (item.state === "受け取った" || item.state === "切った" || item.late)
+                               && seen[item.id] !== seenKey(item)).length;
+}
+
+function cutsShown() {
+  return el.listTabs && tabs.current(el.listTabs) === "cuts"
+    && document.visibilityState === "visible";
+}
+
+/** タブの件数と光り。**色だけに頼らない**ので、件数の文字も出す。 */
+function setTabNews(badge, text) {
+  if (!badge) return;
+  badge.textContent = text;
+  badge.hidden = !text;
+  const tab = badge.closest(".tab");
+  if (tab) tab.dataset.glow = text ? "1" : "";
+}
+
+function updateCutTab() {
+  if (!lastCuts) return;
+  if (!lastCuts.material && cutsShown()) markCutsSeen();
+  const n = cutNews(lastCuts);
+  setTabNews(el.cutsTabBadge, n ? (lastCuts.material ? `新${n}` : `更新${n}`) : "");
+  if (el.cutsTabBadge) {
+    el.cutsTabBadge.title = lastCuts.material
+      ? "まだ開いていない切断依頼の数"
+      : "送った切断依頼のうち、受け取った・切ったに変わったのをまだ見ていないもの";
+  }
+}
+
 function renderCuts(body) {
+  lastCuts = body;
+  updateCutTab();
   const items = body.items || [];
   el.cutRows.replaceChildren(...items.map(cutRow));
   el.cutEmpty.hidden = items.length > 0;
@@ -764,7 +848,8 @@ export function start(state, material, lotPeekWhy) {
                     "sendComment",
                     "send", "clearForm", "sendStatus", "cancelled", "exNote",
                     "drafts", "draftPrev", "draftNext", "draftPos", "draftNote",
-                    "draftNotice", "cutRows", "cutEmpty", "cutUnread"]) {
+                    "draftNotice", "cutRows", "cutEmpty", "cutUnread",
+                    "listTabs", "ordersTabBadge", "cutsTabBadge"]) {
     el[id] = document.getElementById(id);
   }
   // 発注フォームは現場モードにしか無い
@@ -776,6 +861,16 @@ export function start(state, material, lotPeekWhy) {
   // **絞り込みの道具は取りに行く前に揃える。** `query()` が期間の
   // セグメントを見るので、`load()` より後に拾うと1回目が投げる
   el.periodGroup = document.querySelector('.seg[aria-label="期間"]');
+
+  // 一覧の面(発注 | 切断依頼)。切断依頼の面を開いたら、現場は「見た」にして光りを消す
+  if (el.listTabs) {
+    tabs.attach(el.listTabs);
+    const changed = () => window.setTimeout(updateCutTab, 0);
+    el.listTabs.addEventListener("click", changed);
+    el.listTabs.addEventListener("keydown", changed);
+    document.addEventListener("visibilitychange", changed);
+    nav.onLeave(() => document.removeEventListener("visibilitychange", changed));
+  }
 
   render(state);
   load();

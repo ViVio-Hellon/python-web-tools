@@ -1128,6 +1128,30 @@ class CutRequestWebTests(WarehouseWebTestCase):
                                             headers=self.auth())
         self.assertEqual(res.status_code, 404)
 
+    def test_発注と切断依頼は面で分ける(self) -> None:
+        """縦に積むと切断依頼が下に隠れ、段どうしが重なった(現場の声)。タブで分ける。"""
+        for mode in ("field", "material"):
+            with self.subTest(mode=mode):
+                html = self.clients[mode].get("/warehouse", headers=self.auth()).get_data(as_text=True)
+                self.assertIn('id="listTabs"', html)
+                orders = html.index('id="panel-orders"')
+                cuts = html.index('id="panel-cuts"')
+                self.assertLess(orders, html.index('id="rows"'))
+                self.assertLess(html.index('id="rows"'), cuts)
+                self.assertLess(cuts, html.index('id="cutRows"'))
+                self.assertIn('id="cutsTabBadge"', html)
+
+    def test_まだ見ていないものがあればタブが光る(self) -> None:
+        js = (Path(__file__).resolve().parent.parent
+              / "app/static/js/views/warehouse.js").read_text("utf-8")
+        self.assertIn('tab.dataset.glow = text ? "1" : ""', js)
+        # 倉庫はまだ開いていない数、現場は状態が変わったのにまだ見ていない数
+        self.assertIn("if (body.material) return body.unread || 0;", js)
+        self.assertIn('"受け取った" || item.state === "切った"', js)
+        html = self.clients["field"].get("/warehouse", headers=self.auth()).get_data(as_text=True)
+        self.assertIn('.tab[data-glow="1"]:not([aria-selected="true"])', html)
+        self.assertIn("prefers-reduced-motion", html)
+
     def test_倉庫のレールに未読の数を出す(self) -> None:
         html = self.clients["material"].get("/warehouse", headers=self.auth()).get_data(as_text=True)
         self.assertIn("切1", html)

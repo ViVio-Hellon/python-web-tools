@@ -138,6 +138,32 @@ class PageTests(SelectionWebTestCase):
 # ==================================================================
 # 一覧
 # ==================================================================
+class LookTests(SelectionWebTestCase):
+    """見た目の約束(現場の声)。CSS は画面にあるので、書いてあることを確かめる。"""
+
+    def html(self) -> str:
+        res = self.client.get("/selection", headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        return res.get_data(as_text=True)
+
+    def test_特殊モードの帯は下へ動かしても見え続ける(self) -> None:
+        """「【プロテックボードオーダー選択中】は下にスクロールすると見えなくなる」。"""
+        html = self.html()
+        rule = html.split(".modeline:has(.modebar:not([hidden])) {")[1].split("}")[0]
+        self.assertIn("position:sticky", rule)
+
+    def test_決まった資材と配置の結果は大きく出す(self) -> None:
+        """「決定前は今のままでよいが、決定後は大きく」。"""
+        html = self.html()
+        done = html.split('.step[data-state="done"] .stepsum {')[1].split("}")[0]
+        self.assertIn("font-size:var(--fs-lg)", done)
+        plan = html.split('.card--plan[data-placed="1"] > header #planUsage {')[1].split("}")[0]
+        self.assertIn("font-size:var(--fs-lg)", plan)
+        js = (Path(__file__).resolve().parent.parent
+              / "app/static/js/views/selection.js").read_text("utf-8")
+        self.assertIn('planCard.dataset.placed = plans.placed ? "1" : ""', js)
+
+
 class ListTests(SelectionWebTestCase):
     def setUp(self) -> None:
         super().setUp()

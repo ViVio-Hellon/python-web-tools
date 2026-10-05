@@ -64,7 +64,7 @@
   <!-- 4. 配置図 (VBA RefreshPaletteDisplay)
        並びは アングル → 上用 → 下用。上から見た順・積み重ねの順で、
        tkinter版から変えない(自然な対応づけ) -->
-  <section class="card card--plan" id="planCard">
+  <section class="card card--plan" id="planCard"{% if view.plans.placed %} data-placed="1"{% endif %}>
     <header>
       <i class="ib ib--sm ib--accent" aria-hidden="true">図</i>
       <h3>配置図</h3>
@@ -837,6 +837,27 @@
   .modeline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .modeline .modebar { flex:1; margin:0; }
   .modeline .modebar[hidden] { display:none; }
+  /* **特殊モードの帯は、下へ動かしても見え続ける。** 操作の列は動く(一覧を開くと
+     下の段まで届かないため)ので、帯が一番上にあるだけだと、下の段で作業している
+     あいだに見えなくなっていた(現場の声:「【プロテックボードオーダー選択中】などの
+     特殊モードは、下にスクロールすると見えなくなる」)。帯が出ているときだけ上に貼り付ける */
+  .modeline:has(.modebar:not([hidden])) {
+    position:sticky; top:-18px; z-index:5;
+    margin:-18px -20px 0; padding:12px 20px 10px;
+    background:var(--sunken); box-shadow:0 6px 8px -6px rgb(0 0 0 / 25%);
+  }
+  /* **決まったら大きく。** 決める前の要約は控えめでよいが、決まった資材・配置の結果は
+     この先ずっと見返すものなので、ひと目で読める大きさにする(現場の声:「決定した資材・
+     配置完了の文字が小さい。決定前は今のままでよいが、決定後は大きく」) */
+  .step[data-state="done"] .stepsum {
+    font-family:inherit; font-size:var(--fs-lg); font-weight:700; letter-spacing:0;
+    color:var(--ink); white-space:normal; max-width:none; text-align:right;
+  }
+  .card--plan[data-placed="1"] > header #planStatus,
+  .card--plan[data-placed="1"] > header #planUsage {
+    font-family:inherit; font-size:var(--fs-lg); font-weight:700; letter-spacing:0;
+    color:var(--ink);
+  }
 
   .card--pending { opacity:.9; }
   .pendinglist { margin:0; padding:0; list-style:none; display:grid; gap:6px; }

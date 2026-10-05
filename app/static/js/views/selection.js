@@ -526,6 +526,9 @@ function renderPlans(plans) {
 
   el.planStatus.textContent = plans.status;
   el.planUsage.textContent = plans.usage;
+  // 配置が済んだら見出しの結果を大きく出す(CSS `.card--plan[data-placed]`)
+  const planCard = el.planStatus.closest(".card--plan");
+  if (planCard) planCard.dataset.placed = plans.placed ? "1" : "";
   el.planUpperTitle.textContent = plans.upper_title;
   el.planLowerTitle.textContent = plans.lower_title;
   // 上下共用モードでは上用=下用と同サイズ。図も1つでよい
