@@ -351,6 +351,19 @@
   /* 切断依頼: 取り消した・送り直した依頼は薄く(状態の字も出している) */
   .cuts tr.is-cancelled td { color:var(--muted); }
   .cuts td { vertical-align:top; }
+  /* **タブだと分かる形にする。** 下線だけのタブ(設定画面と同じ)では、ここに面が2つあること
+     自体に気づけなかった(現場の声:「そもそも存在に気が付かない」)。押せる札の形にして、
+     **選んでいるほうは色で塗る**(色だけに頼らないよう太字と下線も残す) */
+  #listTabs > .tabs__bar { gap:8px; border-bottom:2px solid var(--accent); margin-bottom:12px; }
+  #listTabs .tab {
+    font-size:var(--fs-lg); font-weight:700; color:var(--ink);
+    padding:8px 20px; border:1px solid var(--rule); border-bottom:0;
+    background:var(--raised); margin-bottom:0; }
+  #listTabs .tab:hover { background:var(--accent-soft); }
+  #listTabs .tab[aria-selected="true"] {
+    background:var(--accent); color:var(--surface); border-color:var(--accent);
+    text-decoration:underline; text-underline-offset:4px; }
+  #listTabs .tab[aria-selected="true"] .tab__badge { background:var(--surface); color:var(--accent); }
   /* **まだ見ていないものがあるタブは光る**(現場の声:「未読があればタブが光るように」)。
      色だけに頼らないよう、件数のバッジ(新N / 更新N)も出す。選んでいるタブは光らせない */
   #listTabs .tab[data-glow="1"]:not([aria-selected="true"]) {

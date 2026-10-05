@@ -1152,6 +1152,12 @@ class CutRequestWebTests(WarehouseWebTestCase):
         self.assertIn('.tab[data-glow="1"]:not([aria-selected="true"])', html)
         self.assertIn("prefers-reduced-motion", html)
 
+    def test_選んでいるタブは色で塗る(self) -> None:
+        """下線だけでは面が2つあることに気づけなかった(現場の声)。"""
+        html = self.clients["field"].get("/warehouse", headers=self.auth()).get_data(as_text=True)
+        rule = html.split('#listTabs .tab[aria-selected="true"] {')[1].split("}")[0]
+        self.assertIn("background:var(--accent)", rule)
+
     def test_倉庫のレールに未読の数を出す(self) -> None:
         html = self.clients["material"].get("/warehouse", headers=self.auth()).get_data(as_text=True)
         self.assertIn("切1", html)
