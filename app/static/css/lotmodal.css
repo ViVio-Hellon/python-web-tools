@@ -151,6 +151,23 @@
 }
 .fields--order dd.copyable:hover,
 .fields--order dd.copyable:focus-visible { color: var(--accent); }
+/* 押した場所のすぐ上に札を出す。乗せると「クリックでコピー」、押すと「コピーしました」
+   (現場の声: 押しても何も変わらないので、コピーできたか分からない。下の一文は遠くて目に入らない) */
+.fields--order dd.copyable { position: relative; }
+.fields--order dd.copyable::after {
+  content: attr(data-tip);
+  position: absolute; left: 0; bottom: 100%; margin-bottom: 4px;
+  padding: 2px 8px; border-radius: var(--radius-sm, 6px);
+  background: var(--ink); color: var(--surface);
+  font-size: var(--fs-xs); font-weight: 600; white-space: nowrap;
+  text-decoration: none; pointer-events: none;
+  opacity: 0; transition: opacity .12s;
+}
+.fields--order dd.copyable:hover::after,
+.fields--order dd.copyable:focus-visible::after,
+.fields--order dd.copyable.copied::after { opacity: 1; }
+.fields--order dd.copyable.copied::after { background: var(--state-ok); color: #fff; }
+.fields--order dd.copyable.copyfail::after { background: var(--state-error); color: #fff; opacity: 1; }
 
 /* 押す前に訊くダイアログ。**何を動かすのかを見せてから訊く** */
 .modal--ask { width: min(460px, 92vw); }

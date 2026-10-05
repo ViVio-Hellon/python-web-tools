@@ -218,6 +218,9 @@ async function sendComment() {
     el.commentText.value = "";
     renderComments(body);
     toast(body.message || "コメントを書きました。", "ok");
+    // **一覧もすぐ出し直す**(コメントの件数・「未読」を、窓の後ろの一覧に)。
+    // 手元を引くだけなので、窓は開いたまま書き続けられる
+    load();
   } catch (err) {
     // 断られても一覧は返る(書けない理由と、いまのやり取り)
     if (err.body && err.body.comments) renderComments(err.body);
@@ -241,8 +244,10 @@ function detailRow(row, field) {
     dd.className = "copyable";
     dd.tabIndex = 0;
     dd.role = "button";
-    dd.title = "クリックでコピー";
-    const copy = () => copyCode(text);
+    // 札(CSS の ::after)で出す。ブラウザの title の吹き出しは押しても文が変わらない
+    dd.dataset.tip = COPY_TIP;
+    dd.setAttribute("aria-label", `${text}(クリックでコピー)`);
+    const copy = () => copyCode(text, dd);
     dd.addEventListener("click", copy);
     dd.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
@@ -254,13 +259,33 @@ function detailRow(row, field) {
   return box;
 }
 
-/** 発注コードを控える。**控えられたかどうかは必ず言う。** */
-async function copyCode(text) {
+const COPY_TIP = "クリックでコピー";
+const COPIED_MS = 1500;
+let copiedTimer = 0;
+
+/** 発注コードを控える。**控えられたかどうかは必ず言う** ── 押したその場所で。 */
+async function copyCode(text, dd) {
+  window.clearTimeout(copiedTimer);
+  let ok = true;
   try {
     await navigator.clipboard.writeText(text);
+  } catch {
+    ok = false;
+  }
+  // 押した所の札を「コピーしました」に変える(少ししたら元の案内に戻す)
+  if (dd) {
+    dd.dataset.tip = ok ? "コピーしました" : "コピーできませんでした";
+    dd.classList.toggle("copied", ok);
+    dd.classList.toggle("copyfail", !ok);
+    copiedTimer = window.setTimeout(() => {
+      dd.dataset.tip = COPY_TIP;
+      dd.classList.remove("copied", "copyfail");
+    }, COPIED_MS);
+  }
+  if (ok) {
     el.orderCopied.textContent = "コピーしました";
     el.orderCopied.className = "why ok";
-  } catch {
+  } else {
     // 権限やブラウザの都合で控えられないことがある。**黙らない**
     el.orderCopied.textContent =
       "コピーできませんでした。値を選んで写してください。";
@@ -305,8 +330,11 @@ function actionsCell(row) {
       // 自分が書いたのに、相手がまだ見ていない
       const wait = document.createElement("span");
       wait.className = "waitmark";
-      wait.textContent = `未読${row.unseen_mine}`;
-      wait.title = "あなたが書いたコメントのうち、相手がまだ見ていないもの";
+      // 「未読」だけだと**自分が読んでいない**と読めてしまい、返事を書くまで消えない印に
+      // 見えた(現場の声)。誰が読んでいないのかを書く
+      wait.textContent = `相手未読${row.unseen_mine}`;
+      wait.title = "あなたが書いたコメントのうち、相手(現場⇔倉庫)がまだ開いていないもの。"
+        + "相手が開くと消えます(あなたが返事を書く必要はありません)";
       b.appendChild(wait);
     }
     if (row.latest_comment) b.title = `最新: ${row.latest_comment}`;
@@ -673,10 +701,12 @@ export function start(state, material, lotPeekWhy) {
     // Ctrl+Enter で書く(Enter だけは改行)
     if (event.key === "Enter" && event.ctrlKey) { event.preventDefault(); sendComment(); }
   });
-  // 閉じたら一覧を取り直す。開いたコメントは既読になったので「新」を消す
+  // 閉じたら一覧を取り直す。開いたコメントは既読になったので「新」を消す。
+  // **いつも取り直す**(手元を引くだけで軽い)── 以前は「新」があった行だけで、
+  // 書いたあと・相手の「見ました」が届いたあとは、並び替えるか画面を移るまで古いままだった
   el.orderModal.addEventListener("close", () => {
-    if (openedRow && openedRow.unread) load();
     openedRow = null;
+    load();
   });
   el.orderModal.addEventListener("click", (event) => {
     if (event.target === el.orderModal) el.orderModal.close();
@@ -748,13 +778,22 @@ export function start(state, material, lotPeekWhy) {
 // 間隔は「気づくのが遅れて困る長さ」で決める。発注は出してすぐ動く
 // ものではないので、分の単位で足りる。短くしても共有を叩く回数が
 // 増えるだけで、現場の仕事は速くならない。
-const WATCH_MS = 60_000;
+//
+// コメントはやり取りなので、発注より早く届けたい(現場の声:「書いたらすぐ一覧で
+// 付けたこと・付いたことが分かるようにしてほしい」)。見に行くのはファイルの姿だけ
+// なので、短くしても共有の負担はほとんど増えない。
+const WATCH_MS = 15_000;
 
 let watch = 0;
 
 function startWatch() {
   window.clearInterval(watch);
-  watch = window.setInterval(() => pull({ quiet: true }), WATCH_MS);
+  watch = window.setInterval(() => {
+    // 発注の窓を開いている間は取り込まない。取り込みは総入れ替えで、開いている行の
+    // 番号が付け直されることがある(閉じたら一覧を取り直し、次の回で取り込む)
+    if (el.orderModal && el.orderModal.open) return;
+    pull({ quiet: true });
+  }, WATCH_MS);
   // 画面を出たら止める。**出たあとも見に行き続けない** ── 見えていない
   // 画面のために共有を叩くのは、誰の役にも立たない
   nav.onLeave(() => window.clearInterval(watch));

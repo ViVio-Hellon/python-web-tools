@@ -980,6 +980,51 @@ class OrderDetailTests(WarehouseWebTestCase):
         self.assertNotIn("clipboard", body,
                          "開いた時点で控えています(VBAは押したときだけ)")
 
+    def _js(self) -> str:
+        return (Path(__file__).resolve().parent.parent
+                / "app/static/js/views/warehouse.js").read_text("utf-8")
+
+    def test_押した場所にコピーしましたを出す(self) -> None:
+        """現場の声:「クリックでコピーはマウスを乗せると出る。押したらコピーしましたを出してほしい」。
+
+        下の一文(`orderCopied`)だけでは遠くて目に入らない。押した発注コードの札を変える。
+        """
+        js = self._js()
+        body = js.split("async function copyCode(")[1].split("\n}")[0]
+        self.assertIn('dd.dataset.tip = ok ? "コピーしました"', body)
+        self.assertIn("copyCode(text, dd)", js)
+        css = (Path(__file__).resolve().parent.parent
+               / "app/static/css/lotmodal.css").read_text("utf-8")
+        self.assertIn("content: attr(data-tip)", css)
+        self.assertIn("dd.copyable.copied::after", css)
+
+    def test_コメントを書いたらすぐ一覧を出し直す(self) -> None:
+        """現場の声:「書いたらすぐ一覧で分かるように。並び替えか別タブに行かないと出ない」。"""
+        js = self._js()
+        send = js.split("async function sendComment(")[1].split("\n}")[0]
+        ok = send.split("renderComments(body);")[1].split("} catch")[0]
+        self.assertIn("load();", ok, "書いたあとに一覧を出し直していません")
+
+    def test_発注の窓を閉じたらいつも一覧を出し直す(self) -> None:
+        """以前は「新」があった行だけで、書いたあとは古い一覧のままだった。"""
+        js = self._js()
+        close = js.split('el.orderModal.addEventListener("close", () => {')[1].split("});")[0]
+        self.assertIn("load();", close)
+        self.assertNotIn("if (openedRow && openedRow.unread)", close)
+
+    def test_見張りは短い間隔で窓を開いている間は取り込まない(self) -> None:
+        """コメントはやり取りなので早く届ける。開いている行の番号を取り込みで付け直さない。"""
+        import re
+        js = self._js()
+        ms = int(re.search(r"const WATCH_MS = ([\d_]+);", js).group(1).replace("_", ""))
+        self.assertLessEqual(ms, 15_000)
+        watch = js.split("function startWatch()")[1].split("\n}")[0]
+        self.assertIn("el.orderModal.open) return;", watch)
+
+    def test_自分のコメントの印は相手未読と書く(self) -> None:
+        """「未読」だけだと自分が読んでいないと読め、返事を書くまで消えない印に見えた。"""
+        self.assertIn("`相手未読${row.unseen_mine}`", self._js())
+
     def test_一覧の値をそのまま使う(self) -> None:
         """**事実の置き場所は `values` ただ1つ。** 別の口を作らない。"""
         svc.create_order(self.conn, lot_no="7654321", hinmei="パレット",
