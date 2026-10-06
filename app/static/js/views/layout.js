@@ -12,6 +12,7 @@
 */
 
 import { api, tokenUrl } from "../api.js";
+import { confirmBox } from "../askbox.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
@@ -360,9 +361,10 @@ export function start(initial) {
     "/api/layout/background/place", { x: 0, y: 0, scale: 1 }));
 
   el.save.addEventListener("click", () => send("/api/layout/save"));
-  el.reset.addEventListener("click", () => {
+  el.reset.addEventListener("click", async () => {
     // 出荷時に戻すと編集した内容は消える。取り消せないので一度確かめる
-    if (confirm("出荷時の配置に戻します。編集した内容は消えます。よろしいですか?")) {
+    if (await confirmBox("出荷時の配置に戻します。編集した内容は消えます。よろしいですか?",
+                         { ok: "出荷時に戻す", danger: true })) {
       send("/api/layout/reset");
     }
   });

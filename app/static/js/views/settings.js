@@ -12,6 +12,7 @@
 import * as authsync from "../authsync.js";
 import { openWindow } from "../desktop.js";
 import { api, tokenUrl } from "../api.js";
+import { confirmBox } from "../askbox.js";
 import { onLeave } from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as jobs from "../jobs.js";
@@ -946,7 +947,7 @@ async function runRefresh() {
   const emptied = boxes.filter((b) => b.dataset.emptied)
     .map((b) => `${b.value}(${b.dataset.emptied})`);
   // **消して入れ直す。** 控えは取るが、押す前に何が起きるかを言う
-  if (!window.confirm(
+  if (!(await confirmBox(
     (swap.length ? `中身を Access の中身に入れ替える表:\n${swap.join("、")}\n\n` : "")
     + (rebuild.length ? `Access の定義で作り直す表(今の表は名前を変えて残します):\n`
                         + `${rebuild.join("、")}\n\n` : "")
@@ -955,7 +956,8 @@ async function runRefresh() {
       ? `⚠ マスタ管理で足した列の値が空になります(列は残ります):\n${emptied.join("、")}\n`
         + "Access に無い列なので、入れ替えると値は残りません。\n\n" : "")
     + "梱包資材マスタにある今の行は消えます(書く前に控えを取ります)。"
-    + "ほかの端末にも次の取り込みで届きます。よろしいですか？")) return;
+    + "ほかの端末にも次の取り込みで届きます。よろしいですか？",
+    { ok: "入れ替える", danger: true }))) return;
   try {
     // 足した列の値が空になることは、上の確認で伝えた(`empty_ok`)
     const result = await api.post("/api/settings/table-refresh",

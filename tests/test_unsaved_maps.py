@@ -202,7 +202,8 @@ class UnsavedScriptWiringTests(unittest.TestCase):
                     text, r'import \* as unsaved from "(\./|\.\./)unsaved\.js";')
 
     def test_終了の問いはサーバの文を出す(self) -> None:
-        self.assertIn("confirm(err.message", self.read("app.js"))
+        # 窓はアプリの中に出す(デスクトップ版でもブラウザの confirm は出ない)
+        self.assertIn("confirmBox(err.message", self.read("app.js"))
 
 
 if __name__ == "__main__":

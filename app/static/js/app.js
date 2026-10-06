@@ -5,6 +5,7 @@
 */
 
 import { api } from "./api.js";
+import { confirmBox } from "./askbox.js";
 import { startHeartbeat } from "./health.js";
 import { toast, toastError } from "./toast.js";
 import * as busy from "./busy.js";
@@ -64,7 +65,7 @@ function wireQuit(button) {
       if (err.status === 409) {
         // 中断してよいか・保存せずに終えてよいかは利用者が決める。
         // **聞く文はサーバが持つ**(実行中の処理か、保存していない図か)
-        if (confirm(err.message || "終了しますか?")) {
+        if (await confirmBox(err.message || "終了しますか?", { ok: "終了する", danger: true })) {
           // 捨ててよいと答えたので、閉じるときにもう一度は聞かない
           unsaved.allowLeave();
           try {

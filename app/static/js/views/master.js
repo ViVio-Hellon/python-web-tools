@@ -17,6 +17,7 @@
 */
 
 import { api } from "../api.js";
+import { confirmBox, promptBox } from "../askbox.js";
 import { toast, toastError } from "../toast.js";
 import * as nav from "../nav.js";
 
@@ -545,10 +546,10 @@ async function createTable() {
 async function rebuildTable() {
   const table = view && view.table;
   if (!table) return;
-  const ok = window.confirm(
+  const ok = await confirmBox(
     `${table} を正しい列名で作り直します。\n` +
     "今の表は消さず、別の名前(◯◯_旧_日時)で残ります。\n" +
-    "よろしいですか?");
+    "よろしいですか?", { ok: "作り直す", danger: true });
   if (!ok) return;
   try {
     render(await api.post("/api/master/table/rebuild",
@@ -569,10 +570,11 @@ async function dropTable() {
   const table = view && view.table;
   if (!table) return;
   const page = view.page || {};
-  const typed = window.prompt(
+  const typed = await promptBox(
     `「${table}」を梱包資材マスタから消します(${(page.total || 0)}行)。戻せません。\n` +
     (page.drop_note ? `${page.drop_note}\n` : "") +
-    "消す前に控えを取ります。\n\n消すなら、表の名前をそのまま入れてください。");
+    "消す前に控えを取ります。\n\n消すなら、表の名前をそのまま入れてください。",
+    { ok: "消す", danger: true });
   if (typed === null) return;                 // やめた
   try {
     render(await api.post("/api/master/table/drop",
@@ -619,10 +621,10 @@ async function addColumn() {
   const initial = el.mColInitial.value.trim();
   const page = view.page || {};
   // **戻せない。** 押す前に一度だけ、何をするかを言う
-  if (!window.confirm(
+  if (!(await confirmBox(
     `${table} に列「${name}」(${el.mColKind.selectedOptions[0].textContent})を足します。\n`
     + (initial ? `いまある ${page.total || 0}行 に「${initial}」を入れます。\n` : "")
-    + "足した列は消せません。よろしいですか？")) return;
+    + "足した列は消せません。よろしいですか？", { ok: "足す" }))) return;
   el.mColSave.disabled = true;
   try {
     render(await api.post("/api/master/column/add", {

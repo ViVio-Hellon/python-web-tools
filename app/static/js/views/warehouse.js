@@ -10,6 +10,7 @@
 */
 
 import { api, tokenUrl } from "../api.js";
+import { confirmBox } from "../askbox.js";
 import { openWindow } from "../desktop.js";
 import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
@@ -232,7 +233,8 @@ async function markCut(item, action) {
   const ask = action === "cut"
     ? `Lot ${item.lot_no} の切断依頼を「切った」にします。よろしいですか？`
     : `Lot ${item.lot_no} の切断依頼を取り消します。倉庫の一覧では「取り消し」と出ます。よろしいですか？`;
-  if (!window.confirm(ask)) return;
+  if (!(await confirmBox(ask, { ok: action === "cut" ? "切った" : "取り消す",
+                               danger: action !== "cut" }))) return;
   try {
     const body = await api.post(`/api/cut-requests/${action}`, { id: item.id });
     renderCuts(body);

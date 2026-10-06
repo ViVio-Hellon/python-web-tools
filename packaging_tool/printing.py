@@ -240,6 +240,42 @@ _SEND_SCRIPT = """<script>
     return out;
   }
   function say(text, kind) { said.textContent = text; said.dataset.kind = kind; }
+  // 確かめの窓。**ブラウザの confirm は使わない** ── デスクトップ版(Tauri の窓)では
+  // 窓が出ないまま「OK」扱いで進んだ(`app/static/js/askbox.js` と同じ理由)
+  function ask(message) {
+    return new Promise(function (resolve) {
+      var d = document.createElement("dialog");
+      d.style.cssText = "max-width:520px;border:1px solid #9ca3af;border-radius:8px;padding:18px 20px;" +
+        "font-family:'Meiryo UI','Yu Gothic UI',sans-serif;font-size:14px;line-height:1.7";
+      var p = document.createElement("p");
+      p.style.cssText = "margin:0 0 14px;white-space:pre-wrap";
+      p.textContent = message;
+      var row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:flex-end;gap:8px";
+      var no = document.createElement("button"), yes = document.createElement("button");
+      no.type = yes.type = "button";
+      no.textContent = "やめる"; yes.textContent = "送る";
+      no.style.cssText = yes.style.cssText = "font:inherit;font-weight:600;padding:6px 16px;" +
+        "border-radius:6px;border:1px solid #9ca3af;cursor:pointer";
+      yes.style.background = "#047857"; yes.style.color = "#fff"; yes.style.borderColor = "#047857";
+      row.appendChild(no); row.appendChild(yes);
+      d.appendChild(p); d.appendChild(row);
+      document.body.appendChild(d);
+      var done = false;
+      function finish(answer) {
+        if (done) return;
+        done = true;
+        if (d.open) d.close();
+        d.remove();
+        resolve(answer);
+      }
+      yes.addEventListener("click", function () { finish(true); });
+      no.addEventListener("click", function () { finish(false); });
+      d.addEventListener("close", function () { finish(false); });
+      d.showModal();
+      no.focus();
+    });
+  }
   function send(extra) {
     var body = { edits: edits() };
     for (var k in extra) body[k] = extra[k];
@@ -252,11 +288,14 @@ _SEND_SCRIPT = """<script>
         var r = got[0], b = got[1], err = b.error || {};
         button.disabled = false;
         if (r.ok) { say("✔ " + b.message, "ok"); return; }
-        if (err.code === "need_confirm" && window.confirm(err.message)) {
-          send(err.retry || {}); return;
+        if (err.code === "need_confirm") {
+          ask(err.message).then(function (ok) {
+            if (ok) send(err.retry || {});
+            else say("送るのをやめました。", "");
+          });
+          return;
         }
-        say(err.code === "need_confirm" ? "送るのをやめました。" : ("✕ " + (err.message || "送れませんでした")),
-            err.code === "need_confirm" ? "" : "ng");
+        say("✕ " + (err.message || "送れませんでした"), "ng");
       })
       .catch(function () { button.disabled = false; say("✕ 送れませんでした(アプリに届きません)", "ng"); });
   }

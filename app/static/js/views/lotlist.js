@@ -10,6 +10,7 @@
  * 画面に伝わらず「条件が出ているのに効いていない」状態を作れる。
  */
 import { api } from "../api.js";
+import { promptBox } from "../askbox.js";
 import { onLeave, pageSignal } from "../nav.js";
 import { toast, toastError } from "../toast.js";
 
@@ -282,8 +283,8 @@ export function start(options) {
   });
   el.clearFilter.addEventListener("click", () => send("/api/lot/list/filter/clear"));
 
-  el.saveFilter.addEventListener("click", () => {
-    const name = window.prompt("この条件に名前を付けてください", "");
+  el.saveFilter.addEventListener("click", async () => {
+    const name = await promptBox("この条件に名前を付けてください", { ok: "名前を付けて残す" });
     if (name === null) return;                 // 取り消し
     send("/api/lot/list/saved/save", { name });
   });
