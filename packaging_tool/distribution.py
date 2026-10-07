@@ -85,6 +85,7 @@ KEY_APPLIED = "distribution_applied"
 ITEMS: tuple[tuple[str, str, bool], ...] = (
     (config.KEY_MASTER_DB_DIR, "梱包資材マスタの置き場所", True),
     (config.KEY_LOT_DB_DIR, "仕掛台帳の置き場所", True),
+    (config.KEY_LOT_DB_DIR2, "仕掛台帳の2つ目の置き場所", True),
     (config.KEY_KANBAN_DB_DIR, "看板マスタの置き場所", True),
     (config.KEY_THRESHOLD_DB_DIR, "パレット閾値マスタの置き場所", True),
     (config.KEY_SPEC_SHEET_URL, "包装仕様書の図面URL", True),

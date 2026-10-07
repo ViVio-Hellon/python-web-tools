@@ -97,6 +97,8 @@ def run(label: str) -> Iterator[bool]:
             write(f"■ {label}  (版 {_version()})")
             write(f"  マスタの場所: {_safe(config.master_db_dir)}")
             write(f"  仕掛台帳の場所: {_safe(config.lot_db_dir)}")
+            if config.lot_db_dir2() is not None:
+                write(f"  仕掛台帳の2つ目の場所: {_safe(config.lot_db_dir2)}")
         yield outer
     finally:
         _depth.reset(token)

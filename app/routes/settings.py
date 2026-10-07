@@ -142,6 +142,7 @@ def save():
     result = settings_presenter.save(
         master_dir=pick("master_dir"),
         lot_dir=pick("lot_dir"),
+        lot_dir2=pick("lot_dir2"),
         kanban_dir=pick("kanban_dir"),
         threshold_dir=pick("threshold_dir"),
         auto_import=bool(body["auto_import"]) if "auto_import" in body else None,

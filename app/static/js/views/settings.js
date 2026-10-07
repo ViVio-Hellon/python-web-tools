@@ -213,12 +213,14 @@ function renderStatus(state) {
   el.importWhy.textContent = state.import_reason;
   el.masterDir.value = state.master_dir;
   el.lotDir.value = state.lot_dir;
+  el.lotDir2.value = state.lot_dir2 || "";
   el.kanbanDir.value = state.kanban_dir;
   el.thresholdDir.value = state.threshold_dir;
   el.exportDir.value = state.export_dir;
   // 相対で書かれたときだけ、実際に見に行く先を出す(サーバが決める)
   showReal(el.masterDirReal, state.master_dir_real);
   showReal(el.lotDirReal, state.lot_dir_real);
+  showReal(el.lotDir2Real, state.lot_dir2_real);
   showReal(el.kanbanDirReal, state.kanban_dir_real);
   showReal(el.thresholdDirReal, state.threshold_dir_real);
   showReal(el.exportDirReal, state.export_dir_real);
@@ -413,9 +415,9 @@ async function startJob(path, body) {
 
 // ------------------------------------------------------------------
 export function start(state, jobState, masterFrame) {
-  for (const id of ["statusGrid", "importWhy", "masterDir", "lotDir", "kanbanDir", "thresholdDir",
+  for (const id of ["statusGrid", "importWhy", "masterDir", "lotDir", "lotDir2", "kanbanDir", "thresholdDir",
                     "exportDir", "exportDirReal", "exportUsage",
-                    "masterDirReal", "lotDirReal", "kanbanDirReal",
+                    "masterDirReal", "lotDirReal", "lotDir2Real", "kanbanDirReal",
                     "thresholdDirReal", "autoImport",
                     "position", "specUrl", "specUrlProblem",
                     "filterRows", "filterEmpty", "saveBehavior",
@@ -496,6 +498,7 @@ export function start(state, jobState, masterFrame) {
     const body = {
       master_dir: el.masterDir.value,
       lot_dir: el.lotDir.value,
+      lot_dir2: el.lotDir2.value,
       kanban_dir: el.kanbanDir.value,
       threshold_dir: el.thresholdDir.value,
     };

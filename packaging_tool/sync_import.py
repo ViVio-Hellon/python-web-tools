@@ -481,27 +481,22 @@ def _import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = Non
     """
     result = ImportResult()
     found = sync_sources.find_lot_dbs(directory)
+    second = sync_sources.find_second_lot_dbs() if directory is None else {}
     searched = ([directory] if directory is not None
-                else [config.lot_db_dir(), config.master_db_dir()])
+                else sync_sources.lot_search_dirs())
     for table, filename in config.LOT_DB_FILES.items():
         import_diag.describe_file(f"仕掛台帳 {filename}", found.get(table), searched)
     if not found:
         result.errors.append(
-            f"仕掛台帳が見つかりません。{config.lot_db_dir()} または"
-            f" {config.master_db_dir()} に3ファイルを置いてください。")
+            f"仕掛台帳が見つかりません。{' / '.join(str(d) for d in searched)} の"
+            "どこかに3ファイルを置いてください。")
         return result
 
     start_pct, end_pct = progress_range
     span = max(end_pct - start_pct, 0)
     for index, (table, path) in enumerate(found.items()):
-        log.info("仕掛台帳 取り込み: %s → %s", path.name, table)
-        import_tables(
-            conn, path, {table: import_specs.LOT_IMPORT_SPECS[table]},
-            source_table=import_specs.LOT_SOURCE_TABLE,
-            required=import_specs.REQUIRED_KEY_COLUMNS,
-            blank_is_missing=import_specs.BLANK_IS_MISSING,
-            fallbacks=import_specs.NULL_FALLBACKS,
-            result=result, progress=progress,
+        import_lot_table(
+            conn, table, path, second.get(table), result=result, progress=progress,
             progress_range=(start_pct + span * index // len(found),
                             start_pct + span * (index + 1) // len(found)))
     missing = set(config.LOT_DB_FILES) - set(found)
@@ -509,6 +504,115 @@ def _import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = Non
         result.errors.append(
             f"{config.LOT_DB_FILES[table]} が見つからないため {table} は更新していません")
     return result
+
+
+# 2つ目の置き場所から足すときの「同じもの」の見分け方(手元の列名)。
+# ロットの表はロット番号、受注の表は受注番号。1つ目にあるものは1つ目を正とする
+LOT_MERGE_KEYS: dict[str, str] = {
+    "仕掛ロット": "ロット番号",
+    "仕掛引当": "ロット番号",
+    "仕掛受注": "受注番号",
+}
+
+
+def _same_file(a: Optional[Path], b: Optional[Path]) -> bool:
+    if a is None or b is None:
+        return False
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return str(a) == str(b)
+
+
+def import_lot_table(conn: sqlite3.Connection, table: str, path: Path,
+                     second: Optional[Path] = None, *, result: ImportResult,
+                     progress: Optional[Progress] = None,
+                     progress_range: tuple[int, int] = (0, 100)) -> None:
+    """仕掛台帳の1表を取り込む。2つ目の置き場所があれば、足りない分をそこから足す。
+
+    1つ目のファイルが**読めなかった**ときは、2つ目のファイルを1つ目として読む
+    (ファイルが無いときと同じ扱い。手元の古い中身に足すだけにしない)。
+    """
+    spec = import_specs.LOT_IMPORT_SPECS[table]
+    log.info("仕掛台帳 取り込み: %s → %s", path.name, table)
+    mine = ImportResult()
+    import_tables(
+        conn, path, {table: spec},
+        source_table=import_specs.LOT_SOURCE_TABLE,
+        required=import_specs.REQUIRED_KEY_COLUMNS,
+        blank_is_missing=import_specs.BLANK_IS_MISSING,
+        fallbacks=import_specs.NULL_FALLBACKS,
+        result=mine, progress=progress, progress_range=progress_range)
+    if second is not None and not _same_file(second, path):
+        if table not in mine.imported:
+            log.warning("%s: 1つ目(%s)が読めないので、2つ目(%s)から読みます",
+                        table, path, second)
+            mine.warnings.append(f"{table}: 1つ目の置き場所のファイルが読めないため、"
+                                 f"2つ目({second})から読みました")
+            import_tables(
+                conn, second, {table: spec},
+                source_table=import_specs.LOT_SOURCE_TABLE,
+                required=import_specs.REQUIRED_KEY_COLUMNS,
+                blank_is_missing=import_specs.BLANK_IS_MISSING,
+                fallbacks=import_specs.NULL_FALLBACKS, result=mine)
+            if table in mine.imported:
+                # 2つ目で読めた。1つ目の「読めません」は残さない(入ったのに失敗に見える)
+                mine.errors = [e for e in mine.errors if not e.startswith(f"{table}:")]
+        else:
+            merge_second_lot(conn, table, second, mine)
+    result.merge(mine)
+
+
+def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
+                     result: ImportResult) -> int:
+    """2つ目の置き場所のファイルから、**1つ目に無いもの**だけを手元に足す。足した行数。
+
+    1つ目にファイルはあるが、目当てのロット(受注)が入っていないとき、2つ目にあれば
+    それを使う(現場の声)。同じロット・受注が両方にあれば1つ目を正とする
+    (2つ目の行は足さない)。読めなければ一言残して何もしない(1つ目の分は入っている)。
+    """
+    spec = import_specs.LOT_IMPORT_SPECS[table]
+    key = LOT_MERGE_KEYS[table]
+    try:
+        rows = sync_sources.read_table(path, import_specs.LOT_SOURCE_TABLE)
+    except SyncError as exc:
+        result.warnings.append(f"{table}: 2つ目の置き場所のファイルを読めませんでした({exc})")
+        import_diag.write(f"  [{table}] 2つ目 {path} を読めません: {exc}")
+        return 0
+    fallbacks = import_specs.NULL_FALLBACKS
+    have = {str(r[0]) for r in conn.execute(f"SELECT DISTINCT [{key}] FROM [{table}]")}
+    columns = [c[0] for c in spec]
+    col_list = ", ".join(f"[{c}]" for c in columns)
+    marks = ", ".join("?" for _ in columns)
+    added = 0
+    keys: set[str] = set()
+    try:
+        with conn:
+            for row in rows:
+                values = {col: conv(row.get(src)) for col, src, conv in spec}
+                value = values.get(key)
+                if value is None or str(value).strip() == "" or str(value) in have:
+                    continue
+                cur = conn.execute(
+                    f"INSERT OR IGNORE INTO [{table}] ({col_list}) VALUES ({marks})",
+                    [values[col] if values[col] is not None else fallbacks.get(conv)
+                     for col, _src, conv in spec])
+                if cur.rowcount:
+                    added += 1
+                    keys.add(str(value))
+    except sqlite3.Error as exc:
+        log.exception("%s: 2つ目から足す途中でエラー", table)
+        result.warnings.append(f"{table}: 2つ目の置き場所から足せませんでした({exc})")
+        return 0
+    if added:
+        result.imported[table] = result.imported.get(table, 0) + added
+        what = "受注" if key == "受注番号" else "ロット"
+        result.notes.append(f"{table}: 1つ目に無い{what} {len(keys):,}件"
+                            f"({added:,}行)を2つ目の置き場所から足しました")
+    import_diag.write(f"  [{table}] ← 2つ目 {Path(path).name}({path.parent}) "
+                      f"1つ目に無い分 {added}行 を足した")
+    log.info("%s: 2つ目(%s)から %s行 足しました", table, path, added)
+    return added
 
 
 def _counts_text(path: Path) -> str:

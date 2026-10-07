@@ -143,23 +143,24 @@ def _auto_import(conn: sqlite3.Connection, *, force: bool = False,
             mark_imported(conn, path)
 
     found = sync_sources.find_lot_dbs()
+    second = sync_sources.find_second_lot_dbs()
     for table, filename in config.LOT_DB_FILES.items():
         import_diag.describe_file(f"仕掛台帳 {filename}", found.get(table),
-                                  [config.lot_db_dir(), config.master_db_dir()])
+                                  sync_sources.lot_search_dirs())
     for table, path in found.items():
-        read, why = import_reason(conn, path)
-        import_diag.decision(path, read or force, "手で押した(強制)" if force else why)
-        if not force and not read:
+        # 2つ目のファイルが変わったときも読み直す(足す分が変わる)
+        group = [p for p in (path, second.get(table)) if p is not None]
+        decisions = {p: import_reason(conn, p) for p in group}
+        for p, (read, why) in decisions.items():
+            import_diag.decision(p, read or force, "手で押した(強制)" if force else why)
+        if not force and not any(read for read, _why in decisions.values()):
             continue
         log.info("自動取り込み(仕掛台帳): %s", path)
-        sync_import.import_tables(
-            conn, path, {table: import_specs.LOT_IMPORT_SPECS[table]},
-            source_table=import_specs.LOT_SOURCE_TABLE,
-            required=import_specs.REQUIRED_KEY_COLUMNS,
-            blank_is_missing=import_specs.BLANK_IS_MISSING,
-            fallbacks=import_specs.NULL_FALLBACKS, result=result,
+        sync_import.import_lot_table(
+            conn, table, path, second.get(table), result=result,
             progress=progress, progress_range=(50, 100))
-        mark_imported(conn, path)
+        for p in group:
+            mark_imported(conn, p)
 
     return result
 

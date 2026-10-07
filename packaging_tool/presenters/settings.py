@@ -173,12 +173,14 @@ class SettingsViewModel:
     # 打たれたまま(相対で書かれていれば相対のまま)
     master_dir: str = ""
     lot_dir: str = ""
+    lot_dir2: str = ""             # 仕掛台帳の2つ目(空なら使わない)
     kanban_dir: str = ""
     threshold_dir: str = ""
     export_dir: str = ""
     # 実際に見に行く道。**相対で書いたときに「どこを見ているか」を出す**
     master_dir_real: str = ""
     lot_dir_real: str = ""
+    lot_dir2_real: str = ""
     kanban_dir_real: str = ""
     threshold_dir_real: str = ""
     export_dir_real: str = ""
@@ -243,12 +245,14 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
         master_dir=_typed(config.KEY_MASTER_DB_DIR, config.master_db_dir(),
                           config.KEY_ACCDB_DIR_LEGACY),
         lot_dir=_typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
+        lot_dir2=_lot_dir2_typed(),
         kanban_dir=_typed(config.KEY_KANBAN_DB_DIR, config.kanban_db_dir()),
         threshold_dir=_typed(config.KEY_THRESHOLD_DB_DIR,
                              config.threshold_db_dir()),
         export_dir=_typed(config.KEY_EXPORT_DIR, config.export_dir()),
         master_dir_real=str(config.master_db_dir()),
         lot_dir_real=str(config.lot_db_dir()),
+        lot_dir2_real=str(config.lot_db_dir2() or ""),
         kanban_dir_real=str(config.kanban_db_dir()),
         threshold_dir_real=str(config.threshold_db_dir()),
         export_dir_real=str(config.export_dir()),
@@ -288,10 +292,16 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
         view.import_reason = (
             "取り込み元のファイルが1つも見つかりません。探した場所は "
             f"{config.master_db_dir()}({config.MATERIAL_DB_NAME})と "
-            f"{config.lot_db_dir()}"
+            f"{' / '.join(str(d) for d in config.lot_db_dirs())}"
             f"({' / '.join(config.LOT_DB_FILES.values())})です。"
             "「いまの状態」に節ごとの結果が出ています。")
     return view
+
+
+def _lot_dir2_typed() -> str:
+    """仕掛台帳の2つ目の置き場所(打たれたまま)。**既定は無い**ので、未設定なら空。"""
+    value = user_settings.get(config.KEY_LOT_DB_DIR2)
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _typed(key: str, fallback: Path, *legacy: str) -> str:
@@ -788,9 +798,19 @@ def _lot_section(lots: dict[str, Path]) -> Section:
     for path in lots.values():
         _encoding_check(section, source_db.probe(path))
         break                          # 3ファイルとも同じ作られ方。1つで足りる
+    from .. import sync_sources
     section.checks.append(Check(
-        "探した場所", f"{config.lot_db_dir()} → {config.master_db_dir()}", INFO,
-        "共有フォルダに届かない端末のために、マスタのフォルダも見ます"))
+        "探した場所", " → ".join(str(d) for d in sync_sources.lot_search_dirs()), INFO,
+        "ファイルごとに前から探します(1つ目 → 2つ目 → マスタのフォルダ)。共有フォルダに"
+        "届かない端末のために、マスタのフォルダも見ます"))
+    second = config.lot_db_dir2()
+    if second is not None:
+        extra = sync_sources.find_second_lot_dbs()
+        section.checks.append(Check(
+            "2つ目の置き場所", f"{second}({len(extra)}/{total} ファイル)",
+            OK if extra else WARN,
+            "1つ目にファイルが無ければ2つ目から読み、1つ目にファイルはあっても目当ての"
+            "ロット・受注が無ければ、取り込みのあとに2つ目から足します(同じものは1つ目を使う)"))
     if len(lots) < total:
         section.action = FIX_SOURCE
     return section
@@ -1176,8 +1196,9 @@ def storage_places() -> dict[str, list[dict[str, str]]]:
             "ボード使用実績、発注コメント、実績パターン",
             "各PCが書き戻しで送り、取り込みで受け取る"),
         StoragePlace(
-            "仕掛台帳", str(config.lot_db_dir()),
-            "仕掛ロット・仕掛引当・仕掛受注", "読むだけ"),
+            "仕掛台帳", " / ".join(str(d) for d in config.lot_db_dirs()),
+            "仕掛ロット・仕掛引当・仕掛受注(2つ目は、1つ目に無いファイル・ロットだけ読む)",
+            "読むだけ"),
         StoragePlace(
             "看板マスタ", str(config.kanban_db_dir() / config.KANBAN_DB_NAME),
             "在庫(看板)の表", "読むだけ"),
@@ -1215,6 +1236,7 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         ],
         "master_dir": view.master_dir,
         "lot_dir": view.lot_dir,
+        "lot_dir2": view.lot_dir2,
         "kanban_dir": view.kanban_dir,
         "threshold_dir": view.threshold_dir,
         "export_dir": view.export_dir,
@@ -1224,6 +1246,8 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
                             if view.master_dir_real != view.master_dir else ""),
         "lot_dir_real": (view.lot_dir_real
                          if view.lot_dir_real != view.lot_dir else ""),
+        "lot_dir2_real": (view.lot_dir2_real
+                          if view.lot_dir2_real != view.lot_dir2 else ""),
         "kanban_dir_real": (view.kanban_dir_real
                             if view.kanban_dir_real != view.kanban_dir else ""),
         "threshold_dir_real": (view.threshold_dir_real
@@ -1286,6 +1310,7 @@ REFUSE_NEED_PASSWORD = "need_password"
 PROTECTED_LABELS = {
     "master_dir": "梱包資材マスタの置き場所",
     "lot_dir": "仕掛台帳の置き場所",
+    "lot_dir2": "仕掛台帳の2つ目の置き場所",
     "kanban_dir": "看板マスタの置き場所",
     "threshold_dir": "パレット閾値マスタの置き場所",
 }
@@ -1293,7 +1318,8 @@ PROTECTED_LABELS = {
 
 def _protected_changes(master_dir: Optional[str], lot_dir: Optional[str],
                        kanban_dir: Optional[str],
-                       threshold_dir: Optional[str] = None) -> list[str]:
+                       threshold_dir: Optional[str] = None,
+                       lot_dir2: Optional[str] = None) -> list[str]:
     """今回**本当に変わる**置き場所の名前。
 
     値が変わらない保存で聞かないのは、設定画面が置き場所を毎回
@@ -1305,11 +1331,12 @@ def _protected_changes(master_dir: Optional[str], lot_dir: Optional[str],
         "master_dir": _typed(config.KEY_MASTER_DB_DIR, config.master_db_dir(),
                              config.KEY_ACCDB_DIR_LEGACY),
         "lot_dir": _typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
+        "lot_dir2": _lot_dir2_typed(),
         "kanban_dir": _typed(config.KEY_KANBAN_DB_DIR, config.kanban_db_dir()),
         "threshold_dir": _typed(config.KEY_THRESHOLD_DB_DIR,
                                 config.threshold_db_dir()),
     }
-    sent = {"master_dir": master_dir, "lot_dir": lot_dir,
+    sent = {"master_dir": master_dir, "lot_dir": lot_dir, "lot_dir2": lot_dir2,
             "kanban_dir": kanban_dir, "threshold_dir": threshold_dir}
     return [PROTECTED_LABELS[key] for key, value in sent.items()
             if value is not None and value.strip() != now[key]]
@@ -1320,7 +1347,8 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
          position: Optional[str] = None,
          password: Optional[str] = None,
          kanban_dir: Optional[str] = None,
-         threshold_dir: Optional[str] = None) -> SaveResult:
+         threshold_dir: Optional[str] = None,
+         lot_dir2: Optional[str] = None) -> SaveResult:
     """設定を保存する。**渡されたものだけ**を触る。
 
     `None` は「この項目は今回いじらない」の意味。画面が一部だけ送って
@@ -1352,7 +1380,7 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
     # **書く前に通す関門。** ここより下で1つでも書いてしまうと、
     # 断ったのに一部だけ変わった状態が残る
     changing = _protected_changes(master_dir, lot_dir, kanban_dir,
-                                  threshold_dir)
+                                  threshold_dir, lot_dir2)
     if changing:
         if not admin_password.verify(str(password or "")):
             # 合っていないのか、そもそも送っていないのかは言い分けない
@@ -1370,6 +1398,9 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
         user_settings.save(config.KEY_MASTER_DB_DIR, master_dir.strip())
     if lot_dir is not None:
         user_settings.save(config.KEY_LOT_DB_DIR, lot_dir.strip())
+    if lot_dir2 is not None:
+        # 空にすると2つ目は使わない(既定は無い)
+        user_settings.save(config.KEY_LOT_DB_DIR2, lot_dir2.strip())
     if kanban_dir is not None:
         user_settings.save(config.KEY_KANBAN_DB_DIR, kanban_dir.strip())
     if threshold_dir is not None:

@@ -201,6 +201,29 @@ def lot_db_dir() -> Path:
     return LOT_DB_DIR
 
 
+def lot_db_dir2() -> Optional[Path]:
+    """仕掛台帳の**2つ目の**フォルダ。設定していなければ None(既定は無い)。
+
+    1つ目で見つからないときに見る(現場の声:「仕掛DBの参照パスを2つセットできるように。
+    1つ目でファイルが無い、またはファイルはあるが対象が見つからない → 2つ目」)。
+        ファイルが無い         … そのファイルは2つ目から読む(`sync_sources.find_lot_dbs`)
+        ファイルに対象が無い   … 取り込みのあとに、2つ目にだけあるロット・受注を足す
+                                 (`sync_import.merge_second_lot`)
+    """
+    from . import user_settings
+    configured = user_settings.get(KEY_LOT_DB_DIR2)
+    if isinstance(configured, str) and configured.strip():
+        return resolve_dir(configured)
+    return None
+
+
+def lot_db_dirs() -> list[Path]:
+    """仕掛台帳を探すフォルダ(1つ目 → 2つ目)。同じフォルダは2度並べない。"""
+    first = lot_db_dir()
+    second = lot_db_dir2()
+    return [first] + ([second] if second is not None and second != first else [])
+
+
 def kanban_db_dir() -> Path:
     """いま使う看板マスタのフォルダ。設定画面の値を優先する。"""
     from . import user_settings
@@ -239,6 +262,8 @@ KEY_MASTER_DB_DIR = "master_db_dir"
 # 更新の日に置き場所を見失わないように
 KEY_ACCDB_DIR_LEGACY = "accdb_dir"
 KEY_LOT_DB_DIR = "lot_db_dir"
+# 仕掛台帳の2つ目の置き場所(1つ目で見つからないときに見る。`lot_db_dir2`)
+KEY_LOT_DB_DIR2 = "lot_db_dir2"
 KEY_KANBAN_DB_DIR = "kanban_db_dir"
 KEY_THRESHOLD_DB_DIR = "threshold_db_dir"
 KEY_EXPORT_DIR = "export_dir"

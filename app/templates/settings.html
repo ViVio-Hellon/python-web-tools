@@ -348,6 +348,20 @@
                {% if not state.lot_dir_real %}hidden{% endif %}
         >→ {{ state.lot_dir_real }}</small>
 
+        {# 仕掛台帳の2つ目。1つ目にファイルが無い、またはファイルに目当てのロットが
+           無いときに見る(`config.lot_db_dir2`)。空なら使わない #}
+        <label for="lotDir2">仕掛台帳(2つ目)</label>
+        <span class="pathrow">
+          <input class="input" id="lotDir2" value="{{ view.lot_dir2 }}"
+                 spellcheck="false" autocomplete="off"
+                 placeholder="空なら使いません(1つ目に無いときに見る場所)">
+          <button class="btn btn--find" type="button" data-browse="lotDir2">
+            <span class="gl">▸</span>参照…</button>
+        </span>
+        <small class="why real" id="lotDir2Real"
+               {% if not state.lot_dir2_real %}hidden{% endif %}
+        >→ {{ state.lot_dir2_real }}</small>
+
         {# 看板(在庫薄警告)マスタ。梱包資材マスタとは別ファイル
            (Form状態管理・看板_*の8テーブル)。見つからなくても
            在庫薄警告を使わない端末には支障が無いので、既定は

@@ -187,9 +187,9 @@ def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
     """
     found: dict[str, Path] = {}
     # フォルダを明示されたときはそこだけを見る。省略時だけ
-    # 「共有 → 起動フォルダ」の順に探す
-    candidates = ([Path(directory)] if directory is not None
-                  else [config.lot_db_dir(), config.master_db_dir()])
+    # 「1つ目 → 2つ目(設定していれば)→ マスタのフォルダ」の順に探す。
+    # **ファイルごとに**探すので、1つ目に無いファイルだけ2つ目から読む
+    candidates = ([Path(directory)] if directory is not None else lot_search_dirs())
     for table, filename in config.LOT_DB_FILES.items():
         for base in candidates:
             path = source_db.find(base, filename)
@@ -197,6 +197,32 @@ def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
                 found[table] = path
                 break
     return found
+
+def lot_search_dirs() -> list[Path]:
+    """仕掛台帳を探すフォルダの順(1つ目 → 2つ目 → マスタのフォルダ)。"""
+    out: list[Path] = []
+    for base in [*config.lot_db_dirs(), config.master_db_dir()]:
+        if base not in out:
+            out.append(base)
+    return out
+
+
+def find_second_lot_dbs() -> dict[str, Path]:
+    """2つ目の置き場所にある仕掛台帳のファイル。設定していなければ空。
+
+    1つ目のファイルに**目当てのロットが無い**ときのために、取り込みのあとで
+    ここから足りない分を足す(`sync_import.merge_second_lot`)。
+    """
+    second = config.lot_db_dir2()
+    if second is None:
+        return {}
+    found: dict[str, Path] = {}
+    for table, filename in config.LOT_DB_FILES.items():
+        path = source_db.find(second, filename)
+        if path is not None:
+            found[table] = path
+    return found
+
 
 # 最後に取り込んだときの取り込み元の姿(大きさと更新時刻)。**プロセスに
 # 1つ。** モードごとに別プロセスなので、端末の中で混ざることはない
