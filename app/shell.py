@@ -197,6 +197,9 @@ def shell_context(active: str, *,
         # 帯に常時出す版。**どれが入っている端末か**を聞かれたときに、
         # 画面を見れば答えられるようにする(出どころは config/app.json)
         "version_label": app_config.version_label(),
+        # 画面の色(ライト / ダーク)。**最初の描画から付けて返す** ── 画面が後から
+        # 付けると、開くたびに一瞬もう片方の色が出る。空なら OS の設定に合わせる
+        "theme": user_settings.get_theme(),
         "favicon": favicon(mode),
         # 管理者認証の世代(`auth_state`)。画面は違う世代を見たら描き直す
         "auth_epoch": auth_state.epoch(),

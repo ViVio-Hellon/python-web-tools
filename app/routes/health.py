@@ -215,6 +215,19 @@ def _running_note() -> Optional[dict]:
             "message": running.message}
 
 
+@bp.post("/api/theme")
+def set_theme():
+    """画面の色(ライト / ダーク)を選ぶ。`{"theme": "light"|"dark"|""}`
+
+    **この端末の設定に残す**(`user_settings`)── 現場モードと資材モードは別の
+    アドレスなので、ブラウザに覚えさせると片方だけ変わる。
+    """
+    from packaging_tool import user_settings
+    theme = str((request.get_json(silent=True) or {}).get("theme") or "")
+    user_settings.set_theme(theme)
+    return jsonify({"theme": user_settings.get_theme()})
+
+
 @bp.post("/api/mode")
 def switch_mode():
     """モードを切り替える。

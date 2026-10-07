@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="ja"{% if theme %} data-theme="{{ theme }}"{% endif %}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>操作説明書 — {{ display_name }}</title>
+{#
+  操作説明書(写真入り)。帯の「説明書」から**別の窓**で開く(`app.js` の wireManual)。
+  作業中の画面を離れずに読めるようにするため、アプリの外枠(帯・レール)は持たない。
+
+  写真は `app/static/manual/img/`。画面を大きく変えたら撮り直す
+  (撮り方は docs/変更履歴.md の、説明書を足したときの項に書いてある)。
+  色はアプリと同じ `tokens.css` を使うので、ライト / ダークの切り替えにも付いてくる。
+#}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--ground); color: var(--ink);
+         font-family: "Meiryo UI", "Yu Gothic UI", "Noto Sans JP", sans-serif;
+         font-size: var(--fs-lg); line-height: 1.8; }
+  .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px;
+         padding: 10px 24px; background: linear-gradient(115deg, var(--bar-a), var(--bar-b));
+         color: var(--bar-ink);
+         box-shadow: 0 2px 6px rgb(0 0 0 / 20%); }
+  .top h1 { margin: 0; font-size: var(--fs-xl); }
+  .top .ver { font-size: var(--fs-sm); opacity: .85; }
+  .top .grow { flex: 1; }
+  .top button { font: inherit; font-size: var(--fs-md); font-weight: 600; cursor: pointer;
+                padding: 6px 14px; border-radius: 6px; border: 1px solid rgb(255 255 255 / 45%);
+                background: transparent; color: inherit; }
+  .wrap { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 24px;
+          max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
+  nav.toc { position: sticky; top: 64px; align-self: start; max-height: calc(100vh - 80px);
+            overflow: auto; background: var(--surface); border: 1px solid var(--rule);
+            border-radius: 10px; padding: 12px 14px; font-size: var(--fs-md); }
+  nav.toc b { display: block; margin: 8px 0 2px; font-size: var(--fs-sm); color: var(--muted); }
+  nav.toc a { display: block; padding: 3px 6px; border-radius: 6px; color: var(--ink);
+              text-decoration: none; }
+  nav.toc a:hover { background: var(--accent-soft); }
+  main { min-width: 0; }
+  section { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px;
+            padding: 18px 24px 20px; margin-bottom: 20px; scroll-margin-top: 70px; }
+  h2 { margin: 0 0 6px; font-size: var(--fs-xl); border-bottom: 3px solid var(--accent);
+       padding-bottom: 4px; }
+  h3 { margin: 22px 0 6px; font-size: var(--fs-lg); }
+  h3::before { content: "▍"; color: var(--accent); }
+  p { margin: 6px 0; }
+  ol, ul { margin: 6px 0; padding-left: 1.6em; }
+  li { margin: 2px 0; }
+  figure { margin: 12px 0 18px; }
+  figure img { display: block; width: 100%; height: auto; border: 1px solid var(--rule);
+               border-radius: 8px; box-shadow: 0 2px 8px rgb(0 0 0 / 12%); cursor: zoom-in; }
+  figcaption { font-size: var(--fs-md); color: var(--muted); margin-top: 4px; }
+  .lead { font-size: var(--fs-lg); }
+  .tip, .warn { border-left: 4px solid var(--accent); background: var(--accent-soft);
+                padding: 8px 12px; border-radius: 6px; margin: 10px 0; }
+  .warn { border-left-color: var(--state-error); background: var(--warn-bg); }
+  kbd, .k { display: inline-block; padding: 0 6px; border: 1px solid var(--rule);
+            border-radius: 4px; background: var(--raised); font-size: var(--fs-sm); font-weight: 700; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: var(--fs-md); }
+  th, td { border: 1px solid var(--rule); padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: var(--raised); }
+  .flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+  .flow span { background: var(--accent); color: var(--surface); border-radius: 999px;
+               padding: 2px 12px; font-weight: 700; font-size: var(--fs-md); }
+  .flow i { font-style: normal; color: var(--muted); }
+  /* 写真を押すと大きく */
+  .zoom { position: fixed; inset: 0; background: rgb(0 0 0 / 80%); display: none;
+          align-items: center; justify-content: center; z-index: 50; cursor: zoom-out; }
+  .zoom.on { display: flex; }
+  .zoom img { max-width: 96vw; max-height: 94vh; border-radius: 6px; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } nav.toc { position: static; } }
+  @media print { .top button, nav.toc { display: none; } .wrap { display: block; }
+                 section { break-inside: avoid-page; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>操作説明書</h1>
+  <span class="ver">{{ display_name }} {{ version_label }}</span>
+  <span class="grow"></span>
+  <button type="button" id="manualPrint">印刷する</button>
+  <button type="button" id="manualClose">閉じる</button>
+</header>
+
+<div class="wrap">
+<nav class="toc" aria-label="目次">
+  <b>はじめに</b>
+  <a href="#overview">画面の見方</a>
+  <a href="#flow">仕事の流れ</a>
+  <b>現場モード</b>
+  <a href="#lot">1. ロット検索</a>
+  <a href="#selection">2. 資材選択</a>
+  <a href="#outputs">　帳票・切断依頼</a>
+  <a href="#inventory">3. 簡易在庫</a>
+  <a href="#warehouse">4. 倉庫連携</a>
+  <a href="#layout">5. 棚検索</a>
+  <a href="#log">6. 選定ログ</a>
+  <a href="#settings">7. 設定</a>
+  <b>倉庫(資材モード)</b>
+  <a href="#material">発注一覧と切断依頼</a>
+  <b>そのほか</b>
+  <a href="#theme">ライト / ダーク</a>
+  <a href="#trouble">困ったとき</a>
+</nav>
+
+<main>
+<section id="overview">
+  <h2>画面の見方</h2>
+  <p class="lead">どの画面も、<b>上の帯</b>・<b>左のレール</b>・<b>右の作業面</b>の3つでできています。</p>
+  <figure><img src="{{ url_for('static', filename='manual/img/00_ribbon.jpg') }}" alt="上の帯">
+    <figcaption>上の帯。いま選んでいる Lot・パレット・製品・拠点が常に出ます。右端に モード切替・説明書・表示(ライト/ダーク)・終了。</figcaption></figure>
+  <table>
+    <tr><th style="width:9em">場所</th><th>何があるか</th></tr>
+    <tr><td>上の帯</td><td>いま決まっていること(Lot・パレット・製品・拠点)。<b>現場 / 資材</b> のモード切替(権限のある端末だけ)、<b>説明書</b>(この窓)、<b>ライト / ダーク</b>、<b>終了</b>。</td></tr>
+    <tr><td>左のレール</td><td>画面の一覧。番号は作業の順番。右の印(<span class="k">125・新1</span> など)は、その画面に未確認や新しいものがある数。</td></tr>
+    <tr><td>作業面</td><td>左が<b>結果</b>(見るもの)、右が<b>操作</b>(押すもの)。いま押すべき段は青い枠で示します。</td></tr>
+  </table>
+  <div class="tip">キーボードの <kbd>F1</kbd>〜<kbd>F7</kbd> でレールの画面へ移れます。</div>
+</section>
+
+<section id="flow">
+  <h2>仕事の流れ(現場)</h2>
+  <div class="flow"><span>1 ロット検索</span><i>→</i><span>2 資材選択</span><i>→</i><span>帳票・切断依頼</span><i>→</i><span>4 倉庫連携で発注</span><i>→</i><span>倉庫が確認</span></div>
+  <p>ロットを引いて「資材展開」すると、製品サイズを持って資材選択へ移ります。パレット → ボード → アングル → 出す の順に上から決めていきます。</p>
+</section>
+
+<section id="lot">
+  <h2>1. ロット検索</h2>
+  <figure><img src="{{ url_for('static', filename='manual/img/01_lot_list.jpg') }}" alt="ロット検索の一覧">
+    <figcaption>ロット検索。上の欄に Lot 番号を打つとすぐ絞り込みます。条件で絞った一覧から選んでもかまいません。</figcaption></figure>
+  <ol>
+    <li>上の欄に <b>Lot 番号</b>(例: H8330P0)を打つ。7桁そろうと詳細が開きます。</li>
+    <li>ロット情報・引当・受注・包装仕様書の図面を確かめる。</li>
+    <li>右下の <b>「資材展開して資材選択へ」</b> を押す。</li>
+  </ol>
+  <figure><img src="{{ url_for('static', filename='manual/img/02_lot_detail.jpg') }}" alt="ロットの詳細">
+    <figcaption>ロットの詳細。製造寸法・オーダー寸法・試験指示票の要否・引当・受注が1枚にまとまっています。</figcaption></figure>
+</section>
+
+<section id="selection">
+  <h2>2. 資材選択</h2>
+  <figure><img src="{{ url_for('static', filename='manual/img/03_selection_start.jpg') }}" alt="資材選択の始め">
+    <figcaption>資材展開した直後。右の①「パレットを決める」が青い枠(いま押すべき段)。</figcaption></figure>
+  <h3>① パレットを決める</h3>
+  <ol>
+    <li>製品の幅・丈が入っています(ロットの製造寸法)。違うときは直します。</li>
+    <li>一覧から使うパレットの行を押し、<b>「パレット決定」</b>。<b>発注コードと単位はこの行から取ります</b>。</li>
+  </ol>
+  <h3>② ボード</h3>
+  <figure><img src="{{ url_for('static', filename='manual/img/04_selection_boards.jpg') }}" alt="ボードの段">
+    <figcaption>ボードの段。「自動選択」で上用・下用を選び、「配置実行」で図にします。手で足す・減らすこともできます。</figcaption></figure>
+  <h3>配置図と選定一覧</h3>
+  <figure><img src="{{ url_for('static', filename='manual/img/05_selection_placed.jpg') }}" alt="配置図">
+    <figcaption>配置したところ。決まった段の要約(上用・下用の枚数)と「配置完了」は大きな字で出ます。左の「配置図」「選定一覧」はタブで切り替え。</figcaption></figure>
+  <figure><img src="{{ url_for('static', filename='manual/img/06_selection_picked.jpg') }}" alt="選定一覧">
+    <figcaption>選定一覧。上用・下用ごとの寸法・枚数・カットの有無。</figcaption></figure>
+  <div class="tip">プロテック・上下共用・EX・1P0113 などの特殊モードのときは、右の一番上に色付きの帯(例【プロテックボードオーダー選択中】)が出ます。下へ動かしても上に残ります。</div>
+  <h3>③ アングル</h3>
+  <p>「アングル自動」で選び、「アングル配置」で図に載せます。「置き場をまとめて見る」で、ボードとアングルの置き場を棚検索で光らせます。</p>
+</section>
+
+<section id="outputs">
+  <h2>帳票・切断依頼・倉庫送信(資材選択の「4 出す」)</h2>
+  <figure><img src="{{ url_for('static', filename='manual/img/07_selection_outputs.jpg') }}" alt="出す段">
+    <figcaption>「4 出す」の段。Lot印刷・切断依頼・配置図印刷・倉庫送信・使用する。</figcaption></figure>
+  <table>
+    <tr><th style="width:9em">ボタン</th><th>すること</th></tr>
+    <tr><td>Lot印刷</td><td>Lot 貼付用の紙を別の窓で開きます。窓の上の「印刷する」で印刷。</td></tr>
+    <tr><td>切断依頼</td><td>切る板があれば「丈カットを行いますか？」と訊いてから切断依頼書を開きます。</td></tr>
+    <tr><td>配置図印刷</td><td>配置図を A4 で開きます。</td></tr>
+    <tr><td>倉庫送信</td><td>倉庫連携の入力欄に<b>下書き</b>を作ります(ここでは登録しません)。</td></tr>
+    <tr><td>使用する</td><td>配置したボードの枚数を記録します(設定の「ボード人気度」に積まれます)。</td></tr>
+  </table>
+  <h3>切断依頼を倉庫へ送る</h3>
+  <figure><img src="{{ url_for('static', filename='manual/img/13_cut_preview.jpg') }}" alt="切断依頼のプレビュー">
+    <figcaption>切断依頼書のプレビュー。点線の欄(担当者・台数・期限日など)はその場で直せます。上の緑の <b>「倉庫へ送る」</b> で、直した紙面のまま倉庫へ送ります。</figcaption></figure>
+  <ul>
+    <li>送った紙面は固まります。<b>別のロットを検索しても消えず</b>、倉庫連携の「送った切断依頼」からいつでも開いて印刷できます。</li>
+    <li>同じロットをもう一度送ると確かめます(倉庫が開く前なら差し替え、受け取ったあとなら別にもう1枚)。</li>
+  </ul>
+</section>
+
+<section id="inventory">
+  <h2>3. 簡易在庫</h2>
+  <figure><img src="{{ url_for('static', filename='manual/img/20_inventory.jpg') }}" alt="簡易在庫">
+    <figcaption>簡易在庫。左で探し、真ん中の図で場所を見て、右の一覧で在庫数を確かめます。受け入れ・払い出し(現場モードだけ)もここから。</figcaption></figure>
+</section>
+
+<section id="warehouse">
+  <h2>4. 倉庫連携(現場)</h2>
+  <figure><img src="{{ url_for('static', filename='manual/img/10_warehouse_field.jpg') }}" alt="倉庫連携">
+    <figcaption>左が新規発注の入力欄(資材選択の「倉庫送信」で下書きが入ります)。右は「送った発注」と「送った切断依頼」のタブ。選んでいるタブは色で塗られます。</figcaption></figure>
+  <h3>発注を送る・取り消す</h3>
+  <ol>
+    <li>左の欄を確かめて <b>「倉庫へ送信」</b>。複数行はまとめて1回で登録します。</li>
+    <li>送った発注は右の一覧に出ます。<b>倉庫が確認する前だけ</b>「取り消し」できます。</li>
+  </ol>
+  <h3>コメント(現場⇔倉庫のやり取り)</h3>
+  <figure><img src="{{ url_for('static', filename='manual/img/11_warehouse_comment.jpg') }}" alt="コメント">
+    <figcaption>行の「コメント」を押すと発注が開き、下にやり取りが出ます。発注コードは押すとコピーできます(押した所に「コピーしました」)。</figcaption></figure>
+  <table>
+    <tr><th style="width:11em">印</th><th>意味</th></tr>
+    <tr><td><span class="k">新1</span></td><td>相手が書いて、<b>自分がまだ開いていない</b>。開けば消えます(返事は要りません)。</td></tr>
+    <tr><td><span class="k">倉庫が未読1</span></td><td><b>自分が書いて</b>、相手(倉庫)がまだ開いていない。</td></tr>
+    <tr><td><span class="k">✔既読</span></td><td>自分が書いたものを相手が開いた。</td></tr>
+  </table>
+  <h3>送った切断依頼</h3>
+  <figure><img src="{{ url_for('static', filename='manual/img/12_warehouse_cuts_field.jpg') }}" alt="送った切断依頼">
+    <figcaption>「送った切断依頼」タブ。状態は 倉庫はまだ開いていません → 受け取った → 切った。倉庫が受け取る前なら「取り消し」できます。状態が変わるとタブが光ります。</figcaption></figure>
+  <div class="tip">相手の画面には 15秒ごとの見張りで届きます(たいてい 10〜15秒)。急ぐときは右上の「最新にする」。</div>
+</section>
+
+<section id="layout">
+  <h2>5. 棚検索</h2>
+  <figure><img src="{{ url_for('static', filename='manual/img/21_layout.jpg') }}" alt="棚検索">
+    <figcaption>棚検索。幅・丈を入れて「検索」すると、当たった置き場が図で光ります。拠点から近い順。</figcaption></figure>
+</section>
+
+<section id="log">
+  <h2>6. 選定ログ</h2>
+  <figure><img src="{{ url_for('static', filename='manual/img/22_log.jpg') }}" alt="選定ログ">
+    <figcaption>選定ログ。選定・配置・帳票・送信で何が起きたかを順に残します。「なぜこのボードになったか」を追うときに見ます。</figcaption></figure>
+</section>
+
+<section id="settings">
+  <h2>7. 設定</h2>
+  <figure><img src="{{ url_for('static', filename='manual/img/30_settings_status.jpg') }}" alt="いまの状態">
+    <figcaption>「いまの状態」。取り込み元が見つかっているか、この端末の権限などを節ごとに出します。赤い「足りません」があれば、まずここを見ます。</figcaption></figure>
+  <figure><img src="{{ url_for('static', filename='manual/img/31_settings_source.jpg') }}" alt="取り込み元">
+    <figcaption>「取り込み元」。梱包資材マスタ・仕掛台帳(2つ目も指定できます)・看板マスタ・パレット閾値マスタの置き場所。変えるときは管理者パスワードが要ります。</figcaption></figure>
+  <figure><img src="{{ url_for('static', filename='manual/img/32_settings_master.jpg') }}" alt="マスタ管理">
+    <figcaption>「マスタ管理」。共有の梱包資材マスタの中身を見て直します(資材モード+管理者認証)。見出しを押すと並び替え。「+ 列を足す…」で列を足せます。</figcaption></figure>
+  <figure><img src="{{ url_for('static', filename='manual/img/33_settings_logs.jpg') }}" alt="ログ">
+    <figcaption>「ログ」。エラーの記録(番号つき)と、時間のかかった操作。問い合わせのときはエラー番号を伝えてください。</figcaption></figure>
+</section>
+
+<section id="material">
+  <h2>倉庫(資材モード): 発注一覧と切断依頼</h2>
+  <figure><img src="{{ url_for('static', filename='manual/img/40_material_orders.jpg') }}" alt="受け取った発注">
+    <figcaption>「受け取った発注」。中身を確かめて <b>「確認済みにする」</b>。「Lotを開く」で発注のロット情報を確かめられます。</figcaption></figure>
+  <figure><img src="{{ url_for('static', filename='manual/img/41_material_cuts.jpg') }}" alt="届いた切断依頼">
+    <figcaption>「届いた切断依頼」。<b>「開く」</b>で紙面を別の窓に出して印刷します(開くと「受け取った」になり、現場からは取り消せなくなります)。切り終えたら <b>「切った」</b>。まだ開いていない依頼があるとタブが光り、レールに「切N」が出ます。</figcaption></figure>
+</section>
+
+<section id="theme">
+  <h2>ライト / ダーク(画面の色)</h2>
+  <p>上の帯の <b>◐ ライト / ダーク</b> を押すと切り替わります。選んだ色は<b>この端末に残り</b>、現場モードでも資材モードでも同じ色になります。</p>
+  <figure><img src="{{ url_for('static', filename='manual/img/50_dark.jpg') }}" alt="ダーク表示">
+    <figcaption>ダーク表示の例(ロット検索)。帳票(印刷する紙)はいつも白地です。</figcaption></figure>
+</section>
+
+<section id="trouble">
+  <h2>困ったとき</h2>
+  <table>
+    <tr><th style="width:16em">こんなとき</th><th>見るところ・すること</th></tr>
+    <tr><td>ロット検索で何も出ない</td><td>設定「取り込みと反映」で取り込む。「いまの状態」の仕掛台帳の節で、ファイルが見つかっているか確かめる。</td></tr>
+    <tr><td>倉庫送信が押せない</td><td>資材選択でパレット一覧の行を選んで「パレット決定」したか(発注コードと単位の取り元)。</td></tr>
+    <tr><td>相手のコメントや切断依頼が出ない</td><td>倉庫連携の「最新にする」。共有フォルダに届いているかは設定「いまの状態」。</td></tr>
+    <tr><td>マスタを直せない</td><td>資材モードの権限と管理者認証(設定「パスワード」→「マスタ編集の認証」)が要ります。理由は画面の黄色い帯に出ます。</td></tr>
+    <tr><td>エラーが出た</td><td>帯に出るエラー番号を控えて、設定「ログ」で中身を見る(「なぜなぜの下書きをコピー」で報告用の文になります)。</td></tr>
+  </table>
+  <p>もっと詳しい説明は、ツールのフォルダの <code>docs\はじめに読む_起動と使い方.md</code> にあります。</p>
+</section>
+</main>
+</div>
+
+<div class="zoom" id="zoom" role="dialog" aria-label="写真を大きく"><img alt=""></div>
+<script>
+(function () {
+  // 写真を押すと大きく、もう一度押すと戻る
+  var zoom = document.getElementById("zoom"), big = zoom.querySelector("img");
+  document.querySelectorAll("figure img").forEach(function (img) {
+    img.addEventListener("click", function () {
+      big.src = img.src; big.alt = img.alt; zoom.classList.add("on");
+    });
+  });
+  zoom.addEventListener("click", function () { zoom.classList.remove("on"); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") zoom.classList.remove("on");
+  });
+  document.getElementById("manualPrint").addEventListener("click", function () { window.print(); });
+  document.getElementById("manualClose").addEventListener("click", function () {
+    // デスクトップ版は外枠が開いた窓なので、外枠に閉じてもらう
+    var desk = window.__TAURI__ && window.__TAURI__.core;
+    if (desk) { desk.invoke("close_window"); return; }
+    window.close();
+  });
+}());
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja">
+<html lang="ja"{% if theme %} data-theme="{{ theme }}"{% endif %}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -107,6 +107,13 @@
     <a class="role-chip role-chip--{{ mode }}" href="/settings?tab=status"
        title="{{ mode_note }}(押すと「この端末の権限」が開きます)">{{ mode_label }}モード<span class="gl">?</span></a>
     {% endif %}
+    {# 説明書(写真入り。別の窓で開く)と画面の色。**どの画面からも届く**ように帯に置く #}
+    <button class="btn btn--find" type="button" id="openManual"
+            title="操作説明書を別の窓で開きます"><span class="gl">?</span>説明書</button>
+    <button class="btn" type="button" id="themeToggle"
+            aria-pressed="{{ 'true' if theme == 'dark' else 'false' }}"
+            title="画面の色をライト / ダークで切り替えます(この端末に残ります)">
+      <span class="gl" aria-hidden="true">◐</span><span id="themeLabel">表示</span></button>
     <button class="btn btn--danger" type="button" id="quit"><span class="gl">■</span>終了</button>
   </div>
 </header>

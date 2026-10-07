@@ -37,6 +37,8 @@ running.start();
  */
 export function wireShell() {
   wireQuit(document.getElementById("quit"));
+  wireTheme(document.getElementById("themeToggle"));
+  wireManual(document.getElementById("openManual"));
   for (const btn of document.querySelectorAll(".modeswitch__btn")) wireMode(btn);
   // 新しい帯は空で来る。**移った先で「何も動いていない」に見せない**
   running.paint();
@@ -76,6 +78,52 @@ function wireQuit(button) {
         return;
       }
       toastError(err);
+    }
+  });
+}
+
+// ------------------------------------------------------------------
+// 画面の色(ライト / ダーク)。**この端末の設定に残す**(`/api/theme`)。
+// 選んでいなければ OS の設定に合わせる(`tokens.css` の3つの状態)
+// ------------------------------------------------------------------
+function currentTheme() {
+  const chosen = document.documentElement.dataset.theme;
+  if (chosen === "light" || chosen === "dark") return chosen;
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark" : "light";
+}
+
+function paintTheme(button) {
+  const now = currentTheme();
+  const label = button.querySelector("#themeLabel");
+  if (label) label.textContent = now === "dark" ? "ダーク" : "ライト";
+  button.setAttribute("aria-pressed", String(now === "dark"));
+  button.title = `いまは${now === "dark" ? "ダーク" : "ライト"}表示です。`
+    + `押すと${now === "dark" ? "ライト" : "ダーク"}に切り替えます(この端末に残ります)`;
+}
+
+function wireTheme(button) {
+  if (!once(button)) return;
+  paintTheme(button);
+  button.addEventListener("click", async () => {
+    const next = currentTheme() === "dark" ? "light" : "dark";
+    // **先に画面を変える**(押した手応え)。残すのはそのあと
+    document.documentElement.dataset.theme = next;
+    paintTheme(button);
+    try {
+      await api.post("/api/theme", { theme: next });
+    } catch (err) {
+      toastError(err);
+    }
+  });
+}
+
+// 説明書。**別の窓で開く**(作業中の画面を離れずに読めるように)
+function wireManual(button) {
+  if (!once(button)) return;
+  button.addEventListener("click", () => {
+    if (!desktop.openWindow("/manual", "操作説明書")) {
+      toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
     }
   });
 }

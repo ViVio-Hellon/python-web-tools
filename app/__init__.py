@@ -635,6 +635,9 @@ def _register_routes(app: Flask) -> None:
     from .routes import log as log_routes
 
     app.register_blueprint(health.bp)
+    # 操作説明書(写真入り)。どのモードでも開ける
+    from .routes import manual as manual_routes
+    app.register_blueprint(manual_routes.bp)
     # 部品カタログ。利用者向けではなく開発を進めるための見本帳
     app.register_blueprint(catalog.bp)
     # 設定画面は**どのモードでも**開ける。取り込みと書き戻し、そして

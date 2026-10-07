@@ -89,6 +89,22 @@ def get_position_label() -> str:
     return value if isinstance(value, str) and value else UNSET_LABEL
 
 
+# 画面の色(ライト / ダーク)。**空なら OS の設定に合わせる**(`tokens.css` の3つの状態)
+KEY_THEME = "theme"
+THEMES = ("light", "dark")
+
+
+def get_theme() -> str:
+    """選んだ画面の色。"light" / "dark"、選んでいなければ ""(OS に合わせる)。"""
+    value = get(KEY_THEME)
+    return value if value in THEMES else ""
+
+
+def set_theme(value: str) -> bool:
+    """画面の色を選ぶ。"light" / "dark" 以外は「OS に合わせる」(空)。"""
+    return save(KEY_THEME, value if value in THEMES else "")
+
+
 def set_position(value: str) -> bool:
     """拠点を登録する(VBA `mBtnPosition_Click` の `SaveSetting`)。"""
     return save(KEY_POSITION, value)
