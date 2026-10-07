@@ -860,6 +860,20 @@ function renderBring(plan) {
       label.className = "why";
       label.append(box, rebuild ? " 作り直す" : " 入れ替える");
       pick.appendChild(label);
+    } else if (t.exists && t.can_append && t.append_rows) {
+      // 入れ替えられない表(このツールが書き込む)。**Access にしか無い行だけ**足せる
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.value = t.name;
+      box.dataset.refresh = "1";
+      box.dataset.action = "append";
+      box.dataset.rows = String(t.append_rows);
+      box.checked = false;
+      box.addEventListener("change", updateBringRun);
+      const label = document.createElement("label");
+      label.className = "why";
+      label.append(box, " 無い行だけ足す");
+      pick.appendChild(label);
     } else if (t.exists) {
       pick.textContent = "もうある";
       pick.className = "why";
@@ -911,12 +925,20 @@ function renderBring(plan) {
                 ? `が、⚠ 値は空になります(${emptied.map((e) => `${e.name} ${e.rows}行`).join("・")})`
                 : "(いまは値がありません)")
             : "")
-        : `入れ替えられません: ${t.refresh_why}`;
+        : t.appendable
+          ? (t.can_append
+            ? (t.append_rows
+              ? `Access にしか無い行 ${t.append_rows.toLocaleString()}件を足せます`
+                + `(もうある ${t.append_same.toLocaleString()}件と、ツールにだけある行には触りません)。`
+                + "同じ行かは 登録日時・LotNo・発注コード・厚・幅・丈 で見分けます"
+              : `Access にしか無い行はありません(もうある ${t.append_same.toLocaleString()}件)`)
+            : `足せません: ${t.append_why}`)
+          : `入れ替えられません: ${t.refresh_why}`;
       cols.prepend(note);
     }
     tr.append(pick, name, count, cols);
     // 持ってこられる表を上に、入れ替えられる表を次に、どちらもできない表を下に
-    tr.dataset.order = !t.exists ? "0" : t.can_refresh ? "1" : "2";
+    tr.dataset.order = !t.exists ? "0" : (t.can_refresh || (t.can_append && t.append_rows)) ? "1" : "2";
     return tr;
   }).sort((a, b) => Number(a.dataset.order) - Number(b.dataset.order));
   bring.rows.replaceChildren(...rows);
@@ -936,14 +958,23 @@ function chosenRefresh() {
 
 function updateBringRun() {
   bring.run.disabled = chosenTables().length === 0;
-  if (bring.refresh) bring.refresh.disabled = chosenRefresh().length === 0;
+  if (!bring.refresh) return;
+  bring.refresh.disabled = chosenRefresh().length === 0;
+  // 「無い行だけ足す」だけを選んだときは、消す操作ではないので赤くしない
+  const boxes = [...bring.rows.querySelectorAll("input[type=checkbox][data-refresh]:checked")];
+  const onlyAppend = boxes.length > 0 && boxes.every((b) => b.dataset.action === "append");
+  bring.refresh.textContent = onlyAppend ? "選んだ表に無い行を足す" : "選んだ表を入れ替える・作り直す";
+  bring.refresh.classList.toggle("btn--danger", !onlyAppend);
 }
 
 async function runRefresh() {
   const tables = chosenRefresh();
   if (!tables.length) return;
   const boxes = [...bring.rows.querySelectorAll("input[type=checkbox][data-refresh]:checked")];
-  const swap = boxes.filter((b) => b.dataset.action !== "rebuild").map((b) => b.value);
+  const swap = boxes.filter((b) => !["rebuild", "append"].includes(b.dataset.action))
+    .map((b) => b.value);
+  const append = boxes.filter((b) => b.dataset.action === "append")
+    .map((b) => `${b.value}(${Number(b.dataset.rows).toLocaleString()}件)`);
   const rebuild = boxes.filter((b) => b.dataset.action === "rebuild").map((b) => b.value);
   const loses = boxes.filter((b) => b.dataset.loses)
     .map((b) => `${b.value}(${b.dataset.loses})`);
@@ -958,9 +989,14 @@ async function runRefresh() {
     + (emptied.length
       ? `⚠ マスタ管理で足した列の値が空になります(列は残ります):\n${emptied.join("、")}\n`
         + "Access に無い列なので、入れ替えると値は残りません。\n\n" : "")
-    + "梱包資材マスタにある今の行は消えます(書く前に控えを取ります)。"
+    + (append.length ? `Access にしか無い行だけを足す表(今ある行は消しも書き換えもしません):\n`
+                       + `${append.join("、")}\n\n` : "")
+    + (swap.length || rebuild.length
+      ? "梱包資材マスタにある今の行は消えます(書く前に控えを取ります)。"
+      : "書く前に梱包資材マスタの控えを取ります。")
     + "ほかの端末にも次の取り込みで届きます。よろしいですか？",
-    { ok: "入れ替える", danger: true }))) return;
+    swap.length || rebuild.length
+      ? { ok: "入れ替える", danger: true } : { ok: "足す" }))) return;
   try {
     // 足した列の値が空になることは、上の確認で伝えた(`empty_ok`)
     const result = await api.post("/api/settings/table-refresh",
@@ -968,6 +1004,7 @@ async function runRefresh() {
     renderBring(result.plan);
     toast(result.message, "ok");
     if (result.refreshed && result.refreshed.length) master.show(result.refreshed[0].name);
+    else if (result.appended && result.appended.length) master.show(result.appended[0].name);
     bring.note.hidden = false;
     bring.note.className = "status status--ok";
     bring.note.textContent = `${result.message}(控え: ${result.backup})`;

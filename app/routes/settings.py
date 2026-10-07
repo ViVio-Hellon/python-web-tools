@@ -465,6 +465,8 @@ def table_refresh_run():
                "refreshed": [{"name": n, "before": b, "after": a}
                              for n, b, a in result.refreshed],
                "kept_old": [{"name": n, "old": o} for n, o in result.kept_old],
+               "appended": [{"name": n, "rows": r, "same": m}
+                            for n, r, m in result.appended],
                "backup": result.backup,
                "plan": table_bring.plan_dict(table_bring.plan(str(body.get("path", ""))))}
     if result.ok:

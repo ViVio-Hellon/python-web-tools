@@ -59,6 +59,18 @@ REFUSE_NEED_CONFIRM = "need_confirm"   # 足した列の値が空になる。確
 # もうある表にすること
 ACTION_REFRESH = "refresh"        # 中身を入れ替える(Access にだけある列は足す)
 ACTION_REBUILD = "rebuild"        # 作り直す(列が消えた・名前が変わった)
+ACTION_APPEND = "append"          # Access にしか無い行だけを足す(今ある行には触らない)
+
+# **入れ替えはしないが、Access にしか無い行だけは足せる表**と、同じ行か見分ける列。
+# 資材パレット注文管理はこのツールが書き込む表なので入れ替えられない(`_tool_owned`)。
+# ところが Access 側でも発注が入り続けていて、それがツールに届かない。そこで
+# 「登録日時・LotNo・発注コード・寸法」が全部同じ行が梱包資材マスタに無いものだけを
+# 行ごと足す。管理番号は Access と梱包資材マスタで別々に振られているので見分けに使わない
+APPEND_KEYS: dict[str, tuple[str, ...]] = {
+    config.TBL_WAREHOUSE_ORDER: ("登録日時", "LotNo", "発注コード", "厚", "幅", "丈"),
+}
+# 足すときに写さない列。管理番号は梱包資材マスタで振り直し、送信IDはツールが送った行の印
+APPEND_SKIP = ("管理番号", "送信ID")
 
 # 足した表の記録(梱包資材マスタの中)。マスタ管理が同じ名前で読む
 from .master_common import BROUGHT_REGISTRY as REGISTRY  # noqa: E402
@@ -96,6 +108,11 @@ class Candidate:
     tool_columns: list[str] = field(default_factory=list)
     # そのうち値の入っている列と行数 [(列, 行数)]。入れ替える前に確かめる
     emptied: list[tuple[str, int]] = field(default_factory=list)
+    # Access にしか無い行だけを足せる表(`APPEND_KEYS`)── 足す行数・もうある行数・できない理由
+    append_rows: int = 0
+    append_same: int = 0
+    append_why: str = ""
+    appendable: bool = False
 
     @property
     def action(self) -> str:
@@ -111,6 +128,10 @@ class Candidate:
     @property
     def can_refresh(self) -> bool:
         return self.exists and not self.refresh_why
+
+    @property
+    def can_append(self) -> bool:
+        return self.exists and self.appendable and not self.append_why
 
 
 @dataclass
@@ -146,6 +167,8 @@ class BringResult:
     refreshed: list[tuple[str, int, int]] = field(default_factory=list)
     # 作り直す前の表を残した名前: (表, 残した名前)
     kept_old: list[tuple[str, str]] = field(default_factory=list)
+    # 無い行だけ足した表: (表, 足した行数, もうあった行数)
+    appended: list[tuple[str, int, int]] = field(default_factory=list)
 
 
 # Access が自分のために持っている表。**持ってこない。**
@@ -533,6 +556,8 @@ def plan(source_path: str) -> Plan:
             found.current_rows = max(dest_counts.get(here, 0), 0)
             _compare_columns(found, source_db.columns(dest, here), here, dest)
             found.keeps = KEEPS.get(here, "")
+            if here in APPEND_KEYS:
+                _look_append(found, readable, dest, here)
         out.candidates.append(found)
     out.ok = True
     new = len(out.new_tables)
@@ -543,6 +568,10 @@ def plan(source_path: str) -> Plan:
     if rebuild:
         out.message += f"、列が変わったので作り直す表が {rebuild} 個"
     out.message += "あります。"
+    for c in out.candidates:
+        if c.can_append and c.append_rows:
+            out.message += (f" {c.name} は、Access にしか無い行 {c.append_rows:,} 件を"
+                            "足せます(今ある行には触りません)。")
     if internal:
         out.message += f"(Access の内部の表 {len(internal)} 個は出していません)"
     suspects = [c for c in out.candidates if c.suspect]
@@ -860,15 +889,24 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
             found = Candidate(name=table, columns=columns, exists=True,
                               suspect=_suspect_rows(src, table, columns))
             _compare_columns(found, source_db.columns(dest, table), table, dest)
-            if found.refresh_why:
+            if table in APPEND_KEYS:
+                # 入れ替えない表。Access にしか無い行だけを足す
+                _look_append(found, src, dest, table)
+                if found.append_why:
+                    refusals.append(f"{table}({found.refresh_why}。"
+                                    f"無い行だけ足すこともできません: {found.append_why})")
+                actions[table] = ACTION_APPEND
+            elif found.refresh_why:
                 refusals.append(f"{table}({found.refresh_why})")
-            actions[table] = found.action
+            else:
+                actions[table] = found.action
             found_by[table] = found
     if refusals:
         return BringResult(False, "入れ替えられない表があります: " + "、".join(refusals)
                            + "。何も変えていません。", REFUSE_NOTHING)
     wanted = list(dict.fromkeys(named))
-    emptied = [found_by[t] for t in wanted if found_by[t].emptied]
+    emptied = [found_by[t] for t in wanted
+               if found_by[t].emptied and actions[t] != ACTION_APPEND]
     if emptied and not empty_ok:
         return BringResult(False, "マスタ管理で足した列の値が空になります: "
                            + "、".join(emptied_text(f) for f in emptied)
@@ -877,7 +915,8 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
                            REFUSE_NEED_CONFIRM)
 
     try:
-        backup = _backup(dest, "中身を入れ替える前")
+        only_append = all(actions[t] == ACTION_APPEND for t in wanted)
+        backup = _backup(dest, "無い行を足す前" if only_append else "中身を入れ替える前")
     except OSError as exc:
         return BringResult(False, f"書く前の控えを取れませんでした({exc})。"
                                   "何も変えていません。", REFUSE_WRITE_FAILED)
@@ -888,10 +927,24 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     done: list[tuple[str, int, int]] = []
     kept_old: list[tuple[str, str]] = []
+    appended: list[tuple[str, int, int]] = []
     failed: list[str] = []
     notes: list[str] = []
     with source_db.connect(dest) as dst:
         for table in wanted:
+            if actions[table] == ACTION_APPEND:
+                try:
+                    added, same = _append_one(dst, src, table)
+                    appended.append((table, added, same))
+                    import_diag.write(f"  無い行だけ足した: {table} {added:,}行"
+                                      f"(もうあった {same:,}行には触っていない)")
+                    log.info("Access にしか無い行を足した: %s %s行 (もうあった %s行) (%s)",
+                             table, added, same, src)
+                except (source_db.SourceError, sqlite3.Error) as exc:
+                    failed.append(f"{table}({exc})")
+                    import_diag.write(f"  ✕ 足せませんでした: {table} ── {exc}")
+                    log.warning("Access にしか無い行を足せませんでした: %s: %s", table, exc)
+                continue
             rebuild = actions[table] == ACTION_REBUILD
             verb = "作り直した" if rebuild else "入れ替えた"
             try:
@@ -919,18 +972,22 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     follow = []
     if conn is not None:
         from .master_common import _follow
-        for table, _b, _a in done:
+        for table in [t for t, _b, _a in done] + [t for t, n, _s in appended if n]:
             said = _follow(conn, dest, table).lstrip("。")
             if said:
                 follow.append(f"{table}: {said}")
-    if failed and not done:
+    if failed and not done and not appended:
         return BringResult(False, "Access の最新にできませんでした: " + "、".join(failed)
                            + "。梱包資材マスタは変えていません。",
                            REFUSE_WRITE_FAILED, backup=str(backup))
     rebuilt = {t for t, _o in kept_old}
     parts = [f"{t}({b:,}行 → {a:,}行{'・作り直し' if t in rebuilt else ''})"
              for t, b, a in done]
-    message = "Access の最新にしました: " + "、".join(parts) + f"。(書いたファイル: {dest})"
+    message = ("Access の最新にしました: " + "、".join(parts) + "。") if parts else ""
+    if appended:
+        message += "Access にしか無い行を足しました: " + "、".join(
+            f"{t}({n:,}件。もうあった {s:,}件には触っていません)" for t, n, s in appended) + "。"
+    message += f"(書いたファイル: {dest})"
     if kept_old:
         message += (" 作り直す前の表は "
                     + "、".join(f"{old}" for _t, old in kept_old)
@@ -942,7 +999,125 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     if failed:
         message += " ただし次はできませんでした: " + "、".join(failed)
     return BringResult(not failed, message, "" if not failed else REFUSE_WRITE_FAILED,
-                       backup=str(backup), refreshed=done, kept_old=kept_old)
+                       backup=str(backup), refreshed=done, kept_old=kept_old,
+                       appended=appended)
+
+
+# ------------------------------------------------------------------
+# Access にしか無い行だけを足す(`APPEND_KEYS` の表)
+# ------------------------------------------------------------------
+_KEY_NUMBERS = ("厚", "幅", "丈")
+
+
+def _key_value(column: str, value: Any) -> str:
+    """同じ行か見分けるときの値。書き方の違い(日時の / と -、140 と 140.000)をそろえる。"""
+    from . import import_specs
+    if value is None:
+        return ""
+    if column == "登録日時":
+        text = import_specs.to_datetime_text(value) or ""
+        return text.replace("T", " ")[:19]
+    if column in _KEY_NUMBERS:
+        number = import_specs.to_real(value)
+        return "" if number is None else f"{number:.3f}"
+    return str(value).strip()
+
+
+def _row_key(row: dict[str, Any], keys: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(_key_value(k, row.get(k)) for k in keys)
+
+
+def _missing_rows(src_rows: list[dict[str, Any]], dest_rows: list[dict[str, Any]],
+                  keys: tuple[str, ...]) -> tuple[list[dict[str, Any]], int]:
+    """Access の行のうち、梱包資材マスタに無いもの と、もうある行の数。
+
+    **数で突き合わせる。** 同じ値の行が Access に2行・梱包資材マスタに1行なら、1行だけ足す。
+    """
+    from collections import Counter
+    have = Counter(_row_key(r, keys) for r in dest_rows)
+    missing: list[dict[str, Any]] = []
+    same = 0
+    for row in src_rows:
+        key = _row_key(row, keys)
+        if have[key] > 0:
+            have[key] -= 1
+            same += 1
+        else:
+            missing.append(row)
+    return missing, same
+
+
+def _append_problem(table: str, src_columns: list[str], dest_columns: list[str]) -> str:
+    keys = APPEND_KEYS[table]
+    lacking = [k for k in keys if k not in src_columns]
+    if lacking:
+        return f"同じ行か見分ける列が Access の表にありません: {', '.join(lacking)}"
+    lacking = [k for k in keys if k not in dest_columns]
+    if lacking:
+        return f"同じ行か見分ける列が梱包資材マスタの表にありません: {', '.join(lacking)}"
+    return ""
+
+
+def _look_append(found: "Candidate", src: Path, dest: Path, table: str) -> None:
+    """足せる行の数を数える(書かない)。"""
+    found.appendable = True
+    found.append_why = _append_problem(table, found.columns, source_db.columns(dest, table))
+    if not found.append_why and found.suspect:
+        found.append_why = (f"文字化けの疑いがある行が {found.suspect}行 あります。"
+                            "Access のドライバ(pyodbc)が使えるPCで読み直してください")
+    if found.append_why:
+        return
+    q = source_db.quote_identifier(table)
+    missing, same = _missing_rows(source_db.read_query(src, f"SELECT * FROM {q}"),
+                                  source_db.read_query(dest, f"SELECT * FROM {q}"),
+                                  APPEND_KEYS[table])
+    found.append_rows, found.append_same = len(missing), same
+
+
+# 足すときに書き方をそろえる列(日時)。ツールは日時を ISO で書き、`date(登録日時)` で
+# 絞り込む(倉庫連携の「今日」「7日」)。Access の「2026/10/07 12:08:10」のままだと絞り込みから漏れる
+APPEND_DATES = ("登録日時", "取り消し日時", "確認日時")
+
+
+def _append_value(column: str, value: Any) -> Any:
+    """足す値。**日時だけ ISO にそろえ、ほかは Access の値のまま。**
+
+    数を取り込みの直し方(整数にする)で入れると、丈 2770.5 が 2771 になって
+    次に突き合わせたとき別の行に見え、二重に足してしまう。
+    """
+    if column in APPEND_DATES:
+        from . import import_specs
+        return import_specs.to_datetime_text(value)
+    return value
+
+
+def _append_one(dst: "source_db.SourceConnection", src: Path, table: str) -> tuple[int, int]:
+    """Access にしか無い行を足す。(足した行数, もうあった行数)。
+
+    **数えるのと足すのを1回で確定する**(数えたあとにほかの端末が送った行と
+    取り違えない)。今ある行は読むだけで、書き換えも消しもしない。
+    """
+    keys = APPEND_KEYS[table]
+    q = source_db.quote_identifier(table)
+    src_rows = source_db.read_query(src, f"SELECT * FROM {q}")
+    with dst.transaction() as tx:
+        info = {r["name"]: r for r in tx.query(f"PRAGMA table_info({q})")}
+        missing, same = _missing_rows(src_rows, tx.query(f"SELECT * FROM {q}"), keys)
+        number = info.get("管理番号")
+        numbered = bool(number) and not (
+            number["pk"] and str(number["type"] or "").upper() == "INTEGER")
+        top = 0
+        if numbered:
+            got = tx.query(f'SELECT MAX(CAST("管理番号" AS INTEGER)) AS n FROM {q}')
+            top = int(got[0]["n"] or 0)
+        for row in missing:
+            values = {c: _append_value(c, v) for c, v in row.items()
+                      if c in info and c not in APPEND_SKIP}
+            if numbered:
+                top += 1
+                values["管理番号"] = top          # 送るときと同じ MAX+1(VBAと同じ)
+            tx.insert(table, values)
+    return len(missing), same
 
 
 def _column_types(path: Path, table: str) -> dict[str, str]:
@@ -1119,6 +1294,9 @@ def plan_dict(p: Plan) -> dict[str, Any]:
                     "removed_columns": c.removed_columns,
                     "import_loses": c.import_loses,
                     "tool_columns": c.tool_columns,
+                    "can_append": c.can_append, "append_why": c.append_why,
+                    "appendable": c.appendable,
+                    "append_rows": c.append_rows, "append_same": c.append_same,
                     "emptied": [{"name": n, "rows": r} for n, r in c.emptied]}
                    for c in p.candidates],
     }
