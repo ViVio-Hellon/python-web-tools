@@ -1755,11 +1755,24 @@ class TableBringTests(DataWebTestCase):
             self.assertIn(key, html)
 
 
+# 本物の Access の頭(`table_bring.sniff` が Access と見分ける最小の形)
+ACCESS_HEAD = b"\x00\x01\x00\x00Standard ACE DB\x00" + b"\x00" * 200
+
 _FAKE_ENGINE = '''
 import os
 def read_source(src, prefer="auto"):
-    if "壊れ" in os.path.basename(src):
-        raise RuntimeError("どちらの読み取りエンジンも使用できませんでした。")
+    # 本物の変換ツールと同じ言い方(どちらで読めなくても同じ前置きで、方式ごとの行が続く)
+    if "部品無し" in os.path.basename(src):
+        raise RuntimeError("どちらの読み取りエンジンも使用できませんでした。\\n詳細:\\n"
+                           "pyodbc: No module named 'pyodbc'\\n"
+                           "access_parser: No module named 'access_parser'")
+    if "読めない" in os.path.basename(src):
+        with open(os.path.join(os.path.dirname(__file__), "calls.txt"), "a") as fh:
+            fh.write("1")
+        raise RuntimeError("どちらの読み取りエンジンも使用できませんでした。\\n詳細:\\n"
+                           "pyodbc: No module named 'pyodbc'\\n"
+                           "access_parser: Failed to parse DB file header. "
+                           "Check it is a valid access database")
     # 呼ばれた回数を数える(同じ Access を2回変換しないことを確かめる)
     with open(os.path.join(os.path.dirname(__file__), "calls.txt"), "a") as fh:
         fh.write("1")
@@ -2122,7 +2135,7 @@ class TableBringAccessTests(TableBringTests):
         self.addCleanup(user_settings.save, config.KEY_CONVERTER_DIR, saved or "")
         user_settings.save(config.KEY_CONVERTER_DIR, str(self.conv))
         self.converted = self.dir / "access" / "資材.accdb"
-        self.converted.write_bytes(b"\x00\x01Standard ACE DB")   # 中身は偽の変換ツールが読む
+        self.converted.write_bytes(ACCESS_HEAD)   # 中身は偽の変換ツールが読む
 
     def calls(self) -> int:
         path = self.conv / "calls.txt"
@@ -2176,7 +2189,7 @@ class TableBringAccessTests(TableBringTests):
     def test_予備の読み方で読んだら言う(self) -> None:
         from packaging_tool import table_bring
         spare = self.dir / "access" / "予備.accdb"
-        spare.write_bytes(b"x")
+        spare.write_bytes(ACCESS_HEAD)
         plan = table_bring.plan(str(spare))
         self.assertTrue(plan.ok)
         self.assertIn("予備の読み方(access_parser)で読みました", plan.converted)
@@ -2212,12 +2225,59 @@ class TableBringAccessTests(TableBringTests):
 
     def test_読み取り部品が無ければそう言う(self) -> None:
         from packaging_tool import table_bring
-        broken = self.dir / "access" / "壊れ.accdb"
-        broken.write_bytes(b"x")
+        broken = self.dir / "access" / "部品無し.accdb"
+        broken.write_bytes(ACCESS_HEAD)
         plan = table_bring.plan(str(broken))
         self.assertFalse(plan.ok)
         self.assertIn("Access を読む部品が見つかりません", plan.message)
         self.assertIn("_libs", plan.message)
+
+    def test_部品はあって読めないときは部品が無いと言わない(self) -> None:
+        """現場で出た形: 同梱の access_parser は動いたが「Failed to parse DB file header」。
+        それを「部品が見つかりません」と言い、Python を3つ試して3回とも同じ失敗をしていた。"""
+        from unittest import mock
+        from packaging_tool import table_bring
+        bad = self.dir / "access" / "読めない.accdb"
+        bad.write_bytes(ACCESS_HEAD)
+        with mock.patch.object(table_bring, "_pythons",
+                               return_value=[[sys.executable], [sys.executable, "-B"]]):
+            plan = table_bring.plan(str(bad))
+        self.assertFalse(plan.ok)
+        self.assertNotIn("部品が見つかりません", plan.message)
+        self.assertIn("読めませんでした", plan.message)
+        self.assertIn("Failed to parse DB file header", plan.message)
+        self.assertEqual(self.calls(), 1)            # ほかの Python では試し直さない
+
+    def test_名前がAccessでも中身で見分ける(self) -> None:
+        from packaging_tool import table_bring
+        folder = self.dir / "access"
+        cases = {
+            "空.accdb": (b"", "は空です"),
+            "零.accdb": (b"\x00" * 4096, "頭が 0 ばかり"),
+            "表計算.accdb": (b"PK\x03\x04" + b"x" * 100, "zip の形"),
+            "古い表計算.mdb": (b"\xd0\xcf\x11\xe0" + b"x" * 100, "Office の別の形"),
+            "別物.accdb": (b"hello world, not access", "Access のファイルではないようです"),
+        }
+        for name, (data, said) in cases.items():
+            with self.subTest(name=name):
+                (folder / name).write_bytes(data)
+                plan = table_bring.plan(str(folder / name))
+                self.assertFalse(plan.ok)
+                self.assertIn(said, plan.message)
+                self.assertNotIn("部品", plan.message)
+        self.assertEqual(self.calls(), 0)            # 変換ツールは呼ばない
+
+    def test_名前がAccessで中身がsqlite3ならそのまま読む(self) -> None:
+        from packaging_tool import table_bring
+        inside = self.dir / "access" / "中身は.accdb"
+        conn = sqlite3.connect(inside)
+        conn.execute('CREATE TABLE "新しい表" (ID INTEGER, 名前 TEXT)')
+        conn.commit()
+        conn.close()
+        plan = table_bring.plan(str(inside))
+        self.assertTrue(plan.ok, plan.message)
+        self.assertIn("中身は sqlite3", plan.converted)
+        self.assertEqual(self.calls(), 0)
 
     def test_参照でAccessのファイルが見える(self) -> None:
         from urllib.parse import quote

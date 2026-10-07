@@ -302,12 +302,22 @@ def _convert(src: Path) -> tuple[Path, str]:
             _converted_cache[str(src)] = (stamp, out, engine)
             log.info("Access を変換しました: %s → %s (%s)", src, out, engine)
             return out, engine
+        said = _reader_errors(stderr)
         last = stderr.splitlines()[-1] if stderr else f"終了コード {done.returncode}"
-        tried.append(f"{' '.join(python)}: {last}")
-        # 読み取り部品が入っていない Python なら次を試す。それ以外は中身の問題
-        no_engine = "読み取りエンジン" in stderr or "ModuleNotFoundError" in stderr
-        if not no_engine:
+        tried.append(f"{' '.join(python)}: {' / '.join(said) or last}")
+        # 読み取り部品が無い Python なら次を試す。**部品はあって読めなかったのなら
+        # ファイルの問題**なので、ほかの Python で試しても同じ(待たせるだけ)
+        no_engine = _reader_missing(stderr)
+        if not no_engine and not said:
             break
+        if not no_engine:
+            out.unlink(missing_ok=True)
+            raise ConvertError(
+                f"Access のファイル({src.name})を読めませんでした。"
+                "ツールに入っている予備の読み方(access_parser)では読めない作りのファイルです。"
+                "Access で開けるなら、Access で「データベースの最適化/修復」をしてから選び直すか、"
+                "Access のドライバ(pyodbc + Microsoft Access Driver)が入ったPCで持ってきてください。"
+                f"詳しく: {' / '.join(said)}")
     out.unlink(missing_ok=True)
     if no_engine:
         raise ConvertError(
@@ -319,11 +329,75 @@ def _convert(src: Path) -> tuple[Path, str]:
     raise ConvertError("Access を変換できませんでした。" + " / ".join(tried[-2:]))
 
 
+def _reader_errors(stderr: str) -> list[str]:
+    """変換ツールが返した、読み取り方式ごとの失敗(`pyodbc: …` `access_parser: …` の行)。"""
+    return [line.strip() for line in stderr.splitlines()
+            if line.strip().startswith(("pyodbc:", "access_parser:"))]
+
+
+def _reader_missing(stderr: str) -> bool:
+    """読み取り部品そのものが無くて失敗したか。
+
+    変換ツールは、どちらで読めなくても「どちらの読み取りエンジンも使用できませんでした」と
+    言う。部品が**無い**のか、部品はあって**ファイルを読めなかった**のかは、方式ごとの行で分ける。
+    """
+    if "ModuleNotFoundError" in stderr and not _reader_errors(stderr):
+        return True                         # 変換ツールの部品(engine など)が読めない
+    return bool(re.search(r"^\s*access_parser: No module named", stderr, re.M))
+
+
+# ファイルの頭(中身の種類の見分け)。拡張子は .accdb でも中身が違うことがある
+_JET_MAGIC = b"\x00\x01\x00\x00"
+_JET_NAMES = (b"Standard Jet DB", b"Standard ACE DB")
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+# `_readable` が返す読み取り方式: 名前は Access だが中身は sqlite3 だったので、そのまま読んだ
+SQLITE_INSIDE = "中身は sqlite3"
+
+
+def sniff(path: Path) -> str:
+    """ファイルの頭を見て中身を言う。"access" / "sqlite" / それ以外は**読めない理由の文**。
+
+    名前だけ変えたファイル・書きかけ・コピーや同期の途中で空のまま、などを
+    「Access を読む部品が無い」と取り違えないため、変換の前に見る。
+    """
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            head = fh.read(32)
+    except OSError as exc:
+        return f"{path.name} を開けませんでした({exc})。"
+    if head[:4] == _JET_MAGIC and head[4:19] in _JET_NAMES:
+        return "access"
+    if head.startswith(_SQLITE_MAGIC):
+        return "sqlite"
+    where = f"{path.name}({size:,} バイト)"
+    if size == 0:
+        return (f"{where} は空です。書きかけか、コピー・同期に失敗したファイルです。"
+                "元の Access のファイルを選び直してください。")
+    if not head.strip(b"\x00"):
+        return (f"{where} は頭が 0 ばかりで、Access のファイルとして読めません。"
+                "壊れているか、コピー・同期の途中です。元の Access のファイルを選び直してください。")
+    if head.startswith(b"PK\x03\x04"):
+        return f"{where} の中身は Access ではなく zip の形(Excel の .xlsx など)です。"
+    if head.startswith(b"\xd0\xcf\x11\xe0"):
+        return f"{where} の中身は Access ではなく、Office の別の形(Excel の .xls など)です。"
+    return (f"{where} の中身は Access のファイルではないようです"
+            f"(頭の16バイト: {head[:16].hex(' ')})。名前だけ .accdb / .mdb に変えたファイルかもしれません。")
+
+
 def _readable(src: Path) -> tuple[Path, str]:
-    """読む実体。Access なら変換したもの、sqlite3 ならそのもの。"""
-    if is_access(src):
+    """読む実体と読み取り方式。Access なら変換したもの、sqlite3 ならそのもの。
+
+    **拡張子ではなく中身で決める**(名前は .accdb でも中身が sqlite3 なら、そのまま読む)。
+    """
+    kind = sniff(src)
+    if kind == "access":
         return _convert(src)
-    return src, ""
+    if kind == "sqlite":
+        return src, (SQLITE_INSIDE if is_access(src) else "")
+    if is_access(src):
+        raise ConvertError(kind)
+    return src, ""                          # sqlite3 の名前で中身が違う: 読むところで断る
 
 
 def _suspect_rows(path: Path, table: str, columns: list[str]) -> int:
@@ -424,7 +498,9 @@ def plan(source_path: str) -> Plan:
     except ConvertError as exc:
         out.message = str(exc)
         return out
-    if is_access(src):
+    if engine == SQLITE_INSIDE:
+        out.converted = "名前は Access ですが中身は sqlite3 だったので、そのまま読みました"
+    elif is_access(src):
         out.converted = ("Access を変換して読みました"
                          + (f"(読み取り: {engine})" if engine else ""))
     try:
