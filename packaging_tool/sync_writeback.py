@@ -55,6 +55,7 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   mark_blockers=(("確認済み", "取り消し済"),
                                  ("取り消し済", "確認済み")),
                   match_columns=("登録日時", "LotNo", "品名"),
+                  unique_column="発注キー",
                   number_column="管理番号",
                   optional_columns=("送信端末", "発注キー")),
     WriteBackSpec(sqlite_table=config.TBL_STOCK_HISTORY,

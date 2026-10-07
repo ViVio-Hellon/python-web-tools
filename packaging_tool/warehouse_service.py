@@ -391,7 +391,7 @@ def _refusal(conn: sqlite3.Connection, mgr_no: int, cannot: str) -> str:
     return f"{cannot}でした。画面を更新してください。"
 
 
-_IDENTITY = ("取込元管理番号", "登録日時", "LotNo", "品名")
+_IDENTITY = ("取込元管理番号", "発注キー", "登録日時", "LotNo", "品名")
 
 
 def identity(conn: sqlite3.Connection, mgr_no: int) -> Optional[dict]:
@@ -420,7 +420,14 @@ def find_again(conn: sqlite3.Connection, mgr_no: int,
             (before["取込元管理番号"],)).fetchone()
         if row:
             return int(row[0])
-    # 手元で作って送った行は、取り込むまで共有の行番号を知らない
+    # 手元で作って送った行は、取り込むまで共有の行番号を知らない。
+    # **発注キー(発注ごとに一意)を先に見る。** 中身(登録日時・LotNo・品名)は
+    # 同じ秒に同じロット・品名で2回送ると2行に当たり、先頭の行を取っていた
+    if before.get("発注キー"):
+        row = conn.execute(f"SELECT 管理番号 FROM {TABLE} WHERE 発注キー = ?",
+                           (before["発注キー"],)).fetchone()
+        if row:
+            return int(row[0])
     row = conn.execute(
         f"SELECT 管理番号 FROM {TABLE}"
         " WHERE 登録日時 = ? AND LotNo = ? AND 品名 = ? ORDER BY 管理番号 LIMIT 1",

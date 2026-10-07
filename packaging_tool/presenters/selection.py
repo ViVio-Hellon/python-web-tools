@@ -1566,12 +1566,18 @@ def build_plans(session: Any) -> PlansViewModel:
     # **選んだのに置けなかったボードは、ここにも残して言う。** 通知(トースト)は
     # 数秒で消えるので、図だけ見た人には「下用0枚」が選び忘れなのか、置けなかったのか
     # 分からなかった(通し点検: 905×1950 の候補A で 下用 945x2000 が丈で置けない)
+    trimmed = list(getattr(placement, "trimmed", []) or [])
+    if trimmed:
+        view.status += (" / ✂ はみ出す分を切って置いたボード: "
+                        + " / ".join(t.label() for t in trimmed))
     missed = list(getattr(placement, "unplaced", []) or [])
     if missed:
         n_missed = sum(int(m.count or 1) for m in missed)
         view.status = (f"⚠ 置けなかったボードがあります({n_missed}枚): "
                        + " / ".join(m.label() for m in missed)
-                       + f" ── 置けた分: 上用{n_upper}枚 / 下用{n_lower}枚 (計{len(placed)}枚)")
+                       + f" ── 置けた分: 上用{n_upper}枚 / 下用{n_lower}枚 (計{len(placed)}枚)"
+                       + (" / ✂ はみ出す分を切って置いたボード: "
+                          + " / ".join(t.label() for t in trimmed) if trimmed else ""))
     view.usage, view.lines = _info_lines(session, placed, shared)
     return view
 

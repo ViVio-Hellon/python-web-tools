@@ -63,8 +63,13 @@ def pending(conn: sqlite3.Connection) -> dict[str, int]:
             "AND COALESCE(使用回数未反映, 0) > 0").fetchone()[0]
         deleted = conn.execute(
             f"SELECT COUNT(*) FROM {_q(store.TBL_PT_DELETED)}").fetchone()[0]
-    except sqlite3.Error:
-        return out                          # 表がまだ無い(古いDB)
+    except sqlite3.Error as exc:
+        if "no such table" in str(exc).lower():
+            return out                      # 表がまだ無い(古いDB)
+        # **数えられないのに「無い」と言わない。** 言うと総入れ替えの取り込みが走り、
+        # 送れていない実績を消す(`outbox_sync._not_unknown` と同じ考え)
+        log.warning("送れていない実績を数えられませんでした(取り込みは見送ります): %s", exc)
+        return {"数えられなかった実績": 1}
     if unsent:
         out["未送信の実績"] = unsent
     if usage:

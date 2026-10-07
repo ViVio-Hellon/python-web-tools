@@ -124,6 +124,8 @@
   {# **発注と切断依頼は面(タブ)で分ける。** 縦に積むと、発注の一覧が長いときに切断依頼が
      下に隠れ(現場の声:「送った切断依頼が分かりにくい」)、画面の高さが足りないと段どうしが
      重なった。見出しは常に見えていて、**まだ見ていないものがあれば光る**(`warehouse.js`) #}
+  {# 共有フォルダが見えない間は、一覧が古いままだと**消えない**一言で言う(`showReach`) #}
+  <p class="status status--warn" id="reach" role="status" hidden></p>
   <div class="tabs" data-tabs="warehouse-list" id="listTabs">
     <div class="tabs__bar" role="tablist" aria-label="一覧の面">
       <button class="tab" type="button" role="tab" data-key="orders" data-default="1"

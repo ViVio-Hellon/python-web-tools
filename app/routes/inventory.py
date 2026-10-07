@@ -364,6 +364,8 @@ def _transaction_response(result, label: str):
         # 反映」でまとめて送られる)。設定画面が「登録のたびに自動でも
         # 送られる」と書いているのは、この呼び出しのこと
         data_sync.write_back_in_background()
+        if body.get("message"):
+            body["message"] += data_sync.queued_note()
         return jsonify(body)
     if result.conflict:
         # 他の端末が先に動かした。取り直してからでないと続けられない

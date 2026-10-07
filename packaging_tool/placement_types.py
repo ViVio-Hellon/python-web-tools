@@ -69,6 +69,29 @@ FILL_SORT_TOLERANCE = 5
 
 
 @dataclass
+class TrimmedBoard:
+    """はみ出す分を切って置いたボード1件(元の寸法 → 置いた寸法)。"""
+
+    category: str
+    width: int
+    length: int
+    placed_width: int
+    placed_length: int
+    count: int
+
+    def label(self) -> str:
+        cuts = []
+        if self.placed_width < self.width:
+            cuts.append(f"幅カット{self.width - self.placed_width}mm")
+        if self.placed_length < self.length:
+            cuts.append(f"丈カット{self.length - self.placed_length}mm")
+        return (f"{self.category} {self.width}x{self.length} → "
+                f"{self.placed_width}x{self.placed_length}"
+                f"{f' × {self.count}枚' if self.count > 1 else ''}"
+                f"({'・'.join(cuts) or 'カット'})")
+
+
+@dataclass
 class UnplacedBoard:
     """置けなかったボード1件。**理由まで持つ。**"""
 
@@ -157,6 +180,10 @@ class PlacementContext:
     # 「追加しても配置すらしない、このボタンはいらないのでは」に
     # しか見えない(実際にそう言われた)。断るなら理由を言う
     unplaced: list["UnplacedBoard"] = field(default_factory=list)
+    # **そのままでは置けず、はみ出す分を切って置いたボード**(`_place_trimmed`)。
+    # 選定(別案など)がパレット丈より長い板を選んだとき、黙って落とさずに
+    # 切った形で図に出す(現場の指示:「ロジック通りなら良い。カット含めて表示」)
+    trimmed: list["TrimmedBoard"] = field(default_factory=list)
 
     def note_unplaced(self, category: str, width: int, length: int,
                       count: int) -> None:

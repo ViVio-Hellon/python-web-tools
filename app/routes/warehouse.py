@@ -230,6 +230,9 @@ def refresh():
     return jsonify({**presenter.to_dict(view),
                     "refresh": {"updated": got.updated,
                                 "looked": got.looked,
+                                # 取り込めなかった表と理由(送れていない分があって見送った等)。
+                                # 見張りでも画面に残す(`showReach`)
+                                "errors": list(got.errors),
                                 "message": got.message()}})
 
 
@@ -416,7 +419,7 @@ def comment():
     order_comments.mark_read(conn, mgr_no, terminal=svc.this_terminal(), side=_side())
     # 相手に届けるのが目的なので、書いた直後に送りにいく(画面には出さない)
     data_sync.write_back_in_background()
-    return jsonify(_comments_body(conn, mgr_no, message=result.message))
+    return jsonify(_comments_body(conn, mgr_no, message=result.message + data_sync.queued_note()))
 
 
 @field_only.post("/api/warehouse/cancel")
@@ -495,7 +498,10 @@ def _action(func, label: str):
     # 発注を出したときと同じで、画面には何も出さない(手元の更新は
     # もう終わっており、届かなくても次の反映でまとめて送られる)
     data_sync.write_back_in_background()
-    return jsonify(presenter.action_dict(result))
+    body = presenter.action_dict(result)
+    if body.get("message"):
+        body["message"] += data_sync.queued_note()
+    return jsonify(body)
 
 
 # ------------------------------------------------------------------
@@ -507,7 +513,8 @@ def _cut_list(conn) -> dict:
     from packaging_tool import cut_requests
     material = _mode() == modes.MATERIAL
     terminal = svc.this_terminal()
-    items = [cut_requests.to_dict(r, terminal=terminal, material=material)
+    unsent = cut_requests.unsent_ids(conn)
+    items = [cut_requests.to_dict(r, terminal=terminal, material=material, unsent=unsent)
              for r in cut_requests.recent(conn)]
     return {"items": items, "material": material,
             # 倉庫がまだ開いていない数(倉庫では「新」、現場では「未読」)
@@ -540,7 +547,7 @@ def _cut_mark(state: str):
         return jsonify(payload), (404 if result.reason == cut_requests.REFUSE_NOT_FOUND
                                   else 409)
     data_sync.write_back_in_background()
-    payload["message"] = result.message
+    payload["message"] = result.message + data_sync.queued_note()
     return jsonify(payload)
 
 

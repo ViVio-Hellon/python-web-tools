@@ -95,6 +95,22 @@ from .sync_import import (  # noqa: F401
     ImportResult, duplicate_count, import_all, import_lot_ledger,
     import_master, import_tables)
 from .sync_refresh import OrderRefresh, refresh_orders  # noqa: F401
+
+
+# 共有フォルダに届かず、この端末に預かっただけのときに添える一言
+QUEUED_NOTE = ("(共有フォルダに届かないため、相手にはまだ見えていません。"
+               "つながると自動で送ります)")
+
+
+def queued_note() -> str:
+    """**共有フォルダが見えないときだけ** `QUEUED_NOTE` を返す(見えていれば空)。
+
+    確認・取消・コメント・受入/払出・切断依頼の状態は、どれも手元に書いてから
+    背景で共有へ送る。共有が見えない間に「確認済みにしました」とだけ言うと、
+    押した人は相手にも見えていると思う(通し点検: 発注の送信で同じことが
+    起きていた)。手元では済んでいるので失敗にはせず、そう言い添える。
+    """
+    return QUEUED_NOTE if sync_sources.find_material_db() is None else ""
 from .sync_auto import (  # noqa: F401
     STAMP_TABLE, auto_import, auto_import_in_background, mark_imported,
     needs_import)

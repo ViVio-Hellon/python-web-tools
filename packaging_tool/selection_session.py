@@ -817,6 +817,11 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             ulog.log(f"  置けませんでした: {miss.label()}", emphasis=True)
             log.info("配置できず: %s", miss.label())
             notes.append(miss.label())
+        # そのままでは入らず、はみ出す分を切って置いたもの(選定どおりに置いた)
+        for cut in getattr(self.placement, "trimmed", []):
+            ulog.log(f"  はみ出す分を切って置きました: {cut.label()}", emphasis=True)
+            log.info("切って配置: %s", cut.label())
+            notes.append(f"切って置きました: {cut.label()}")
 
         ulog.log(f"ボード配置 完了: {len(placed)}枚", emphasis=True)
         # 実績保存用: 配置方式と配置時点の内容を控える(VBA `AutoPlaceBoards`)

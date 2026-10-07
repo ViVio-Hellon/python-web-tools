@@ -190,6 +190,14 @@ function cutRow(item) {
   mark.className = `st st--${item.state_kind}`;
   mark.textContent = item.state_text;
   state.appendChild(mark);
+  // この端末で送った・押したが、まだ共有(相手)へ届いていない
+  if (item.unsent) {
+    const wait = document.createElement("span");
+    wait.className = "st st--warn unsent";
+    wait.textContent = "未送信";
+    wait.title = "共有フォルダに届かないため、まだ相手に届いていません。つながると自動で送ります";
+    state.append(" ", wait);
+  }
   if (item.replaced) {
     const note = document.createElement("div");
     note.className = "why";
@@ -620,9 +628,16 @@ async function pull({ quiet = false } = {}) {
   if (quiet) search.set("only_if_changed", "1");
   try {
     const body = await api.post(`/api/warehouse/refresh?${search}`, {});
+    // **共有が見えないことを、見張りでも黙らない。** 以前は見張りが失敗を
+    // 飲み込んだので、共有が見えない間も一覧は「最新」に見えていた(通し点検)
+    showReach(body.refresh);
     // 見張りのときは、変わっていないのに画面を作り直さない ── 選んで
     // いる行や途中の操作を、何も起きていないのに取り上げることになる
     if (!quiet || body.refresh.updated) render(body);
+    // 切断依頼は**別の窓**(資材選択のプレビュー)から送る。共有が変わらない限り
+    // 出し直さなかったので、共有が見えない間に送った依頼が、送った端末の一覧にも
+    // 出なかった(通し点検)。手元から引くだけなので、見張りのたびに引き直す
+    else loadCuts();
     if (!quiet) toast(body.refresh.message, body.refresh.looked ? "ok" : "ng");
     else if (body.refresh.updated) toast(body.refresh.message, "ok");
   } catch (err) {
@@ -630,6 +645,27 @@ async function pull({ quiet = false } = {}) {
     // 赤い帯が出続けるのは邪魔でしかない(次の回でまた試す)
     if (!quiet) toastError(err);
   }
+}
+
+/** 共有フォルダが見えているか。見えなければ、一覧の上に**消えない**一言を出す。 */
+function showReach(refresh) {
+  if (!el.reach) return;
+  if (!refresh) return;
+  const lost = refresh.looked === false;
+  // 見に行けたが、一部の表を取り込めなかった(送れていない分があって見送った等)。
+  // 変わっていなかった回(`updated` も `errors` も無い)は前の表示のまま
+  const partial = !lost && (refresh.errors || []).length > 0;
+  if (!lost && !partial && !refresh.updated && refresh.looked) {
+    if (el.reach.dataset.kind === "lost") { el.reach.hidden = true; el.reach.dataset.kind = ""; }
+    return;
+  }
+  el.reach.hidden = !(lost || partial);
+  el.reach.dataset.kind = lost ? "lost" : partial ? "partial" : "";
+  el.reach.textContent = lost
+    ? `⚠ 共有フォルダが見えません。この一覧は最後に取り込んだ時点のものです(${refresh.message})`
+    : partial
+      ? `⚠ 共有の最新を一部取り込めていません: ${refresh.errors.join(" / ")}`
+      : "";
 }
 
 /** そのLotの詳細をこの場で出す。**作業中のロットは変えない。** */
@@ -861,7 +897,7 @@ export function start(state, material, lotPeekWhy) {
   draftAt = 0;
   exBlankKeys = state.ex_blank_keys || [];
   draftIsEx = false;
-  for (const id of ["rows", "listNote", "found", "pending", "unreadComments", "q", "refresh",
+  for (const id of ["reach", "rows", "listNote", "found", "pending", "unreadComments", "q", "refresh",
                     "sendComment",
                     "send", "clearForm", "sendStatus", "cancelled", "exNote",
                     "drafts", "draftPrev", "draftNext", "draftPos", "draftNote",

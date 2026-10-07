@@ -316,3 +316,21 @@ class モード一覧と実装が合っているか(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SameConditionCodesTests(unittest.TestCase):
+    """同じ条件でコードの違う行(実データ: 松板 24×120 4000-4999 が 355047 と 355054)。"""
+
+    def test_使うコードとほかの候補を言う(self) -> None:
+        import sqlite3 as _sqlite3
+        from packaging_tool import special_packaging as sp
+        conn = _sqlite3.connect(":memory:")
+        conn.row_factory = _sqlite3.Row
+        conn.execute("CREATE TABLE 松板角材 (管理番号 INTEGER PRIMARY KEY, 品名 TEXT, 厚 REAL, 幅 INTEGER,"
+                     " 丈min INTEGER, 丈max INTEGER, コード TEXT, 単位 TEXT, 備考 TEXT)")
+        conn.executemany("INSERT INTO 松板角材 (品名, 厚, 幅, 丈min, 丈max, コード, 単位, 備考)"
+                         " VALUES ('松板', 24, 120, 4000, 4999, ?, '本', '')", [("355047",), ("355054",)])
+        hit = sp.find_material(conn, name="松板", atsu=24, haba=120, target_length=4500)
+        self.assertEqual(hit.code, "355047")
+        self.assertIn("同じ条件で2件(355047・355054)", hit.info)
+        self.assertIn("355047 を使います", hit.info)

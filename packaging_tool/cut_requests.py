@@ -360,7 +360,27 @@ def _short(at: str) -> str:
         return at or ""
 
 
-def to_dict(req: Request, *, terminal: str, material: bool) -> dict[str, Any]:
+def unsent_ids(conn: sqlite3.Connection) -> set[str]:
+    """この端末で送った・押したが、まだ共有へ届いていない切断依頼(依頼ID)。
+
+    依頼そのもの(紙面)と、状態(受け取った・切った・取り消し)のどちらかが
+    残っていれば「未送信」。共有フォルダが見えない間に押した分が、相手に
+    届いていないと分かるようにする(発注の「未送信」と同じ)。
+    """
+    from . import outbox_sync, sync_writeback
+    out: set[str] = set()
+    for spec in sync_writeback.WRITEBACK_SPECS:
+        if spec.sqlite_table not in (TABLE, EVENT_TABLE):
+            continue
+        try:
+            out |= {str(r["依頼ID"]) for r in outbox_sync.pending_rows(conn, spec)}
+        except sqlite3.Error:
+            continue
+    return out
+
+
+def to_dict(req: Request, *, terminal: str, material: bool,
+            unsent: Optional[set] = None) -> dict[str, Any]:
     late = ""
     for got, who, at in req.late:
         if got == CANCELLED and _same(who, terminal):
@@ -374,6 +394,7 @@ def to_dict(req: Request, *, terminal: str, material: bool) -> dict[str, Any]:
         "mine": _same(req.terminal, terminal),
         "replaced": bool(req.replaced_by), "replaces": req.replaces,
         "late": late,
+        "unsent": req.request_id in (unsent or set()),
         # できること。**画面で条件を組み立てない**
         "can_cut": material and req.state in (SENT, RECEIVED),
         "can_cancel": (not material and req.state == SENT

@@ -1182,3 +1182,46 @@ class 置けなかった理由(unittest.TestCase):
         ctx.placed.append(placed(0, 0, 1000, 1000))
         self.assertIn("置ける場所が残っていません",
                       pl.explain_unplaced(ctx, 400, 400, LOWER))
+
+
+class 選定が選んだ板は切って置く(unittest.TestCase):
+    """別案(候補A・B)がパレット丈より長い下用ボードを選ぶことがある(実データ:
+    905×1950 のパレットに 945×2000)。以前は「置けませんでした」と落としていた。
+
+    現場の指示:「ロジック通りなら良いのでは？カット含めて表示してください」。
+    """
+
+    def run_case(self, lower, upper=(), pal=(905, 1950), prod=(867, 1834)):
+        return pl.auto_place_boards(
+            list(lower), list(upper), make_palette(*pal),
+            ProductSize(width=prod[0], length=prod[1]))
+
+    def test_はみ出す丈だけ切って置き元の寸法を残す(self) -> None:
+        ctx = self.run_case([SelectedBoard(945, 2000, 1, "主")])
+        self.assertEqual(ctx.unplaced, [])
+        [board] = [p for p in ctx.placed if p.board_category == "下用"]
+        self.assertEqual(board.x + board.length, 1950)          # パレット丈まで
+        self.assertEqual({board.original_width, board.original_length}, {945, 2000})
+        [cut] = ctx.trimmed
+        self.assertIn("丈カット50mm", cut.label())
+        self.assertNotIn("幅カット", cut.label())                 # 幅ははみ出し許容の内
+        # 図はカットとして描く(元の寸法と置いた寸法が違う)
+        from packaging_tool.placement_render import detect_board_cut
+        self.assertTrue(detect_board_cut(board.original_width, board.original_length,
+                                         board.width, board.length).cut_length)
+
+    def test_手で足した板は切らずに理由を言う(self) -> None:
+        """どこを切るかを勝手に決めない(手で足した板は今までどおり断る)。"""
+        ctx = self.run_case([SelectedBoard(945, 2000, 1, "")])
+        self.assertEqual(ctx.trimmed, [])
+        self.assertEqual(len(ctx.unplaced), 1)
+
+    def test_ほかの板と重ねない(self) -> None:
+        ctx = self.run_case([SelectedBoard(905, 1000, 1, "主"), SelectedBoard(945, 2000, 1, "主")])
+        lower = [p for p in ctx.placed if p.board_category == "下用"]
+        for a in lower:
+            for b in lower:
+                if a is b:
+                    continue
+                self.assertFalse(a.x < b.x + b.length and b.x < a.x + a.length
+                                 and a.y < b.y + b.width and b.y < a.y + a.width, (a, b))

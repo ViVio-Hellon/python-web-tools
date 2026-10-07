@@ -595,6 +595,16 @@ class _StaleCursor:
         self._owner.rewrote = True
         return data
 
+    def fetchall(self):
+        # 同じ位置に2行ないかを見るため、受入・払出は行を全部引く(`_same_place_why`)
+        out = []
+        for row in self._cursor.fetchall():
+            data = dict(row)
+            data["更新日時"] = self._owner._stale
+            self._owner.rewrote = True
+            out.append(data)
+        return out
+
     def __getattr__(self, name):
         return getattr(self._cursor, name)
 

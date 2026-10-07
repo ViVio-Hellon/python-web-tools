@@ -77,7 +77,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .board_scoring import get_best_orientation
+from .board_scoring import LOWER_OVERHANG_Y, UPPER_WIDTH_TOLERANCE, get_best_orientation
 from .board_selection_algorithm import (PROTEC_1P1216_TOLERANCE,
                                         PROTEC_OTHER_TOLERANCE,
                                         TAG_CUT_PREMISE, TAG_LENGTH_FILL,
@@ -98,7 +98,7 @@ from .placement_types import (  # noqa: F401
     CATEGORY_LOWER, CATEGORY_UPPER, COVERED_TOLERANCE, CUT_UPPER_MINUS, FILL_SHORT_SIDE_LIMIT,
     FILL_SORT_TOLERANCE, FINE_RANGE, GRID_STEP, SNAP_STEP, TAG_Y_STACK,
     UPPER_SCAN_MARGIN, X_OVERHANG_LIMIT, PlacementContext, RotationState,
-    UnplacedBoard, _make_model, evaluate_placement, explain_unplaced)
+    TrimmedBoard, UnplacedBoard, _make_model, evaluate_placement, explain_unplaced)
 from .placement_fit import (  # noqa: F401
     _dims, _overlaps, can_place_at_with_y_limit,
     can_place_at_with_y_limit_and_x_bound, can_place_board_at, place_board_at)
@@ -155,6 +155,67 @@ def _place_cut_premise(
             bypass_check=True, custom_width=wc_target_w, custom_length=wc_short,
         )
         xp_cut += wc_short
+
+
+def _place_trimmed(
+    ctx: PlacementContext, b: SelectedBoard, idx: int, category: str, y_off: int,
+) -> int:
+    """**そのままでは置けない主ボードを、はみ出す分だけ切って置く。** 置いた枚数を返す。
+
+    選定(別案の候補A・Bなど)は、パレット丈より長い下用ボードを選ぶことがある
+    (実データ: 905×1950 のパレットに 945×2000)。以前は「置けませんでした」と
+    落としていたため、選定一覧にある板が図に無かった。現場の指示は
+    「ロジック通りなら良い。カット含めて表示してください」── 選んだとおりに置き、
+    はみ出す分は切ったものとして図に出す(元の寸法は `original_*` に残るので、
+    図はカット線と寸法を描く)。
+
+    - 向きは通常の配置と同じ決め方(`get_best_orientation`)
+    - 切るのは**はみ出す分だけ**: 丈は基準の丈(下用=パレット丈 / 上用=製品丈)まで、
+      幅は境界(下用=パレット幅の許容はみ出しまで / 上用=製品幅+許容)を超えるときだけ
+      切断の定義どおり(下用=パレット幅 / 上用=製品幅−20)に切る
+    - 置く場所は、同じ種類の板と重ならない一番手前(x の小さい所)
+    """
+    model = _make_model(b, idx, category)
+    limit_w = ctx.limit_width(category)
+    rot, eff_w, eff_l = get_best_orientation(model, limit_w - y_off)
+    if category == CATEGORY_UPPER:
+        base_l = ctx.product.length
+        bound_w = ctx.product.width + UPPER_WIDTH_TOLERANCE
+        cut_w = limit_w - CUT_UPPER_MINUS
+    else:
+        base_l = ctx.palette.length
+        bound_w = int(ctx.palette.width * LOWER_OVERHANG_Y)
+        cut_w = limit_w
+    width = eff_w if y_off + eff_w <= bound_w else max(0, cut_w - y_off)
+    if width <= 0:
+        return 0
+    put = 0
+    for _ in range(b.count):
+        starts = sorted({0} | {pb.x + pb.length for pb in ctx.placed
+                               if pb.board_category == category})
+        spot = None
+        for x in starts:
+            length = min(eff_l, base_l - x)
+            if length <= 0:
+                continue
+            probe = BoardModel(width=width, length=length, board_category=category)
+            if can_place_board_at(ctx, x, y_off, probe, False):
+                spot = (x, length)
+                break
+        if spot is None:
+            break
+        x, length = spot
+        place_board_at(ctx, x, y_off, model, rot, bypass_check=True,
+                       custom_width=width, custom_length=length)
+        put += 1
+    if put:
+        last = ctx.placed[-1]
+        ctx.trimmed.append(TrimmedBoard(
+            category=category, width=eff_w, length=eff_l,
+            placed_width=last.width, placed_length=last.length, count=put))
+        log.debug("  %s %sx%s: はみ出す分を切って %s枚置きました(→ %sx%s)",
+                  category, b.width, b.length, put, last.width, last.length)
+    return put
 
 
 def _try_convert_to_y_stack(
@@ -327,6 +388,14 @@ def place_boards_from_list(
 
             # **1枚も置けなかったら、そう言う。** 黙って飛ばすと、手で
             # 追加した人には「押しても何も起きない」としか見えない
+            if (put == 0 and pass_num == 1 and b.tag.strip() and tag != TAG_Y_STACK
+                    and effective_tag not in (TAG_WIDTH_FILL, TAG_LENGTH_FILL)):
+                # **選定が選んだ**主ボードが入らなかった ── 選定どおり、はみ出す分を
+                # 切って置く。手で足した板(タグ無し)は今までどおり「置けませんでした」
+                # と理由を言う(どこを切るかを勝手に決めない。現場の指摘で入れた断り)
+                put = _place_trimmed(ctx, b, i, category, y_off)
+                if put:
+                    last_b = ctx.placed[-1]
             if put == 0:
                 ctx.note_unplaced(category, b.width, b.length, b.count)
                 log.debug("  %s%s: 置けませんでした ── %s", category, model.id,

@@ -84,8 +84,12 @@ class WriteBackSpec:
     mark_blockers  : (印, 先に付いていたら負ける印) の組。送り先でもう
                      相手の印が付いていたら、こちらの印は送らない
                      (例: 取り消し済の発注に「確認済み」を付けない)
+    unique_column  : 行番号も送信IDも当たらないときに、**中身より先に**見る
+                     一意の列(発注の 発注キー)。中身で探すと同じ中身の行を
+                     まとめて当ててしまう
     match_columns  : 行番号も送信IDも当たらないときに、同じ行を探す列
-                     (送信IDを書けなかった時期に送った行のため)
+                     (送信IDを書けなかった時期に送った行のため)。
+                     **2行以上当たったら印は付けない**(どれか決められない)
     on_insert      : 1行を足すのと**同じまとまりで**送り先に施す処理
                      (例: 入出庫履歴を足したら在庫数も動かす)。
                      呼ばれ方は on_insert(送り先のトランザクション, 足した値)。
@@ -108,6 +112,7 @@ class WriteBackSpec:
     source_key: str = ""
     mark_blockers: tuple[tuple[str, str], ...] = ()
     match_columns: tuple[str, ...] = ()
+    unique_column: str = ""
     on_insert: Optional[Callable[[Any, dict[str, Any]], None]] = field(
         default=None, compare=False)
     number_column: str = ""
@@ -255,11 +260,29 @@ def unpushed_mark_tables(conn: sqlite3.Connection,
     for spec in specs:
         try:
             rows = unpushed_mark_rows(conn, spec)
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
+            if _not_unknown(spec, exc):
+                continue
+            remaining[spec.sqlite_table] = 1
             continue
         if rows:
             remaining[spec.sqlite_table] = len(rows)
     return remaining
+
+
+def _not_unknown(spec: WriteBackSpec, exc: sqlite3.Error) -> bool:
+    """数えられなかったとき、「送れていない分は無い」と言ってよいか。
+
+    **言ってよいのは、手元にその表が無いときだけ**(無い表に送れていない行は無い)。
+    それ以外(掴まれている・混んでいる など)で「無い」と答えると、総入れ替えの
+    取り込みが走って、送れていない発注を消してしまう。分からないときは
+    「ある」と答えて取り込みを見送らせる(次の回でまた数える)。
+    """
+    if "no such table" in str(exc).lower():
+        return True
+    log.warning("%s: 送れていない行を数えられませんでした(取り込みは見送ります): %s",
+                spec.sqlite_table, exc)
+    return False
 
 
 def mark_pending(conn: sqlite3.Connection, spec: WriteBackSpec,
@@ -388,12 +411,25 @@ def _put_marks(tx: "source_db.SourceTransaction", spec: WriteBackSpec,
     found: list[dict[str, Any]] = []
     if where:
         found, cond_sql, cond_params = rows_by(where)
+    if (not found and spec.unique_column and spec.unique_column in row.keys()
+            and row[spec.unique_column] not in (None, "")):
+        # 一意の鍵(発注キー)を中身より先に見る
+        try:
+            found, cond_sql, cond_params = rows_by({spec.unique_column: row[spec.unique_column]})
+        except source_db.SourceError:
+            found = []                     # 送り先にその列が無い(古い共有)
     if not found and spec.match_columns and all(
             c in row.keys() and row[c] not in (None, "") for c in spec.match_columns):
         # 送信IDを書けなかった時期に送った行・変換し直しで送信IDが
         # 消えた行は、中身で探す
         found, cond_sql, cond_params = rows_by(
             {c: row[c] for c in spec.match_columns})
+        if len(found) > 1:
+            # **同じ中身の行が2つ以上ある。** 以前は当たった行すべてに印を書いて
+            # いた(同じ秒に同じロット・品名で2回送ると、片方の確認で両方が
+            # 確認済みになる)。どれか決められないので書かない
+            return (f"送り先に同じ中身の行が{len(found)}行あり、どれに付けるか決められません。"
+                    "印は送らず、次の取り込みで共有に合わせます")
     if not found:
         return ("送り先に行がありません(共有側で消えています)。"
                 "印は送らず、次の取り込みで共有に合わせます")
@@ -417,7 +453,9 @@ def unsent_tables(conn: sqlite3.Connection,
     for spec in specs:
         try:
             rows = pending_rows(conn, spec)
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
+            if not _not_unknown(spec, exc):
+                remaining[spec.sqlite_table] = 1     # 分からない = 送れていない分があるかも
             continue
         if rows:
             remaining[spec.sqlite_table] = len(rows)

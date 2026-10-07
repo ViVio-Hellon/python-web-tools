@@ -665,10 +665,13 @@ def receive(
 
     try:
         with conn:
-            row = conn.execute(
+            rows = conn.execute(
                 "SELECT * FROM PalletMaster WHERE 幅 = ? AND 丈 = ? AND 位置 = ?",
                 (width, length, position),
-            ).fetchone()
+            ).fetchall()
+            if len(rows) > 1:
+                return TransactionResult(ok=False, message=_same_place_why(rows))
+            row = rows[0] if rows else None
 
             if row is not None:
                 new_stock = row["在庫数"] + qty
@@ -717,6 +720,19 @@ def receive(
     return TransactionResult(ok=True, message=f"受け入れを登録しました(在庫数: {new_stock})。", new_stock=new_stock)
 
 
+def _same_place_why(rows: list) -> str:
+    """同じ位置に同じ寸法の行が2行以上あるときの断り。
+
+    在庫は 幅・丈・位置 で1行と決めている(VBA と同じ。共有側 `apply_stock` も同じ)。
+    2行あると**どちらを動かすかを黙って決める**ことになる(発注コードで起きたのと
+    同じ形の不具合)ので、動かさずにそう言う。
+    """
+    marks = "・".join(f"{(r['記号'] or '記号なし')}/{(r['業界'] or '')}" for r in rows)
+    return (f"同じ位置({rows[0]['位置']})に {rows[0]['幅']}×{rows[0]['丈']} の在庫が"
+            f"{len(rows)}行あります({marks})。どちらを動かすか決められないので、"
+            "マスタ管理で1行にまとめてから受入・払出してください。")
+
+
 def issue(
     conn: sqlite3.Connection,
     *,
@@ -733,10 +749,13 @@ def issue(
 
     try:
         with conn:
-            row = conn.execute(
+            rows = conn.execute(
                 "SELECT * FROM PalletMaster WHERE 幅 = ? AND 丈 = ? AND 位置 = ?",
                 (width, length, position),
-            ).fetchone()
+            ).fetchall()
+            if len(rows) > 1:
+                return TransactionResult(ok=False, message=_same_place_why(rows))
+            row = rows[0] if rows else None
             if row is None:
                 return TransactionResult(ok=False, message="対象レコードが見つかりませんでした。")
 
