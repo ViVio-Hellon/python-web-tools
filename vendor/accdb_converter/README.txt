@@ -13,4 +13,10 @@ Access を読むには、このPCの Python に次のどちらかが要る(変�
   - pyodbc + Microsoft Access Driver(ACE)… 最も正確。Office の Access があれば入っている
   - access_parser(construct, tabulate)   … ドライバ不要の予備。まれに行を読み違える
 
+【予備の部品を同梱(VER4.5.1)】 _libs\ に access_parser 0.0.6・construct 2.10.70・
+tabulate 0.9.0(どれも純 Python。Python 3.9 以降で動く版)を入れてある。
+PC の Python に pyodbc も access_parser も無いときだけ使う(sys.path の最後に足す)。
+Python を入れ直した・デスクトップ版が別の Python で動いている などで
+「読めなくなった」を起こさないため。ライセンスは _libs\licenses\。
+
 変換ツール側を直したら、上の5ファイルをここへ写し直し、コミットを書き換えること。

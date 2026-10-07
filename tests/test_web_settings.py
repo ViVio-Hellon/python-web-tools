@@ -2216,8 +2216,8 @@ class TableBringAccessTests(TableBringTests):
         broken.write_bytes(b"x")
         plan = table_bring.plan(str(broken))
         self.assertFalse(plan.ok)
-        self.assertIn("Access を読む部品がこのPCの Python に入っていません", plan.message)
-        self.assertIn("start_debug.bat", plan.message)
+        self.assertIn("Access を読む部品が見つかりません", plan.message)
+        self.assertIn("_libs", plan.message)
 
     def test_参照でAccessのファイルが見える(self) -> None:
         from urllib.parse import quote

@@ -186,6 +186,11 @@ def _looks_like_converter(folder: Path) -> bool:
 
 # 同梱した変換ツールの読み取り部品(`vendor/accdb_converter/README.txt`)
 BUNDLED_CONVERTER = config.BASE_DIR / "vendor" / "accdb_converter"
+# 予備の読み取り部品(access_parser と、それが使う construct・tabulate)。どれも純 Python。
+# PC の Python に pyodbc も access_parser も入っていないときだけ使う
+# (`sys.path` の**最後**に足すので、入っていればそちらが先に読まれる)。
+# Python を入れ直した・別の Python で動いている などで「読めなくなった」を起こさないため
+BUNDLED_LIBS = BUNDLED_CONVERTER / "_libs"
 
 
 def converter_dir() -> Optional[Path]:
@@ -223,8 +228,9 @@ def set_converter_dir(folder_text: str) -> str:
 # `writers.write_sqlite`)。結果は1行の JSON で返す
 _CONVERT_SCRIPT = (
     "import sys, json\n"
-    "folder, src, out = sys.argv[1:4]\n"
+    "folder, src, out, libs = sys.argv[1:5]\n"
     "sys.path.insert(0, folder)\n"
+    "sys.path.append(libs)\n"
     "import engine, writers\n"
     "tables, desc = engine.read_source(src)\n"
     "writers.write_sqlite(tables, out)\n"
@@ -275,7 +281,8 @@ def _convert(src: Path) -> tuple[Path, str]:
     for python in _pythons():
         try:
             done = subprocess.run(
-                [*python, "-c", _CONVERT_SCRIPT, str(folder), str(src), str(out)],
+                [*python, "-c", _CONVERT_SCRIPT, str(folder), str(src), str(out),
+                 str(BUNDLED_LIBS)],
                 cwd=str(folder), env=env, capture_output=True,
                 timeout=CONVERT_TIMEOUT_SEC)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -304,10 +311,11 @@ def _convert(src: Path) -> tuple[Path, str]:
     out.unlink(missing_ok=True)
     if no_engine:
         raise ConvertError(
-            "Access を読む部品がこのPCの Python に入っていません"
-            "(pyodbc + Access のドライバ、または access_parser のどちらかが要ります)。"
-            "変換ツールの start_debug.bat で確かめられます。"
-            f"詳しく: {' / '.join(tried[-2:])}")
+            "Access を読む部品が見つかりません。ツールに同梱している予備の部品"
+            "(vendor\\accdb_converter\\_libs)が欠けていないか確かめてください"
+            "(PC の Python に pyodbc + Access のドライバ、または access_parser が入っていれば"
+            "そちらでも読めます)。"
+            f"詳しく: {' / '.join(tried)}")
     raise ConvertError("Access を変換できませんでした。" + " / ".join(tried[-2:]))
 
 
