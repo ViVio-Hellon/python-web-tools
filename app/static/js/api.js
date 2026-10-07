@@ -105,4 +105,13 @@ export const api = {
   post: (path, data) => request(path, { method: "POST", body: JSON.stringify(data ?? {}) }),
   // ファイルを送る(「表を持ってくる」のドラッグ&ドロップ)
   postForm: (path, form) => request(path, { method: "POST", body: form }),
+  /*
+    ファイルの中身を**そのままのバイト列**で送る。デスクトップ版の窓(WebView2)は、
+    FormData に入れたファイルの中身をアプリの中の通り道へ渡さないことがあり、
+    空のファイルが届いていた(「Failed to parse DB file header」)。
+    メモリに読み込んだバイト列なら、そのまま届く。
+  */
+  postBytes: (path, bytes) => request(path, {
+    method: "POST", body: bytes, headers: { "Content-Type": "application/octet-stream" },
+  }),
 };

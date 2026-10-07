@@ -2314,6 +2314,34 @@ class TableBringAccessTests(TableBringTests):
                                headers=self.auth()).get_json()
         self.assertTrue(plan["ok"], plan["message"])
 
+    def test_落としたファイルはバイト列のまま届く(self) -> None:
+        """デスクトップ版の窓(WebView2)は FormData のファイルの中身を渡さないことがあり、
+        空のファイルが届いて「Failed to parse DB file header」になっていた。
+        画面は中身をそのままのバイト列で送り、名前と大きさを問い合わせに付ける。"""
+        from urllib.parse import urlencode
+        data = self.converted.read_bytes()
+        query = urlencode({"name": "資材.accdb", "size": len(data)})
+        res = self.client.post(
+            f"/api/settings/table-bring/upload?{query}", headers=self.auth(),
+            data=data, content_type="application/octet-stream")
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(Path(res.get_json()["path"]).read_bytes(), data)
+        js = (_ROOT / "app/static/js/views/settings.js").read_text("utf-8")
+        self.assertIn("api.postBytes(", js)
+        self.assertNotIn("new FormData()", js)
+
+    def test_欠けて届いたら置かずにそう言う(self) -> None:
+        from urllib.parse import urlencode
+        data = self.converted.read_bytes()
+        for got in (b"", data[:10]):
+            with self.subTest(n=len(got)):
+                query = urlencode({"name": "資材.accdb", "size": len(data)})
+                res = self.client.post(
+                    f"/api/settings/table-bring/upload?{query}", headers=self.auth(),
+                    data=got, content_type="application/octet-stream")
+                self.assertEqual(res.status_code, 400)
+                self.assertIn("欠けて届きました", res.get_json()["error"]["message"])
+
     def test_知らない種類のファイルは受け取らない(self) -> None:
         import io
         res = self.client.post(

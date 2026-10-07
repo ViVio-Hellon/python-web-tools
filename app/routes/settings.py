@@ -360,12 +360,22 @@ def table_bring_upload():
 
     ブラウザはファイルの**場所**を教えてくれない(中身だけ渡す)。このツールは
     同じPCで動いているので、手元の作業フォルダへ置いて、そこから読む。
+
+    画面は中身を**そのままのバイト列**で送る(名前と大きさは問い合わせに付ける)。
+    デスクトップ版の窓は FormData のファイルの中身を渡さないことがあり、空のファイルが
+    届いていたため(`api.postBytes`)。FormData で来たものも今までどおり受ける。
     """
     from packaging_tool import table_bring
     upload = request.files.get("file")
-    if upload is None or not upload.filename:
+    if upload is not None and upload.filename:
+        name, stream = upload.filename, upload.stream
+    else:
+        name, stream = request.args.get("name", ""), request.stream
+    if not name:
         return jsonify(_error("no_file", "ファイルが届きませんでした")), 400
-    saved, why = table_bring.save_upload(upload.filename, upload.stream)
+    size = request.args.get("size", "")
+    saved, why = table_bring.save_upload(
+        name, stream, expected=int(size) if size.isdigit() else None)
     if saved is None:
         return jsonify(_error("bad_file", why)), 400
     return jsonify({"path": str(saved)})

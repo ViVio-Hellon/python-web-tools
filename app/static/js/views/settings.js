@@ -1055,13 +1055,15 @@ function acceptDrop(zone, before) {
 }
 
 async function uploadBring(file) {
-  const form = new FormData();
-  form.append("file", file, file.name);
   bring.note.hidden = false;
   bring.note.className = "status";
   bring.note.textContent = `${file.name} を受け取っています…`;
   try {
-    const got = await api.postForm("/api/settings/table-bring/upload", form);
+    // 中身をここで読んでから送る(`api.postBytes` の説明)。大きさも添えて、
+    // 届いた大きさが違えばサーバが断る(途中で欠けたファイルを読まない)
+    const bytes = await file.arrayBuffer();
+    const query = new URLSearchParams({ name: file.name, size: String(file.size) });
+    const got = await api.postBytes(`/api/settings/table-bring/upload?${query}`, bytes);
     bring.path.value = got.path;
     await lookBring();
   } catch (err) {

@@ -427,11 +427,14 @@ UPLOAD_SUFFIXES = ACCESS_SUFFIXES + source_db.SUFFIXES
 UPLOAD_LIMIT_BYTES = 1024 * 1024 * 1024
 
 
-def save_upload(filename: str, stream: Any) -> tuple[Optional[Path], str]:
+def save_upload(filename: str, stream: Any,
+                expected: Optional[int] = None) -> tuple[Optional[Path], str]:
     """ドロップされたファイルを手元の作業フォルダへ置く。(置いた場所, 断る理由)。
 
     名前はファイル名の部分だけを使う(フォルダを含む名前で外へ書かせない)。
     同じ名前が来たら置き換える ── 直して落とし直すのがふつうの使い方なので。
+    `expected`(画面が知っている大きさ)と届いた大きさが違えば置かない ──
+    欠けたファイルを読んで「Access ではない」と言うより、届かなかったと言う。
     """
     from . import app_config
     name = Path(str(filename).replace("\\", "/")).name
@@ -455,6 +458,12 @@ def save_upload(filename: str, stream: Any) -> tuple[Optional[Path], str]:
     except (OSError, ValueError) as exc:
         target.unlink(missing_ok=True)
         return None, f"ファイルを受け取れませんでした({exc})"
+    if expected is not None and written != expected:
+        target.unlink(missing_ok=True)
+        log.warning("持ってくるファイルが欠けて届きました: %s (%s / %s バイト)",
+                    name, written, expected)
+        return None, (f"{name} が欠けて届きました({written:,} / {expected:,} バイト)。"
+                      "もう一度落とすか、「参照」でファイルの場所を選んでください。")
     _converted_cache.pop(str(target), None)      # 同じ名前で落とし直したら変換し直す
     log.info("持ってくるファイルを受け取りました: %s (%s バイト)", target, written)
     return target, ""
