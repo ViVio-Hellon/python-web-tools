@@ -2376,6 +2376,53 @@ class SendTests(SelectionWebTestCase):
         # 発注一覧にはまだ何も入っていない
         self.assertEqual(self.get("/api/warehouse/orders")["found"], 0)
 
+    def test_同じ寸法の行が何行あっても押した行のコードで送る(self) -> None:
+        """現場の通し点検で出た食い違い。
+
+        タイト 1400×2650 は 059484(組)・059144(台)… と同じ寸法・記号で何行もある。
+        一覧に出るのは単位が「台」の行(059144)で、押したのもその行なのに、
+        寸法と記号だけで引いていたので**表の先頭の 059484(組)で倉庫へ送っていた**。
+        """
+        insert_pallet(self.conn, width=1400, length=2650, code="059484", unit="組")
+        insert_pallet(self.conn, width=1400, length=2650, code="059144", unit="台")
+        insert_pallet(self.conn, width=1400, length=2650, code="060681", unit="台")
+        self.post("/api/selection/clear")
+        listed = [r for r in self.get()["rows"] if (r["width"], r["length"]) == (1400, 2650)]
+        ids = {code: n for n, code in self.conn.execute(
+            "SELECT 管理番号, コード FROM PalletMaster WHERE 幅 = 1400")}
+        # 一覧に出るのは単位「台」の2行だけ。行は管理番号を持ち、押したときの案内もその行のコード
+        self.assertEqual(sorted(r["id"] for r in listed),
+                         sorted([ids["059144"], ids["060681"]]))
+        self.assertIn("060681", next(r["note"] for r in listed if r["id"] == ids["060681"]))
+        # 2行目(060681)を押した → そのコードで送る
+        self.post("/api/selection/pallet/pick",
+                  {"width": 1400, "length": 2650, "symbol": "", "id": ids["060681"]})
+        self.post("/api/selection/send")
+        order = work_context.get_context().pending_orders[-1]
+        self.assertEqual((order["hatchu_code"], order["tani"]), ("060681", "台"))
+        # 番号を送らない古い画面でも、一覧に出ない「組」の行では送らない
+        self.post("/api/selection/pallet/pick", {"width": 1400, "length": 2650, "symbol": ""})
+        self.assertEqual(self.session().pallet_row.code, "059144")
+        # 寸法と番号が食い違う(別の行の番号)なら断る
+        self.post("/api/selection/pallet/pick",
+                  {"width": 1100, "length": 2000, "symbol": "", "id": ids["059144"]}, expect=400)
+
+    def test_アングルは選んだ行の脚数で選ぶ(self) -> None:
+        """同じ寸法でも脚数の違うパレットがある(実データ: 510×770 は 3 と 2)。
+        寸法だけで引くと表の先頭の行の脚数になっていた。"""
+        insert_pallet(self.conn, width=1350, length=1350, code="A", leg=2)
+        insert_pallet(self.conn, width=1350, length=1350, code="B", leg=3)
+        second = self.conn.execute(
+            "SELECT 管理番号 FROM PalletMaster WHERE コード = 'B'").fetchone()[0]
+        self.post("/api/selection/pallet/pick",
+                  {"width": 1350, "length": 1350, "symbol": "", "id": second})
+        self.assertEqual(self.session().pallet_leg_count(), 3)
+        # 行を選ばず寸法だけ入れたときは、今までどおり寸法で引く
+        self.post("/api/selection/clear")
+        self.post("/api/selection/pallet/apply", {"width": "1350", "length": "1350"})
+        self.assertIsNone(self.session().pallet_row)
+        self.assertEqual(self.session().pallet_leg_count(), 2)
+
     def test_下書きは送るまで開き直しても消えない(self) -> None:
         """タブをもう1枚開く・譲ったタブを読み込み直す、で送っていない下書きが
         黙って消えていた(タブを複数開いた通しの試験)。送ったと思い込むと
@@ -2547,9 +2594,13 @@ class SendTests(SelectionWebTestCase):
 
     def test_倉庫へ送ると直した内容ごと固めて残る(self) -> None:
         from packaging_tool import cut_requests
+        from unittest import mock
+        from packaging_tool import sync_sources
         self._cut_sheet()
-        body = self._send_cut({"edits": {"tantou": "送る前に直した"}})
+        with mock.patch.object(sync_sources, "find_material_db", return_value=Path("共有/梱包資材マスタ.sqlite3")):
+            body = self._send_cut({"edits": {"tantou": "送る前に直した"}})
         self.assertIn("倉庫へ送りました", body["message"])
+        self.assertFalse(body.get("queued"))
         [req] = cut_requests.recent(self.conn)
         self.assertEqual(req.lot_no, "1234567")
         # 製品は紙面の「製品サイズ」と同じ(ロットの厚×幅×丈。".0" は付けない)
@@ -2563,6 +2614,17 @@ class SendTests(SelectionWebTestCase):
         self.session().clear_for_new_lot()
         self.assertIn("送る前に直した",
                       cut_requests.report_of(self.conn, req.request_id).sheets[0])
+
+    def test_共有が見えなければ送りましたと言わない(self) -> None:
+        """発注と同じ。手元に預かっただけで、倉庫にはまだ届いていない(通し点検)。"""
+        from unittest import mock
+        from packaging_tool import sync_sources
+        self._cut_sheet()
+        with mock.patch.object(sync_sources, "find_material_db", return_value=None):
+            body = self._send_cut()
+        self.assertTrue(body["queued"])
+        self.assertIn("まだ倉庫には届いていません", body["message"])
+        self.assertNotIn("送りました", body["message"])
 
     def test_同じロットを送り直すと訊いてから差し替える(self) -> None:
         from packaging_tool import cut_requests
@@ -3088,6 +3150,18 @@ class ManualAddPlacementTests(SelectionWebTestCase):
         text = "\n".join(e.text for e in self.session().presenter.user_log.entries)
         self.assertIn("置けませんでした", text)
         self.assertIn("450x1520", text)
+
+    def test_図の上の文にも置けなかったボードを残す(self) -> None:
+        """通知は数秒で消える。「配置完了: 下用1枚」だけだと、置けなかった板があったと
+        分からない(通し点検: 候補A で 下用 945x2000 がパレット丈1950に入らず、
+        「配置完了: 上用3枚 / 下用0枚」とだけ出ていた)。"""
+        self.add("lower", 540, 900)
+        self.add("lower", 1250, 1250)
+        self.place()
+        status = self.get()["plans"]["status"]
+        self.assertIn("⚠ 置けなかったボードがあります(1枚)", status)
+        self.assertIn("1250x1250", status)
+        self.assertIn("置けた分: 上用0枚 / 下用1枚", status)
 
 
 

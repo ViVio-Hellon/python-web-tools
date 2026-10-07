@@ -123,7 +123,8 @@ def pick_pallet():
     applied = session.apply_pallet(str(width), str(length))
     if not applied.ok:
         return jsonify(_error("bad_size", applied.message)), 400
-    picked = session.pick_pallet_row(width, length, str(body.get("symbol", "")))
+    picked = session.pick_pallet_row(width, length, str(body.get("symbol", "")),
+                                     row_id=_parse_int(body.get("id")))
     if not picked.ok:
         return _apply(session, picked)
 
@@ -290,7 +291,8 @@ def search_pallet():
     # 発注コードと単位は一覧の行にしか無いので、覚えないと画面上は行が
     # 光っているのに倉庫送信が「行を選んでください」と断り、Lot印刷は
     # 業界・記号・発注コードが空欄で刷られる
-    picked = session.pick_pallet_row(result.width, result.length, result.symbol)
+    picked = session.pick_pallet_row(result.width, result.length, result.symbol,
+                                     row_id=result.row_id or None)
     if not picked.ok:
         log.warning("自動選定した %s×%s %s を一覧から引けませんでした: %s",
                     result.width, result.length, result.symbol, picked.message)
@@ -676,14 +678,24 @@ def send_cut_request():
         if result.reason == cut_requests.REFUSE_NEED_CONFIRM:
             # 確かめたら何を付けて送り直すか(倉庫がまだ開いていない → 差し替え)
             previous = cut_requests.get(conn, result.request_id)
+            # 差し替えられるのは送った端末だけ。ほかの端末の分ならもう1枚として送る
             payload["error"]["retry"] = (
-                {"replace": True} if previous and previous.state == cut_requests.SENT
+                {"replace": True}
+                if previous and previous.state == cut_requests.SENT
+                and cut_requests._same(previous.terminal, warehouse_service.this_terminal())
                 else {"again": True})
             return jsonify(payload), 409
         return jsonify(payload), 422
     session.presenter.user_log.log(result.message, emphasis=True)
     # 倉庫に届けるのが目的なので、すぐ送りにいく
     data_sync.write_back_in_background()
+    # 共有フォルダが見えないときは「送りました」と言わない(発注の送信と同じ)。
+    # つながれば心拍のついでに自動で送る(`retry_unsent_in_background`)
+    from packaging_tool import sync_sources
+    if sync_sources.find_material_db() is None:
+        return jsonify({"ok": True, "queued": True, "id": result.request_id,
+                        "message": (f"切断依頼(Lot {lot_no})をこの端末に預かりましたが、共有フォルダに"
+                                    "届かないため、まだ倉庫には届いていません。つながると自動で送ります。")})
     return jsonify({"ok": True, "message": result.message + "倉庫連携の「切断依頼」で状態を見られます。",
                     "id": result.request_id})
 

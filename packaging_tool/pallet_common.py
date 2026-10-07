@@ -171,22 +171,6 @@ def is_suppressed_matrix(
     return (str(width or ""), str(length or "")) in suppress_map
 
 
-def find_pallet_row(conn: sqlite3.Connection, width: int, length: int, symbol: str) -> Optional[PalletSizeRow]:
-    """幅・丈・記号からPalletMasterの1行を引く(コード・単位を知りたいだけの単純参照)。
-
-    一覧表示側のフィルタ(単位/EX/製品サイズ適合)には関係なく、画面に
-    表示されている行の実体をそのまま引けるようにする(クリック時の
-    単位・コード表示 = VBA `DynamicTip` 用)。
-    """
-    rows = db.fetch_all(
-        conn, "SELECT * FROM PalletMaster WHERE 幅 = ? AND 丈 = ?",
-        (width, length), caller_name="find_pallet_row") or []
-    for row in rows:
-        if (row["記号"] or "").strip() == symbol:
-            return _row_to_pallet_size_row(row)
-    return None
-
-
 # パレット一覧に出す単位。**判断はここ1か所**(VBA `FilterPalletList`)。
 #
 # 既定は「台」だけ ── パレットとして数えるものがそれだから。
@@ -453,3 +437,6 @@ class AutoSelectPalletResult:
     # "幅" = 幅方向に2山(Pass1〜16と強制入替え) / "丈" = 丈方向に2山(Pass17〜20)
     # / "" = 2山積でない。「セット」で製品サイズのこの向きを2倍する
     stack_dir: str = ""
+    # 選んだ PalletMaster の行(管理番号)。同じ寸法・記号でも発注コードが違う行が
+    # あるので、発注コード・単位はこの行から取る(`find_pallet_row`)
+    row_id: int = 0

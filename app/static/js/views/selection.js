@@ -184,7 +184,10 @@ function row(item) {
   tr.dataset.length = item.length;
   tr.dataset.symbol = item.symbol;
   tr.dataset.note = item.note;
-  tr.dataset.key = `${item.width}x${item.length}:${item.symbol}`;
+  // **行そのもの**(PalletMaster の管理番号)。同じ寸法・記号でも発注コードの違う行が
+  // あるので、決めるときはこの番号で伝える(寸法だけだと別の行のコードで送っていた)
+  tr.dataset.id = item.id || "";
+  tr.dataset.key = `${item.width}x${item.length}:${item.symbol}:${item.id || ""}`;
   // マウスを乗せたときだけ、そのパレットの単位・コードを見せる
   // (VBA `DynamicTip` に相当)。押さなくても分かるようにする
   tr.title = item.note;
@@ -772,7 +775,7 @@ export function start(initial) {
     if (!tr || !tr.dataset.width) return;
     pickedPalletRow = {
       width: tr.dataset.width, length: tr.dataset.length,
-      symbol: tr.dataset.symbol || "", key: tr.dataset.key,
+      symbol: tr.dataset.symbol || "", key: tr.dataset.key, id: tr.dataset.id || "",
     };
     el.palWidth.value = tr.dataset.width;
     el.palLength.value = tr.dataset.length;
@@ -801,7 +804,7 @@ export function start(initial) {
     if (!pickedPalletRow) return;
     send("/api/selection/pallet/pick", {
       width: pickedPalletRow.width, length: pickedPalletRow.length,
-      symbol: pickedPalletRow.symbol,
+      symbol: pickedPalletRow.symbol, id: pickedPalletRow.id,
       product_width: el.prodWidth.value,
       product_length: el.prodLength.value,
     });

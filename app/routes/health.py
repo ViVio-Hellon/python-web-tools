@@ -94,6 +94,11 @@ def health():
     業務データは含めないので、トークン無しで答えてよい。
     """
     config = current_app.config
+    if config["READY"] and request.args.get("beat") == "1":
+        # 画面の心拍(15秒ごと)のついでに、送れていない発注・受払・印を送り直す。
+        # 共有が一時的に見えなかった間の分が、次に何か登録するまで届かなかった
+        from packaging_tool import data_sync
+        data_sync.retry_unsent_in_background()
     return jsonify({
         "app_id": config["APP_ID"],
         "display_name": config["DISPLAY_NAME"],

@@ -707,4 +707,25 @@ def _register_routes(app: Flask) -> None:
     def _not_found(_e):                         # noqa: ANN202 - Flaskのフック
         if request.path.startswith("/api/"):
             return jsonify(_error("not_found", "その操作はこのモードでは使えません")), 404
-        return jsonify(_error("not_found", "ページが見つかりません")), 404
+        # **画面のアドレスなら画面で答える。** 以前は JSON をそのまま返していたので、
+        # 資材モードで資材選択のアドレス(古いブックマーク・1台でモードを切り替えた直後など)を
+        # 開くと `{"error":{"code":"not_found","message":"\u30da…"}}` が出ていた(通し点検)
+        from markupsafe import escape
+        from flask import url_for
+        mode_label = modes.label(current_mode())
+        html = (
+            '<!doctype html><html lang="ja"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            "<title>画面がありません</title>"
+            f'<link rel="stylesheet" href="{url_for("static", filename="css/tokens.css")}">'
+            "<style>body{margin:0;background:var(--ground);color:var(--ink);"
+            "font-family:'Meiryo UI','Yu Gothic UI',sans-serif;font-size:var(--fs-lg);line-height:1.8}"
+            "main{max-width:640px;margin:12vh auto;padding:24px 28px;background:var(--surface);"
+            "border:1px solid var(--rule);border-radius:12px}h1{margin:0 0 8px;font-size:var(--fs-xl)}"
+            "a{color:var(--accent);font-weight:700}code{font-size:var(--fs-sm)}</style></head><body><main>"
+            "<h1>この画面はありません</h1>"
+            f"<p><code>{escape(request.path)}</code> は"
+            f"{escape(mode_label) + 'モードでは' if mode_label else 'この端末では'}使えない画面か、"
+            "アドレスが違います。</p>"
+            '<p><a href="/">最初の画面へ戻る</a></p></main></body></html>')
+        return html, 404, {"Content-Type": "text/html; charset=utf-8"}

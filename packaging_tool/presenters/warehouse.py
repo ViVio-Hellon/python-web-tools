@@ -237,6 +237,9 @@ class OrderRow:
     latest_comment: str = ""
     # まだ書けるか(未確認のあいだだけ)。書けないなら理由
     comment_why: str = ""
+    # **この端末で登録したが、まだ共有(倉庫)へ届いていない。** 共有フォルダが
+    # 見えない間に送った発注は、画面上は送れたように見えて倉庫には無い
+    unsent: bool = False
 
     @property
     def lot_url(self) -> str:
@@ -293,12 +296,14 @@ def build(conn: sqlite3.Connection, *, mode: str,
 
     terminal = svc.this_terminal()
     from .. import order_comments
+    unsent = _unsent_order_ids(conn)
     # 側(現場/倉庫)も渡す。1台で両方のモードを使う端末でも、自分の側で書いたものだけが
     # 「自分のコメント」になる(`order_comments._mine`)
     notes = order_comments.summaries(
         conn, terminal=terminal,
         side=order_comments.SIDE_MATERIAL if is_material else order_comments.SIDE_FIELD)
-    rows = [_row(item, is_material=is_material, terminal=terminal, notes=notes)
+    rows = [_row(item, is_material=is_material, terminal=terminal, notes=notes,
+                 unsent=unsent)
             for item in raw]
     pending = sum(1 for r in rows if r.status == svc.STATUS_PENDING)
     return WarehouseViewModel(
@@ -310,8 +315,21 @@ def build(conn: sqlite3.Connection, *, mode: str,
     )
 
 
+def _unsent_order_ids(conn: sqlite3.Connection) -> set[int]:
+    """この端末で登録して、まだ共有へ送れていない発注(管理番号)。"""
+    from .. import outbox_sync, sync_writeback
+    spec = next((s for s in sync_writeback.WRITEBACK_SPECS
+                 if s.sqlite_table == svc.TABLE), None)
+    if spec is None:
+        return set()
+    try:
+        return {int(r[spec.key_column]) for r in outbox_sync.pending_rows(conn, spec)}
+    except sqlite3.Error:
+        return set()
+
+
 def _row(item: dict, *, is_material: bool, terminal: str = "",
-         notes: Optional[dict] = None) -> OrderRow:
+         notes: Optional[dict] = None, unsent: Optional[set] = None) -> OrderRow:
     from .. import order_comments
     status = item.get("状態", svc.STATUS_PENDING)
     sender = str(item.get("送信端末") or "").strip()
@@ -348,6 +366,7 @@ def _row(item: dict, *, is_material: bool, terminal: str = "",
         # **どのモードでも出す。** 現場にとっても「この発注は何のLotか」は
         # 確かめたい事実で、資材だけのものではない
         lot_no=str(item.get("LotNo") or "").strip(),
+        unsent=int(item.get("管理番号") or 0) in (unsent or set()),
     )
 
 
@@ -465,6 +484,7 @@ def row_dict(row: OrderRow) -> dict[str, Any]:
         "can_confirm": row.can_confirm,
         "can_cancel": row.can_cancel,
         "why": row.why,
+        "unsent": row.unsent,
         "comments": row.comments,
         "unread": row.unread,
         "unseen_mine": row.unseen_mine,

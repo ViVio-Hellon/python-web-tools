@@ -264,6 +264,14 @@ function cell(row, column) {
     chip.className = `st st--${row.status_kind}`;
     chip.textContent = row.status;
     td.appendChild(chip);
+    // この端末で登録したが、まだ共有(倉庫)へ届いていない。つながれば自動で送る
+    if (row.unsent) {
+      const wait = document.createElement("span");
+      wait.className = "st st--warn unsent";
+      wait.textContent = "未送信";
+      wait.title = "共有フォルダに届かないため、まだ倉庫に届いていません。つながると自動で送ります";
+      td.append(" ", wait);
+    }
     return td;
   }
 
@@ -729,8 +737,9 @@ async function send(confirmDuplicate = false) {
 
   try {
     const body = await api.post("/api/warehouse/send", values);
-    setStatus(el.sendStatus, body.message, "ok");
-    toast(body.message, "ok");
+    // 共有に届かず、手元に預かっただけのとき(`queued`)は「送れた」と言わない
+    setStatus(el.sendStatus, body.message, body.queued ? "warn" : "ok");
+    toast(body.message, body.queued ? "ng" : "ok");
     // 送った内容は消す。同じものを二度送らせないため
     for (const node of Object.values(el.fields)) node.value = "";
     if (el.sendComment) el.sendComment.value = "";
@@ -884,6 +893,10 @@ export function start(state, material, lotPeekWhy) {
   load();
 
   el.refresh.addEventListener("click", () => pull());
+  // **開いたらすぐ一度見に行く。** 見張りの最初の回は 15 秒後なので、それまでは
+  // 開く前に手元へ取り込んだ分しか出ず、送ったばかりの発注が最大 15 秒見えなかった
+  // (通し点検: 倉庫が開いてから 14.6 秒後に出た)。変わっていなければ何もしない
+  pull({ quiet: true });
   startWatch();
   // ロットの詳細を使えるようにする。**資材展開は渡さない** ── ここは
   // 確かめる場所なので、ボタンはテンプレートにも出していない

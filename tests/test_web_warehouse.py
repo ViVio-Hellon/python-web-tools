@@ -1167,3 +1167,60 @@ class CutRequestWebTests(WarehouseWebTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnsentTests(WarehouseWebTestCase):
+    """共有フォルダが見えない間に送った発注(通し点検で見つかったこと)。
+
+    - 画面は「倉庫へ発注を送信しました」と言っていたが、倉庫には届いていなかった
+    - 共有が戻っても、その端末で次に何か登録するまで送り直さなかった
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from unittest import mock
+        from packaging_tool import sync_sources
+        patcher = mock.patch.object(sync_sources, "find_material_db", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # 試験の中で背景の送信は走らせない(共有は無い)
+        bg = mock.patch("packaging_tool.data_sync.write_back_in_background")
+        bg.start()
+        self.addCleanup(bg.stop)
+
+    def test_共有が見えなければ送れたと言わず一覧に未送信と出す(self) -> None:
+        res = self.send()
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertTrue(body["queued"])
+        self.assertIn("まだ倉庫には届いていません", body["message"])
+        self.assertNotIn("送信しました", body["message"])
+        rows = self.clients["field"].get("/api/warehouse/orders", headers=self.auth()).get_json()["rows"]
+        mine = [r for r in rows if r["mgr_no"] == body["mgr_no"]]
+        self.assertTrue(mine and mine[0]["unsent"])
+
+    def test_心拍のついでに送り直す_間隔は空ける(self) -> None:
+        from unittest import mock
+        from packaging_tool import sync_writeback
+        with mock.patch.object(sync_writeback, "_retry_at", 0.0), \
+                mock.patch.object(sync_writeback.threading, "Thread") as thread:
+            self.assertTrue(sync_writeback.retry_unsent_in_background(now=1000.0))
+            # 走っている間・間隔の内側では行かない
+            self.assertFalse(sync_writeback.retry_unsent_in_background(now=1001.0))
+            sync_writeback._retry_running = False
+            self.assertFalse(sync_writeback.retry_unsent_in_background(now=1010.0))
+            self.assertTrue(sync_writeback.retry_unsent_in_background(now=1000.0 + sync_writeback.RETRY_MIN_SEC))
+            self.assertEqual(thread.call_count, 2)
+        sync_writeback._retry_running = False
+
+    def test_画面の心拍だけが送り直しを起こす(self) -> None:
+        from unittest import mock
+        with mock.patch("packaging_tool.data_sync.retry_unsent_in_background") as retry:
+            client = self.clients["field"]
+            client.application.config["READY"] = True
+            client.get("/api/health")                    # 起動の確認(待機画面・二重起動)
+            retry.assert_not_called()
+            client.get("/api/health?beat=1")             # 画面の心拍
+            retry.assert_called_once()
+        js = (Path(__file__).resolve().parent.parent / "app/static/js/health.js").read_text("utf-8")
+        self.assertIn('/api/health?beat=1', js)

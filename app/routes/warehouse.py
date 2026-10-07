@@ -318,7 +318,18 @@ def send():
     # **画面には何も出さない** ── 手元の登録はもう終わっており、
     # 届かなくても次の「取り込み元へ反映」でまとめて送られる
     data_sync.write_back_in_background()
-    return jsonify({"ok": True, "message": result.message,
+    # **共有フォルダが見えないときは「送信しました」と言わない。** 手元に預かっただけで、
+    # 倉庫にはまだ届いていない(通し点検: 見えない間も「送信しました」と出て、現場は
+    # 届いたと思っていた)。つながれば心拍のついでに自動で送る(`retry_unsent_in_background`)
+    from packaging_tool import sync_sources
+    queued = sync_sources.find_material_db() is None
+    message = result.message
+    if queued:
+        rows = f"{len(result.mgr_nos)}行まとめて" if len(result.mgr_nos) > 1 else ""
+        message = (f"発注を{rows}この端末に登録しましたが、共有フォルダに届かないため、まだ倉庫には"
+                   "届いていません。つながると自動で送ります(一覧に「未送信」と出ている間は届いていません)。")
+        log.warning("共有フォルダが見えないため、発注を手元に預かりました: 管理番号=%s", result.mgr_nos)
+    return jsonify({"ok": True, "message": message, "queued": queued,
                     "mgr_no": result.mgr_nos[0], "mgr_nos": result.mgr_nos})
 
 

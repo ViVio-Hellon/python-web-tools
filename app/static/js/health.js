@@ -54,7 +54,8 @@ async function followModes(modes) {
 
 async function beat() {
   try {
-    const body = await api.get("/api/health");
+    // `beat=1`: 画面の心拍。サーバはこのついでに、送れていない発注などを送り直す
+    const body = await api.get("/api/health?beat=1");
     if (misses >= MISSES_BEFORE_OFFLINE) setOffline(false);
     misses = 0;
     /*

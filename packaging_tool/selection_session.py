@@ -285,15 +285,18 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self.invalidate_placement()
         self._sync_ribbon()
 
-    def pick_pallet_row(self, width: int, length: int,
-                        symbol: str) -> BoardOpResult:
+    def pick_pallet_row(self, width: int, length: int, symbol: str,
+                        row_id: Optional[int] = None) -> BoardOpResult:
         """一覧の行を選ぶ(VBA `_on_pallet_row_select`)。
 
         寸法を入力欄へ写すだけでなく**行そのものを覚える**。
         発注コードと単位は行にしか無く、同じ寸法でも記号違いで
         別のコードになるので、倉庫送信と帳票はこれを見る。
         """
-        row = svc.find_pallet_row(self.presenter.conn, width, length, symbol)
+        # **押した行そのもの**(管理番号)で引く。同じ寸法・記号でも発注コードの
+        # 違う行があり、寸法だけで引くと一覧に出ていない行のコードで送っていた
+        row = svc.find_pallet_row(self.presenter.conn, width, length, symbol,
+                                  row_id=row_id, last_hosozai=self.presenter.last_hosozai)
         if row is None:
             return BoardOpResult(
                 False, f"{width}×{length} {symbol} は一覧にありません。",

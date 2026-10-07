@@ -46,6 +46,20 @@ class AngleMixin:
     # ------------------------------------------------------------------
     # アングル
     # ------------------------------------------------------------------
+    def pallet_leg_count(self) -> int:
+        """決めたパレットの脚数。**一覧で選んだ行そのものの脚数**を使う。
+
+        同じ寸法でも脚数の違うパレットがある(510×770 は 3 と 2、1350×1350 は 2 と 3)。
+        寸法だけで引くと表の先頭の行の脚数になり、選んだパレットとアングルの本数が
+        食い違う。行を選ばずに寸法だけ入れたときは、今までどおり寸法で引く。
+        """
+        row = getattr(self, "pallet_row", None)
+        if (row is not None and (row.width, row.length)
+                == (self.palette.width, self.palette.length)):
+            return int(row.leg_count or 0)
+        return angle_service.get_leg_count(
+            self.presenter.conn, self.palette.width, self.palette.length)
+
     def angle_candidates(self) -> list[int]:
         """候補アングル丈。`load_all_angle_lengths` は未登録でも `[0]` を返すので落とす。"""
         return [length for length
@@ -113,8 +127,7 @@ class AngleMixin:
         pallet_len = leg_count = 0
         if self.palette.is_set:
             pallet_len = self.palette.length
-            leg_count = angle_service.get_leg_count(
-                conn, self.palette.width, self.palette.length)
+            leg_count = self.pallet_leg_count()
             ulog.log(f"  パレット丈: {pallet_len} / 脚数: {leg_count}")
         else:
             # 脚数を見ずに選んだことを残す。**同じ製品でも本数が変わる**

@@ -246,13 +246,25 @@ def send(conn: sqlite3.Connection, report: printing.Report, *, lot_no: str,
     replaces = ""
     if current:
         last = current[0]
+        mine = _same(last.terminal, terminal)
         if last.state == SENT and replace:
-            if not _same(last.terminal, terminal):
+            if not mine:
                 return Result(False, f"前の依頼は {last.terminal} が送ったものなので、ここから"
                                      "差し替えられません。", REFUSE_NOT_MINE)
             replaces = last.request_id
         elif last.state == RECEIVED and again:
             pass
+        elif last.state == SENT and not mine and again:
+            pass                       # ほかの端末の分は残して、もう1枚
+        elif last.state == SENT and not mine:
+            # **差し替えを訊かない。** 差し替えられるのは送った端末だけなので、訊いて
+            # 「送る」を押させてから断ることになる(通し点検: デスクトップ版で
+            # 「差し替えますか？」→ 送る → 「ここからは差し替えられません」)
+            return Result(False, f"このロット({lot_no})の切断依頼は {last.terminal} が "
+                                 f"{last.sent_at} に送ってあり、倉庫はまだ開いていません"
+                                 "(差し替えは送った端末からだけです)。これを別にもう1枚送りますか？"
+                                 "(前のものはそのまま残ります)", REFUSE_NEED_CONFIRM,
+                          last.request_id)
         elif last.state == SENT:
             return Result(False, f"このロット({lot_no})の切断依頼は {last.sent_at} にもう送って"
                                  "あり、倉庫はまだ開いていません。前のものを取り消して、"

@@ -34,20 +34,38 @@ from .user_log import RejectLog, UserLog, tag_area
 
 log = get_logger("board_selection.pallet_list")
 
-def find_pallet_row(conn: sqlite3.Connection, width: int, length: int, symbol: str) -> Optional[PalletSizeRow]:
-    """幅・丈・記号からPalletMasterの1行を引く(コード・単位を知りたいだけの単純参照)。
+def find_pallet_row(conn: sqlite3.Connection, width: int, length: int, symbol: str,
+                    *, row_id: Optional[int] = None,
+                    last_hosozai: str = "") -> Optional[PalletSizeRow]:
+    """一覧で選んだ PalletMaster の1行を引く(発注コード・単位の出どころ)。
 
-    一覧表示側のフィルタ(単位/EX/製品サイズ適合)には関係なく、画面に
-    表示されている行の実体をそのまま引けるようにする(クリック時の
-    単位・コード表示 = VBA `DynamicTip` 用)。
+    **同じ幅・丈・記号の行は何行もある**(例: タイト 1400×2650 に
+    059484 組・059144 台・056837 枚 …)。以前は寸法と記号だけで引いて
+    **表の先頭の行**を返していたため、一覧に出ていて押した行(059144 台)と、
+    倉庫へ送る発注コード(059484 組 ── 単位の条件で一覧には出ない行)が
+    食い違っていた。
+
+    - `row_id`(一覧の行が持つ 管理番号)があれば、その行そのものを返す。
+      寸法・記号が合わなければ None(押した行と違う行を返さない)
+    - 無いとき(古い画面・自動選定の結果に番号が無いとき)は、**一覧に出せる行**
+      (`unit_allowed`)を先に、その中で管理番号の若い順に選ぶ
     """
+    def same(row: sqlite3.Row) -> bool:
+        return (row["幅"] == width and row["丈"] == length
+                and (row["記号"] or "").strip() == (symbol or "").strip())
+
+    if row_id:
+        hit = db.fetch_one(conn, "SELECT * FROM PalletMaster WHERE 管理番号 = ?",
+                           (int(row_id),), caller_name="find_pallet_row")
+        return _row_to_pallet_size_row(hit) if hit is not None and same(hit) else None
     rows = db.fetch_all(
-        conn, "SELECT * FROM PalletMaster WHERE 幅 = ? AND 丈 = ?",
+        conn, "SELECT * FROM PalletMaster WHERE 幅 = ? AND 丈 = ? ORDER BY 管理番号",
         (width, length), caller_name="find_pallet_row") or []
-    for row in rows:
-        if (row["記号"] or "").strip() == symbol:
-            return _row_to_pallet_size_row(row)
-    return None
+    rows = [r for r in rows if same(r)]
+    if not rows:
+        return None
+    listed = [r for r in rows if unit_allowed(r["単位"], last_hosozai)]
+    return _row_to_pallet_size_row((listed or rows)[0])
 
 def list_pallet_sizes(
     conn: sqlite3.Connection,

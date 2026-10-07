@@ -262,7 +262,7 @@ def auto_select_pallet(
             pass_label=pass_def.label, rotated=rotated,
             needs_thickness_warning=best_warning,
             search_width=search_w, search_length=search_l,
-            stack_dir=stack_dir,
+            stack_dir=stack_dir, row_id=int(best_row["管理番号"] or 0),
         )
 
     # 強制フォールバック(元VBA仕様: フィルタ大幅緩和・1回のみ・回転フラグは立てない)
@@ -295,6 +295,7 @@ def auto_select_pallet(
             industry=best_row["業界"] or "", symbol=(best_row["記号"] or "").strip(),
             pass_label="強制フォールバック", rotated=False,
             search_width=fb_w, search_length=fb_l,
+            row_id=int(best_row["管理番号"] or 0),
             # 強制入替えの2山は幅方向(検索条件が「製品幅×2 × 製品丈」のため)
             stack_dir="幅" if two_stack else "",
         )

@@ -684,6 +684,9 @@ class PalletRow:
     length: int = 0
     symbol: str = ""
     is_ex: bool = False
+    # PalletMaster の行(管理番号)。同じ寸法・記号でも発注コードの違う行があるので、
+    # 「パレット決定」はこの番号で行そのものを決める
+    id: int = 0
     # クリックしたときだけ出す情報(VBA `DynamicTip`)。列には無い
     note: str = ""
     # **サーバが覚えている行かどうか。** 発注コードと単位の出どころは
@@ -1560,6 +1563,15 @@ def build_plans(session: Any) -> PlansViewModel:
     n_upper = sum(1 for p in placed if p.board_category == render.CATEGORY_UPPER)
     view.status = (f"配置完了: 上用{n_upper}枚 / 下用{n_lower}枚 "
                    f"(計{len(placed)}枚)")
+    # **選んだのに置けなかったボードは、ここにも残して言う。** 通知(トースト)は
+    # 数秒で消えるので、図だけ見た人には「下用0枚」が選び忘れなのか、置けなかったのか
+    # 分からなかった(通し点検: 905×1950 の候補A で 下用 945x2000 が丈で置けない)
+    missed = list(getattr(placement, "unplaced", []) or [])
+    if missed:
+        n_missed = sum(int(m.count or 1) for m in missed)
+        view.status = (f"⚠ 置けなかったボードがあります({n_missed}枚): "
+                       + " / ".join(m.label() for m in missed)
+                       + f" ── 置けた分: 上用{n_upper}枚 / 下用{n_lower}枚 (計{len(placed)}枚)")
     view.usage, view.lines = _info_lines(session, placed, shared)
     return view
 
@@ -1662,10 +1674,8 @@ def _angle_plan(session: Any) -> Optional[dict[str, Any]]:
     leg_count = 0
     pallet_len = 0
     if session.palette.is_set:
-        from .. import angle_service
         pallet_len = session.palette.length
-        leg_count = angle_service.get_leg_count(
-            session.presenter.conn, session.palette.width, session.palette.length)
+        leg_count = session.pallet_leg_count()
     return render_json.with_tokens(render_json.build_angle_plan_dict(
         session.selected_angles, session.product.length, pallet_len, leg_count,
         need_cut=session.angle_need_cut))
@@ -1809,6 +1819,7 @@ def _pallet_row(row: Any, picked: Any = None) -> PalletRow:
     return PalletRow(
         values=[str(getattr(row, key)) for _label, key, _numeric in PALLET_COLUMNS],
         width=row.width, length=row.length, symbol=row.symbol, is_ex=is_ex,
+        id=int(getattr(row, "id", 0) or 0),
         note=(f"単位: {row.unit or '---'}   コード: {row.code or '---'}"
               + _match_note(row)),
         picked=(picked is not None and picked.id == row.id),
@@ -1853,7 +1864,7 @@ def to_dict(view: SelectionViewModel) -> dict[str, Any]:
         "banner": {"kind": view.banner.kind, "text": view.banner.text,
                    "visible": view.banner.visible},
         "rows": [{"values": r.values, "width": r.width, "length": r.length,
-                  "symbol": r.symbol, "is_ex": r.is_ex, "note": r.note,
+                  "symbol": r.symbol, "is_ex": r.is_ex, "note": r.note, "id": r.id,
                   "picked": r.picked}
                  for r in view.rows],
         "list_mode": view.list_mode,

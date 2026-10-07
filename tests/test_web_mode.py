@@ -122,6 +122,21 @@ class RegistrationTests(ModeTestCase):
         self.assertEqual(res.status_code, 404)
         self.assertEqual(res.get_json()["error"]["code"], "not_found")
 
+    def test_無い画面のアドレスはJSONではなく画面で答える(self) -> None:
+        """通し点検: 資材モードで /selection を開くと JSON の生文字列が出ていた。"""
+        app = self.make("material", *MATERIAL_ONLY)
+        res = app.test_client().get("/no-such-screen<x>", headers=self.auth())
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.mimetype, "text/html")
+        body = res.get_data(as_text=True)
+        self.assertIn("この画面はありません", body)
+        self.assertIn("資材モード", body)
+        self.assertIn("&lt;x&gt;", body)                # 打たれたアドレスはそのまま埋めない
+        self.assertIn('href="/"', body)
+        # 操作(/api/)は今までどおり JSON
+        api = app.test_client().get("/api/no-such", headers=self.auth())
+        self.assertEqual(api.get_json()["error"]["code"], "not_found")
+
     def test_両方持っていれば両方ある(self) -> None:
         """モードを切り替えられるので、いま資材モードで見ていても
         現場のURLは要る(レールに出すかどうかはモードが決める)。"""

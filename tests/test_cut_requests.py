@@ -104,6 +104,18 @@ class SendTests(CutRequestTestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.reason, cr.REFUSE_NOT_MINE)
 
+    def test_ほかの端末が送ったものがあれば差し替えでなくもう1枚かを訊く(self) -> None:
+        """通し点検(デスクトップ版): 「差し替えますか？」→ 送る →「ここからは差し替え
+        られません」と、できないことを訊いてから断っていた。"""
+        self.sent(terminal="GENBA-2")
+        result = self.send()
+        self.assertEqual(result.reason, cr.REFUSE_NEED_CONFIRM)
+        self.assertIn("別にもう1枚送りますか", result.message)
+        self.assertNotIn("差し替えますか", result.message)
+        self.assertTrue(self.send(again=True).ok)
+        states = sorted((r.terminal, r.state) for r in cr.recent(self.conn))
+        self.assertEqual(states, sorted([("GENBA-2", cr.SENT), (FIELD, cr.SENT)]))   # 前のものは残る
+
     def test_倉庫が受け取ったあとはもう1枚かを訊く(self) -> None:
         first = self.sent()
         event(self.conn, first, cr.RECEIVED, SOUKO, "2099-01-01 10:00:00")

@@ -403,6 +403,60 @@ def _push_patterns(conn: sqlite3.Connection, source: Any,
     result.errors.extend(f"{config.TBL_PT_HEADER}: {e}" for e in pushed.errors)
 
 
+# 送れていない分を送り直しに行く間隔の下限(秒)。心拍(15秒ごと)のたびに行くと、
+# 共有に届かない端末で同じ失敗を15秒ごとに繰り返すだけになる
+RETRY_MIN_SEC = 30
+_retry_lock = threading.Lock()
+_retry_at = 0.0
+_retry_running = False
+
+
+def retry_unsent_in_background(*, now: Optional[float] = None) -> bool:
+    """**送れていない分があれば、送り直しに行く**(心拍から呼ぶ)。行ったら True。
+
+    以前は「次に何か登録したとき」にしか送り直さなかった。共有フォルダが一時的に
+    見えない間に発注を1件だけ出すと、その端末で次に何かを登録するまで**倉庫に
+    届かないまま**になっていた(通し点検: 共有を戻して90秒たっても届かず、
+    別の発注を送った時についでに届いた)。画面には「送信しました」と出ているので、
+    現場は届いたと思っている。
+
+    重いことはしない: 間隔(`RETRY_MIN_SEC`)を空け、同時に2つは走らせず、
+    送れていない分が無ければ共有には触らない。
+    """
+    import time as _time
+    global _retry_at, _retry_running
+    moment = _time.monotonic() if now is None else now
+    with _retry_lock:
+        if _retry_running or moment - _retry_at < RETRY_MIN_SEC:
+            return False
+        _retry_at = moment
+        _retry_running = True
+
+    def runner() -> None:
+        global _retry_running
+        try:
+            with db.connect() as conn:
+                waiting = _unsent_writeback_tables(conn)
+                if not waiting:
+                    return
+                log.info("送れていない分を送り直します: %s", waiting)
+                result = write_back(conn)
+            if result.total:
+                log.info("送れていなかった分を送りました: %s件", result.total)
+            if result.skipped_reason:
+                log.info("まだ送れません: %s", result.skipped_reason)
+            for message in result.errors:
+                log.warning("取り込み元へ反映できず: %s", message)
+        except Exception:                       # noqa: BLE001 - 背景処理なので握る
+            log.exception("送れていない分の送り直しで例外(手元の登録は残っています)")
+        finally:
+            with _retry_lock:
+                _retry_running = False
+
+    threading.Thread(target=runner, daemon=True, name="writeback-retry").start()
+    return True
+
+
 def write_back_in_background(on_done: Optional[Callable[[WriteBackResult], None]] = None) -> None:
     """登録操作のあとに呼ぶ、邪魔をしない書き戻し。
 

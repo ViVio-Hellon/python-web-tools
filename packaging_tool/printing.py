@@ -287,7 +287,7 @@ _SEND_SCRIPT = """<script>
       .then(function (got) {
         var r = got[0], b = got[1], err = b.error || {};
         button.disabled = false;
-        if (r.ok) { say("✔ " + b.message, "ok"); return; }
+        if (r.ok) { say((b.queued ? "⚠ " : "✔ ") + b.message, b.queued ? "ng" : "ok"); return; }
         if (err.code === "need_confirm") {
           ask(err.message).then(function (ok) {
             if (ok) send(err.retry || {});

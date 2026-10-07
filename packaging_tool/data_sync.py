@@ -89,7 +89,8 @@ def list_tables(*a, **k):
     return sync_sources.list_tables(*a, **k)
 from .sync_writeback import (  # noqa: F401
     ORDER_TABLES, WRITEBACK_SPECS, WriteBackResult, WriteBackSpec,
-    _unsent_writeback_tables, write_back, write_back_in_background)
+    _unsent_writeback_tables, retry_unsent_in_background, write_back,
+    write_back_in_background)
 from .sync_import import (  # noqa: F401
     ImportResult, duplicate_count, import_all, import_lot_ledger,
     import_master, import_tables)
