@@ -71,11 +71,89 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     # (isolation_level=Noneのautocommitモードにすると `with conn:` が
     # 何もグループ化しなくなり、複数文をまたぐ原子性が失われるため注意)。
     conn = sqlite3.connect(str(path), timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 10000")  # ms。VBA版の ConnectionTimeout=10秒 に相当
-    sqlite_toolkit.enable_wal(conn)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 10000")  # ms。VBA版の ConnectionTimeout=10秒 に相当
+        sqlite_toolkit.enable_wal(conn)
+    except BaseException:
+        # **開きかけで落ちたら閉じてから投げる。** 閉じないと、壊れたファイル
+        # (「file is not a database」はここで出る)を掴んだまま残る。Windows では
+        # 開いているファイルは名前を変えられないので、退けて作り直せなくなる
+        conn.close()
+        raise
     return conn
+
+
+# ------------------------------------------------------------------
+# 壊れた作業用DB
+# ------------------------------------------------------------------
+# 作業用DBは**取り込み元の写し**がほとんど(取り込みのたびに入れ替わる)。壊れていたら
+# 退けて作り直し、取り込み直せば元に戻る。壊れたまま起動ごと止めるより、そのほうが
+# 現場の仕事は止まらない。退けたファイルは消さない ── まだ送れていない発注などが
+# 入っていた場合に、あとから取り出せるように。
+CORRUPT_MARKERS = ("file is not a database", "database disk image is malformed",
+                   "malformed database schema", "file is encrypted")
+SIDECARS = ("-wal", "-shm", "-journal")
+
+
+def is_corrupt(exc: BaseException) -> bool:
+    """壊れている(開き直しても読めない)ことを示す例外か。**掴まれている・混んでいるは違う。**"""
+    if not isinstance(exc, sqlite3.DatabaseError):
+        return False
+    text = str(exc).lower()
+    return any(marker in text for marker in CORRUPT_MARKERS)
+
+
+def quarantine(path: Optional[Path] = None) -> Path:
+    """壊れた作業用DBを横へ退ける(消さない)。退けた先を返す。
+
+    `-wal` / `-shm` も一緒に退ける ── 本体だけ動かすと、残った `-wal` が新しく
+    作ったDBに当てられて、また壊れる。名前を変えられなければ `OSError`
+    (Windows で別のプログラムが掴んでいるとき)。
+    """
+    from datetime import datetime
+
+    path = Path(path) if path is not None else config.DB_PATH
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    moved = path.with_name(f"{path.stem}.壊れていた_{stamp}{path.suffix}")
+    path.replace(moved)
+    for extra in SIDECARS:
+        side = Path(str(path) + extra)
+        if side.exists():
+            side.replace(Path(str(moved) + extra))
+    return moved
+
+
+def prepare(db_path: Optional[Path] = None) -> str:
+    """起動時の作業用DBの用意(`schema.sql` の適用まで)。**壊れていたら退けて作り直す。**
+
+    戻り値は利用者に知らせる一言(何もなければ空)。退けられなければ、理由の分かる
+    文で `RuntimeError` を投げる(呼び手が画面に出す)。
+    """
+    path = Path(db_path) if db_path is not None else config.DB_PATH
+    try:
+        with connect(path) as conn:
+            apply_schema(conn)
+        return ""
+    except sqlite3.DatabaseError as exc:
+        if not is_corrupt(exc):
+            raise
+        reason = str(exc)
+    log.warning("作業用DBが壊れています(%s): %s", reason, path)
+    try:
+        moved = quarantine(path)
+    except OSError as exc:
+        raise RuntimeError(
+            f"作業用DBが壊れていて({reason})、退けることもできませんでした({exc})。"
+            f"このツールを全部閉じてから開き直してください。直らなければ {path} を"
+            "別の名前に変えてから開いてください。") from None
+    with connect(path) as conn:
+        apply_schema(conn)
+    log.warning("壊れた作業用DBを %s へ退けて、新しく作り直しました", moved)
+    return (f"作業用DBが壊れていたため({reason})、新しく作り直しました。中身は取り込み元から"
+            f"取り込み直します。壊れていたファイルは {moved.name} として残しています"
+            "(まだ送れていなかった発注などがあれば、そこに入っています)。")
 
 
 @contextmanager

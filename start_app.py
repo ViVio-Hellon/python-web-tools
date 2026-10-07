@@ -444,10 +444,13 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
         loaded = distribution.apply_on_start()
         if loaded.applied:
             log().info("配布設定を読み込みました: %s", ", ".join(loaded.applied))
-        with db.connect() as conn:
-            db.apply_schema(conn)
+        # 作業用DBを用意する。**壊れていたら退けて作り直す**(`db.prepare`)── 壊れたまま
+        # 起動ごと止まると、取り込み直せば戻る中身のために現場の仕事が止まる
+        rebuilt = db.prepare()
         # 選定ログを日ごとのファイルにも残す。**問い合わせは後日来る**
         user_log.keep_on_disk()
+        if rebuilt:
+            user_log.get_user_log().log(f"[起動] {rebuilt}", emphasis=True)
         selection_log_store.prune()
         # 前の起動が置いていった取り込み元の写しを片づける。
         # **行儀よく終われなかったぶん**がここに残る(stop.bat は

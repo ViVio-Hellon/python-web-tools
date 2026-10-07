@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use tauri::http::{Request, Response};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 use tauri_plugin_opener::OpenerExt;
 
 use bridge::{Bridge, Phase};
@@ -254,14 +254,14 @@ fn confirm_close(app: AppHandle, bridge: Arc<Bridge>) {
                     .ok()
                     .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(str::to_string))
                     .unwrap_or_else(|| "実行中の処理があります。終了しますか?".into());
-                let yes = app
+                let answer = app
                     .dialog()
                     .message(message)
                     .title(TITLE)
                     .kind(MessageDialogKind::Warning)
-                    .buttons(MessageDialogButtons::OkCancelCustom("終了する".into(), "やめる".into()))
-                    .blocking_show();
-                if yes {
+                    .buttons(MessageDialogButtons::OkCancelCustom(QUIT_YES.into(), QUIT_NO.into()))
+                    .blocking_show_with_result();
+                if chose_quit(&answer) {
                     let _ = bridge.call("POST", "/api/shutdown", "", json, br#"{"force": true}"#);
                     exit_soon(app);
                 }
@@ -271,6 +271,24 @@ fn confirm_close(app: AppHandle, bridge: Arc<Bridge>) {
             _ => exit_soon(app),
         }
     });
+}
+
+/// × の確かめの窓のボタン。
+const QUIT_YES: &str = "終了する";
+const QUIT_NO: &str = "やめる";
+
+/// × の確かめの窓で「終了する」を押したか。**はっきり「終了する」のときだけ真。**
+///
+/// 窓の答えの読み方は部品(tauri-plugin-dialog)まかせにしない ── 窓が出せなかった・
+/// 窓の × で閉じた・知らない答え は、どれも「やめる」(終わらない)。確かめが黙って
+/// 「はい」になると、保存していない配置図や途中の取り込みが消える。
+fn chose_quit(answer: &MessageDialogResult) -> bool {
+    match answer {
+        MessageDialogResult::Custom(label) => label == QUIT_YES,
+        // ボタンの名前を出せない環境(Windows の古い窓など)では OK / キャンセルで返る
+        MessageDialogResult::Ok => true,
+        _ => false,
+    }
 }
 
 fn exit_soon(app: AppHandle) {
@@ -379,6 +397,18 @@ mod tests {
         assert!(is_app_url(&url));
         assert!(url.as_str().ends_with("/report/plan?t=x"));
         assert!(!is_app_url(&"http://nlmfangysysv:9084/".parse().unwrap()));
+    }
+
+    #[test]
+    fn 終了の確かめは終了するを押したときだけ終わる() {
+        assert!(chose_quit(&MessageDialogResult::Custom(QUIT_YES.into())));
+        assert!(chose_quit(&MessageDialogResult::Ok));
+        // やめる・窓の × で閉じた・知らない答え は、どれも終わらない
+        assert!(!chose_quit(&MessageDialogResult::Custom(QUIT_NO.into())));
+        assert!(!chose_quit(&MessageDialogResult::Cancel));
+        assert!(!chose_quit(&MessageDialogResult::No));
+        assert!(!chose_quit(&MessageDialogResult::Custom("".into())));
+        assert!(!chose_quit(&MessageDialogResult::Custom("OK".into())));
     }
 
     #[test]
