@@ -230,6 +230,10 @@ class OrderRow:
     unread: int = 0
     # 自分が書いたのに、相手がまだ見ていないもの
     unseen_mine: int = 0
+    # 自分が書いて、相手がもう見たもの(「既読」)
+    seen_mine: int = 0
+    # 相手の呼び名(現場なら「倉庫」、倉庫なら「現場」)。印の言葉に使う
+    partner: str = ""
     latest_comment: str = ""
     # まだ書けるか(未確認のあいだだけ)。書けないなら理由
     comment_why: str = ""
@@ -289,7 +293,11 @@ def build(conn: sqlite3.Connection, *, mode: str,
 
     terminal = svc.this_terminal()
     from .. import order_comments
-    notes = order_comments.summaries(conn, terminal=terminal)
+    # 側(現場/倉庫)も渡す。1台で両方のモードを使う端末でも、自分の側で書いたものだけが
+    # 「自分のコメント」になる(`order_comments._mine`)
+    notes = order_comments.summaries(
+        conn, terminal=terminal,
+        side=order_comments.SIDE_MATERIAL if is_material else order_comments.SIDE_FIELD)
     rows = [_row(item, is_material=is_material, terminal=terminal, notes=notes)
             for item in raw]
     pending = sum(1 for r in rows if r.status == svc.STATUS_PENDING)
@@ -314,6 +322,8 @@ def _row(item: dict, *, is_material: bool, terminal: str = "",
         comments=note.count if note else 0,
         unread=note.unread if note else 0,
         unseen_mine=note.unseen_mine if note else 0,
+        seen_mine=note.seen_mine if note else 0,
+        partner=order_comments.SIDE_FIELD if is_material else order_comments.SIDE_MATERIAL,
         latest_comment=note.latest if note else "",
         comment_why=order_comments.closed_why(item),
         mgr_no=item.get("管理番号", 0),
@@ -458,6 +468,8 @@ def row_dict(row: OrderRow) -> dict[str, Any]:
         "comments": row.comments,
         "unread": row.unread,
         "unseen_mine": row.unseen_mine,
+        "seen_mine": row.seen_mine,
+        "partner": row.partner,
         "latest_comment": row.latest_comment,
         "comment_why": row.comment_why,
         "lot_no": row.lot_no,

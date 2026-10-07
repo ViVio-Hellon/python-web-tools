@@ -343,7 +343,8 @@ def _side() -> str:
 def _comments_body(conn, mgr_no: int, **extra):
     row = conn.execute(f"SELECT * FROM {svc.TABLE} WHERE 管理番号 = ?",
                        (mgr_no,)).fetchone()
-    comments = order_comments.comments_for(conn, mgr_no, terminal=svc.this_terminal())
+    comments = order_comments.comments_for(conn, mgr_no, terminal=svc.this_terminal(),
+                                           side=_side())
     return {"mgr_no": mgr_no,
             "comments": [order_comments.to_dict(c) for c in comments],
             # 書けないなら理由(未確認のあいだだけ書ける)。**画面で決めない**

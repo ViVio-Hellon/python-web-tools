@@ -1021,9 +1021,11 @@ class OrderDetailTests(WarehouseWebTestCase):
         watch = js.split("function startWatch()")[1].split("\n}")[0]
         self.assertIn("el.orderModal.open) return;", watch)
 
-    def test_自分のコメントの印は相手未読と書く(self) -> None:
-        """「未読」だけだと自分が読んでいないと読め、返事を書くまで消えない印に見えた。"""
-        self.assertIn("`相手未読${row.unseen_mine}`", self._js())
+    def test_自分のコメントの印は誰が未読かと既読を書く(self) -> None:
+        """「相手未読」では分かりにくかった。「倉庫が未読1」、相手が開いたら「✔既読」。"""
+        js = self._js()
+        self.assertIn("`${row.partner}が未読${row.unseen_mine}`", js)
+        self.assertIn('done.textContent = "✔既読"', js)
 
     def test_一覧の値をそのまま使う(self) -> None:
         """**事実の置き場所は `values` ただ1つ。** 別の口を作らない。"""

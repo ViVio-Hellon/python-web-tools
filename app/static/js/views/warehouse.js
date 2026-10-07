@@ -510,15 +510,21 @@ function actionsCell(row) {
       b.appendChild(mark);
     }
     if (row.unseen_mine) {
-      // 自分が書いたのに、相手がまだ見ていない
+      // 自分が書いたのに、相手がまだ見ていない。**誰が読んでいないのかを書く**
+      // (「相手未読」では分かりにくかった。現場の声)
       const wait = document.createElement("span");
       wait.className = "waitmark";
-      // 「未読」だけだと**自分が読んでいない**と読めてしまい、返事を書くまで消えない印に
-      // 見えた(現場の声)。誰が読んでいないのかを書く
-      wait.textContent = `相手未読${row.unseen_mine}`;
-      wait.title = "あなたが書いたコメントのうち、相手(現場⇔倉庫)がまだ開いていないもの。"
-        + "相手が開くと消えます(あなたが返事を書く必要はありません)";
+      wait.textContent = `${row.partner}が未読${row.unseen_mine}`;
+      wait.title = `あなたが書いたコメントのうち、${row.partner}がまだ開いていないもの。`
+        + `${row.partner}が開くと「既読」に変わります(返事を書く必要はありません)`;
       b.appendChild(wait);
+    } else if (row.seen_mine) {
+      // 書いたものは全部、相手が見た
+      const done = document.createElement("span");
+      done.className = "seenmark";
+      done.textContent = "✔既読";
+      done.title = `あなたが書いたコメントを、${row.partner}が開いて見ました`;
+      b.appendChild(done);
     }
     if (row.latest_comment) b.title = `最新: ${row.latest_comment}`;
     box.appendChild(b);

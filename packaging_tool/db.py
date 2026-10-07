@@ -222,6 +222,7 @@ def _migrate_before_schema(conn: sqlite3.Connection) -> None:
                               "BOX最終実績_枚本数"),
                              "前工程まわりと BOX最終実績")
     _park_old_board_usage(conn)
+    _park_old_comment_read(conn)
 
 
 # 移行のあいだだけ置いておく古いボード使用実績の名前。
@@ -255,9 +256,37 @@ def _park_old_board_usage(conn: sqlite3.Connection) -> None:
     log.info("ボード使用実績を新しい形に作り変えます(古い集計は引き継ぎます)")
 
 
+# 側(現場/倉庫)の無い古いコメント既読。`_park_old_comment_read` が退け、
+# `_move_old_comment_read` が新しい表へ移して消す
+_COMMENT_READ_PARKED = "発注コメント既読_移行中"
+
+
+def _park_old_comment_read(conn: sqlite3.Connection) -> None:
+    """側の列が無い古いコメント既読を脇へ退ける(主キーが変わるので作り直す)。"""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info([発注コメント既読])")]
+    if not cols or "側" in cols:
+        return
+    conn.execute(f"DROP TABLE IF EXISTS [{_COMMENT_READ_PARKED}]")
+    conn.execute(f"ALTER TABLE [発注コメント既読] RENAME TO [{_COMMENT_READ_PARKED}]")
+
+
+def _move_old_comment_read(conn: sqlite3.Connection) -> None:
+    """古い既読を両方の側で読んだことにして移す(移した日に「新」が大量に出ないように)。"""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                        (_COMMENT_READ_PARKED,)).fetchone():
+        return
+    with conn:
+        for side in ("現場", "倉庫"):
+            conn.execute(f"INSERT OR IGNORE INTO [発注コメント既読] (コメントID, 側)"
+                         f" SELECT コメントID, ? FROM [{_COMMENT_READ_PARKED}]", (side,))
+        conn.execute(f"DROP TABLE [{_COMMENT_READ_PARKED}]")
+    log.info("コメントの既読を側(現場/倉庫)ごとの形に移しました")
+
+
 def _migrate_after_schema(conn: sqlite3.Connection) -> None:
     """`schema.sql` を当てたあとに片付けること。"""
     _move_old_board_usage(conn)
+    _move_old_comment_read(conn)
     _add_order_mark_columns(conn)
     # 実績(スナップショット)の表。名前が `config.TBL_PT_*` の仮の値なので、
     # schema.sql に書かずに定数から作る(名前を直すのが1か所で済む)

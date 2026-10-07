@@ -3,7 +3,7 @@
 # 詳しくは docs/デスクトップ版.md
 [package]
 name = "packaging-tool-desktop"
-version = "4.4.0"
+version = "4.4.1"
 edition = "2021"
 publish = false
 

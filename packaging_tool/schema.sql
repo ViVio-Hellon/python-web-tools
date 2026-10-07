@@ -314,9 +314,13 @@ CREATE TABLE IF NOT EXISTS 発注コメント (
 );
 CREATE INDEX IF NOT EXISTS idx_order_comment_key ON 発注コメント(発注キー);
 
--- この端末で読んだコメント。**端末ごと**なので共有へは送らない
+-- この端末で読んだコメント。**端末ごと**なので共有へは送らない。
+-- **側(現場/倉庫)ごと**に持つ ── 1台で両方のモードを使う端末では、現場モードで
+-- 読んだものを倉庫モードで読んだことにしない(`order_comments._mine`)
 CREATE TABLE IF NOT EXISTS 発注コメント既読 (
-    コメントID  TEXT PRIMARY KEY
+    コメントID  TEXT NOT NULL,
+    側          TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (コメントID, 側)
 );
 
 -- 発注コメント閲覧: **相手がコメントを見たか**(`order_comments.mark_read`)。

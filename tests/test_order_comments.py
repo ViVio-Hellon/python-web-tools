@@ -79,6 +79,67 @@ class ExchangeTests(CommentTestBase):
         self.assertEqual(self.unread(self.b, "NEW", "SOUKO"), 0)
 
 
+class OnePcBothModesTests(CommentTestBase):
+    """**1台のPCで現場モードと倉庫モードを切り替えて使う**とき(端末名が同じ)。
+
+    現場の声:「現場で送って、倉庫はまだ開いてもいないのに相手未読と出る」「倉庫で開いても
+    現場は相手未読のまま。送る→相手が開く→既読 になっていない」。以前は端末名だけで
+    「自分のコメント」を決めていたので、同じPCの倉庫モードからも自分のものに見えていた。
+    """
+
+    PC = "GENBA-1"
+
+    def summary(self, side: str) -> oc.Summary:
+        row = self.a.execute(f'SELECT * FROM "{ORDER}" WHERE LotNo = ?', ("NEW",)).fetchone()
+        return oc.summaries(self.a, terminal=self.PC, side=side)[oc.order_key(row)]
+
+    def view(self, side: str) -> list[oc.Comment]:
+        return oc.comments_for(self.a, self.local_no(self.a, "NEW"), terminal=self.PC, side=side)
+
+    def test_倉庫モードでは現場が書いたものは相手のコメント(self):
+        self.order("NEW")
+        self.write(self.a, "NEW", "至急で", self.PC, oc.SIDE_FIELD)
+        # 現場モード: 自分のもの。倉庫が未読
+        field = self.summary(oc.SIDE_FIELD)
+        self.assertEqual((field.unseen_mine, field.seen_mine, field.unread), (1, 0, 0))
+        # 倉庫モード: 相手(現場)のもの。「新」が付き、「倉庫が未読」は付かない
+        material = self.summary(oc.SIDE_MATERIAL)
+        self.assertEqual((material.unread, material.unseen_mine), (1, 0))
+        [c] = self.view(oc.SIDE_MATERIAL)
+        self.assertFalse(c.mine)
+        self.assertTrue(c.unread)
+
+    def test_倉庫モードで開けば現場から見て既読になる(self):
+        self.order("NEW")
+        self.write(self.a, "NEW", "至急で", self.PC, oc.SIDE_FIELD)
+        added = oc.mark_read(self.a, self.local_no(self.a, "NEW"),
+                             terminal=self.PC, side=oc.SIDE_MATERIAL)
+        self.assertEqual(added, 1)
+        field = self.summary(oc.SIDE_FIELD)
+        self.assertEqual((field.unseen_mine, field.seen_mine), (0, 1))
+        [c] = self.view(oc.SIDE_FIELD)
+        self.assertRegex(oc.seen_text(c), r"^倉庫 GENBA-1 が .* に見ました$")
+        self.assertEqual(self.summary(oc.SIDE_MATERIAL).unread, 0)
+
+    def test_現場モードで読んでも倉庫モードの新は消えない(self):
+        """既読は側ごと。現場モードで開いたのを、倉庫が開いたことにしない。"""
+        self.order("NEW")
+        self.write(self.a, "NEW", "至急で", self.PC, oc.SIDE_FIELD)
+        oc.mark_read(self.a, self.local_no(self.a, "NEW"), terminal=self.PC, side=oc.SIDE_FIELD)
+        self.assertEqual(self.summary(oc.SIDE_MATERIAL).unread, 1)
+        self.assertEqual(self.summary(oc.SIDE_FIELD).unseen_mine, 1)
+
+    def test_古い既読は両方の側で読んだことにして移す(self):
+        from packaging_tool import db
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE 発注コメント既読 (コメントID TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO 発注コメント既読 VALUES ('c1')")
+        conn.commit()
+        db.apply_schema(conn)
+        self.assertEqual(sorted(conn.execute("SELECT コメントID, 側 FROM 発注コメント既読")),
+                         [("c1", "倉庫"), ("c1", "現場")])
+
+
 class SeenTests(CommentTestBase):
     """**相手がコメントを見たか**(現場の声:「見たか見てないかを分かるようにしてほしい」)。
 

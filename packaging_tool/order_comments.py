@@ -72,6 +72,8 @@ class Summary:
     latest: str = ""
     # 自分が書いたのに、相手がまだ見ていないもの
     unseen_mine: int = 0
+    # 自分が書いて、相手がもう見たもの(「既読」を出すため)
+    seen_mine: int = 0
 
 
 @dataclass
@@ -115,25 +117,39 @@ def closed_why(row: sqlite3.Row) -> str:
 
 
 def comments_for(conn: sqlite3.Connection, mgr_no: int, *,
-                 terminal: str) -> list[Comment]:
+                 terminal: str, side: str = "") -> list[Comment]:
     """その発注のコメント(古い順)。**読んだことにはしない**(`mark_read`)。"""
     row = _order(conn, mgr_no)
     if row is None:
         return []
-    return _comments(conn, order_key(row), terminal)
+    return _comments(conn, order_key(row), terminal, side)
 
 
-def _comments(conn: sqlite3.Connection, key: str, terminal: str) -> list[Comment]:
+def _mine(who: str, writer_side: str, terminal: str, side: str) -> bool:
+    """自分が書いたコメントか。**同じ端末で、同じ側(現場/倉庫)のときだけ。**
+
+    以前は端末名だけで見ていた。1台のPCで現場モードと倉庫モードを切り替えて使うと、
+    現場で書いたものが倉庫モードでも「自分のもの」になり、開く前から「相手未読」と出て、
+    倉庫モードで開いても「自分のものを自分で開いた」として既読が付かなかった(現場の声:
+    「送る→相手が開く→既読 になっていない」)。
+    """
+    if not _same(who, terminal):
+        return False
+    return not side or not writer_side or writer_side == side
+
+
+def _comments(conn: sqlite3.Connection, key: str, terminal: str,
+              my_side: str = "") -> list[Comment]:
     if not key:
         return []
-    read = _read_ids(conn)
+    read = _read_ids(conn, my_side)
     seen = _seen_by(conn)
     rows = conn.execute(
         f"SELECT コメントID, 書いた端末, 書いた側, 本文, 書いた日時 FROM {TABLE}"
         " WHERE 発注キー = ? ORDER BY 書いた日時, 管理番号", (key,)).fetchall()
     out = []
     for cid, who, side, text, at in rows:
-        mine = _same(who, terminal)
+        mine = _mine(who, side, terminal, my_side)
         out.append(Comment(comment_id=cid, terminal=who, side=side, text=text,
                            written_at=at, mine=mine,
                            unread=not mine and cid not in read,
@@ -182,22 +198,25 @@ def mark_read(conn: sqlite3.Connection, mgr_no: int, *,
     added = 0
     with conn:
         if terminal and side:
-            read = _read_ids(conn)
+            read = _read_ids(conn, side)
             fresh = conn.execute(
                 f"SELECT コメントID, 書いた端末, 書いた側 FROM {TABLE}"
                 " WHERE 発注キー = ? AND コメントID <> ''", (key,)).fetchall()
             now = db.now_db_string()
             for cid, who, writer_side in fresh:
-                if cid in read or _same(who, terminal) or writer_side == side:
-                    continue               # 読んだことがある・自分の・同じ側の
+                # 相手(現場⇔倉庫)が書いたものを、この側で初めて開いたときだけ。
+                # **端末は問わない** ── 1台で両方のモードを使う端末でも、倉庫モードで
+                # 開けば倉庫が見たことになる
+                if cid in read or writer_side == side:
+                    continue               # この側で読んだことがある・同じ側の
                 conn.execute(
                     f"INSERT INTO {SEEN_TABLE} (コメントID, 見た端末, 見た側, 見た日時)"
                     " VALUES (?, ?, ?, ?)", (cid, terminal, side, now))
                 added += 1
         conn.execute(
-            f"INSERT OR IGNORE INTO {READ_TABLE} (コメントID)"
-            f" SELECT コメントID FROM {TABLE} WHERE 発注キー = ? AND コメントID <> ''",
-            (key,))
+            f"INSERT OR IGNORE INTO {READ_TABLE} (コメントID, 側)"
+            f" SELECT コメントID, ? FROM {TABLE} WHERE 発注キー = ? AND コメントID <> ''",
+            (side, key))
     if added:
         log.info("相手のコメントを見ました: 発注キー=%s %s件(%s %s)", key, added, side, terminal)
     return added
@@ -216,22 +235,24 @@ def add(conn: sqlite3.Connection, mgr_no: int, text: str, *,
         return CommentResult(False, "この発注は一覧にありません。画面を更新してください。")
     why = closed_why(row)
     if why:
-        return CommentResult(False, why, _comments(conn, order_key(row), terminal))
+        return CommentResult(False, why, _comments(conn, order_key(row), terminal, side))
     cid = uuid.uuid4().hex
     with conn:
         conn.execute(
             f"INSERT INTO {TABLE} (発注キー, コメントID, 書いた端末, 書いた側, 本文, 書いた日時)"
             " VALUES (?, ?, ?, ?, ?, ?)",
             (order_key(row), cid, terminal, side, text, db.now_db_string()))
-        conn.execute(f"INSERT OR IGNORE INTO {READ_TABLE} (コメントID) VALUES (?)", (cid,))
+        conn.execute(f"INSERT OR IGNORE INTO {READ_TABLE} (コメントID, 側) VALUES (?, ?)",
+                     (cid, side))
     log.info("コメントを書きました: 発注キー=%s 端末=%s(%s)", order_key(row), terminal, side)
     return CommentResult(True, "コメントを書きました。",
-                         _comments(conn, order_key(row), terminal))
+                         _comments(conn, order_key(row), terminal, side))
 
 
-def summaries(conn: sqlite3.Connection, *, terminal: str) -> dict[str, Summary]:
+def summaries(conn: sqlite3.Connection, *, terminal: str,
+              side: str = "") -> dict[str, Summary]:
     """発注キーごとのまとめ(件数・未読・いちばん新しい1件)。一覧に添える。"""
-    read = _read_ids(conn)
+    read = _read_ids(conn, side)
     seen = _seen_by(conn)
     out: dict[str, Summary] = {}
     try:
@@ -240,21 +261,28 @@ def summaries(conn: sqlite3.Connection, *, terminal: str) -> dict[str, Summary]:
             " ORDER BY 書いた日時, 管理番号").fetchall()
     except sqlite3.Error:
         return out                     # 表がまだ無い(古い手元DB)
-    for key, cid, who, side, text in rows:
+    for key, cid, who, writer_side, text in rows:
         got = out.setdefault(key, Summary())
         got.count += 1
         got.latest = text
-        if not _same(who, terminal):
+        if not _mine(who, writer_side, terminal, side):
             if cid not in read:
                 got.unread += 1
-        elif not _other_side(seen.get(cid, []), side):
+        elif _other_side(seen.get(cid, []), writer_side):
+            got.seen_mine += 1
+        else:
             got.unseen_mine += 1
     return out
 
 
-def _read_ids(conn: sqlite3.Connection) -> set[str]:
+def _read_ids(conn: sqlite3.Connection, side: str = "") -> set[str]:
+    """この端末の、この側(現場/倉庫)で読んだコメント。側を渡さなければどちらでも。"""
     try:
-        return {r[0] for r in conn.execute(f"SELECT コメントID FROM {READ_TABLE}")}
+        if side:
+            rows = conn.execute(f"SELECT コメントID FROM {READ_TABLE} WHERE 側 = ?", (side,))
+        else:
+            rows = conn.execute(f"SELECT コメントID FROM {READ_TABLE}")
+        return {r[0] for r in rows}
     except sqlite3.Error:
         return set()                   # 表がまだ無い(古い手元DB)
 
