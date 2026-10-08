@@ -112,6 +112,14 @@ class ExitCodeTests(_LocalDir):
         self.assertIn("デスクトップ版", out)
         self.assertIn("窓の ×", out)
 
+    def test_止めなかった理由を先に出す(self) -> None:
+        """ランチャー(1.7.1〜)は 0 以外のとき、出力のはじめの2行を理由として見せる
+        (`process_manager._first_lines`)。「起動していません」を先に出さない。"""
+        _, out = self.run_main({"material": "busy"})
+        self.assertTrue(out.splitlines()[0].startswith("[--] material"), out)
+        _, out = self.run_main({}, desktop={"pid": 1, "mode": "field"})
+        self.assertIn("デスクトップ版", out.splitlines()[0])
+
     def test_状態にデスクトップ版を出す(self) -> None:
         out = io.StringIO()
         with mock.patch.object(launch_guard, "desktop_running",

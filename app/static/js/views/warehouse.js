@@ -12,6 +12,7 @@
 import { api, tokenUrl } from "../api.js";
 import { confirmBox } from "../askbox.js";
 import { openWindow } from "../desktop.js";
+import * as draftStore from "../drafts.js";
 import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
@@ -346,6 +347,10 @@ function openOrder(row, { focus = false } = {}) {
   // `lblCopyMsg` を空にしていた)
   el.orderCopied.textContent = "";
   openedRow = row;
+  // 打ちかけのコメントは**その発注ごと**に置く。前の発注に打ちかけた文を
+  // 次の発注へ持ち越さない(以前は欄に残ったまま、別の発注に書けた)
+  el.commentText.value = "";
+  draftStore.bind(el.commentText, `warehouse.comment.${row.mgr_no}`, "コメント");
   el.commentList.replaceChildren();
   el.commentEmpty.hidden = true;
   el.orderModal.showModal();
@@ -415,6 +420,7 @@ async function sendComment() {
     const body = await api.post("/api/warehouse/comment",
                                 { mgr_no: openedRow.mgr_no, text });
     el.commentText.value = "";
+    draftStore.done(el.commentText);
     renderComments(body);
     toast(body.message || "コメントを書きました。", "ok");
     // **一覧もすぐ出し直す**(コメントの件数・「未読」を、窓の後ろの一覧に)。
@@ -779,6 +785,7 @@ async function send(confirmDuplicate = false) {
     // 送った内容は消す。同じものを二度送らせないため
     for (const node of Object.values(el.fields)) node.value = "";
     if (el.sendComment) el.sendComment.value = "";
+    draftStore.done(el.sendComment, ...Object.values(el.fields));
     if (values.rows) { drafts = []; showDraft(); } else dropDraft();
     await load();
   } catch (err) {
@@ -1000,6 +1007,7 @@ export function start(state, material, lotPeekWhy) {
       applyDraftLock(false);
       showDraft();
       for (const node of Object.values(el.fields)) node.value = "";
+      draftStore.done(...Object.values(el.fields));
       setStatus(el.sendStatus, "", "ok");
     });
   }
@@ -1014,6 +1022,20 @@ export function start(state, material, lotPeekWhy) {
     el.draftPrev.addEventListener("click", () => { keepDraftQty(); draftAt -= 1; showDraft(); });
     el.draftNext.addEventListener("click", () => { keepDraftQty(); draftAt += 1; showDraft(); });
     showDraft();
+  }
+  keepTyping();
+}
+
+/**
+ * 送る前の打ちかけを、止まっても失わない(`drafts.js`)。倉庫へのひとことはいつも。
+ * 発注の欄は**手で打つとき**だけ ── 資材選択から届いた下書きはサーバが預かって
+ * いて、開き直せばまた出る(打ちかけを重ねると、下書きと食い違う)。
+ */
+function keepTyping() {
+  if (el.sendComment) draftStore.bind(el.sendComment, "warehouse.send.comment", "倉庫へのひとこと");
+  if (drafts.length) return;
+  for (const [key, node] of Object.entries(el.fields)) {
+    draftStore.bind(node, `warehouse.send.${key}`, "発注の欄");
   }
 }
 

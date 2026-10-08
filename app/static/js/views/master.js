@@ -18,6 +18,7 @@
 
 import { api } from "../api.js";
 import { confirmBox, promptBox } from "../askbox.js";
+import * as draftStore from "../drafts.js";
 import { toast, toastError } from "../toast.js";
 import * as nav from "../nav.js";
 
@@ -50,6 +51,9 @@ export function start(frame) {
   // 一度でも行を開くと、そのあとの読み直し(取り込みのあと・認証のあと)が
   // 全部「編集中だから触らない」で止まり、古い一覧のまま残っていた
   el.mEdit.addEventListener("close", () => {
+    // 書いた・本人が閉じた。どちらも打ちかけは要らない(止められたときは
+    // 窓が閉じる合図が来ないので、打ちかけは残る)
+    draftStore.done(...el.mFields.querySelectorAll("input[data-column]"));
     editing = null;
     afterDialog();
   });
@@ -397,6 +401,12 @@ function openRow(key) {
   // 思って打ち、押してから断られる。読むだけの表は文字のまま出す
   el.mFields.replaceChildren(
     ...(editable && columns.length ? fields(columns, row) : plain(page, row)));
+  // 書く前の打ちかけは、止まっても失わない(`drafts.js`)。**どの表の・どの行の**欄か
+  // まで名前に入れる(別の行を開いたときに戻さない)
+  for (const input of el.mFields.querySelectorAll("input[data-column]")) {
+    draftStore.bind(input, `master.${view.table}.${key === null ? "new" : key}.${input.dataset.column}`,
+                    `${page.label || view.table} の1行`);
+  }
   el.mEdit.showModal();
   const first = el.mFields.querySelector("input:not([readonly])");
   if (first) first.focus();

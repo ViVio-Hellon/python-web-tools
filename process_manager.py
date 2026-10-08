@@ -303,15 +303,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     code = 0
-    for mode in targets:
-        result = stop(mode, force=args.force)
-        print(result)
+    results = [stop(mode, force=args.force) for mode in targets]
+    for result in results:
         if not result.stopped:
             # 断られた(2)より、止められなかった(1)を先に知らせる
             code = 1 if code == 1 or not result.busy_jobs else 2
+    # **止めなかった理由を先に出す。** ランチャー(1.7.1〜)は stop.bat が 0 以外で
+    # 終わると、出力の**はじめの2行**を理由として利用者に見せる。「起動していません」が
+    # 先に来ると、理由がそれになる
     if desktop is not None:
         print(DESKTOP_MESSAGE)
         code = code or 1
+    for result in sorted(results, key=lambda r: r.stopped):
+        print(result)
     return code
 
 

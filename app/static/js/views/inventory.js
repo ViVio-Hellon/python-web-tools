@@ -13,6 +13,7 @@
 
 import { api, tokenUrl } from "../api.js";
 import { confirmBox } from "../askbox.js";
+import * as draftStore from "../drafts.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
@@ -350,6 +351,9 @@ function numbers(fields) {
   return out;
 }
 
+/** 受け入れの欄。登録する前の打ちかけは、止まっても失わない(`drafts.js`)。 */
+const RECEIVE_FIELDS = ["rw", "rl", "rqty", "rpos", "rsym", "rind", "runit", "rnote"];
+
 async function doReceive() {
   const values = numbers({ width: el.rw, length: el.rl, qty: el.rqty });
   if (!values) { toast("幅・丈・台数は数字で入れてください", "ng"); return; }
@@ -367,6 +371,7 @@ async function doReceive() {
     toast(body.message, "ok");
     el.rqty.value = "";
     el.rnote.value = "";
+    draftStore.done(...RECEIVE_FIELDS.map((id) => el[id]));
     // 動かした先の棚を出す。登録した結果がその場で見える
     await showPosition(el.rpos.value.trim());
   } catch (err) {
@@ -441,6 +446,7 @@ export function start(state) {
   });
 
   render(state);
+  for (const id of RECEIVE_FIELDS) draftStore.bind(el[id], `inventory.receive.${id}`, "受け入れの欄");
   // 資材選択から寸法を持って来たときは、**引いたところから始まっている**
   // (`presenters/inventory.initial`)。「最新にする」で取り直せるよう、
   // 同じ問い合わせをここでも組んでおく
