@@ -464,6 +464,15 @@ def _cut(**kw) -> reports.CutRequestData:
 
 
 class CutRequestSheetTests(unittest.TestCase):
+    def test_中身は下に寄せて上に余白を回す(self):
+        """現場の声:「用紙の下に余白があるなら上に回して。上に余白があるほうがテープで
+        現物に貼りやすい」。印刷できる高さ(A4縦 297 − 余白10mm×2 − 控え2mm)いっぱいに取り、
+        中身を下端へ。中身がはみ出すときは上寄せに戻す(`safe`)。"""
+        css = reports.build_cut_request_report(_cut()).setup.extra_css
+        self.assertIn("justify-content: safe flex-end", css)
+        self.assertIn("height: 275mm", css)
+        self.assertNotIn("overflow: hidden", css)
+
     def test_headings_match_the_sample_sheet(self):
         html = reports.build_cut_request_sheet(_cut())
         for caption in ("ロットNO", "担当者", "製品サイズ", "パレットサイズ",

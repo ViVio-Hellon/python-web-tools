@@ -813,11 +813,10 @@ def build_cut_request_sheet(data: CutRequestData) -> str:
 
 def build_cut_request_report(data: CutRequestData) -> printing.Report:
     """切断依頼書の帳票(A4縦・余白1cm)。VBA `PageSetup` と同じ設定。"""
-    report = printing.Report(
-        title=f"切断依頼書 {data.lot_no}".strip(),
-        setup=printing.PageSetup(orientation=printing.PORTRAIT, margin_mm=10.0,
-                                 extra_css=CUT_CSS),
-    )
+    setup = printing.PageSetup(orientation=printing.PORTRAIT, margin_mm=10.0)
+    # 中身は下に寄せ、余りは上に回す(上に余白があるほうがテープで現物に貼りやすい)
+    setup.extra_css = CUT_CSS + setup.bottom_align_css()
+    report = printing.Report(title=f"切断依頼書 {data.lot_no}".strip(), setup=setup)
     report.add_sheet(build_cut_request_sheet(data))
     return report
 

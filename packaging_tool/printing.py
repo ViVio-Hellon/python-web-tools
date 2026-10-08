@@ -116,6 +116,30 @@ class PageSetup:
         )
 
 
+    def bottom_align_css(self) -> str:
+        """1ページの中身を**下に寄せ、余りを上に回す**(切断依頼書)。
+
+        現場の声:「用紙の下に余白があるなら、上に余白を与えるように配置してください。
+        上に余白があるほうがテープで現物に貼りやすい」。印刷できる高さいっぱいに
+        ページを取り、中身を下端へ寄せる。高さは丸めで次のページへはみ出さないよう
+        `BOTTOM_ALIGN_SLACK_MM` だけ控える。
+        """
+        _w, h = self.paper_size_mm()
+        usable = h - 2 * self.effective_margin_mm - BOTTOM_ALIGN_SLACK_MM
+        return (
+            # `safe`: 中身がページより高いときは上寄せに戻す(下寄せのまま上端を
+            # 切り落とさない)。`safe` を知らない古い描画は前の行の flex-end を使う
+            ".sheet { display: flex; flex-direction: column; justify-content: flex-end;"
+            " justify-content: safe flex-end; }\n"
+            f"@media print {{ .sheet {{ height: {usable:g}mm; }} }}\n"
+        )
+
+
+# 下寄せのページの高さを、印刷できる高さからどれだけ控えるか(mm)。
+# ちょうどにすると丸めで白紙のページが1枚増えることがある
+BOTTOM_ALIGN_SLACK_MM = 2
+
+
 @dataclass
 class Report:
     """1つの帳票。`sheets` の1要素が1ページになる。"""
