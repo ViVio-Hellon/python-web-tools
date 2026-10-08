@@ -284,10 +284,14 @@ def find_material(
     codes = [str(r["コード"] or "") for r in rows]
     if len(set(codes)) > 1:
         # **同じ条件でコードの違う行がある**(実データ: 松板 24×120 4000-4999 が
-        # 355047 と 355054)。黙って先頭を使うと、押した人はほかの候補があったと
-        # 気づけない(パレットで同じことが起きていた)。どれを使ったかを並べて言う
-        info += (f" ※同じ条件で{len(codes)}件({'・'.join(codes)})。"
-                 f"管理番号の若い {codes[0]} を使います")
+        # 355047(備考なし)と 355054(仕様：米松)── 別物)。黙って先頭を使うと、
+        # 押した人はほかの候補があったと気づけない(パレットで同じことが起きていた)。
+        # どれを使ったかを、**それぞれの備考(仕様)と並べて**言う
+        def label(r) -> str:
+            note = (r["備考"] or "").strip()
+            return f"{r['コード']}({note or '備考なし'})"
+        info += (f" ※同じ条件で{len(codes)}件: {'・'.join(label(r) for r in rows)}。"
+                 f"{label(rows[0])} を使います")
         log.warning("find_material: 同じ条件で複数のコード %s 厚=%s 幅=%s 丈=%s → %s",
                     name, atsu, haba, target_length, codes)
     hit = MaterialHit(name=name, found=True, info=info,

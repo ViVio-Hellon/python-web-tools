@@ -329,8 +329,9 @@ class SameConditionCodesTests(unittest.TestCase):
         conn.execute("CREATE TABLE 松板角材 (管理番号 INTEGER PRIMARY KEY, 品名 TEXT, 厚 REAL, 幅 INTEGER,"
                      " 丈min INTEGER, 丈max INTEGER, コード TEXT, 単位 TEXT, 備考 TEXT)")
         conn.executemany("INSERT INTO 松板角材 (品名, 厚, 幅, 丈min, 丈max, コード, 単位, 備考)"
-                         " VALUES ('松板', 24, 120, 4000, 4999, ?, '本', '')", [("355047",), ("355054",)])
+                         " VALUES ('松板', 24, 120, 4000, 4999, ?, '枚', ?)",
+                         [("355047", ""), ("355054", "仕様：米松")])
         hit = sp.find_material(conn, name="松板", atsu=24, haba=120, target_length=4500)
         self.assertEqual(hit.code, "355047")
-        self.assertIn("同じ条件で2件(355047・355054)", hit.info)
-        self.assertIn("355047 を使います", hit.info)
+        self.assertIn("同じ条件で2件: 355047(備考なし)・355054(仕様：米松)", hit.info)
+        self.assertIn("355047(備考なし) を使います", hit.info)
