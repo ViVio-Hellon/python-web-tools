@@ -405,25 +405,31 @@ def start_bridge(mode: str, *, token: str = "", server_factory) -> int:
     """
     import secrets
 
+    import launch_guard
     import server as server_module
 
     mode = resolve_mode(mode)
     log_environment(mode)
     srv = server_factory(mode, token or secrets.token_urlsafe(24))
     thread = server_module.run_in_background(srv)
+    # stop.bat・状態表示が「デスクトップ版が動いている」と分かるように(`launch_guard`)
+    launch_guard.write_desktop_marker(mode)
     log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)
     try:
-        srv.build()
-    except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
-        log().exception("アプリを組み立てられませんでした")
-        srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+        try:
+            srv.build()
+        except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
+            log().exception("アプリを組み立てられませんでした")
+            srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+            _hold_until_stopped(srv, thread)
+            return 1
+        # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない
+        _initialize(srv, watch_idle=False)
         _hold_until_stopped(srv, thread)
-        return 1
-    # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない
-    _initialize(srv, watch_idle=False)
-    _hold_until_stopped(srv, thread)
-    log().info("終了しました: mode=%s(デスクトップ版)", mode)
-    return 0
+        log().info("終了しました: mode=%s(デスクトップ版)", mode)
+        return 0
+    finally:
+        launch_guard.remove_desktop_marker()
 
 
 def _initialize(srv, *, watch_idle: bool = True) -> None:
@@ -545,7 +551,12 @@ def _watch_for_idle(srv) -> None:
     def busy() -> bool:
         return bool(jobs.get_registry().busy_labels())
 
-    idle_exit.install(srv.stop, busy)
+    def unsaved() -> bool:
+        # `/api/shutdown` が断るのと同じもの(保存していない配置図・保管位置マップ)
+        from app.routes.health import unsaved_edits
+        return bool(unsaved_edits())
+
+    idle_exit.install(srv.stop, busy, unsaved=unsaved)
 
 
 IMPORT_WAIT_LIMIT_SEC = 120

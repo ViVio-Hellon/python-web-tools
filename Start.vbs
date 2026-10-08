@@ -20,7 +20,7 @@ Option Explicit
 
 Const APP_NAME = "梱包資材総合ツール"
 
-Dim shell, fso, here, script, cmd, args, i
+Dim shell, fso, here, script, cmd
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 here = fso.GetParentFolderName(WScript.ScriptFullName)
@@ -67,15 +67,12 @@ End If
 ' パスは**絶対パスで渡す**。共有フォルダから実行されることがあり、
 ' 作業フォルダに頼ると見つけられないことがある
 '
-' 受け取った引数は**そのまま** start_app.py へ渡す。業務ツール統合ランチャーは
-' このファイルの中に WScript.Arguments があるかを見て、あれば --no-browser を
-' 付けて起動し、自分の専用画面を開く(止めるときにその画面も閉じられる)。
-' 渡さないと、ツールがふだんのブラウザーに開き、ランチャーから閉じられない
-' (docs/ランチャー連携.md)。ダブルクリックでは引数は無いので、今までと同じ
-args = ""
-For i = 0 To WScript.Arguments.Count - 1
-    args = args & " " & Chr(34) & WScript.Arguments(i) & Chr(34)
-Next
+' 受け取った引数は**わざと渡さない**(統合ツールと同じ)。業務ツール統合ランチャーは
+' このファイルが引数を渡すかを中身で見分け、渡すなら --no-browser を付けて自分の画面を
+' 開き、止めるときに**その画面を先に閉じる**。そうすると、保存していない図があっても
+' 画面が先に消え、図を保存する場所が無くなる。渡さなければ画面はツールのもので、
+' 止めるときは画面を残したまま「保存していない変更があります」と断れる
+' (docs/ランチャー連携.md)
 shell.CurrentDirectory = here
-cmd = "pythonw " & Chr(34) & script & Chr(34) & args
+cmd = "pythonw " & Chr(34) & script & Chr(34)
 shell.Run cmd, 0, False

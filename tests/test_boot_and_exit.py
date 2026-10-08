@@ -546,6 +546,36 @@ class IdleWatchTests(unittest.TestCase):
         time.sleep(0.15)
         self.assertEqual(self.stopped, [])
 
+    # --- 保存していない図(画面が合図なしに消えた) ----------------------
+    def _run(self, w: idle_exit.IdleWatch, *, wait: float = 0.15) -> None:
+        w.start()
+        self.addCleanup(w.cancel)
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline and not self.stopped:
+            time.sleep(0.01)
+
+    def test_合図なしに画面が消えたら_保存していない図があるうちは落とさない(self):
+        """業務ツール統合ランチャーは止める前に自分の画面を閉じ、閉じなければ 10 秒で
+        強制する。そのとき「閉じます」の合図は届かず、心拍だけが途切れる。誰も
+        「捨てる」と決めていないので、開き直して保存できるよう残す。"""
+        unsaved = [True]
+        w = self.watch(idle_sec=0.0, grace_sec=0.0, tick_sec=0.01, unsaved=lambda: unsaved[0])
+        w.beat()
+        self._run(w)
+        self.assertEqual(self.stopped, [])
+        unsaved[0] = False                         # 開き直して保存した
+        self._run(w, wait=3)
+        self.assertEqual(self.stopped, [1])
+
+    def test_本人が閉じたら保存していない図があっても落とす(self):
+        """タブを閉じるときは「保存していない変更があります」を通る。閉じた合図が
+        来たのは、本人が捨てると決めたとき。"""
+        w = self.watch(idle_sec=999.0, grace_sec=0.0, tick_sec=0.01, unsaved=lambda: True)
+        w.beat()
+        w.leaving()
+        self._run(w, wait=3)
+        self.assertEqual(self.stopped, [1])
+
     def test_処理が終われば落とす(self):
         self.busy = True
         w = self.watch(idle_sec=0.0, grace_sec=0.0, tick_sec=0.01)

@@ -21,6 +21,17 @@
     python process_manager.py --all            両方止める
     python process_manager.py --force          実行中の処理を中断してでも止める
     python process_manager.py --status         状態を見るだけ
+
+戻り値(`stop.bat` もそのまま返す。業務ツール統合ランチャーが読む):
+
+    0  止めた / もともと動いていない
+    1  止められなかった(応答しない・このアプリか確かめられない)、
+       またはデスクトップ版(exe の窓)が動いている
+    2  止めなかった(保存していない図・実行中の処理がある。`--force` で止める)
+
+**デスクトップ版(exe の窓)は止めない。** 窓の × か画面の「終了」で閉じる
+(閉じるときに保存していない図・実行中の処理を訊くため)。ランチャーは exe の窓に
+「閉じて」と頼んで止める(× と同じ)。
 """
 from __future__ import annotations
 
@@ -111,8 +122,9 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
     asked = _request_shutdown(info.port, info.token, force=force)
     if asked.get("busy"):
         result.busy_jobs = asked.get("running", [])
-        result.message = (f"実行中の処理があります: {', '.join(result.busy_jobs)}\n"
-                          f"    中断して止めるには --force を付けてください")
+        # 実行中の処理だけでなく、保存していない図も入る(`/api/shutdown` の `running`)
+        result.message = (f"止めませんでした: {'、'.join(result.busy_jobs)}\n"
+                          f"    保存せず・中断して止めるには --force を付けてください")
         return result
 
     if asked.get("ok") and _wait_gone(info.port, GRACEFUL_WAIT_SEC):
@@ -273,7 +285,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     targets = list(modes.KEYS) if args.all else [modes.normalize(args.mode)]
 
+    import launch_guard
+
+    desktop = launch_guard.desktop_running()
     if args.status:
+        if desktop is not None:
+            print(f"[稼働] デスクトップ版(exe の窓): pid={desktop.get('pid')} "
+                  f"mode={desktop.get('mode')}")
         for mode in targets:
             health = status(mode)
             if health is None:
@@ -284,12 +302,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                       f"ready={health['ready']} 起動={lock['started']}")
         return 0
 
-    failed = False
+    code = 0
     for mode in targets:
         result = stop(mode, force=args.force)
         print(result)
-        failed = failed or not result.stopped
-    return 1 if failed else 0
+        if not result.stopped:
+            # 断られた(2)より、止められなかった(1)を先に知らせる
+            code = 1 if code == 1 or not result.busy_jobs else 2
+    if desktop is not None:
+        print(DESKTOP_MESSAGE)
+        code = code or 1
+    return code
+
+
+# デスクトップ版は止めない。**「起動していません」で 0 を返さない** ──
+# 以前はブラウザ版のロックだけを見ていたので、exe の窓が動いていても
+# 「止めた」と同じ答えになっていた
+DESKTOP_MESSAGE = ("[--] デスクトップ版(exe の窓)が動いています。stop.bat では止めません。\n"
+                   "    窓の × か画面の「終了」で閉じてください"
+                   "(保存していない図・実行中の処理があれば訊きます)")
 
 
 if __name__ == "__main__":

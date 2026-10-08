@@ -20,6 +20,12 @@
    状態で残ります(`/api/shutdown` と同じ判断を使う)
 3. **1度も繋がっていなければ落とさない。** `--no-browser` で立てて
    おく使い方(検証・並行運用)を巻き添えにしません
+4. **画面が「閉じます」を言わずに消えたら、保存していない図があるうちは
+   落とさない。** タブを閉じるときは「保存していない変更があります」を
+   通るので(`unsaved.js`)、閉じた合図が来たのは本人が捨てると決めたとき。
+   合図なしに心拍だけ途切れたのは、ブラウザが落ちた・外から閉じられた
+   (業務ツール統合ランチャーは止める前に自分の画面を閉じ、10 秒で強制する)
+   とき ── 誰も決めていないので、開き直して保存できるよう残しておく
 """
 from __future__ import annotations
 
@@ -48,6 +54,9 @@ TICK_SEC = 2.0
 
 # 見張りの間隔が壁時計でこれ以上空いたら、PCがスリープしていたとみなす(秒)
 SLEEP_GAP_SEC = 30.0
+
+# 本人が閉じた(閉じた合図が来た)ときの理由。これだけは保存していない図があっても止める
+CLOSED = "画面が閉じられました"
 
 
 @dataclass
@@ -84,12 +93,15 @@ class IdleWatch:
 
     def __init__(self, stop: Callable[[], None],
                  busy: Callable[[], bool],
-                 *, idle_sec: float = IDLE_SEC,
+                 *, unsaved: Optional[Callable[[], bool]] = None,
+                 idle_sec: float = IDLE_SEC,
                  grace_sec: float = GRACE_SEC,
                  tick_sec: float = TICK_SEC,
                  sleep_gap_sec: float = SLEEP_GAP_SEC) -> None:
         self._stop = stop
         self._busy = busy
+        self._unsaved = unsaved or (lambda: False)
+        self._kept = False                      # 保存していない図のために残している
         self.idle_sec = idle_sec
         self.grace_sec = grace_sec
         self.tick_sec = tick_sec
@@ -190,6 +202,15 @@ class IdleWatch:
                 # DBが中途半端な状態で残る。終わればまた見に来る
                 log.info("誰も見ていませんが、処理中なので待ちます")
                 continue
+            if why != CLOSED and self._unsaved():
+                # **画面が合図なしに消えた。** 保存していない図を黙って捨てない
+                if not self._kept:
+                    log.warning("画面が見えなくなりました(%s)が、保存していない図があるので"
+                                "終了しません。開き直して保存するか、画面の「終了」で"
+                                "閉じてください", why)
+                    self._kept = True
+                continue
+            self._kept = False
             log.info("誰も見ていないので終了します(%s)", why)
             self._done.set()
             self._stop()
@@ -235,7 +256,7 @@ class IdleWatch:
                 if now - s.seen < limit:
                     return None                 # 表で心拍がある
         if closed:
-            return "画面が閉じられました"
+            return CLOSED
         return f"{self.idle_sec:.0f}秒 心拍がありません"
 
 

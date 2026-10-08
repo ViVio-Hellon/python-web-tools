@@ -18,6 +18,10 @@ pushd "%~dp0" || (
 )
 title 梱包資材総合ツール - 停止
 
+rem  戻り値は process_manager.py の値をそのまま返す(業務ツール統合ランチャーが読む)
+rem      0 = 止めた・動いていない / 1 = 止められなかった・デスクトップ版が動いている
+rem      2 = 止めなかった: 保存していない図・実行中の処理がある。--force で止める
+set "RC=1"
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [エラー] Python が見つかりません。
@@ -25,10 +29,11 @@ if errorlevel 1 (
 )
 
 python process_manager.py --all %*
-if errorlevel 1 (
+set "RC=%errorlevel%"
+if not "%RC%"=="0" (
     echo.
-    echo 止められなかったものがあります。上のメッセージを確認してください。
-    echo 実行中の処理があるときは、中断してよければ次を実行してください:
+    echo 止めなかったもの・止められなかったものがあります。上のメッセージを確認してください。
+    echo 保存していない図・実行中の処理があるときは、捨てて・中断してよければ次を実行してください:
     echo     stop.bat --force
     echo.
     goto :failed
@@ -40,5 +45,4 @@ exit /b 0
 :failed
 pause
 popd
-endlocal
-exit /b 1
+endlocal & exit /b %RC%

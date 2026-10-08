@@ -358,16 +358,18 @@ class LauncherContractTests(unittest.TestCase):
     「止めても画面が残る」「止まらない」になる。
     """
 
-    def test_Start_vbsは受け取った引数をそのまま渡す(self) -> None:
-        """ランチャーは中に `WScript.Arguments` があるかで、`--no-browser` を
-        付けるかを決める(`tool_registry._vbs_forwards_args`)。無いと、ツールが
-        ふだんのブラウザーに開き、ランチャーから画面を閉じられない。"""
+    def test_Start_vbsは引数を渡さない(self) -> None:
+        """**ランチャーに画面を先に閉じさせない**(統合ツールと同じ)。
+
+        ランチャーは中に `WScript.Arguments` があるかで引数を渡すかを見分け
+        (`tool_registry._vbs_forwards_args`)、渡すなら `--no-browser` を付けて自分の
+        画面を開き、止めるときに**その画面を先に閉じる**(閉じなければ 10 秒で強制)。
+        保存していない図があっても画面が先に消え、保存する場所が無くなる。
+        VER4.7.0 で一度渡すようにしたが、この理由で戻した。注釈にもその語を書かない。"""
         text = read_text("Start.vbs")
-        self.assertIn("wscript.arguments", text.lower())
+        self.assertNotIn("wscript.arguments", text.lower())
         run = next(line for line in _commands(text) if line.startswith("cmd = "))
-        self.assertTrue(run.endswith("& args"), f"引数を付けずに起動しています: {run}")
-        # 1つずつ引用して渡す(空白を含む値が割れないように)
-        self.assertIn('args = args & " " & Chr(34) & WScript.Arguments(i) & Chr(34)', text)
+        self.assertEqual(run, 'cmd = "pythonw " & Chr(34) & script & Chr(34)')
 
     def test_ブラウザを開かない指定を受け付ける(self) -> None:
         """ランチャーはツールのフォルダの .py に `--no-browser` の文字があるかも見る。"""
@@ -385,6 +387,14 @@ class LauncherContractTests(unittest.TestCase):
         `--force` を付けて呼ぶ。引数を `process_manager.py` へ渡していること。"""
         commands = _commands(read_text("stop.bat"))
         self.assertTrue(any(c.startswith("python process_manager.py --all %*") for c in commands))
+
+    def test_stop_batは戻り値をそのまま返す(self) -> None:
+        """0 = 止めた / 1 = 止められなかった・デスクトップ版が動いている /
+        2 = 止めなかった(保存していない図・実行中の処理)。以前は 0 以外を全部 1 にしていた。
+        `endlocal` のあとに `%RC%` を読むと空になるので、同じ行で返す。"""
+        commands = _commands(read_text("stop.bat"))
+        self.assertIn('set "RC=%errorlevel%"', commands)
+        self.assertEqual(commands[-1], "endlocal & exit /b %RC%")
 
     def test_appjsonにランチャーが読む値がある(self) -> None:
         """［＋ ツールを追加］が読むアプリID・表示名・ポート(最初の役割)。"""

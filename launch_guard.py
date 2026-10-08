@@ -503,3 +503,62 @@ def build_lock_info(mode: str, port: int, token: str = "") -> LockInfo:
         app_root=str(app_config.APP_ROOT),
         token=token,
     )
+
+
+# ------------------------------------------------------------------
+# デスクトップ版が動いているか(stop.bat・状態表示から)
+# ------------------------------------------------------------------
+# デスクトップ版の多重起動は、外枠(exe)が `runtime/desktop.lock` を OS のロックで握って
+# 防いでいる。その錠は**外から確かめない** ── 確かめるには一瞬でも錠を取ることになり、
+# ちょうどそのとき起動した exe が「もう動いている」と見て黙って終わる。代わりに、
+# 中の Python(bridge.py)が動いているあいだ、この印を置いておく。
+# 名前を `.lock` にしないのは、ランチャーが `runtime/*.lock` を停止用のトークン探しに読むため
+DESKTOP_MARKER = "desktop.json"
+
+
+def desktop_marker_path() -> Path:
+    return app_config.local_dir("runtime") / DESKTOP_MARKER
+
+
+def write_desktop_marker(mode: str) -> None:
+    """デスクトップ版の Python が動き始めた。書けなくても起動は止めない。"""
+    path = desktop_marker_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "app_id": app_config.app_id(), "mode": mode, "pid": os.getpid(),
+            "exe_pid": os.getppid(), "started_at": time.time(),
+            "app_root": str(app_config.APP_ROOT)}, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        log.warning("デスクトップ版の印を書けませんでした (%s): %s", path, exc)
+
+
+def remove_desktop_marker() -> None:
+    """自分の印だけを消す(あとから起動した別の Python の印は消さない)。"""
+    path = desktop_marker_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if int(raw.get("pid", 0)) == os.getpid():
+            path.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def desktop_running() -> Optional[dict]:
+    """デスクトップ版が動いていれば、その印の中身。動いていなければ `None`。
+
+    印が残っていても、書いた Python がもう居なければ動いていない(落ちたあと)。
+    PID は使い回されるので、そのプロセスが `bridge.py` を動かしていることまで見る
+    (コマンドラインが取れない環境では、生きていることだけで信じる)。
+    """
+    try:
+        raw = json.loads(desktop_marker_path().read_text(encoding="utf-8"))
+        pid = int(raw.get("pid", 0))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not is_process_alive(pid):
+        return None
+    command = process_command_line(pid)
+    if command and "bridge.py" not in command:
+        return None
+    return raw
