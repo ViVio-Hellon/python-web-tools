@@ -355,7 +355,10 @@ def shutdown():
             "stopped": False,
             "reason": "unsaved",
             "unsaved": unsaved,
-            "running": running,
+            # 止めない理由の一覧。**ランチャー・stop.bat はここだけを読んで出す**
+            # (`message` は読まない)。実行中の処理だけを入れていたので、図を保存して
+            # いないだけのときは空になり、ランチャーに「実行中の処理: (不明)」と出ていた
+            "running": running + [f"保存していない変更({name})" for name in unsaved.values()],
             "message": message + (
                 "保存せず、処理も中断して終了しますか?" if running
                 else "保存せずに終了しますか?"),

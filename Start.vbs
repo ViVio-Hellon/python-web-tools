@@ -20,7 +20,7 @@ Option Explicit
 
 Const APP_NAME = "梱包資材総合ツール"
 
-Dim shell, fso, here, script, cmd
+Dim shell, fso, here, script, cmd, args, i
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 here = fso.GetParentFolderName(WScript.ScriptFullName)
@@ -66,6 +66,16 @@ End If
 ' ブラウザにエラー画面を出して行う。
 ' パスは**絶対パスで渡す**。共有フォルダから実行されることがあり、
 ' 作業フォルダに頼ると見つけられないことがある
+'
+' 受け取った引数は**そのまま** start_app.py へ渡す。業務ツール統合ランチャーは
+' このファイルの中に WScript.Arguments があるかを見て、あれば --no-browser を
+' 付けて起動し、自分の専用画面を開く(止めるときにその画面も閉じられる)。
+' 渡さないと、ツールがふだんのブラウザーに開き、ランチャーから閉じられない
+' (docs/ランチャー連携.md)。ダブルクリックでは引数は無いので、今までと同じ
+args = ""
+For i = 0 To WScript.Arguments.Count - 1
+    args = args & " " & Chr(34) & WScript.Arguments(i) & Chr(34)
+Next
 shell.CurrentDirectory = here
-cmd = "pythonw " & Chr(34) & script & Chr(34)
+cmd = "pythonw " & Chr(34) & script & Chr(34) & args
 shell.Run cmd, 0, False

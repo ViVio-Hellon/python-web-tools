@@ -120,6 +120,9 @@ class UnsavedWebTests(unittest.TestCase):
         self.assertEqual(body["reason"], "unsaved")
         self.assertIn(pallet_map_session.UNSAVED_LABEL, body["message"])
         self.assertIn("保存せずに終了しますか", body["message"])
+        # ランチャー・stop.bat は `running` だけを読んで理由を出す。空だと「(不明)」になる
+        self.assertEqual(body["running"],
+                         [f"保存していない変更({pallet_map_session.UNSAVED_LABEL})"])
 
     def test_両方の図の名前を出す(self) -> None:
         layout_session.get_session().dirty = True
@@ -148,7 +151,8 @@ class UnsavedWebTests(unittest.TestCase):
         try:
             body = self.shutdown().get_json()
             self.assertEqual(body["reason"], "unsaved")
-            self.assertEqual(body["running"], ["まとめて取り込み"])
+            self.assertEqual(body["running"], ["まとめて取り込み",
+                                               f"保存していない変更({layout_session.UNSAVED_LABEL})"])
             self.assertIn("実行中の処理", body["message"])
             self.assertIn("中断", body["message"])
         finally:

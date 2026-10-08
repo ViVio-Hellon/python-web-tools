@@ -7,6 +7,11 @@
           (WebView → 外枠(Rust)→ Python → 外枠 → WebView が1周した証拠)
     2. **どのプロセスもポートで待ち受けていない**(exe・Python・WebView の子プロセス)
     3. exe を止めると Python も終わる(取り残さない)
+    4. **ランチャーからの扱い**(docs/ランチャー連携.md)
+       - 2回目に起動した exe は、窓を出さずにすぐ終わる(戻り値 0)。1つ目は動いたまま
+       - Windows: 窓に「閉じて」(WM_CLOSE)と頼むと、×と同じ確かめを通って
+         **自分で**終わる(戻り値 0。Python も残らない)。業務ツール統合ランチャーの
+         ［ツール停止］はこのやり方で止める(`launcher/desktop.py` の close_windows)
 
 使い方:
     python scripts/desktop_smoke.py --exe src-tauri/target/release/PackagingTool.exe
@@ -99,6 +104,69 @@ def alive(pid: int) -> bool:
     return os.path.exists(f"/proc/{pid}")
 
 
+def visible_windows(pids: set[int]) -> list[int]:
+    """それらのプロセスが持つ、見えている最上位の窓(持ち主のいる窓は除く)。
+
+    業務ツール統合ランチャーの `desktop._windows_of` と同じ選び方。Windows だけ。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    found: list[int] = []
+
+    def visit(hwnd, _param):
+        if user32.IsWindowVisible(hwnd) and not user32.GetWindow(hwnd, 4):   # 4 = GW_OWNER
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value in pids:
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(callback_type(visit), 0)
+    return found
+
+
+def ask_to_close(pids: set[int]) -> int:
+    """窓に WM_CLOSE を送る(×ボタンと同じ)。送った窓の数。"""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    return sum(1 for hwnd in visible_windows(pids) if user32.PostMessageW(hwnd, 0x0010, 0, 0))
+
+
+def second_launch_exits(exe: str, env: dict, first: subprocess.Popen) -> bool:
+    """2回目の起動は窓を出さずに終わり、1つ目は動いたままか。"""
+    second = subprocess.Popen([exe], env=env, cwd=str(ROOT))
+    try:
+        code = second.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        second.kill()
+        print("[NG] 2回目に起動した exe が30秒たっても終わりません(2つ動いています)")
+        return False
+    if code != 0:
+        print(f"[NG] 2回目に起動した exe の戻り値が {code} でした(0 のはず)")
+        return False
+    if first.poll() is not None:
+        print(f"[NG] 2回目を起動したら1つ目が終わりました(戻り値 {first.returncode})")
+        return False
+    print("[OK] 2回目に起動した exe はすぐ終わり(戻り値 0)、1つ目は動いたままです")
+    return True
+
+
+def latest_log(work: Path) -> str:
+    logs = sorted((work / "logs").glob("packaging_tool_*.log"))
+    return logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", required=True)
@@ -153,7 +221,23 @@ def main() -> int:
         else:
             print(f"[OK] 待ち受けはありません(調べたプロセス {len(tree)} 個)")
         pythons = [pid for pid in tree if pid != app.pid]
-        app.terminate()
+        ok = second_launch_exits(args.exe, env, app) and ok
+        closed = False
+        if WINDOWS:
+            # ランチャーの［ツール停止］と同じ: 窓に「閉じて」と頼み、自分で終わるのを待つ
+            sent = ask_to_close({app.pid, *children(app.pid)})
+            try:
+                code = app.wait(timeout=30) if sent else None
+            except subprocess.TimeoutExpired:
+                code = None
+            if code == 0 and "停止要求を受け付けました" in latest_log(work):
+                closed = True
+                print(f"[OK] 窓に「閉じて」と頼むと、終了の確かめを通って自分で終わりました(窓 {sent} 枚)")
+            else:
+                print(f"[NG] 窓に「閉じて」と頼んでも終わりませんでした(窓 {sent} 枚・戻り値 {code})")
+                ok = False
+        if not closed and app.poll() is None:
+            app.terminate()
         app.wait(timeout=30)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and any(alive(p) for p in pythons):

@@ -16,7 +16,7 @@
 
     python start_app.py                  この端末に許されたモードで開く
     python start_app.py --mode material  モードを指定する(診断・並行運用)
-    python start_app.py --no-browser     ブラウザを開かない(検証用)
+    python start_app.py --no-browser     ブラウザを開かない(ランチャーから・検証用)
     python start_app.py --check          環境の確認だけして終わる(診断用)
 """
 from __future__ import annotations
@@ -692,7 +692,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                         choices=[AUTO, "field", "material", "warehouse"],
                         help="開くモード。既定(auto)はアクセス権限マスタが決める")
     parser.add_argument("--no-browser", action="store_true",
-                        help="ブラウザを開かない(検証用)")
+                        help="ブラウザを開かない(ランチャーが自分の画面を開くとき・検証用)")
     parser.add_argument("--check", action="store_true",
                         help="実行環境の確認だけして終わる(診断用)")
     args = parser.parse_args(argv)

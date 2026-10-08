@@ -24,6 +24,7 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
@@ -344,6 +345,54 @@ class VbsTests(unittest.TestCase):
         text = read_text("Start.vbs")
         self.assertNotIn("--mode", text)
         self.assertNotIn("--role", text)
+
+
+# ==================================================================
+# 業務ツール統合ランチャーから使うとき(docs/ランチャー連携.md)
+# ==================================================================
+class LauncherContractTests(unittest.TestCase):
+    """ランチャー(python-business-tools-launcher)が見ていること。
+
+    ランチャーはツールごとの分岐を持たない。起動ファイルの中身・`config/app.json`・
+    隣の `stop.bat`・`/api/health` だけで扱いを決めるので、ここが崩れると黙って
+    「止めても画面が残る」「止まらない」になる。
+    """
+
+    def test_Start_vbsは受け取った引数をそのまま渡す(self) -> None:
+        """ランチャーは中に `WScript.Arguments` があるかで、`--no-browser` を
+        付けるかを決める(`tool_registry._vbs_forwards_args`)。無いと、ツールが
+        ふだんのブラウザーに開き、ランチャーから画面を閉じられない。"""
+        text = read_text("Start.vbs")
+        self.assertIn("wscript.arguments", text.lower())
+        run = next(line for line in _commands(text) if line.startswith("cmd = "))
+        self.assertTrue(run.endswith("& args"), f"引数を付けずに起動しています: {run}")
+        # 1つずつ引用して渡す(空白を含む値が割れないように)
+        self.assertIn('args = args & " " & Chr(34) & WScript.Arguments(i) & Chr(34)', text)
+
+    def test_ブラウザを開かない指定を受け付ける(self) -> None:
+        """ランチャーはツールのフォルダの .py に `--no-browser` の文字があるかも見る。"""
+        import start_app
+        opened = []
+        with mock.patch.object(start_app, "run_environment_checks"), \
+                mock.patch.object(start_app, "start",
+                                  side_effect=lambda mode, open_browser: opened.append(open_browser) or 0):
+            self.assertEqual(start_app.main(["--no-browser"]), 0)
+            self.assertEqual(start_app.main([]), 0)
+        self.assertEqual(opened, [False, True])
+
+    def test_起動ファイルの隣に止めるファイルがある(self) -> None:
+        """ランチャーは起動ファイルの隣の `stop.bat` を使い、「強制終了する」のときは
+        `--force` を付けて呼ぶ。引数を `process_manager.py` へ渡していること。"""
+        commands = _commands(read_text("stop.bat"))
+        self.assertTrue(any(c.startswith("python process_manager.py --all %*") for c in commands))
+
+    def test_appjsonにランチャーが読む値がある(self) -> None:
+        """［＋ ツールを追加］が読むアプリID・表示名・ポート(最初の役割)。"""
+        import json
+        conf = json.loads((_ROOT / "config" / "app.json").read_text("utf-8"))
+        self.assertEqual(conf["app_id"], "nlm.packaging-tool")
+        self.assertTrue(conf["display_name"])
+        self.assertEqual(next(iter(conf["server"]["roles"].values()))["port"], 8713)
 
 
 # ==================================================================
