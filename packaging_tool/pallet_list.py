@@ -8,7 +8,7 @@
 製品サイズを入れた後の一覧だけ単位の規則が抜け落ちていたことがある。
 
 `list_pallets_by_product_dims` は、製品 幅・丈を**打っている最中**の
-振り分け。両方そろえば「載るか」、片方だけなら寸法の近似、どちらも
+振り分け。両方そろえば「載るか」、片方だけならその辺の適合範囲、どちらも
 空なら全件。
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ from .pallet_common import (KIND_LEN2, KIND_WIDTH2, MAX_NEAR_MISS_LOGS,
                             _fit_range_inverted, _fit_range_ok, _is_numeric,
                             _keta_ok, _pass_tag, _physically_fits,
                             _reject_reason, _row_to_pallet_size_row,
-                            _search_dims, _size_ok, _thickness_5x10_ok,
+                            _search_dims, _thickness_5x10_ok,
                             _two_stack_ok, build_matrix_suppress_map,
                             is_suppressed_matrix, unit_allowed)
 from .user_log import RejectLog, UserLog, tag_area
@@ -158,12 +158,28 @@ def search_pallet_direct(
     return result
 
 
+def _side_fit_ok(row: sqlite3.Row, search_w: Optional[int], search_l: Optional[int],
+                 tol: int) -> bool:
+    """適合範囲に入るか。**`None` の辺は見ない**(製品の幅か丈の片方だけを打ったとき)。"""
+    if search_w is not None and not (row["巾適合min"] - tol <= search_w <= row["巾適合max"] + tol):
+        return False
+    if search_l is not None and not (row["丈適合min"] - tol <= search_l <= row["丈適合max"] + tol):
+        return False
+    return True
+
+
+def _side_physically_fits(row: sqlite3.Row, search_w: Optional[int],
+                          search_l: Optional[int]) -> bool:
+    """`_physically_fits` の片側版。`None` の辺は見ない。"""
+    return _physically_fits(row, search_w or 0, search_l or 0)
+
+
 @tag_area("パレット")
 def list_pallets_for_product(
     conn: sqlite3.Connection,
     *,
-    product_width: int,
-    product_length: int,
+    product_width: Optional[int],
+    product_length: Optional[int],
     show_all: bool = False,
     ex_only: bool = False,
     is_ex_order: bool = False,
@@ -204,6 +220,11 @@ def list_pallets_for_product(
     【除外ログの上限】マスタの件数が多いと「×除外」の行が際限なく
     伸び、本当に必要な「○候補」の行が埋もれてしまう(現場の声)。
     上位`RejectLog`の既定件数だけそのまま出し、残りは件数にまとめる。
+
+    【片方だけ】`product_width` か `product_length` の片方が `None` なら、**打った辺の
+    適合範囲だけ**を見る(VBA の仕様。現場の声:「幅だけ打てば幅に適合するパレット、
+    丈だけなら丈に適合するパレット。適合を見ながら軽く検索するのは普通にする」)。
+    片方だけのときは回転を見ない(幅は巾適合、丈は丈適合)。2山積なら打った辺を2倍にする。
     """
     # auto_select_pallet の各パスは厳密/±5mmの許容差を使う。ここも同じ
     # 5mmにして、決定されたパレットが検索結果から漏れないようにする
@@ -215,8 +236,13 @@ def list_pallets_for_product(
     ex_only_mode = is_ex_order and ex_only
     suppress_map = build_matrix_suppress_map(rows)
 
-    ulog.log(f"[パレット絞り込み] 製品 {product_width} x {product_length}"
-             + ("【2山積】" if two_stack else ""), emphasis=True)
+    def side(value: Optional[int]) -> str:
+        return "(未入力)" if value is None else str(value)
+
+    ulog.log(f"[パレット絞り込み] 製品 {side(product_width)} x {side(product_length)}"
+             + ("【2山積】" if two_stack else "")
+             + ("(打った辺の適合範囲だけ見ます)" if None in (product_width, product_length) else ""),
+             emphasis=True)
     ulog.log(f"  マスタ {len(rows)}件 / 許容差 ±{tol}mm"
              f" / EX表示={'する' if show_all else 'しない'}"
              + ("  EXオンリー" if ex_only_mode else ""))
@@ -229,8 +255,18 @@ def list_pallets_for_product(
     # 通常寸法は1パスも走らない。ここで通常寸法も混ぜると、**任意で2山を
     # 選んだのに通常の候補まで並んで邪魔になる**(現場の声)。
     # 組み合わせも `_search_dims` にそろえる(幅2山=片側2倍、丈2山=丈2倍)。
-    if two_stack:
-        tries: list[tuple[int, int, bool, str]] = [
+    if product_width is None or product_length is None:
+        # 片方だけ。打った辺をその辺の適合範囲で見る(回転しない)
+        if product_width is not None:
+            tries = [(product_width * 2, None, False, KIND_WIDTH2) if two_stack
+                     else (product_width, None, False, "")]
+        elif product_length is not None:
+            tries = [(None, product_length * 2, False, KIND_LEN2) if two_stack
+                     else (None, product_length, False, "")]
+        else:
+            tries = []
+    elif two_stack:
+        tries: list[tuple[Optional[int], Optional[int], bool, str]] = [
             (product_width * 2, product_length, False, KIND_WIDTH2),
             (product_length * 2, product_width, True, KIND_WIDTH2),
             (product_width, product_length * 2, False, KIND_LEN2),
@@ -272,7 +308,7 @@ def list_pallets_for_product(
             continue
 
         hit = next(((sw, sl, rot, kind) for sw, sl, rot, kind in allowed
-                    if _size_ok(row, sw, sl, tol)), None)
+                    if _side_fit_ok(row, sw, sl, tol)), None)
         if hit is None:
             rejects.log(f"  ×除外: {label} 適合範囲外"
                      f"(巾{row['巾適合min']}〜{row['巾適合max']} /"
@@ -280,11 +316,11 @@ def list_pallets_for_product(
             continue
         search_w, search_l, rotated, stacked = hit
 
-        if not _physically_fits(row, search_w, search_l):
+        if not _side_physically_fits(row, search_w, search_l):
             # 適合範囲には入るのに現物には載らない。**マスタの適合範囲が
             # 現物より広い**行で起きる ── 見分けが付かないと直せない
             rejects.log(f"  ×除外: {label} 現物に載りません"
-                     f"(製品 {search_w}x{search_l})")
+                     f"(製品 {side(search_w)}x{side(search_l)})")
             continue
 
         symbol = (row["記号"] or "").strip()
@@ -314,7 +350,7 @@ def list_pallets_for_product(
                          f"(記号 {symbol} / 板厚 {manufactured_thickness})")
                 continue
 
-        exact = _size_ok(row, search_w, search_l, 0)
+        exact = _side_fit_ok(row, search_w, search_l, 0)
         found = _row_to_pallet_size_row(row)
         found.rotated = rotated
         found.exact = exact
@@ -347,28 +383,22 @@ def list_pallets_by_product_dims(
 ) -> list[PalletSizeRow]:
     """製品 幅・丈を**入力している最中**の一覧絞り込み(確定前)。
 
-    「載るか」の判定(`list_pallets_for_product`)は幅・丈の両方が
-    無いと成り立たない(1辺だけでは向きも当たりも決められない)。
-    片方しか打っていない段階では、代わりに**パレット自身の幅・丈が
-    その値に近いもの**を見せる(`search_pallet_direct` と同じ
-    ±{SEARCH_RANGE_TOLERANCE}mm の単純近似)。両方そろえば厳密な
-    「載るか」判定に切り替わる。どちらも空なら通常の全件一覧。
+    **幅だけ打てば巾適合、丈だけ打てば丈適合、両方なら両方**に収まるパレットを見せる
+    (VBA の仕様。`list_pallets_for_product`)。以前は片方だけのとき、パレット自身の
+    幅・丈がその値の前後50mm のものを出していて、適合範囲では
+    見ていなかった(現場の声:「両方にサイズが入った場合にしか検索していない」)。
+    どちらも空なら通常の全件一覧。
     """
     has_width = _is_numeric(product_width_text)
     has_length = _is_numeric(product_length_text)
-    if has_width and has_length:
+    if has_width or has_length:
         return list_pallets_for_product(
-            conn, product_width=int(float(product_width_text)),
-            product_length=int(float(product_length_text)),
+            conn,
+            product_width=int(float(product_width_text)) if has_width else None,
+            product_length=int(float(product_length_text)) if has_length else None,
             show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order,
             two_stack=two_stack, last_hosozai=last_hosozai,
             manufactured_thickness=manufactured_thickness, user_log=user_log,
-            is_1p1185_mode=is_1p1185_mode)
-    if has_width or has_length:
-        return search_pallet_direct(
-            conn, pallet_width_text=product_width_text,
-            pallet_length_text=product_length_text,
-            show_all=show_all, last_hosozai=last_hosozai,
             is_1p1185_mode=is_1p1185_mode)
     return list_pallet_sizes(
         conn, show_all=show_all, ex_only=ex_only, is_ex_order=is_ex_order,

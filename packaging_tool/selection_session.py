@@ -46,6 +46,7 @@ from . import board_scoring
 from . import board_selection_algorithm as alg
 from . import board_selection_service as svc
 from . import location_service, material_service
+from . import special_packaging as spk
 from . import placement_algorithm as place
 from . import tiling_algorithm as tiling
 from . import user_log as user_log_mod
@@ -284,6 +285,40 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self.pallet_row = None
         self.invalidate_placement()
         self._sync_ribbon()
+
+    def clear_special_modes(self) -> list[str]:
+        """「やり直す」で、ロットから立った**特殊モード**を外す。外したモードの名前を返す。
+
+        現場の声:「一度でも【1P1185モード タイトサイズ限定表示】のような特殊モードが発火すると
+        やり直すでは消せない。ロット展開で消えるのは当たり前として、やり直すでも消せるように」。
+        外すのは包装仕様NOで立つ3つ(1P1185・プロテック・1P0113。強制1P0113 も)。
+        **EX受注と上下共用は外さない** ── どちらも注文そのものの性質(EX の発注の仕方・
+        保護材で決まる組み方)で、外すと倉庫送信や上用の組み方を取り違える。
+        もう一度ロットを展開すれば、包装仕様NOから判定し直して立つ。
+        """
+        presenter = self.presenter
+        cleared: list[str] = []
+        if presenter.mode_1p1185.is_1p1185:
+            presenter.mode_1p1185 = spk.Mode1P1185State()
+            cleared.append("1P1185")
+        if presenter.protec.is_protec:
+            outcome = presenter.check_and_set_protec_mode(
+                "", available_board_types=self.board_types(),
+                current_board_type=self.board_type)
+            if outcome.should_switch:
+                self.board_type = outcome.target_board_type
+            cleared.append("プロテック")
+        if presenter.mode_1p0113 or presenter.force_1p0113:
+            presenter.force_1p0113 = False
+            self._reset_qty(presenter.apply_1p0113_mode(""))
+            cleared.append(spk.HOSOSIYO_1P0113)
+        if cleared:
+            log.info("やり直す: 特殊モードを外しました: %s", "・".join(cleared))
+            presenter.user_log.log(f"[やり直す] 特殊モードを外しました: {'・'.join(cleared)}"
+                                   "(ロットを展開し直すと、包装仕様NOから判定し直します)",
+                                   emphasis=True)
+        self._sync_ribbon()
+        return cleared
 
     def pick_pallet_row(self, width: int, length: int, symbol: str,
                         row_id: Optional[int] = None) -> BoardOpResult:

@@ -664,6 +664,39 @@ class ModeFromLotTests(SelectionWebTestCase):
         self.assertIn("1234567", state["lot_caption"])
         self.assertEqual(state["lot_no"], "1234567")
 
+    # --- 「やり直す」で特殊モードも外す ------------------------------------
+    def test_やり直すで1P1185モードを外し_ロット展開で戻る(self) -> None:
+        """現場の声:「一度でも【1P1185モード タイトサイズ限定表示】のような特殊モードが発火すると
+        やり直すでは消せない。ロット展開で消えるのは当たり前として、やり直すでも消せるように」"""
+        self.conn.execute("UPDATE 仕掛ロット SET 製造板幅 = 1245, 製造板丈 = 1245")
+        self.conn.commit()
+        state = self.search(包装仕様NO="1P1185", 取引先名称="株式会社ﾅﾒｶﾜｱﾙﾐ")
+        self.assertEqual(state["banner"]["kind"], "1p1185")
+        cleared = self.post("/api/selection/clear")
+        self.assertNotEqual(cleared["banner"]["kind"], "1p1185")
+        self.assertFalse(self.session().presenter.mode_1p1185.is_1p1185)
+        self.assertIn("1P1185", cleared["message"])
+        # もう一度ロットを展開すれば、包装仕様NOから判定し直して立つ
+        self.client.get("/api/lot/1234567", headers=self.auth())
+        self.assertEqual(self.get()["banner"]["kind"], "1p1185")
+
+    def test_やり直すで1P0113とプロテックも外す(self) -> None:
+        self.assertTrue(self.search(包装仕様NO="1P0113")["mode_1p0113"])
+        self.assertFalse(self.post("/api/selection/clear")["mode_1p0113"])
+        self.conn.execute("DELETE FROM 仕掛受注")
+        self.conn.commit()
+        self.assertEqual(self.search(包装仕様NO="1P1216")["banner"]["kind"], "protec")
+        state = self.post("/api/selection/clear")
+        self.assertNotEqual(state["banner"]["kind"], "protec")
+        self.assertFalse(self.session().presenter.protec.is_protec)
+
+    def test_やり直すでもEX受注は外さない(self) -> None:
+        """EX は注文そのものの性質(発注コード・単位・発注数を空で送る)。外すと取り違える。"""
+        self.search(EX_輸出区分="EX")
+        state = self.post("/api/selection/clear")
+        self.assertEqual(state["banner"]["kind"], "ex")
+        self.assertTrue(self.session().presenter.is_ex_order)
+
 
 # ==================================================================
 # ボード選定 (Phase 6b)

@@ -734,25 +734,45 @@ class ListPalletsForProductTests(BoardSelectionTestCase):
 class ListPalletsByProductDimsTests(BoardSelectionTestCase):
     """製品 幅・丈の入力中(未確定)の一覧絞り込み。"""
 
-    def test_width_only_matches_by_tolerance(self):
-        insert_pallet(self.conn, width=1020, length=2000,
-                      w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="台")
-        insert_pallet(self.conn, width=1500, length=2000,
-                      w_min=1400, w_max=1600, l_min=1900, l_max=2100, unit="台")
+    def test_幅だけなら巾適合に収まるパレット(self):
+        """VBA の仕様: 幅だけ打てば、幅がその行の巾適合に収まるパレット(丈は見ない)。
+        以前はパレット自身の幅の前後50mm で、適合範囲を見ていなかった。"""
+        insert_pallet(self.conn, width=1150, length=2650,          # 巾適合 900〜1200 → 当たる
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")
+        insert_pallet(self.conn, width=1020, length=2000,          # 幅は近いが巾適合 1050〜 → 外れる
+                      w_min=1050, w_max=1100, l_min=1900, l_max=2100, unit="台")
+        insert_pallet(self.conn, width=1500, length=5000,          # 丈はどうでもよい
+                      w_min=950, w_max=1450, l_min=4900, l_max=5100, unit="台")
         rows = svc.list_pallets_by_product_dims(
             self.conn, product_width_text="1000", product_length_text="")
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].width, 1020)
+        self.assertEqual(sorted((r.width, r.length) for r in rows), [(1150, 2650), (1500, 5000)])
+        self.assertTrue(all(not r.rotated for r in rows))
 
-    def test_length_only_matches_by_tolerance(self):
-        insert_pallet(self.conn, width=1000, length=2010,
-                      w_min=900, w_max=1100, l_min=1900, l_max=2100, unit="台")
-        insert_pallet(self.conn, width=1000, length=5000,
-                      w_min=900, w_max=1100, l_min=4900, l_max=5100, unit="台")
+    def test_丈だけなら丈適合に収まるパレット(self):
+        insert_pallet(self.conn, width=1150, length=2650,          # 丈適合 2400〜2700 → 当たる
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")
+        insert_pallet(self.conn, width=1000, length=2510,          # 丈は近いが丈適合 〜2450 → 外れる
+                      w_min=900, w_max=1100, l_min=2300, l_max=2450, unit="台")
+        # 回転は見ない(丈 2500 を巾適合で当てない)
+        insert_pallet(self.conn, width=2600, length=4000,
+                      w_min=2400, w_max=2550, l_min=3800, l_max=3990, unit="台")
         rows = svc.list_pallets_by_product_dims(
-            self.conn, product_width_text="", product_length_text="2000")
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].length, 2010)
+            self.conn, product_width_text="", product_length_text="2500")
+        self.assertEqual([(r.width, r.length) for r in rows], [(1150, 2650)])
+
+    def test_片方だけでも単位_EX_現物の条件は同じ(self):
+        """両方そろったときと同じ判断(単位・EX・現物に載るか)を使う。"""
+        insert_pallet(self.conn, width=1150, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="枚")     # 単位で外れる
+        insert_pallet(self.conn, width=1150, length=2650, symbol="EX",
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")     # EX は既定で出さない
+        insert_pallet(self.conn, width=900, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")     # 現物(幅900)に載らない
+        insert_pallet(self.conn, width=1200, length=2650,
+                      w_min=900, w_max=1200, l_min=2400, l_max=2700, unit="台")     # 当たる
+        rows = svc.list_pallets_by_product_dims(
+            self.conn, product_width_text="1000", product_length_text="")
+        self.assertEqual([(r.width, r.symbol) for r in rows], [(1200, rows[0].symbol)])
 
     def test_both_dims_uses_the_precise_fit_check(self):
         """両方そろえば、単純な近似ではなく「載るか」の厳密判定を使う。"""

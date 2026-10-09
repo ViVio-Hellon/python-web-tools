@@ -346,9 +346,15 @@ def clear_sizes():
     """「セットクリア」(VBA `btnClearPalProd_Click`)。"""
     session = _session()
     session.clear_sizes()
+    # ロットから立った特殊モード(1P1185 など)も外す。ロット展開でしか消えなかった(現場の声)
+    cleared = session.clear_special_modes()
     work_context.get_context().clear()
     log.info("パレット・製品サイズをクリアしました")
-    return _state(session, message="パレット・製品サイズを未設定に戻しました")
+    message = "パレット・製品サイズを未設定に戻しました"
+    if cleared:
+        message += (f"。特殊モード({'・'.join(cleared)})も外しました"
+                    "(ロットを展開し直すと判定し直します)")
+    return _state(session, message=message)
 
 
 # ------------------------------------------------------------------
