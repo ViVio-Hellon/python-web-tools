@@ -515,6 +515,25 @@ LOT_MERGE_KEYS: dict[str, str] = {
 }
 
 
+# 1つ目に**ロットはあるが値が空**のとき、2つ目の同じロットで埋める列のまとまり
+# (現場の質問:「SIKALOT で BOX最終実績_板厚・板幅・板丈 のデータが無かった場合、
+# パス2で見に行くってことですよね?」)。
+#
+# **まとまりごと**入れ替える(板厚だけ1つ目・板幅は2つ目、のように混ぜない)。
+# 「空」は `need` の列のどれかが 0(取り込みで空欄は 0 になる。`NULL_FALLBACKS`)。
+# 2つ目のほうも `need` が全部そろっているときだけ使う。
+#
+# ロットの表はロット番号が一意ではない(BOX工程ごとに行が分かれる)。BOX最終実績_* は
+# ロットの全行に同じ値が配られている列なので(`schema.sql`)、ロットの全行を埋めてよい。
+# 行ごとに値が違う列(BOX実績_* など)は、1つ目と2つ目の行の対応が取れないので埋めない
+LOT_FILL_GROUPS: dict[str, tuple[tuple[str, ...], tuple[str, ...], str]] = {
+    "仕掛ロット": (("BOX最終実績_設備名", "BOX最終実績_板厚", "BOX最終実績_板幅",
+                     "BOX最終実績_板丈", "BOX最終実績_枚本数"),
+                    ("BOX最終実績_板厚", "BOX最終実績_板幅", "BOX最終実績_板丈"),
+                    "BOX最終実績(板厚・板幅・板丈)"),
+}
+
+
 def _same_file(a: Optional[Path], b: Optional[Path]) -> bool:
     if a is None or b is None:
         return False
@@ -570,6 +589,9 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
     1つ目にファイルはあるが、目当てのロット(受注)が入っていないとき、2つ目にあれば
     それを使う(現場の声)。同じロット・受注が両方にあれば1つ目を正とする
     (2つ目の行は足さない)。読めなければ一言残して何もしない(1つ目の分は入っている)。
+
+    1つ目にロットはあるが**値が空**(BOX最終実績の寸法など)のときは、2つ目の同じロットの
+    値で埋める(`fill_blank_from_second`)。
     """
     spec = import_specs.LOT_IMPORT_SPECS[table]
     key = LOT_MERGE_KEYS[table]
@@ -604,6 +626,7 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
         log.exception("%s: 2つ目から足す途中でエラー", table)
         result.warnings.append(f"{table}: 2つ目の置き場所から足せませんでした({exc})")
         return 0
+    fill_blank_from_second(conn, table, rows, have, result)
     if added:
         result.imported[table] = result.imported.get(table, 0) + added
         what = "受注" if key == "受注番号" else "ロット"
@@ -613,6 +636,54 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
                       f"1つ目に無い分 {added}行 を足した")
     log.info("%s: 2つ目(%s)から %s行 足しました", table, path, added)
     return added
+
+
+def fill_blank_from_second(conn: sqlite3.Connection, table: str, rows: list,
+                           have: set[str], result: ImportResult) -> int:
+    """1つ目にあるロットで値が空の列を、2つ目の同じロットの値で埋める。埋めたロット数。
+
+    `LOT_FILL_GROUPS` に挙げた列だけ。1つ目に値があれば1つ目を正とする(上書きしない)。
+    """
+    group = LOT_FILL_GROUPS.get(table)
+    if group is None or not have:
+        return 0
+    columns, need, label = group
+    spec = import_specs.LOT_IMPORT_SPECS[table]
+    key = LOT_MERGE_KEYS[table]
+    fallbacks = import_specs.NULL_FALLBACKS
+    convs = {col: conv for col, _src, conv in spec}
+    found: dict[str, list] = {}
+    for row in rows:
+        values = {col: conv(row.get(src)) for col, src, conv in spec}
+        lot = values.get(key)
+        if lot is None or str(lot) not in have or str(lot) in found:
+            continue
+        if all((values.get(col) or 0) > 0 for col in need):
+            found[str(lot)] = [values[col] if values[col] is not None
+                               else fallbacks.get(convs[col]) for col in columns]
+    if not found:
+        return 0
+    sets = ", ".join(f"[{col}] = ?" for col in columns)
+    blank = " OR ".join(f"COALESCE([{col}], 0) <= 0" for col in need)
+    filled = 0
+    try:
+        with conn:
+            for lot, values in found.items():
+                cur = conn.execute(
+                    f"UPDATE [{table}] SET {sets} WHERE [{key}] = ? AND ({blank})",
+                    [*values, lot])
+                if cur.rowcount:
+                    filled += 1
+    except sqlite3.Error as exc:
+        log.exception("%s: 2つ目の値で埋める途中でエラー", table)
+        result.warnings.append(f"{table}: 2つ目の置き場所の値で埋められませんでした({exc})")
+        return 0
+    if filled:
+        result.notes.append(f"{table}: 1つ目で{label}が空のロット {filled:,}件を、"
+                            "2つ目の置き場所の値で埋めました")
+        import_diag.write(f"  [{table}] ← 2つ目 {label}が空のロット {filled}件 を埋めた")
+        log.info("%s: %sが空のロット %s件を2つ目で埋めました", table, label, filled)
+    return filled
 
 
 def _counts_text(path: Path) -> str:

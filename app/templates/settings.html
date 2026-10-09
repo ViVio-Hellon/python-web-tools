@@ -348,8 +348,8 @@
                {% if not state.lot_dir_real %}hidden{% endif %}
         >→ {{ state.lot_dir_real }}</small>
 
-        {# 仕掛台帳の2つ目。1つ目にファイルが無い、またはファイルに目当てのロットが
-           無いときに見る(`config.lot_db_dir2`)。空なら使わない #}
+        {# 仕掛台帳の2つ目。1つ目にファイルが無い、ファイルに目当てのロットが無い、
+           ロットはあるが BOX最終実績の寸法が空のときに見る(`config.lot_db_dir2`)。空なら使わない #}
         <label for="lotDir2">仕掛台帳(2つ目)</label>
         <span class="pathrow">
           <input class="input" id="lotDir2" value="{{ view.lot_dir2 }}"

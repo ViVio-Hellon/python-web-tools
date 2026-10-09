@@ -173,6 +173,41 @@ class SecondLotDirTests(unittest.TestCase):
                 self.assertEqual(self.local("SELECT ロット番号 FROM 仕掛ロット"), [("Y000002",)])
                 source_db.sweep_old_copies()
 
+    def test_1つ目でBOX最終実績が空なら2つ目の値で埋める(self) -> None:
+        """現場の質問:「SIKALOT で BOX最終実績_板厚・板幅・板丈 のデータが無かった場合、
+        パス2で見に行くってことですよね?」── ロットはあっても値が空なら、2つ目を見る。"""
+        def boxed(no: str, t: str, w: str, l: str, n: str = "", place: str = "") -> dict:
+            row = lot(no, "1つ目")
+            row.update({src("仕掛ロット", "BOX最終実績_板厚"): t, src("仕掛ロット", "BOX最終実績_板幅"): w,
+                        src("仕掛ロット", "BOX最終実績_板丈"): l, src("仕掛ロット", "BOX最終実績_枚本数"): n,
+                        src("仕掛ロット", "BOX最終実績_設備名"): place})
+            return row
+        write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [
+            boxed("A000001", "", "", ""),                 # 空 → 2つ目で埋める
+            boxed("A000001", "", "", ""),                 # 同じロットの別の工程の行も
+            boxed("B000002", "6", "1250", ""),            # 丈だけ空 → まとまりごと2つ目に
+            boxed("C000003", "8", "1500", "3000", "40", "KEN1"),   # そろっている → 1つ目のまま
+            boxed("D000004", "", "", ""),                 # 2つ目にも無い → 空のまま
+        ])
+        write_ledger(self.second, "SIKALOT.sqlite3", "仕掛ロット", [
+            boxed("A000001", "5", "1200", "2500", "30", "KEN2"),
+            boxed("B000002", "7", "1300", "2600", "31", "KEN3"),
+            boxed("C000003", "9", "9999", "9999", "99", "別"),
+            boxed("D000004", "4", "", ""),                # 2つ目も欠けている → 使わない
+        ])
+        result = data_sync.import_lot_ledger(self.conn)
+        got = self.local("SELECT ロット番号, BOX最終実績_板厚, BOX最終実績_板幅, BOX最終実績_板丈,"
+                         " BOX最終実績_枚本数, BOX最終実績_設備名, 用途名 FROM 仕掛ロット ORDER BY 管理番号")
+        self.assertEqual(got, [
+            ("A000001", 5.0, 1200.0, 2500.0, 30, "KEN2", "1つ目"),
+            ("A000001", 5.0, 1200.0, 2500.0, 30, "KEN2", "1つ目"),
+            ("B000002", 7.0, 1300.0, 2600.0, 31, "KEN3", "1つ目"),
+            ("C000003", 8.0, 1500.0, 3000.0, 40, "KEN1", "1つ目"),
+            ("D000004", 0.0, 0.0, 0.0, 0, "", "1つ目"),
+        ])
+        self.assertTrue(any("BOX最終実績(板厚・板幅・板丈)が空のロット 2件" in n for n in result.notes),
+                        result.notes)
+
     def test_2つ目を設定していなければ足さない(self) -> None:
         user_settings.save(config.KEY_LOT_DB_DIR2, "")
         write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [lot("A000001")])
