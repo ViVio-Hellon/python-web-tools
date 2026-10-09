@@ -288,6 +288,7 @@ def _migrate_after_schema(conn: sqlite3.Connection) -> None:
     _move_old_board_usage(conn)
     _move_old_comment_read(conn)
     _add_order_mark_columns(conn)
+    _add_origin_columns(conn)
     # 実績(スナップショット)の表。名前が `config.TBL_PT_*` の仮の値なので、
     # schema.sql に書かずに定数から作る(名前を直すのが1か所で済む)
     from . import pattern_store
@@ -317,6 +318,40 @@ def _add_order_mark_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             f"ALTER TABLE [資材パレット注文管理] ADD COLUMN [{column}] {kind}")
         log.info("資材パレット注文管理 に %s 列を足しました", column)
+    conn.commit()
+
+
+def _add_origin_columns(conn: sqlite3.Connection) -> None:
+    """書き戻す表に「作成元」の列を足す(**取り込んだ行は送らない**ため)。
+
+    列の既定値は「手元」。この端末で作る処理は列を書かなくても送られる。
+    取り込みが「取込」を書き、その行は何があっても送り返さない
+    (`outbox_sync.WriteBackSpec.origin_column`)。
+
+    前の版の手元DBに足すときは、**もう共有と行き来が済んだ行**(同期記録が「済」)を
+    「取込」にする。まだ送っていない行は「手元」のまま ── 送る分は残す。
+    """
+    from . import outbox_sync, sync_writeback
+    log_ready = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (outbox_sync.SYNC_LOG_TABLE,)).fetchone() is not None
+    for spec in sync_writeback.WRITEBACK_SPECS:
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info([{spec.sqlite_table}])")}
+        if not have or spec.origin_column in have:
+            continue
+        conn.execute(
+            f"ALTER TABLE [{spec.sqlite_table}] ADD COLUMN [{spec.origin_column}]"
+            f" TEXT NOT NULL DEFAULT '{outbox_sync.ORIGIN_LOCAL}'")
+        if log_ready:
+            moved = conn.execute(
+                f"UPDATE [{spec.sqlite_table}] SET [{spec.origin_column}] = ?"
+                f" WHERE [{spec.key_column}] IN (SELECT 行ID FROM [{outbox_sync.SYNC_LOG_TABLE}]"
+                "  WHERE テーブル名 = ? AND 状態 = ?)",
+                (outbox_sync.ORIGIN_IMPORTED, spec.sqlite_table, outbox_sync.SYNC_DONE)).rowcount
+        else:
+            moved = 0
+        log.info("%s に %s 列を足しました(済みの %s行 を取込に)",
+                 spec.sqlite_table, spec.origin_column, moved)
     conn.commit()
 
 

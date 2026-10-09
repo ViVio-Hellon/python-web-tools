@@ -371,7 +371,8 @@ class StockTests(HandoffBase):
         ps.issue(self.a, width=1000, length=1000, position="A1", qty=1)
         rows, op_ids = outbox_sync.claim_rows(self.a, spec)
         # 届いたのに「送信中」のまま落ちた、を作る
-        values = {k: rows[0][k] for k in rows[0].keys() if k != "id"}
+        # 送るときと同じく、手元だけの列(作成元)は外す
+        values = {k: rows[0][k] for k in rows[0].keys() if k not in ("id", spec.origin_column)}
         values["送信ID"] = op_ids[rows[0]["id"]]
         with source_db.connect(self.src) as src, src.transaction() as tx:
             tx.insert(HISTORY, values)

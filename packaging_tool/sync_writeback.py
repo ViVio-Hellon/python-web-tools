@@ -16,6 +16,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from pathlib import Path
+from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from . import config, db, import_specs, outbox_sync, source_db
@@ -89,6 +90,12 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   key_column="管理番号",
                   number_column="管理番号"),
 ]
+
+# **取り込んだ行は送らない**(全表)。送るのは、この端末で作った行だけ。
+# 列は手元だけのもので、既定値は「手元」(作る処理は書かなくてよい)。
+# 取り込み(`sync_import.import_tables`)だけが「取込」を書く
+ORIGIN_COLUMN = "作成元"
+WRITEBACK_SPECS = [replace(spec, origin_column=ORIGIN_COLUMN) for spec in WRITEBACK_SPECS]
 
 # 共有にまだ無ければ、**最初に送る端末が作る**表。
 #

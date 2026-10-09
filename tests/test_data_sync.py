@@ -321,6 +321,75 @@ class ImportIsAtomicWithSentMarkTests(ImportDoesNotEchoBackTests):
         self.assertEqual(self.source_lots(), ["L0", "L1", "L2", "NEW"])
 
 
+class OnlyLocalRowsAreSentTests(ImportDoesNotEchoBackTests):
+    """**取り込んだ行は、何があっても送らない**(送るのは、この端末で作った行だけ)。
+
+    これまでは「送ったと記録していない行」を送っていた。記録が欠けると(取り込みと記録の
+    ずれ・古い版の不具合・記録の表の破損)、取り込んだ行がぜんぶ未送信に見え、共有へ
+    表まるごと送り返していた(現場の共有で、注文 182件の組が4つ・コメントが倍)。
+    行に出どころ(作成元)を持たせ、取り込んだ行は送る候補にしない。
+    """
+
+    def test_送った記録が消えても取り込んだ行は送り返さない(self) -> None:
+        data_sync.import_master(self.conn, self.src)
+        self.conn.execute(f"DELETE FROM [{outbox_sync.SYNC_LOG_TABLE}]")   # 記録が欠けた
+        self.conn.commit()
+        self.assertEqual(data_sync._unsent_writeback_tables(self.conn), {})
+        data_sync.write_back(self.conn, self.src)
+        self.assertEqual(self.source_lots(), ["L0", "L1", "L2"])
+
+    def test_記録が消えてもこの端末で作った行は送る(self) -> None:
+        """送らない側に倒しすぎて、作った発注が届かない、は作らない。"""
+        data_sync.import_master(self.conn, self.src)
+        cols = ", ".join(f'"{c}"' for c in self.COLUMNS)
+        marks = ", ".join("?" for _ in self.COLUMNS)
+        # 作る処理は「作成元」を書かない(既定で「手元」)
+        self.conn.execute(f'INSERT INTO "{self.TABLE}" ({cols}) VALUES ({marks})',
+                          self._row("NEW"))
+        self.conn.execute(f"DELETE FROM [{outbox_sync.SYNC_LOG_TABLE}]")
+        self.conn.commit()
+        self.assertEqual(data_sync._unsent_writeback_tables(self.conn), {self.TABLE: 1})
+        data_sync.write_back(self.conn, self.src)
+        self.assertEqual(self.source_lots(), ["L0", "L1", "L2", "NEW"])
+
+    def test_作成元は送り先へ送らない(self) -> None:
+        data_sync.import_master(self.conn, self.src)
+        cols = ", ".join(f'"{c}"' for c in self.COLUMNS)
+        marks = ", ".join("?" for _ in self.COLUMNS)
+        self.conn.execute(f'INSERT INTO "{self.TABLE}" ({cols}) VALUES ({marks})',
+                          self._row("NEW"))
+        self.conn.commit()
+        result = data_sync.write_back(self.conn, self.src)
+        self.assertEqual(result.errors, [])
+        with contextlib.closing(sqlite3.connect(self.src)) as raw:
+            shared = [r[1] for r in raw.execute(f'PRAGMA table_info("{self.TABLE}")')]
+        self.assertNotIn("作成元", shared)
+
+
+class OriginColumnMigrationTests(unittest.TestCase):
+    """前の版の手元DBに「作成元」を足すとき、もう共有と行き来が済んだ行だけを「取込」にする。"""
+
+    def test_済の行は取込に_まだ送っていない行は手元のまま(self) -> None:
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        # 前の版の形: 作成元の列が無い
+        conn.execute("ALTER TABLE ボード使用実績 DROP COLUMN 作成元")
+        conn.executemany("INSERT INTO ボード使用実績 (ボード幅, ボード丈, ボードタイプ, 使用日時)"
+                         " VALUES (?, 1000, 'ハードボード', '2026-10-09 10:00:00')",
+                         [(100,), (200,), (300,)])
+        outbox_sync.ensure_sync_table(conn)
+        conn.executemany(f"INSERT INTO [{outbox_sync.SYNC_LOG_TABLE}] (テーブル名, 行ID, 状態)"
+                         " VALUES ('ボード使用実績', ?, ?)", [(1, "済"), (2, "送信中")])
+        conn.commit()
+        db.apply_schema(conn)
+        got = [tuple(r) for r in conn.execute("SELECT 管理番号, 作成元 FROM ボード使用実績 ORDER BY 1")]
+        self.assertEqual(got, [(1, "取込"), (2, "手元"), (3, "手元")])
+        # 2度目は何もしない
+        db.apply_schema(conn)
+        self.assertEqual([tuple(r) for r in conn.execute(
+            "SELECT 管理番号, 作成元 FROM ボード使用実績 ORDER BY 1")], got)
+
+
 class DedupeScriptTests(unittest.TestCase):
     """`scripts/dedupe_writeback.py` ── **すでに増えた行**を片付ける道具。
 

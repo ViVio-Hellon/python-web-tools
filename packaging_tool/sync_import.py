@@ -229,15 +229,19 @@ def import_tables(
             log.warning("%s: 元に無い列: %s", table, missing)
 
         columns = [c[0] for c in spec]
-        placeholders = ", ".join("?" for _ in columns)
-        col_list = ", ".join(f"[{c}]" for c in columns)
+        outbox = _WRITEBACK_BY_TABLE.get(table)
+        # 書き戻す表は、取り込んだ行に「取込」の印を付ける。**この印の行は送らない**
+        # (`outbox_sync.WriteBackSpec.origin_column`)
+        origin = ([outbox.origin_column] if outbox is not None and outbox.origin_column
+                  else [])
+        placeholders = ", ".join("?" for _ in columns + origin)
+        col_list = ", ".join(f"[{c}]" for c in columns + origin)
         keys = required.get(table, ())
         blanks = blank_is_missing.get(table, ())
 
         imported = skipped = 0
         why_skipped = {"鍵が無い": 0, "鍵が空欄": 0}
         samples: list[str] = []
-        outbox = _WRITEBACK_BY_TABLE.get(table)
         if outbox is not None:
             outbox_sync.ensure_sync_table(conn)   # コミットするので、トランザクションの前に
         try:
@@ -268,7 +272,8 @@ def import_tables(
                     conn.execute(
                         f"INSERT INTO [{table}] ({col_list}) VALUES ({placeholders})",
                         [values[col] if values[col] is not None else fallbacks.get(conv)
-                         for col, _src, conv in spec])
+                         for col, _src, conv in spec]
+                        + [outbox_sync.ORIGIN_IMPORTED for _ in origin])
                     imported += 1
                 if outbox is not None:
                     outbox_sync.record_all_sent(conn, outbox)
@@ -485,8 +490,8 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
     return result
 
 # 中身の比較から外す列。送るときに振られる番号と、手元だけで持つ控え
-# (共有での番号・印をまだ送っていないか)。中身ではない
-LOCAL_ONLY_COLUMNS = ("送信ID", "取込元管理番号", "印未反映")
+# (共有での番号・印をまだ送っていないか・行の出どころ)。中身ではない
+LOCAL_ONLY_COLUMNS = ("送信ID", "取込元管理番号", "印未反映", "作成元")
 
 
 def duplicate_count(conn: sqlite3.Connection, table: str,

@@ -60,6 +60,13 @@ STALE_CLAIM_MINUTES = 10
 # このままでよい
 DEFAULT_OP_ID_COLUMN = "送信ID"
 
+# 行の出どころ(手元の列。送り先には送らない)。`WriteBackSpec.origin_column` を
+# 指定した表では、**取り込んだ行(ORIGIN_IMPORTED)は何があっても送らない**。
+# 列の既定値は「手元」── この端末で作る処理は列を書かなくても送られる
+# (書き忘れで送られない、を作らない)。取り込みだけが「取込」を書く
+ORIGIN_LOCAL = "手元"
+ORIGIN_IMPORTED = "取込"
+
 
 @dataclass(frozen=True)
 class WriteBackSpec:
@@ -100,6 +107,11 @@ class WriteBackSpec:
                      変換した表だと、番号の列は自動で振られない
                      (型の無いただの列)。空のまま足すと、ほかの端末が
                      その行を番号で指せない
+    origin_column  : 行の出どころの手元の列(`ORIGIN_LOCAL` / `ORIGIN_IMPORTED`)。
+                     指定すると、**取り込んだ行は送る候補にしない**。
+                     「送ったと記録していない行を送る」だけだと、記録が欠けたとき
+                     (取り込みと記録のずれ・古い版の不具合)に、取り込んだ行を
+                     まるごと送り返してしまう(現場で表が丸ごと倍になった)
     """
 
     sqlite_table: str
@@ -117,6 +129,7 @@ class WriteBackSpec:
         default=None, compare=False)
     number_column: str = ""
     optional_columns: tuple[str, ...] = ()
+    origin_column: str = ""
 
     @property
     def marks_enabled(self) -> bool:
@@ -237,6 +250,13 @@ def record_all_sent(conn: sqlite3.Connection, spec: WriteBackSpec) -> int:
     return marked
 
 
+def _local_only(spec: WriteBackSpec) -> str:
+    """送る候補を「この端末で作った行」に絞る条件(`origin_column` が無ければ空)。"""
+    if not spec.origin_column:
+        return ""
+    return f" AND COALESCE([{spec.origin_column}], '') <> '{ORIGIN_IMPORTED}'"
+
+
 def pending_rows(conn: sqlite3.Connection, spec: WriteBackSpec) -> list[sqlite3.Row]:
     """まだ送れていない行を拾う(予約はしない)。件数確認用。"""
     ensure_sync_table(conn)
@@ -245,6 +265,7 @@ def pending_rows(conn: sqlite3.Connection, spec: WriteBackSpec) -> list[sqlite3.
         f"SELECT * FROM [{spec.sqlite_table}] WHERE [{spec.key_column}] NOT IN"
         f" (SELECT 行ID FROM [{SYNC_LOG_TABLE}]"
         f"  WHERE テーブル名 = ? AND 状態 = ?)"
+        f"{_local_only(spec)}"
         f" ORDER BY [{spec.key_column}]",
         (spec.sqlite_table, SYNC_DONE)).fetchall()
 
@@ -518,10 +539,12 @@ def claim_rows(conn: sqlite3.Connection,
                         spec.sqlite_table, len(stale))
 
         # 2) まだ記録の無い行を新規に予約する(送信IDを新規採番)
+        # **取り込んだ行は拾わない**(`origin_column`)。記録が欠けていても送り返さない
         fresh = conn.execute(
             f"SELECT [{spec.key_column}] AS 行ID FROM [{spec.sqlite_table}]"
             f" WHERE [{spec.key_column}] NOT IN"
-            f" (SELECT 行ID FROM [{SYNC_LOG_TABLE}] WHERE テーブル名 = ?)",
+            f" (SELECT 行ID FROM [{SYNC_LOG_TABLE}] WHERE テーブル名 = ?)"
+            f"{_local_only(spec)}",
             (spec.sqlite_table,)).fetchall()
         for record in fresh:
             row_id = int(record["行ID"])
@@ -834,7 +857,7 @@ def write_back(conn: sqlite3.Connection,
     result = WriteBackResult()
     for spec in specs:
         op_id_ready = spec.use_op_id_guard and ensure_op_id_column(source, spec)
-        local_only = {c for c in (spec.mark_pending, spec.source_key) if c}
+        local_only = {c for c in (spec.mark_pending, spec.source_key, spec.origin_column) if c}
         if spec.optional_columns:
             # 送り先に無い列は送らない。混ぜると1行も入らなくなる
             try:
