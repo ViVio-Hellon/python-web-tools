@@ -13,7 +13,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Iterable, Any, Callable, Optional
 
 from . import config, db, import_specs, outbox_sync, source_db
 from .logging_utils import get_logger
@@ -197,6 +197,28 @@ def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
                 found[table] = path
                 break
     return found
+
+def describe_dir(base: Path, wanted: Iterable[str]) -> str:
+    """そのフォルダで何が見えたか(見つからないときに**理由まで**言うため)。
+
+    「見つかりません」だけだと、フォルダに届いていないのか、届いたが名前が違うのか、
+    現場からは区別できない(ファイルは置いてあるのに「見つかりません」と出た)。
+    """
+    import os
+    try:
+        names = os.listdir(base)
+    except FileNotFoundError:
+        return f"{base}: フォルダがありません"
+    except OSError as exc:
+        return f"{base}: フォルダを開けません({exc.__class__.__name__}: {exc})"
+    files = sorted(n for n in names if Path(n).suffix.lower() in source_db.SUFFIXES)
+    hits = [n for n in files
+            if Path(n).stem.lower() in {Path(w).stem.lower() for w in wanted}]
+    if hits:
+        return f"{base}: {', '.join(hits)} が見えています"
+    shown = ", ".join(files[:8]) + (" …" if len(files) > 8 else "")
+    return f"{base}: 開けましたが該当するファイルがありません(ある取り込み元: {shown or 'なし'})"
+
 
 def lot_search_dirs() -> list[Path]:
     """仕掛台帳を探すフォルダの順(1つ目 → 2つ目 → マスタのフォルダ)。"""

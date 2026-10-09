@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PackagingTool",
-  "version": "4.7.9",
+  "version": "4.7.10",
   "identifier": "jp.packagingtool.desktop",
   "build": {
     "frontendDist": "boot"

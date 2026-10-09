@@ -337,6 +337,18 @@ class SecondLotDirTests(unittest.TestCase):
         self.assertEqual(self.local("SELECT COUNT(*) FROM 仕掛ロット_2つ目"), [(0,)])
         self.assertEqual(lot_service.search_lot(self.conn, "H9022S0").lot.box_choices, [])
 
+    def test_見つからないときは各フォルダで何が見えたかを言う(self) -> None:
+        """現場の声:「この間違ったパス先にも SIKALOT/SIKAHIKI/SIKAODR は置いてある」。
+        「見つかりません」だけでは、届いていないのか名前が違うのか分からない。"""
+        (self.first / "仕掛台帳_古い.sqlite3").write_bytes(b"")
+        user_settings.save(config.KEY_LOT_DB_DIR2, str(self.second / "無いフォルダ"))
+        result = data_sync.import_lot_ledger(self.conn)
+        [message] = [e for e in result.errors if "仕掛台帳" in e]
+        self.assertIn("SIKALOT.sqlite3・SIKAHIKI.sqlite3・SIKAODR.sqlite3", message)
+        self.assertIn(f"{self.first}: 開けましたが該当するファイルがありません"
+                      "(ある取り込み元: 仕掛台帳_古い.sqlite3)", message)
+        self.assertIn(f"{self.second / '無いフォルダ'}: フォルダがありません", message)
+
     def test_2つ目を設定していなければ足さない(self) -> None:
         user_settings.save(config.KEY_LOT_DB_DIR2, "")
         write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [lot("A000001")])
