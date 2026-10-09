@@ -247,7 +247,7 @@ def _lot_badges(lot: lot_service.LotInfo) -> list[Badge]:
     badges = []
     if lot.is_box:
         badges.append(Badge("BOX実績寸法", "alert"))
-    badges.append(Badge(f"最終実績数 {lot.final_process_count}枚"))
+    badges.append(Badge(f"最終実績数 {lot.final_process_text or lot.final_process_count}枚"))
     return badges
 
 

@@ -38,7 +38,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import db, outbox_sync
+from . import db, import_specs, outbox_sync
 from .logging_utils import get_logger
 
 log = get_logger("warehouse_service")
@@ -207,8 +207,12 @@ def _order_values(order: dict, *, now: str, sender: str) -> tuple[dict, str]:
         # 呼び出し側はVBA同様の書式済み文字列("1122.0"等)を渡してくることがある。
         # Access版は列型に合わせて暗黙変換していたので、floatを経由して受ける
         atu_v = float(order.get("atu"))
-        haba_v = int(float(order.get("haba")))
-        take_v = int(float(order.get("take")))
+        # **幅・丈の小数を切り捨てない。** VBA は `FormatDimension(..., "0.0")` で
+        # 2502.5 のまま書く。以前は int() で 2502 にしていた(整数はそのまま整数)
+        haba_v = import_specs.to_number(order.get("haba"))
+        take_v = import_specs.to_number(order.get("take"))
+        if haba_v is None or take_v is None:
+            raise ValueError("幅・丈")
     except (TypeError, ValueError, OverflowError):
         return {}, "厚・幅・丈は数値で入力してください。"
 

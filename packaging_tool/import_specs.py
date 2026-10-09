@@ -87,6 +87,28 @@ def to_real(value: Any) -> Optional[float]:
     return number if math.isfinite(number) else None
 
 
+def to_number(value: Any) -> Optional[float]:
+    """数として取り込む。**整数はそのまま整数、小数は小数のまま**(切り捨てない)。
+
+    寸法や枚本数を `to_int` で読むと、2971.5 が 2971、2.9 が 2 になっていた(VBA・Access は
+    2971.5 のまま持つ)。整数の値は今までどおり整数で入るので、整数を前提にした表示や
+    突き合わせは変わらない。読めない値・無限大・非数は `None`(=空)。
+    """
+    number = to_real(value)
+    if number is None:
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def clng(value: Any) -> int:
+    """VBA の `CLng(Val(x))` と同じ丸め(いちばん近い整数。ちょうど .5 は偶数の側)。
+
+    2.9 → 3、2.5 → 2、3.5 → 4。読めなければ 0。
+    """
+    number = to_real(value)
+    return int(round(number)) if number is not None else 0
+
+
 def to_text(value: Any) -> str:
     return _text(value)
 
@@ -243,8 +265,9 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("材質", "材質", to_text),
         ("調質", "調質", to_text),
         ("厚", "厚", lambda v: to_real(v) or 0.0),
-        ("幅", "幅", lambda v: to_int(v) or 0),
-        ("丈", "丈", lambda v: to_int(v) or 0),
+        # 小数を切り捨てない(Access の 2971.5 を 2971 にしていた)
+        ("幅", "幅", lambda v: to_number(v) or 0),
+        ("丈", "丈", lambda v: to_number(v) or 0),
         ("用途コード", "用途コード", to_text),
         ("納入先", "納入先", to_text),
         ("発注数", "発注数", to_int),
@@ -263,8 +286,9 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("発注キー", "発注キー", to_text),
     ],
     "PalletMaster": [
-        ("幅", "幅", to_int),
-        ("丈", "丈", to_int),
+        # 小数を切り捨てない(PalletMaster に 幅 2.5 の行がある)
+        ("幅", "幅", to_number),
+        ("丈", "丈", to_number),
         ("巾適合min", "巾適合min", lambda v: to_int(v) or 0),
         ("巾適合max", "巾適合max", lambda v: to_int(v) or 0),
         ("丈適合min", "丈適合min", lambda v: to_int(v) or 0),
@@ -282,8 +306,9 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("備考", "備考", to_text),
     ],
     "パレット入出庫履歴": [
-        ("幅", "幅", to_int),
-        ("丈", "丈", to_int),
+        # 小数を切り捨てない(PalletMaster に 幅 2.5 の行がある)
+        ("幅", "幅", to_number),
+        ("丈", "丈", to_number),
         ("業界", "業界", to_text),
         ("記号", "記号", to_text),
         ("位置", "位置", to_text),
@@ -493,7 +518,7 @@ LOT_IMPORT_SPECS: dict[str, list[tuple[str, str, object]]] = {
         ("BOX実績_板厚", "BOX実績_板厚", to_real),
         ("BOX実績_板幅", "BOX実績_板幅", to_real),
         ("BOX実績_板丈", "BOX実績_板丈", to_real),
-        ("BOX実績_枚本数", "BOX実績_枚本数", to_int),
+        ("BOX実績_枚本数", "BOX実績_枚本数", to_number),
         # ひとつ前・ふたつ前の工程の枚本数。
         #
         # **画面のどこにも出していません。** 一覧から外し(1工程目の行では
@@ -507,8 +532,8 @@ LOT_IMPORT_SPECS: dict[str, list[tuple[str, str, object]]] = {
         # それでも取り込みは続けます(現場の判断)。手元に置いておけば、
         # 要るようになったときに取り込み直さずに使えます。使わないと
         # 決めたら、ここと `schema.sql` の2行を消してください
-        ("前々工程実績_枚本数", "前々工程実績_枚本数", to_int),
-        ("前工程実績_枚本数", "前工程実績_枚本数", to_int),
+        ("前々工程実績_枚本数", "前々工程実績_枚本数", to_number),
+        ("前工程実績_枚本数", "前工程実績_枚本数", to_number),
         # そのロットの**最終工程**の実績(現場の依頼で追加)。
         # ロット内で1つに定まるので、一覧が出す先頭行にも正しい値が載る
         # (`schema.sql` の説明)。BOX実績_* は取り込みを続ける ──
@@ -517,7 +542,7 @@ LOT_IMPORT_SPECS: dict[str, list[tuple[str, str, object]]] = {
         ("BOX最終実績_板厚", "BOX最終実績_板厚", to_real),
         ("BOX最終実績_板幅", "BOX最終実績_板幅", to_real),
         ("BOX最終実績_板丈", "BOX最終実績_板丈", to_real),
-        ("BOX最終実績_枚本数", "BOX最終実績_枚本数", to_int),
+        ("BOX最終実績_枚本数", "BOX最終実績_枚本数", to_number),
         # 試験指示票(先行データ)の要否判定に使う(VBA `AdvanceCheck`)
         ("品質グレード_表面処理", "品質ｸﾞﾚｰﾄﾞ_表面処理", to_text),
     ],
@@ -553,5 +578,5 @@ LOT_SOURCE_TABLE = "仕掛"
 # SQLiteの DEFAULT は「列を省略したとき」にしか効かず、NULLを明示的に
 # INSERT すると NOT NULL 制約で落ちるため、変換関数ごとに補う。
 # (仕掛台帳の実データはBOX実績系が空欄の行が多い)
-NULL_FALLBACKS: dict[object, object] = {to_int: 0, to_real: 0.0, to_text: ""}
+NULL_FALLBACKS: dict[object, object] = {to_int: 0, to_real: 0.0, to_number: 0, to_text: ""}
 

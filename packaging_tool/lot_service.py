@@ -24,7 +24,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from . import db
+from . import db, import_specs
 from .logging_utils import get_logger
 
 log = get_logger("lot_service")
@@ -151,6 +151,7 @@ class LotInfo:
     # 最終実績が0のとき(最終工程がまだ記録されていない2件)は
     # 今までどおり BOX実績 を使う ── 悪くしないため
     final_process_count: int = 0
+    final_process_text: str = ""   # 見せる値(元の値のまま。2.9 なら "2.9")
     quality_surface: str = ""    # 品質グレード_表面処理(試験指示票の要否判定に使う)
     # 包装仕様NOの書き換え判定(flag4)、試験指示票の要否判定
     # (AdvanceCheck flag1)のどちらも BOX実績に差し替える前の「製造板厚」を
@@ -300,7 +301,7 @@ class LotSearchResult:
             base += "---【BOX実績寸法】---"
         else:
             base += "-----------"
-        return f"{base}最終実績数: {self.lot.final_process_count}枚"
+        return f"{base}最終実績数: {self.lot.final_process_text or self.lot.final_process_count}枚"
 
     @property
     def odr_header(self) -> str:
@@ -340,6 +341,19 @@ def _needs_spec_override(lot: LotInfo) -> bool:
     flag4 = lot.manufactured_thickness == FLAG_THICKNESS
     flag5 = lot.is_box
     return flag1 and flag2 and flag3 and flag4 and flag5
+
+
+def _final_count(row: Any) -> Any:
+    """BOX最終実績_枚本数。空(0)なら BOX実績_枚本数(古い形式の写し)。"""
+    return row["BOX最終実績_枚本数"] or row["BOX実績_枚本数"] or 0
+
+
+def _count_text(value: Any) -> str:
+    """枚本数の見せ方。整数ならそのまま、小数は小数のまま(VBA は値を文字のまま出す)。"""
+    number = import_specs.to_number(value)
+    if number is None:
+        return "0"
+    return str(number)
 
 
 def _box_final(row: Any, name: str) -> Any:
@@ -435,8 +449,11 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str,
         actual_course=row["実績_設備コース"] or "",
         is_box=is_box,
         box_course=box_course,
-        final_process_count=(int(row["BOX最終実績_枚本数"] or 0)
-                             or int(row["BOX実績_枚本数"] or 0)),
+        # 枚本数は小数のことがある(2.9 など)。**数えるときは VBA と同じ `CLng`**
+        # (いちばん近い整数)、**見せるときは元の値のまま**(VBA は文字のまま出す)。
+        # 以前は取り込みで切り捨てていた(2.9 → 2)
+        final_process_count=import_specs.clng(_final_count(row)),
+        final_process_text=_count_text(_final_count(row)),
         quality_surface=str(row["品質グレード_表面処理"] or ""),
         manufactured_thickness=row["製造板厚"],
     )
