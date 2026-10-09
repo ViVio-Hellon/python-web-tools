@@ -690,12 +690,44 @@ class ModeFromLotTests(SelectionWebTestCase):
         self.assertNotEqual(state["banner"]["kind"], "protec")
         self.assertFalse(self.session().presenter.protec.is_protec)
 
-    def test_やり直すでもEX受注は外さない(self) -> None:
-        """EX は注文そのものの性質(発注コード・単位・発注数を空で送る)。外すと取り違える。"""
+    def test_やり直すはロットの選択ごと外す(self) -> None:
+        """現場の声:「ロットは選択したままで寸法を消すのはおかしい」「やり直す時点で選択した
+        ロットも外せばよくない？」。ロット・寸法・ロットから立ったモード(EX も)を外し、
+        何も選んでいない状態に戻す。押しっぱなしのモード(疲労度優先)は残す。"""
         self.search(EX_輸出区分="EX")
+        self.post("/api/selection/toggle/fatigue")
+        self.post("/api/selection/pallet/apply", {"width": "1100", "length": "2000"})
         state = self.post("/api/selection/clear")
-        self.assertEqual(state["banner"]["kind"], "ex")
-        self.assertTrue(self.session().presenter.is_ex_order)
+        self.assertEqual(state["lot_no"], "")
+        self.assertEqual(state["lot_caption"], "")
+        self.assertFalse(state["banner"]["visible"])
+        self.assertFalse(state["pallet_set"])
+        self.assertFalse(state["product_set"])
+        self.assertFalse(state["ex_only"])
+        self.assertEqual(state["ribbon"]["lot"], work_context.NO_LOT)
+        self.assertEqual(state["ribbon"]["product"], work_context.UNSET)
+        self.assertIn("EX", state["message"])
+        self.assertIn("ロット検索からロットを選び直してください", state["message"])
+        presenter = self.session().presenter
+        self.assertIsNone(presenter.lot_result)
+        self.assertFalse(presenter.is_ex_order)
+        self.assertEqual(work_context.get_context().lot_no, "")
+        # 押しっぱなしのモードは残す(ロットを替えたときと同じ)
+        self.assertTrue(state["boards"]["fatigue"])
+        # ロットが無いので、倉庫送信は断られる
+        self.assertIn("ロット", state["outputs"]["send_why"])
+        # ロット検索で選び直せば、また EX が立つ
+        self.client.get("/api/lot/1234567", headers=self.auth())
+        self.assertEqual(self.get()["banner"]["kind"], "ex")
+
+    def test_やり直すで上下共用も外す(self) -> None:
+        session = self.session()
+        self.search()
+        session.presenter.last_hosozai = "ザラ板"         # 保護材がアングル以外 = 上下共用
+        self.assertTrue(session.presenter.is_shared_board_mode)
+        state = self.post("/api/selection/clear")
+        self.assertIn("上下共用", state["message"])
+        self.assertFalse(session.presenter.is_shared_board_mode)
 
 
 # ==================================================================
@@ -2419,7 +2451,9 @@ class SendTests(SelectionWebTestCase):
         insert_pallet(self.conn, width=1400, length=2650, code="059484", unit="組")
         insert_pallet(self.conn, width=1400, length=2650, code="059144", unit="台")
         insert_pallet(self.conn, width=1400, length=2650, code="060681", unit="台")
+        # やり直してロットを引き直す(足した行を一覧に出す。やり直すはロットも外す)
         self.post("/api/selection/clear")
+        self.client.get("/api/lot/1234567", headers=self.auth())
         listed = [r for r in self.get()["rows"] if (r["width"], r["length"]) == (1400, 2650)]
         ids = {code: n for n, code in self.conn.execute(
             "SELECT 管理番号, コード FROM PalletMaster WHERE 幅 = 1400")}

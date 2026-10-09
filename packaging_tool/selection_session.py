@@ -320,6 +320,35 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self._sync_ribbon()
         return cleared
 
+    def start_over(self) -> list[str]:
+        """「やり直す」: **ロットの選択ごと外して**、何も選んでいない状態に戻す。外したモードの名前を返す。
+
+        現場の声:「ロットは選択したままで寸法を消すのはおかしい」「やり直す時点で選択したロットも外せばよくない？」。
+        以前はパレット・製品サイズ(と特殊モード)だけを消し、ロットは選んだままだった
+        (VBA `btnClearPalProd_Click` もパレット・製品だけを消す。**ここは VBA と違う**)。
+
+        外すもの: ロット・パレット・製品サイズ・選んだボードとアングル・帳票で直した内容(ロットを
+        替えたときと同じ `clear_for_new_lot`)と、ロットから立ったモード全部(1P1185・プロテック・
+        1P0113・EX受注・上下共用)。EX受注と上下共用も、ロットを外せば根拠が無くなるので外す。
+        **押しっぱなしのモード(疲労度優先・在庫考慮・EXまで表示)は残す**(ロットを替えたときと同じ)。
+        """
+        cleared = self.clear_special_modes()
+        presenter = self.presenter
+        if presenter.is_ex_order:
+            cleared.append("EX")
+        if presenter.is_shared_board_mode:              # プロテックはもう外れている
+            cleared.append("上下共用")
+        self.clear_for_new_lot()
+        presenter.lot_result = None
+        presenter.lot_no = ""
+        presenter.manufactured_thickness = None
+        presenter.set_ex_order(False)
+        presenter.last_hosozai = ""
+        self.ex_only = False
+        log.info("やり直す: ロットの選択ごと外しました(%s)", "・".join(cleared) or "モードなし")
+        self._sync_ribbon()
+        return cleared
+
     def pick_pallet_row(self, width: int, length: int, symbol: str,
                         row_id: Optional[int] = None) -> BoardOpResult:
         """一覧の行を選ぶ(VBA `_on_pallet_row_select`)。

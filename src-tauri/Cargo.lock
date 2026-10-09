@@ -2369,7 +2369,7 @@ dependencies = [
 
 [[package]]
 name = "packaging-tool-desktop"
-version = "4.8.4"
+version = "4.8.5"
 dependencies = [
  "serde",
  "serde_json",

@@ -235,7 +235,8 @@
                 title="一覧でパレットを選ぶと押せます"
                 {% if not view.can_decide %}disabled{% endif %}>
           <span class="gl">✓</span>パレット決定</button>
-        <button class="btn btn--danger" type="button" id="clearSizes">
+        <button class="btn btn--danger" type="button" id="clearSizes"
+                title="ロットの選択ごと外して、何も選んでいない状態に戻します">
           <span class="gl">×</span>やり直す</button>
       </div>
       <p class="why" id="productFrom" {% if not view.product_from %}hidden{% endif %}>{{ view.product_from }}</p>
