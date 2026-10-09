@@ -99,6 +99,16 @@ class DuplicateCountTests(unittest.TestCase):
         self.add("ボードA", 4)
         self.assertEqual(self.count(), 0)
 
+    def test_共有での番号が違っても中身が同じなら重複(self):
+        """手元の注文は、共有での番号(取込元管理番号)と印の未送信を持つ。写しごとに番号が
+        違うので、比べると「重複なし」に見えていた(現場: 728件中 542件が写し)。"""
+        self.conn.execute("ALTER TABLE 発注 ADD COLUMN 取込元管理番号 INTEGER")
+        self.conn.execute("ALTER TABLE 発注 ADD COLUMN 印未反映 TEXT")
+        for source in (126, 306, 490, 670):
+            self.conn.execute("INSERT INTO 発注 (品名, 数量, 取込元管理番号, 印未反映)"
+                              " VALUES ('ボードA', 3, ?, '')", (source,))
+        self.assertEqual(self.count(), 3)
+
     def test_複数の組が重なっていれば合計する(self):
         self.add("ボードA", 3)
         self.add("ボードA", 3)

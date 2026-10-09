@@ -484,18 +484,27 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
     sync_sources.note_source_read(path)
     return result
 
+# 中身の比較から外す列。送るときに振られる番号と、手元だけで持つ控え
+# (共有での番号・印をまだ送っていないか)。中身ではない
+LOCAL_ONLY_COLUMNS = ("送信ID", "取込元管理番号", "印未反映")
+
+
 def duplicate_count(conn: sqlite3.Connection, table: str,
                     key_column: str) -> int:
     """**中身が同じ行**の数(1件目は数えない)。
 
-    比べないのは「送るときに振られる番号」だけ ── 管理番号と送信ID。
+    比べないのは「送るときに振られる番号」と、手元だけの控えの列。
     それ以外の列が全部一致していれば、同じ行が2回入っているとみなす。
+
+    **取込元管理番号(共有での番号)も比べない。** 共有で同じ注文が4回入っていても、
+    写しごとに共有での番号が違うので、比べると「重複なし」に見えていた(現場の
+    手元DBで、資材パレット注文管理 728件が「重複なし」── 共有では 180件が4回ずつ)。
     """
     try:
         columns = [r[1] for r in conn.execute(f"PRAGMA table_info([{table}])")]
     except sqlite3.Error:                         # pragma: no cover
         return 0
-    compare = [c for c in columns if c not in (key_column, "送信ID")]
+    compare = [c for c in columns if c not in (key_column, *LOCAL_ONLY_COLUMNS)]
     if not compare:
         return 0
     names = ", ".join(f"[{c}]" for c in compare)

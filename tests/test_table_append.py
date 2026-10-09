@@ -123,6 +123,22 @@ class AppendOrdersTests(unittest.TestCase):
         self.assertIsNone(added[0]["送信端末"])
         self.assertTrue(Path(result.backup).is_file())
 
+    def test_足した後の取り込み直しで手元の発注を送り直さない(self) -> None:
+        """足したあと、手元へ取り込み直す(`master_common._follow`)。〜VER4.7.7 はそのとき
+        送信済みの印を付けなかったので、手元の発注がぜんぶ「未送信」に見え、次の書き戻しで
+        **表まるごと共有へ送り直していた**(現場の共有で 182件 → 728件。足すたびに1つ増える)。"""
+        from packaging_tool import data_sync, db
+        local = sqlite3.connect(":memory:")
+        local.row_factory = sqlite3.Row
+        db.apply_schema(local)
+        self.addCleanup(local.close)
+        result = table_bring.refresh(local, str(self.access), [TABLE])
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(local.execute(f'SELECT COUNT(*) FROM "{TABLE}"').fetchone()[0], 5)
+        self.assertEqual(data_sync._unsent_writeback_tables(local), {})
+        data_sync.write_back(local, self.master)
+        self.assertEqual(len(self.rows()), 5)
+
     def test_2回押しても二重に足さない(self) -> None:
         self.assertTrue(table_bring.refresh(None, str(self.access), [TABLE]).ok)
         again = table_bring.refresh(None, str(self.access), [TABLE])
