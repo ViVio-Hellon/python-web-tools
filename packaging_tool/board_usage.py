@@ -205,7 +205,7 @@ def refresh_if_changed(conn: sqlite3.Connection,
     **この端末でまだ送っていない分があれば入れ替えない**(総入れ替えなので
     消えてしまう)。送れたあとの一覧で取り込み直す。取り込んだら True。
     """
-    from . import import_specs, outbox_sync, sync_import, sync_sources, sync_writeback
+    from . import import_specs, sync_import, sync_sources, sync_writeback
     path = path or sync_sources.find_material_db()
     if path is None:
         return False
@@ -225,9 +225,7 @@ def refresh_if_changed(conn: sqlite3.Connection,
     _seen_stamp[str(path)] = stamp
     if TABLE not in result.imported:
         return False
-    for spec in sync_writeback.WRITEBACK_SPECS:
-        if spec.sqlite_table == TABLE:
-            outbox_sync.mark_all_sent(conn, spec)
+    # 送信済みの記録は `import_tables` が入れ替えと同じトランザクションで付けた
     log.info("使用実績を取り込み直しました: %s件", result.imported[TABLE])
     return True
 

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -209,6 +210,24 @@ class ImportGateTests(SyncTestCase):
         outcome = sync.import_from(self.a, self.path)
         self.assertIn("未送信の実績", outcome.skipped_reason)
         self.assertEqual(len(ps.get_pattern_list(self.a)), 1)   # 消えていない
+
+    def test_確かめた後に保存した実績は入れ替えで消さない(self) -> None:
+        """取り込み元を読んでいるあいだに保存された実績(確かめた後・入れ替える前)。"""
+        save(self.b)
+        self.push(self.b)
+        read = sync.source_db.read_table
+
+        def saved_meanwhile(path, table):
+            rows = read(path, table)
+            if table == H:
+                save(self.a, LotNo="L-meanwhile")
+            return rows
+
+        with mock.patch.object(sync.source_db, "read_table", side_effect=saved_meanwhile):
+            outcome = sync.import_from(self.a, self.path)
+        self.assertIn("未送信の実績", outcome.skipped_reason)
+        self.assertEqual(len(ps.get_pattern_list(self.a)), 1)   # 消えていない
+        self.assertEqual(self.push(self.a).sent, 1)
 
     def test_取り込み元に表が無ければ消さずに送り直す(self) -> None:
         """取り込み元を作り直した(表が無くなった)とき、手元の実績を守る。"""

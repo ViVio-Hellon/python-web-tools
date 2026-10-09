@@ -250,6 +250,77 @@ class ImportDoesNotEchoBackTests(unittest.TestCase):
         self.assertEqual(self.source_lots(), ["L0", "L1", "L2", "NEW"])
 
 
+class ImportIsAtomicWithSentMarkTests(ImportDoesNotEchoBackTests):
+    """**取り込み(入れ替え)と送信済みの記録のあいだに、裏の書き戻しが入れないこと。**
+
+    現場の手元DBで、発注コメント・ボード使用実績が「同じ7件が同じ順で2回」入っていた。
+    同期記録はどれも同じ時刻の「済」── 取り込みの後に送信済みにしていたので、
+    入れ替えをコミットしてから送信済みにするまでのあいだに裏の書き戻し(`claim_rows`)が
+    走ると、取り込んだばかりの行をぜんぶ未送信と見て共有へ送り直していた(共有ごと倍)。
+
+    手元は2本の接続(画面の処理と裏の書き戻し)で同じファイルを開く形で確かめる。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.local = self.dir / "local.db"
+        self.conn = sqlite3.connect(self.local)
+        self.conn.row_factory = sqlite3.Row
+        db.apply_schema(self.conn)
+        self.addCleanup(self.conn.close)
+
+    def other(self) -> sqlite3.Connection:
+        """裏の書き戻しが使う、もう1本の接続。"""
+        conn = sqlite3.connect(self.local, timeout=0.2)
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        return conn
+
+    def test_入れ替えた直後に裏の書き戻しが走っても送り直さない(self) -> None:
+        spec = spec_for(self.TABLE)
+        claimed: list[int] = []
+        report = imports.import_diag.table_report
+
+        def background_right_after(table, *args, **kwargs):
+            # 入れ替えをコミットした直後(`table_report` は入れ替えの後に呼ばれる)
+            if table == self.TABLE:
+                rows, _ids = outbox_sync.claim_rows(self.other(), spec)
+                claimed.append(len(rows))
+            return report(table, *args, **kwargs)
+
+        with mock.patch.object(imports.import_diag, "table_report",
+                               side_effect=background_right_after):
+            data_sync.import_master(self.conn, self.src)
+        self.assertEqual(claimed, [0])
+        data_sync.write_back(self.other(), self.src)
+        self.assertEqual(self.source_lots(), ["L0", "L1", "L2"])
+
+    def test_確かめた後に書いた行は入れ替えで消さない(self) -> None:
+        """取り込みの前の「未送信は無い」を確かめた後に、画面で1件書かれた場合。"""
+        read = sources.read_table
+        cols = ", ".join(f'"{c}"' for c in self.COLUMNS)
+        marks = ", ".join("?" for _ in self.COLUMNS)
+
+        def written_meanwhile(path, table):
+            rows = read(path, table)
+            if table == self.TABLE:
+                other = self.other()
+                other.execute(f'INSERT INTO "{self.TABLE}" ({cols}) VALUES ({marks})',
+                              self._row("NEW"))
+                other.commit()
+            return rows
+
+        data_sync.import_master(self.conn, self.src)
+        with mock.patch.object(sources, "read_table", side_effect=written_meanwhile):
+            result = data_sync.import_master(self.conn, self.src)
+        self.assertTrue(any(self.TABLE in e and "未送信" in e for e in result.errors),
+                        result.errors)
+        lots = [r[0] for r in self.conn.execute(f'SELECT LotNo FROM "{self.TABLE}"')]
+        self.assertIn("NEW", lots)
+        data_sync.write_back(self.conn, self.src)
+        self.assertEqual(self.source_lots(), ["L0", "L1", "L2", "NEW"])
+
+
 class DedupeScriptTests(unittest.TestCase):
     """`scripts/dedupe_writeback.py` ── **すでに増えた行**を片付ける道具。
 
@@ -306,7 +377,11 @@ class DedupeScriptTests(unittest.TestCase):
         copy = self.script.backup(self.src)
         self.assertTrue(copy.exists())
         self.assertNotEqual(copy, self.src)
-        self.assertEqual(copy.read_bytes(), self.src.read_bytes())
+        # 中身が同じ(SQLite の backup で写すので、ファイルの頭の数字は変わりうる)
+        sql = 'SELECT * FROM "資材パレット注文管理" ORDER BY 管理番号'
+        with contextlib.closing(sqlite3.connect(copy)) as a, \
+                contextlib.closing(sqlite3.connect(self.src)) as b:
+            self.assertEqual(a.execute(sql).fetchall(), b.execute(sql).fetchall())
 
     def test_showは組ごとに管理番号と送信IDを出す(self) -> None:
         """原因を追うには、どの行どうしが重なったか(送信IDが同じか違うか)が要る。"""

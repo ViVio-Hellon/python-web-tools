@@ -136,6 +136,20 @@
         </p>
 
         <div class="ops__row">
+          <span class="ops__name">同じ内容の行</span>
+          <div class="btn-row">
+            {# 数えるのは誰でも。共有の行を消すのは管理者だけ(押したときにサーバが断る) #}
+            <button class="btn" type="button" id="dedupeCount">数える</button>
+            <button class="btn btn--commit" type="button" id="dedupeRun" hidden></button>
+          </div>
+        </div>
+        <p class="why" id="dedupeWhy">
+          発注コメント・ボード使用実績などで、同じ1件が2回入った行を数えます。共有(梱包資材マスタ)に
+          あれば、控えを取ってから消して取り込み直せます。この端末にだけあるなら取り込み直すだけで消えます。
+        </p>
+        <pre class="job__summary" id="dedupeResult" hidden></pre>
+
+        <div class="ops__row">
           <span class="ops__name">Access で作った表</span>
           <div class="btn-row" id="bringOpenDrop">
             <button class="btn" type="button" id="bringOpen">表を持ってくる…</button>

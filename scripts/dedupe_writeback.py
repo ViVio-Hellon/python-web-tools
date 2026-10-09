@@ -37,38 +37,22 @@ VER2.2.1 より前は、取り込みのたびに書き戻し対象のテーブ�
 from __future__ import annotations
 
 import argparse
-import shutil
 import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from packaging_tool import config, data_sync, source_db  # noqa: E402
+from packaging_tool import config, data_sync, dedupe  # noqa: E402
 
-# 中身の比較から外す列。**送るときに振られる番号**であって中身ではない
-IGNORED = ("管理番号", "id", "送信ID")
+# 中身の比較から外す列(`packaging_tool.dedupe` と同じ)
+IGNORED = dedupe.IGNORED
 
 
 def duplicates(conn: sqlite3.Connection, table: str) -> tuple[list[int], int]:
     """消してよい行のID一覧と、全体の行数を返す。"""
-    conn.row_factory = sqlite3.Row
-    quoted = source_db.quote_identifier(table)
-    rows = conn.execute(f"SELECT rowid AS __行, * FROM {quoted}").fetchall()
-    if not rows:
-        return [], 0
-    names = [n for n in rows[0].keys() if n not in IGNORED and n != "__行"]
-
-    seen: dict[tuple, int] = {}
-    drop: list[int] = []
-    for row in rows:
-        key = tuple(row[n] for n in names)
-        if key in seen:
-            drop.append(row["__行"])         # 2件目以降を消す
-        else:
-            seen[key] = row["__行"]
-    return drop, len(rows)
+    counted = dedupe.count_conn(conn, table)
+    return counted.drop, counted.total
 
 
 def show(conn: sqlite3.Connection, table: str, limit: int = 5) -> None:
@@ -77,34 +61,18 @@ def show(conn: sqlite3.Connection, table: str, limit: int = 5) -> None:
     **送信IDが違う組**は、同じ1件が別の送信として2回届いたもの(書き戻しの再送)。
     送信IDが空の組は、送信IDを書けなかった時期・別の道(表を持ってくる など)で入ったもの。
     """
-    conn.row_factory = sqlite3.Row
-    quoted = source_db.quote_identifier(table)
-    rows = conn.execute(f"SELECT rowid AS __行, * FROM {quoted}").fetchall()
-    names = [n for n in rows[0].keys() if n not in IGNORED and n != "__行"]
-    groups: dict[tuple, list] = {}
-    for row in rows:
-        groups.setdefault(tuple(row[n] for n in names), []).append(row)
-    shown = 0
-    for members in groups.values():
-        if len(members) < 2:
-            continue
-        shown += 1
-        if shown > limit:
+    groups = dedupe.count_conn(conn, table).groups
+    for number, group in enumerate(groups, start=1):
+        if number > limit:
             print(f"    …ほかにも組があります(先頭 {limit}組だけ出しました)")
             break
-        first = members[0]
-        what = " / ".join(f"{n}={first[n]}" for n in names[:6])
-        print(f"    ・{len(members)}行: {what}")
-        for row in members:
-            ids = " ".join(f"{n}={row[n]}" for n in IGNORED if n in row.keys())
-            print(f"        {ids or 'rowid=' + str(row['__行'])}")
+        print(f"    ・{len(group.rows)}行: {group.describe()}")
+        for ids in group.ids():
+            print(f"        {ids}")
 
 
 def backup(path: Path) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    copy = path.with_name(f"{path.stem}.bak-{stamp}{path.suffix}")
-    shutil.copyfile(path, copy)
-    return copy
+    return dedupe.backup(path)
 
 
 def main() -> int:
@@ -164,21 +132,13 @@ def main() -> int:
               "(消す前に控えを取ります)。")
         return 0
 
-    copy = backup(path)
-    print(f"\n控え: {copy}")
-    conn = sqlite3.connect(path)
-    try:
-        with conn:
-            for table, drop in plan.items():
-                if not drop:
-                    continue
-                quoted = source_db.quote_identifier(table)
-                conn.executemany(f"DELETE FROM {quoted} WHERE rowid = ?",
-                                 [(i,) for i in drop])
-                print(f"  {table}: {len(drop)}件 消しました")
-    finally:
-        conn.close()
-    print("終わりました。設定画面から「まとめて取り込み」を押してください。")
+    fixed = dedupe.fix_shared(path, list(plan))
+    if not fixed.ok:
+        print(fixed.summary(), file=sys.stderr)
+        return 1
+    print("\n" + fixed.summary())
+    print("終わりました。設定画面から「まとめて取り込み」を押してください"
+          "(設定画面の「同じ内容の行」からも、片付けと取り込み直しを1回でできます)。")
     return 0
 
 

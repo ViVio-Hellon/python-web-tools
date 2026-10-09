@@ -119,9 +119,7 @@ def refresh_orders(conn: sqlite3.Connection,
         blank_is_missing=import_specs.BLANK_IS_MISSING,
         optional=import_specs.OPTIONAL_TABLES,
         fallbacks=import_specs.NULL_FALLBACKS)
-    for spec in WRITEBACK_SPECS:
-        if spec.sqlite_table in imported.imported:
-            outbox_sync.mark_all_sent(conn, spec)
+    # 送信済みの記録は `import_tables` が入れ替えと同じトランザクションで付けた
     # ボード使用実績も入れ直すが、画面の件数には数えない(発注ではない)
     imported.imported.pop(config.TBL_BOARD_USAGE, None)
     # コメントは入れ直すが、発注の件数には数えない

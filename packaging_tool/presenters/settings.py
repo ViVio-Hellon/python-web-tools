@@ -435,6 +435,8 @@ FIX_SOURCE = ("置き場所を直す", "source")
 FIX_ACCESS = ("マスタ管理でアクセス権限を編集", "master")
 # 取り込み直しに行く先。**入れ直さないと直らないもの**があるので繋ぐ
 FIX_IMPORT = ("取り込み直す", "run")
+# 同じ内容の行 → 「取り込み」の面の「同じ内容の行」(数える・片付けて取り込み直す)
+FIX_DEDUPE = ("同じ内容の行を片付ける", "run")
 
 
 def _material_section(material: Optional[Path], conn=None) -> Section:
@@ -742,10 +744,9 @@ def _check_local_master(section: Section, conn) -> None:
                 "同じ内容の行", f"{spec.sqlite_table} に {same}件", WARN,
                 "この端末の手元のDBで、中身がまったく同じ行が重なっています"
                 "(人が2回書いたものではなく、同じ1件が2回入ったもの)。"
-                "まず共有を `python scripts\\dedupe_writeback.py --show` で数え、"
-                "重なっていれば `--fix`(控えを取ってから消す)のあと取り込み直してください。"
-                "共有に無ければ、取り込み直すと手元も消えます"
-                "(手元は `--local` で数えられます)。"))
+                "「取り込み」の面の「同じ内容の行」で、共有と手元の重なりを数え、"
+                "共有を片付けて(控えを取ってから消す)取り込み直せます。"))
+            section.action = FIX_DEDUPE
 
     # 書き方のゆれ。**拾えてはいるが、直しておいたほうが確実**。
     # 「5x10」と小文字で書かれた行は、そろえてから固定表に当てている
@@ -1452,3 +1453,44 @@ def delete_lot_filter(name: str) -> SaveResult:
     """よく使う条件を1つ消す。"""
     result = lot_browse_session.get_session().delete_saved(name)
     return SaveResult(result.ok, result.message, result.reason)
+
+
+def dedupe_plan(path, shared: list, local: dict[str, int], *, blocked: str = "") -> dict[str, Any]:
+    """「同じ内容の行」を片付ける前に見せる中身(`/api/settings/dedupe`)。
+
+    共有(`dedupe.count_path`)と手元(`dedupe.local_duplicates`)を並べ、押すと
+    何が起きるかを1文で言う。**共有に消すものが無ければ消さない**(取り込み直すだけ)。
+    `blocked` は共有の行を消せない理由(管理者認証・マスタを直せる権限。消せるなら空)。
+    """
+    shared_rows = [{
+        "table": c.table, "total": c.total, "dupes": len(c.drop), "error": c.error,
+        "missing": c.missing,
+        # 原因を追う手がかり。組の中身と、各行の管理番号・送信ID
+        "samples": [{"what": g.describe(), "ids": g.ids()} for g in c.groups[:3]],
+    } for c in shared]
+    shared_total = sum(r["dupes"] for r in shared_rows)
+    local_total = sum(local.values())
+    if shared_total:
+        plan = (f"共有の梱包資材マスタから同じ内容の行を {shared_total}件 消し(先に入った行を残す。"
+                "消す前に丸ごと控えを取ります)、この端末へ取り込み直します。"
+                "ほかの端末も次の取り込みで直ります。")
+        button = "控えを取って片付け、取り込み直す"
+    elif local_total:
+        plan = ("共有には同じ内容の行がありません。この端末にだけ残っているので、"
+                "取り込み直すだけで消えます(共有は書き換えません)。")
+        button = "取り込み直す"
+    else:
+        plan = "共有にもこの端末にも、同じ内容の行はありません。"
+        button = ""
+    return {
+        "path": str(path) if path is not None else "",
+        "shared": shared_rows,
+        "shared_total": shared_total,
+        "local": [{"table": t, "dupes": n} for t, n in local.items()],
+        "local_total": local_total,
+        "plan": plan,
+        "button": button,
+        # 共有を消すときだけ関門がある。**通れない理由をそのまま**出す
+        # (認証は通したのに「認証が要ります」と出ると、何をすればよいか分からない)
+        "blocked": blocked if shared_total else "",
+    }

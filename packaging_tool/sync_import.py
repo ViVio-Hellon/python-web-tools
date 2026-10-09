@@ -94,6 +94,28 @@ class ImportResult:
             lines.extend(f"  {n}" for n in self.notes)
         return "\n".join(lines)
 
+# 書き戻す表(手元で行が増え、共有へ送る表)。取り込みでは、未送信の確かめと
+# 送信済みの記録を入れ替えと同じトランザクションで行う(`import_tables`)
+_WRITEBACK_BY_TABLE = {spec.sqlite_table: spec for spec in WRITEBACK_SPECS}
+
+
+class _UnsentRows(Exception):
+    """入れ替える直前に、まだ送っていない行・印が見つかった(取り込みを見送る)。"""
+
+    def __init__(self, count: int) -> None:
+        super().__init__(count)
+        self.count = count
+
+
+def _still_unsent(conn: sqlite3.Connection, spec: outbox_sync.WriteBackSpec) -> int:
+    """まだ送っていない行と印の数。数えられなければ「ある」(1)と答える(消さない側へ倒す)。"""
+    total = 0
+    for count in (outbox_sync.unsent_tables(conn, [spec]),
+                  outbox_sync.unpushed_mark_tables(conn, [spec])):
+        total += count.get(spec.sqlite_table, 0)
+    return total
+
+
 def import_tables(
     conn: sqlite3.Connection,
     source_path: Path,
@@ -215,8 +237,23 @@ def import_tables(
         imported = skipped = 0
         why_skipped = {"鍵が無い": 0, "鍵が空欄": 0}
         samples: list[str] = []
+        outbox = _WRITEBACK_BY_TABLE.get(table)
+        if outbox is not None:
+            outbox_sync.ensure_sync_table(conn)   # コミットするので、トランザクションの前に
         try:
             with conn:
+                if outbox is not None:
+                    # **書き戻す表は、確かめる・入れ替える・送信済みにする、を1つの
+                    # トランザクションで。** あいだが空くと、
+                    #   - 確かめた後に増えた行(いま書いたコメント)を入れ替えで消す
+                    #   - 入れ替えた後・送信済みにする前に、裏の書き戻しが取り込んだ
+                    #     行をぜんぶ未送信と見て共有へ送り直す(表まるごと倍になる)
+                    # IMMEDIATE で書き込みを先に押さえ、裏の予約(`claim_rows`)を待たせる
+                    if not conn.in_transaction:
+                        conn.execute("BEGIN IMMEDIATE")
+                    waiting = _still_unsent(conn, outbox)
+                    if waiting:
+                        raise _UnsentRows(waiting)
                 conn.execute(f"DELETE FROM [{table}]")
                 for number, row in enumerate(rows, start=1):
                     values = {col: conv(row.get(src)) for col, src, conv in spec}
@@ -233,6 +270,16 @@ def import_tables(
                         [values[col] if values[col] is not None else fallbacks.get(conv)
                          for col, _src, conv in spec])
                     imported += 1
+                if outbox is not None:
+                    outbox_sync.record_all_sent(conn, outbox)
+        except _UnsentRows as unsent:
+            log.warning("%s: 未送信 %s件のため総入れ替えを見送り", table, unsent.count)
+            result.errors.append(
+                f"{table}: 未送信の行が残っているため取り込みを見送りました"
+                "(送れたあとの取り込みで入れ替えます)")
+            report(imported=None, skipped={}, skipped_samples=[], after=before,
+                   error=f"未送信 {unsent.count}件(手元はそのまま)")
+            continue
         except sqlite3.Error as exc:
             log.exception("%s: 取り込み中にエラー", table)
             result.errors.append(f"{table}: {exc}")
@@ -398,18 +445,9 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
         import_diag.write(f"  {line}")
         result.notes.append(line)
 
-    # **取り込んだ行は、取り込み元から来た行。** 送り返す必要はない。
-    #
-    # ここを飛ばすと取り込みのたびに倍になる。総入れ替えで管理番号が
-    # 振り直されるのに同期記録は古い行IDのままなので、取り込んだ行が
-    # どれも「未送信」に見え、次の取り込みの前の書き戻しが**新しい行と
-    # してもう一度**送ってしまう(3件 → 6件 → 12件)。
-    #
-    # ここへ来た時点で、これらのテーブルに未送信の行は無い ── 上の
-    # `unsent` の関門が、残っているテーブルを取り込みから外している。
-    for spec in WRITEBACK_SPECS:
-        if spec.sqlite_table in result.imported:
-            outbox_sync.mark_all_sent(conn, spec)
+    # **取り込んだ行は、取り込み元から来た行。** 送り返す必要はない ──
+    # 送信済みの記録は `import_tables` が入れ替えと同じトランザクションで付けている。
+    # ここで後から付け直すと、そのあいだに書いた行まで「送信済み」に化けて送られない
 
     # **中身が同じ行がないか、読んだついでに数える。**
     # 取り込みのたびに倍になる不具合(〜VER2.2.0)は、現場からは見えて

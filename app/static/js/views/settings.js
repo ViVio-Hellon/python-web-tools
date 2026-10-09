@@ -41,7 +41,7 @@ let lastJobId = "";
 
 function setDisabled(disabled) {
   for (const btn of document.querySelectorAll(
-    "[data-import], #writeBack, #recompute, #savePaths, #saveBehavior")) {
+    "[data-import], #writeBack, #recompute, #savePaths, #saveBehavior, #dedupeRun")) {
     // 元から押せないもの(書き戻せない端末など)は押せないまま
     if (btn.dataset.lockedOff === "1") continue;
     btn.disabled = disabled;
@@ -51,7 +51,7 @@ function setDisabled(disabled) {
 /** いま押せないボタンを覚えておく。走り終わったときに復活させないため。 */
 function rememberLocked() {
   for (const btn of document.querySelectorAll(
-    "[data-import], #writeBack, #recompute, #savePaths, #saveBehavior")) {
+    "[data-import], #writeBack, #recompute, #savePaths, #saveBehavior, #dedupeRun")) {
     if (btn.disabled) btn.dataset.lockedOff = "1";
   }
 }
@@ -397,6 +397,56 @@ function watchMasterTab() {
   if (tabs.current(el.settingsTabs) === "logs") trace.opened();
 }
 
+/* ------------------------------------------------------------------
+   同じ内容の行(共有と手元を数える → 共有を片付けて取り込み直す)
+   何を数えたか・押すと何が起きるかの文はサーバが決める(`dedupe_plan`)
+   ------------------------------------------------------------------ */
+let dedupePlan = null;
+
+function dedupeText(plan) {
+  const lines = [];
+  lines.push(`共有(${plan.path || "見つかりません"})`);
+  for (const t of plan.shared) {
+    if (t.missing) { lines.push(`  ${t.table}: 共有にまだありません`); continue; }
+    if (t.error) { lines.push(`  ${t.table}: 見られません(${t.error})`); continue; }
+    lines.push(`  ${t.table}: ${t.total}件 → ${t.dupes ? `重なり ${t.dupes}件` : "重なりなし"}`);
+    for (const g of t.samples) {
+      lines.push(`    ・${g.what}`);
+      for (const id of g.ids) lines.push(`        ${id}`);
+    }
+  }
+  lines.push("この端末");
+  if (!plan.local.length) lines.push("  重なりなし");
+  for (const t of plan.local) lines.push(`  ${t.table}: 重なり ${t.dupes}件`);
+  lines.push("", plan.plan);
+  if (plan.blocked) lines.push(`※ ${plan.blocked}`);
+  return lines.join("\n");
+}
+
+async function countDedupe() {
+  try {
+    dedupePlan = await api.get("/api/settings/dedupe");
+  } catch (err) {
+    toastError(err);
+    return;
+  }
+  el.dedupeResult.hidden = false;
+  el.dedupeResult.textContent = dedupeText(dedupePlan);
+  el.dedupeRun.hidden = !dedupePlan.button;
+  el.dedupeRun.textContent = dedupePlan.button;
+}
+
+async function runDedupe() {
+  if (!dedupePlan) return;
+  // **消すときは、何を消すかを言ってから。** 取り込み直すだけのときは聞かない
+  if (dedupePlan.shared_total && !(await confirmBox(
+    `${dedupePlan.plan}\n\nよろしいですか？`,
+    { ok: dedupePlan.button }))) return;
+  el.dedupeRun.hidden = true;           // 終わったら数え直してもらう(古い数えで2回押させない)
+  dedupePlan = null;
+  startJob("/api/settings/dedupe", {});
+}
+
 async function startJob(path, body) {
   try {
     const res = await api.post(path, body);
@@ -430,6 +480,7 @@ export function start(state, jobState, masterFrame) {
                     "masterAuthPass", "masterAuthBtn", "masterAuthWhy", "masterAuthState",
                     "pathAuth", "pathPassword", "pathWhy",
                     "writeBack", "recompute", "savePaths", "refresh",
+                    "dedupeCount", "dedupeRun", "dedupeResult",
                     "importDiag", "importDiagSave",
                     "job", "jobLabel", "jobState", "jobPct", "jobBar",
                     "jobMessage", "jobSummary", "jobLanes", "recentRows", "recentEmpty",
@@ -466,6 +517,8 @@ export function start(state, jobState, masterFrame) {
   });
   el.recompute.addEventListener("click", () =>
     startJob("/api/settings/recompute", {}));
+  el.dedupeCount.addEventListener("click", countDedupe);
+  el.dedupeRun.addEventListener("click", runDedupe);
   el.refresh.addEventListener("click", refreshStatus);
 
   // ボード人気度をCSVに。**書いた場所をそのまま出す** ── 書き出しで

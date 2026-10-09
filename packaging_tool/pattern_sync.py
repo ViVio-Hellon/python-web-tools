@@ -298,6 +298,17 @@ def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
     names = list(SOURCE_HEADER_NAMES)
     try:
         with conn:
+            # **入れ替える直前に、同じトランザクションの中でもう一度確かめる。**
+            # 上で確かめてから取り込み元を読むあいだに保存された実績を、入れ替えで
+            # 消さないため(IMMEDIATE で書き込みを先に押さえる)
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            left = pending(conn)
+            if left:
+                outcome.skipped_reason = (
+                    "まだ取り込み元へ送れていない実績があります("
+                    + "・".join(f"{k}{v}件" for k, v in left.items()) + ")")
+                return outcome
             for table, _cols, _order in store.DETAIL_TABLES:
                 conn.execute(f"DELETE FROM {_q(table)}")
             conn.execute(f"DELETE FROM {_q(config.TBL_PT_HEADER)}")

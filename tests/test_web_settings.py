@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import re
 import sqlite3
 import sys
@@ -18,6 +19,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
@@ -2390,3 +2392,92 @@ class BehaviorSaveTests(DataWebTestCase):
                                      "spec_sheet_url": "http://x/{no}"})
         self.assertEqual(res.status_code, 200, res.get_json())
         self.assertEqual(res.get_json()["spec_sheet_url"], "http://x/{no}")
+
+
+class DedupeApiTests(DataWebTestCase):
+    """設定画面から、共有の「同じ内容の行」を数えて片付ける(現場の依頼:
+    「--fix を付けて実行が必要な場合、設定で行えるように」)。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from packaging_tool import import_specs
+        self.table = config.TBL_ORDER_COMMENT
+        self.cols = [src for _c, src, _v in import_specs.IMPORT_SPECS[self.table]]
+        self.master = self.dir / config.MATERIAL_DB_NAME
+        with contextlib.closing(sqlite3.connect(self.master)) as raw, raw:
+            raw.execute("CREATE TABLE PalletMaster (管理番号 INTEGER)")
+            raw.execute(f'CREATE TABLE "{self.table}" (管理番号 INTEGER PRIMARY KEY,'
+                        " 送信ID TEXT, " + ", ".join(f'"{c}" TEXT' for c in self.cols) + ")")
+
+    def put(self, *texts: str) -> None:
+        """コメントを足す(同じ文を2回渡すと、同じ1件が2回入った形)。"""
+        with contextlib.closing(sqlite3.connect(self.master)) as raw, raw:
+            for text in texts:
+                values = {c: "" for c in self.cols}
+                values.update({"発注キー": "#1", "コメントID": f"id-{text}", "本文": text})
+                raw.execute(f'INSERT INTO "{self.table}" (送信ID, '
+                            + ", ".join(f'"{c}"' for c in self.cols) + ") VALUES (hex(randomblob(4)), "
+                            + ", ".join("?" for _ in self.cols) + ")",
+                            [values[c] for c in self.cols])
+
+    def shared(self) -> list[str]:
+        with contextlib.closing(sqlite3.connect(self.master)) as raw:
+            return [r[0] for r in raw.execute(f'SELECT 本文 FROM "{self.table}" ORDER BY 管理番号')]
+
+    def backups(self) -> list[Path]:
+        return sorted(self.dir.glob("*.bak-*"))
+
+    def test_共有と手元の重なりを数える(self) -> None:
+        self.put("A", "B", "A", "B")
+        body = self.client.get("/api/settings/dedupe", headers=self.auth()).get_json()
+        row = next(t for t in body["shared"] if t["table"] == self.table)
+        self.assertEqual((row["total"], row["dupes"]), (4, 2))
+        self.assertEqual(body["shared_total"], 2)
+        self.assertIn("2件 消し", body["plan"])
+        self.assertEqual(body["button"], "控えを取って片付け、取り込み直す")
+        self.assertIn("管理者認証", body["blocked"])
+        # 原因を追う手がかり(各行の管理番号・送信ID)
+        self.assertIn("管理番号=1 送信ID=", row["samples"][0]["ids"][0])
+        # 共有にまだ無い表は「見られない」ではなく「まだ無い」
+        seen = next(t for t in body["shared"] if t["table"] == config.TBL_ORDER_COMMENT_SEEN)
+        self.assertEqual((seen["missing"], seen["error"]), (True, ""))
+
+    def test_共有を消すのは管理者だけ(self) -> None:
+        self.put("A", "A")
+        res = self.client.post("/api/settings/dedupe", json={}, headers=self.auth())
+        self.assertEqual(res.status_code, 403)
+        self.assertIn("管理者認証", res.get_json()["error"]["message"])
+        self.assertEqual(self.shared(), ["A", "A"])
+        self.assertEqual(self.backups(), [])
+
+    def test_控えを取ってから共有を片付け_取り込み直す(self) -> None:
+        from app.routes import settings as routes
+        self.put("A", "B", "A", "B", "C")
+        with mock.patch.object(routes, "_dedupe_allowed", return_value=(True, "")):
+            res = self.client.post("/api/settings/dedupe", json={}, headers=self.auth())
+        self.assertEqual(res.status_code, 202, res.get_json())
+        self.wait_idle()
+        self.assertEqual(self.shared(), ["A", "B", "C"])     # 先に入った行を残す
+        [copy] = self.backups()
+        with contextlib.closing(sqlite3.connect(copy)) as raw:
+            self.assertEqual(raw.execute(f'SELECT COUNT(*) FROM "{self.table}"').fetchone()[0], 5)
+        recent = self.client.get("/api/jobs", headers=self.auth()).get_json()["recent"][0]
+        self.assertEqual(recent["label"], "同じ内容の行を片付ける")
+        self.assertIn("2件 消しました", recent["summary"])
+
+    def test_共有に無ければ消さずに取り込み直すだけ_認証は要らない(self) -> None:
+        self.put("A", "B")
+        body = self.client.get("/api/settings/dedupe", headers=self.auth()).get_json()
+        self.assertEqual(body["blocked"], "")
+        res = self.client.post("/api/settings/dedupe", json={}, headers=self.auth())
+        self.assertEqual(res.status_code, 202, res.get_json())
+        self.wait_idle()
+        self.assertEqual(self.shared(), ["A", "B"])
+        self.assertEqual(self.backups(), [])
+        recent = self.client.get("/api/jobs", headers=self.auth()).get_json()["recent"][0]
+        self.assertIn("同じ内容の行はありませんでした", recent["summary"])
+
+    def test_画面に数える_片付けるがある(self) -> None:
+        html = self.client.get("/settings").get_data(as_text=True)
+        for id_ in ('id="dedupeCount"', 'id="dedupeRun"', 'id="dedupeResult"'):
+            self.assertIn(id_, html)

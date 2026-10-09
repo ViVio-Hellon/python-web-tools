@@ -211,12 +211,26 @@ def mark_all_sent(conn: sqlite3.Connection, spec: WriteBackSpec) -> int:
     """
     ensure_sync_table(conn)
     with conn:
-        conn.execute(f"DELETE FROM [{SYNC_LOG_TABLE}] WHERE テーブル名 = ?",
-                     (spec.sqlite_table,))
-        cursor = conn.execute(
-            f"INSERT INTO [{SYNC_LOG_TABLE}] (テーブル名, 行ID, 状態)"
-            f" SELECT ?, [{spec.key_column}], ? FROM [{spec.sqlite_table}]",
-            (spec.sqlite_table, SYNC_DONE))
+        return record_all_sent(conn, spec)
+
+
+def record_all_sent(conn: sqlite3.Connection, spec: WriteBackSpec) -> int:
+    """`mark_all_sent` の中身。**コミットしない** ── 取り込みと同じトランザクションで呼ぶ。
+
+    【なぜ取り込みと同じトランザクションか】
+    取り込み(総入れ替え)をコミットしてから印を付けると、その**あいだ**に
+    裏の書き戻し(`claim_rows`)が走れば、取り込んだばかりの行がぜんぶ
+    「未送信」に見えて、共有へもう一度送られる ── 表まるごと倍になる
+    (現場の手元DBで、発注コメント・ボード使用実績が 7件 → 14件 と、
+    同じ7件が同じ順で2回入っていた)。あいだに入れなくすれば起きない。
+    同期記録の表は先に用意しておくこと(`ensure_sync_table` はコミットする)。
+    """
+    conn.execute(f"DELETE FROM [{SYNC_LOG_TABLE}] WHERE テーブル名 = ?",
+                 (spec.sqlite_table,))
+    cursor = conn.execute(
+        f"INSERT INTO [{SYNC_LOG_TABLE}] (テーブル名, 行ID, 状態)"
+        f" SELECT ?, [{spec.key_column}], ? FROM [{spec.sqlite_table}]",
+        (spec.sqlite_table, SYNC_DONE))
     marked = cursor.rowcount or 0
     log.info("%s: 取り込んだ %s件を送信済みとして記録しました",
              spec.sqlite_table, marked)
