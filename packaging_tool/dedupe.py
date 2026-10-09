@@ -8,11 +8,20 @@
 **取り込みと同じ形にそろえてから**、比べなくてよい列(管理番号・送信ID など。`IGNORED`)を
 除いた全部の列が一致する行。Access から来た行(`2026/08/11`・厚 `140.000`・空欄 NULL)と
 ツールが送った行(`2026-08-11`・`140.0`・`''`)は、そろえると同じになる。値そのものが
-違う行(丈 2502.5 と 2502 など)は**別の行**として残す。確認・取り消しの印が違う行も別の行
+違う行(丈 2502.5 と 2502 など)は**同じ行ではない**(下の「切り捨ての写し」だけは別に拾う)。
+確認・取り消しの印が違う行も別の行
 (どちらの印が正しいか機械では決めない)。
 
 一致した組の中で**いちばん小さい番号だけを残し**、残りを消す(先に入った行が本物で、
 あとから増えたのが写し。発注コメントの `#番号` も小さいほうを指している)。
+
+【切り捨ての写し(共有だけ)】
+VER4.8.3 より前は、取り込みで幅・丈の小数を切り捨て、その値を共有へ送り直していた。共有には
+「丈 2502.5 の元の行」と「丈 2502 の写し」が残る(現場の判断: 消す)。値が違うので上の決め方では
+同じ行にならないため、別に拾う(`truncated_copies`)。拾うのは次を全部満たす行だけ:
+  - 幅・丈(`TRUNCATED_COLUMNS`)以外の列が、ある行と全部同じ(登録日時の秒・確認の印まで)
+  - その行の幅・丈は小数を持ち、こちらは**その小数を切り捨てた値**(2502.5 → 2502)
+小数のある元の行を残し、写しを消す。VER4.8.3 からは切り捨てないので、新しくはできない。
 
 【共有と手元】
 `run_fix` は 共有を片付ける → 手元を取り込み直す → 手元に残った重なりも消す、の順。
@@ -25,6 +34,7 @@
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -69,6 +79,12 @@ class TableCount:
     groups: list[Group] = field(default_factory=list)
     error: str = ""                                     # 数えられなかった理由
     missing: bool = False                               # その表がまだ無い(数えるものが無い)
+    truncated: list[int] = field(default_factory=list)  # 切り捨ての写し(rowid。drop とは重ならない)
+
+    @property
+    def remove(self) -> list[int]:
+        """消す行ぜんぶ(同じ内容の写し + 切り捨ての写し)。"""
+        return sorted({*self.drop, *self.truncated})
 
 
 def _columns(table: str, sample: dict[str, Any], *, shared: bool) -> list[tuple[str, str, Callable]]:
@@ -116,6 +132,37 @@ def group_rows(rows: Iterable[dict[str, Any]], table: str = "", *, shared: bool 
     return sorted(drop), many, len(rows)
 
 
+# 以前、取り込みで小数を切り捨てていた列(`import_specs.to_number` に変える前は整数にしていた)
+TRUNCATED_COLUMNS = ("幅", "丈")
+
+
+def _integral(value: Any) -> bool:
+    return isinstance(value, int) or (isinstance(value, float) and value.is_integer())
+
+
+def truncated_copies(rows: Iterable[dict[str, Any]], table: str = "", *,
+                     shared: bool = True) -> list[int]:
+    """**切り捨ての写し**の rowid(丈 2502.5 の行があるときの、ほかが全部同じ丈 2502 の行)。"""
+    rows = list(rows)
+    if not rows:
+        return []
+    columns = _columns(table, rows[0], shared=shared)
+    at = [i for i, (name, _r, _c) in enumerate(columns) if name in TRUNCATED_COLUMNS]
+    if not at:
+        return []
+
+    def cut(key: tuple) -> tuple:
+        return tuple(math.trunc(v) if i in at and isinstance(v, (int, float)) else v
+                     for i, v in enumerate(key))
+
+    keys = [(row, _key(row, columns)) for row in rows]
+    # 小数を持つ元の行を、切り捨てた姿で覚える
+    originals = {cut(key) for _row, key in keys
+                 if any(isinstance(key[i], float) and not key[i].is_integer() for i in at)}
+    return sorted(row[ROW] for row, key in keys
+                  if all(_integral(key[i]) for i in at) and cut(key) in originals)
+
+
 def _read(conn: Any, table: str) -> list[dict[str, Any]]:
     sql = f"SELECT rowid AS {ROW}, * FROM {source_db.quote_identifier(table)}"
     if isinstance(conn, sqlite3.Connection):
@@ -130,8 +177,17 @@ def count_conn(conn: Any, table: str, *, shared: bool = True) -> TableCount:
 
     `shared=False` は手元の作業用DB(列名が手元のもの)。
     """
-    drop, groups, total = group_rows(_read(conn, table), table, shared=shared)
-    return TableCount(table, total, drop, groups)
+    rows = _read(conn, table)
+    drop, groups, total = group_rows(rows, table, shared=shared)
+    return TableCount(table, total, drop, groups, truncated=_extra(rows, table, drop, shared))
+
+
+def _extra(rows: list[dict[str, Any]], table: str, drop: list[int], shared: bool) -> list[int]:
+    """切り捨ての写し(共有だけ。手元は取り込み直しで共有の姿になる)。"""
+    if not shared:
+        return []
+    done = set(drop)
+    return [r for r in truncated_copies(rows, table, shared=True) if r not in done]
 
 
 def _tables(tables: Optional[Iterable[str]]) -> list[str]:
@@ -160,7 +216,8 @@ def count_path(path: Path, tables: Optional[Iterable[str]] = None, *,
                 out.append(TableCount(table, error=str(exc)))
             continue
         drop, groups, total = group_rows(rows, table, shared=shared)
-        out.append(TableCount(table, total, drop, groups))
+        out.append(TableCount(table, total, drop, groups,
+                              truncated=_extra(rows, table, drop, shared)))
     return out
 
 
@@ -187,6 +244,7 @@ class FixResult:
     ok: bool = True
     backup: str = ""                                     # 控えの置き場所(消さなかったときは空)
     removed: dict[str, int] = field(default_factory=dict)
+    truncated: dict[str, int] = field(default_factory=dict)  # removed のうち切り捨ての写し
     error: str = ""
 
     @property
@@ -200,7 +258,9 @@ class FixResult:
             return "共有の梱包資材マスタに、重複はありませんでした。"
         lines = [f"共有の梱包資材マスタから、重複を {self.total}件 消しました"
                  f"(控え: {self.backup})。"]
-        lines += [f"  {t}: {n}件" for t, n in self.removed.items() if n]
+        lines += [f"  {t}: {n}件" + (f"(うち切り捨ての写し {self.truncated[t]}件。小数のある元の行を残しました)"
+                                       if self.truncated.get(t) else "")
+                  for t, n in self.removed.items() if n]
         return "\n".join(lines)
 
 
@@ -217,7 +277,7 @@ def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
     broken = [f"{c.table}: {c.error}" for c in counted if c.error]
     if broken:
         return FixResult(ok=False, error="共有を読めませんでした(" + " / ".join(broken) + ")")
-    before = [c for c in counted if c.drop]
+    before = [c for c in counted if c.remove]
     if not before:
         return result
     try:
@@ -232,12 +292,14 @@ def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
                     counted = count_conn(tx, table)
                 except sqlite3.Error:
                     continue                             # 表が無い
-                if not counted.drop:
+                if not counted.remove:
                     continue
                 quoted = source_db.quote_identifier(table)
-                for row_id in counted.drop:
+                for row_id in counted.remove:
                     tx.execute(f"DELETE FROM {quoted} WHERE rowid = ?", (row_id,))
-                result.removed[table] = len(counted.drop)
+                result.removed[table] = len(counted.remove)
+                if counted.truncated:
+                    result.truncated[table] = len(counted.truncated)
     except source_db.SourceError as exc:
         log.warning("共有の重複を消せませんでした: %s", exc)
         return FixResult(ok=False, backup=result.backup,

@@ -33,6 +33,9 @@ VER2.2.1 より前は、取り込みのたびに書き戻し対象のテーブ�
 増えたのが写しだからです)。`--local` のときは、もう共有と行き来が済んだ行(取り込んだ行・
 送った行)を残し、まだ送っていない写しのほうを消します。
 
+共有では、以前の版が幅・丈の小数を切り捨てて送り直した**切り捨ての写し**(丈 2502.5 の行に対する
+丈 2502 の行。ほかの列は全部同じ)も消します。小数のある元の行を残します。
+
 【消す前に必ず控えを取ります】
 `--fix` を付けたときだけ書き換えます。書き換える前に、同じフォルダへ
 `<名前>.bak-YYYYMMDDHHMMSS.sqlite3` として丸ごと写しを取ります。
@@ -112,12 +115,15 @@ def main() -> int:
     try:
         for table in tables:
             try:
-                drop, total = duplicates(conn, table, shared=not args.local)
+                counted = dedupe.count_conn(conn, table, shared=not args.local)
             except sqlite3.Error as exc:
                 print(f"  {table}: 見られません({exc})")
                 continue
+            drop, total = counted.remove, counted.total
             plan[table] = drop
-            note = f"重複 {len(drop)}件" if drop else "重複なし"
+            note = f"重複 {len(counted.drop)}件" if drop else "重複なし"
+            if counted.truncated:
+                note += f"・切り捨ての写し {len(counted.truncated)}件"
             print(f"  {table}: {total}件 → {note}")
             if args.show and drop:
                 show(conn, table, shared=not args.local)

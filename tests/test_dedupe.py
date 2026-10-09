@@ -73,11 +73,32 @@ class SharedRuleTests(unittest.TestCase):
         self.assertEqual((counted.total, len(counted.drop)), (2, 1))
         self.assertEqual(counted.drop, [2])                  # 先に入った行を残す
 
-    def test_値が違えば別の行_丈の小数(self) -> None:
-        """丈 2502.5 と 2502 は値が違う。切り捨てた写しかもしれないが、機械では決めない。"""
+    def test_丈の小数が違えば同じ行ではない_切り捨ての写しとして拾う(self) -> None:
+        """丈 2502.5 と 2502 は同じ内容の行ではない。ただし、ほかが全部同じで 2502 が 2502.5 を
+        切り捨てた値なら「切り捨ての写し」(以前の版が切り捨てて送り直した。現場の判断: 消す)。"""
         self.put(丈=2502.5)
         self.put(丈=2502)
-        self.assertEqual(self.count().drop, [])
+        counted = self.count()
+        self.assertEqual((counted.drop, counted.truncated), ([], [2]))
+
+    def test_切り捨てでない違いは拾わない(self) -> None:
+        """切り上げ(2503)・幅も丈も整数どうし(2502 と 2501)・ほかの列も違う、は別の注文として残す。"""
+        self.put(丈=2502.5)
+        self.put(丈=2503)                                    # 切り上げは写しではない
+        self.put(丈=2501)
+        self.put(丈=2502, 発注数=4)                          # 発注数が違う
+        self.put(丈=2502, 確認済み="済", 確認日時="2026-08-12 10:00:00")   # 印が違う
+        self.put(丈=2502, 登録日時="2026-08-11 09:05:01")    # 1秒違う
+        counted = self.count()
+        self.assertEqual((counted.drop, counted.truncated), ([], []))
+
+    def test_幅の切り捨ても拾う(self) -> None:
+        self.put(幅=1047.5, 丈=2502.5)
+        self.put(幅=1047, 丈=2502)
+        # 丈だけ切り捨てた行は拾わない。以前の版は幅・丈を一緒に切り捨てていたので、
+        # 片方だけ小数の残る行はその写しではない(狭く拾って、別の注文を消さない)
+        self.put(幅=1047.5, 丈=2502)
+        self.assertEqual(self.count().truncated, [2])
 
     def test_確認の印が違えば別の行(self) -> None:
         """どちらの印が正しいかは機械では決めない。消さない。"""
@@ -94,16 +115,19 @@ class SharedRuleTests(unittest.TestCase):
 
     def test_片付けは控えを取ってから先に入った行を残す(self) -> None:
         self.put()
-        self.put(丈=2502)
+        self.put(丈=2502)                                    # 切り捨ての写し
         self.put()
         self.put()
+        self.put(丈=2400)                                    # 別の注文
         result = dedupe.fix_shared(self.src, [ORDER])
         self.assertTrue(result.ok, result.error)
-        self.assertEqual(result.removed, {ORDER: 2})
-        self.assertEqual(self.shared_numbers(), [1, 2])      # 値の違う 2502 は残る
+        self.assertEqual(result.removed, {ORDER: 3})
+        self.assertEqual(result.truncated, {ORDER: 1})
+        self.assertIn("うち切り捨ての写し 1件", result.summary())
+        self.assertEqual(self.shared_numbers(), [1, 5])      # 小数のある元の行と、別の注文が残る
         copy = Path(result.backup)
         with sqlite3.connect(copy) as raw:
-            self.assertEqual(raw.execute(f'SELECT COUNT(*) FROM "{ORDER}"').fetchone()[0], 4)
+            self.assertEqual(raw.execute(f'SELECT COUNT(*) FROM "{ORDER}"').fetchone()[0], 5)
 
     def test_消すものが無ければ書かない_控えも取らない(self) -> None:
         self.put()
@@ -158,11 +182,14 @@ class LocalRuleTests(unittest.TestCase):
         self.assertEqual(self.numbers(), [sent])
         self.assertNotIn(unsent, self.numbers())
 
-    def test_値が違う行は手元でも消さない(self) -> None:
+    def test_値が違う行は手元では消さない(self) -> None:
+        """切り捨ての写しを消すのは共有だけ。手元は取り込み直しで共有の姿になる
+        (手元で消すと、まだ送っていない行を消しうる)。"""
         self.put(丈=2502.5)
         self.put(丈=2502)
         self.assertEqual(dedupe.fix_local(self.conn), {})
         self.assertEqual(len(self.numbers()), 2)
+        self.assertEqual(dedupe.count_conn(self.conn, ORDER, shared=False).truncated, [])
 
     def test_共有に表が無い閲覧の重複も消える(self) -> None:
         """発注コメント閲覧は取り込みで入れ替わらないことがある(共有に表が無い)。"""

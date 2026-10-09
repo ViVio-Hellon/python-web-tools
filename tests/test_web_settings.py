@@ -2483,6 +2483,7 @@ class DedupeApiTests(DataWebTestCase):
         html = self.client.get("/settings").get_data(as_text=True)
         self.assertIn('id="dedupeRun"', html)
         self.assertIn("--fix を実行(重複を消す)", html)
+        self.assertIn("切り捨ての写し", html)                  # 何を消すかを先に書く
         for gone in ('id="dedupeCount"', 'id="dedupeResult"', ">数える<"):
             self.assertNotIn(gone, html)
         # 押す前の数えはもう無い
