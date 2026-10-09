@@ -535,8 +535,7 @@ def _import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = Non
         import_diag.describe_file(f"仕掛台帳 {filename}", found.get(table), searched)
     if not found:
         # **どこで何が見えたかまで言う。** 置いてあるのに「見つかりません」と出たとき、
-        # フォルダに届いていないのか・名前が違うのかが分からなかった(現場の声)。
-        # 3つ目はマスタのフォルダ(仕掛台帳を同じ所に置く運用のための予備)
+        # フォルダに届いていないのか・名前が違うのかが分からなかった(現場の声)
         names = list(config.LOT_DB_FILES.values())
         seen = [sync_sources.describe_dir(d, names) for d in searched]
         result.errors.append(

@@ -191,6 +191,50 @@ class SeenTests(CommentTestBase):
         self.assertEqual(oc.mark_read(self.b, no, terminal="SOUKO", side=oc.SIDE_MATERIAL), 1)
         self.assertEqual(oc.mark_read(self.b, no, terminal="SOUKO", side=oc.SIDE_MATERIAL), 0)
 
+    def test_同時に2回開いても見たは1回だけ残す(self):
+        """同じ発注を2つの要求がほぼ同時に開いたとき(現場の手元DBで、同じコメントID・同じ時刻の
+        「見た」が2行あった)。後から来た要求は、先の要求が書き終わるまで待ち、もう見たと分かる。"""
+        import tempfile
+        import threading
+        from pathlib import Path
+        self.order("NEW")
+        self.write(self.a, "NEW", "よろしく", "GENBA-1", oc.SIDE_FIELD)
+        self.send(self.a)
+        self.refresh(self.b)
+        path = Path(tempfile.mkdtemp(prefix="seen_")) / "local.db"
+        with sqlite3.connect(path) as disk:
+            self.b.backup(disk)
+        first = sqlite3.connect(path, timeout=5)
+        self.addCleanup(first.close)
+        no = self.local_no(first, "NEW")
+        counts: list[int] = []
+
+        def open_too() -> None:
+            # 接続はそれを使うスレッドで開く(sqlite3 はスレッドをまたげない)
+            second = sqlite3.connect(path, timeout=5)
+            try:
+                counts.append(oc.mark_read(second, no, terminal="SOUKO",
+                                           side=oc.SIDE_MATERIAL))
+            finally:
+                second.close()
+
+        other = threading.Thread(target=open_too)
+        read_ids = oc._read_ids
+
+        def meanwhile(conn, side):
+            got = read_ids(conn, side)
+            if conn is first and not other.is_alive() and not counts:
+                other.start()               # 先の要求が「まだ見ていない」と読んだ直後
+                other.join(0.5)             # 鍵が無ければ、ここで後の要求が書き終わる
+            return got
+
+        with mock.patch.object(oc, "_read_ids", side_effect=meanwhile):
+            counts.append(oc.mark_read(first, no, terminal="SOUKO", side=oc.SIDE_MATERIAL))
+            other.join()
+        self.assertEqual(sorted(counts), [0, 1])
+        rows = first.execute(f"SELECT COUNT(*) FROM {oc.SEEN_TABLE}").fetchone()[0]
+        self.assertEqual(rows, 1)
+
     def test_取り込みをまたいでも見たは消えない(self):
         self.order("NEW")
         self.write(self.a, "NEW", "よろしく", "GENBA-1", oc.SIDE_FIELD)

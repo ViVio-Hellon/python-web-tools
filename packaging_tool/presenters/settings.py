@@ -805,8 +805,7 @@ def _lot_section(lots: dict[str, Path]) -> Section:
     from .. import sync_sources
     section.checks.append(Check(
         "探した場所", " → ".join(str(d) for d in sync_sources.lot_search_dirs()), INFO,
-        "ファイルごとに前から探します(1つ目 → 2つ目 → マスタのフォルダ)。共有フォルダに"
-        "届かない端末のために、マスタのフォルダも見ます"))
+        "ファイルごとに前から探します(1つ目 → 2つ目)。2つ目は設定したときだけ見ます"))
     second = config.lot_db_dir2()
     if second is not None:
         extra = sync_sources.find_second_lot_dbs()

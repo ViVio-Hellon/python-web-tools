@@ -198,6 +198,11 @@ def mark_read(conn: sqlite3.Connection, mgr_no: int, *,
     added = 0
     with conn:
         if terminal and side:
+            # **確かめてから書くまでを1回で。** 同じ発注を2つの要求がほぼ同時に開くと、
+            # どちらも「まだ見ていない」と読んで「見た」を2行残していた(現場の手元DBで
+            # 同じコメントID・同じ時刻の行が2つ)。書き込みの鍵を先に取り、後の要求を待たせる
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             read = _read_ids(conn, side)
             fresh = conn.execute(
                 f"SELECT コメントID, 書いた端末, 書いた側 FROM {TABLE}"

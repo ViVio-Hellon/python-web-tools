@@ -349,6 +349,18 @@ class SecondLotDirTests(unittest.TestCase):
                       "(ある取り込み元: 仕掛台帳_古い.sqlite3)", message)
         self.assertIn(f"{self.second / '無いフォルダ'}: フォルダがありません", message)
 
+    def test_設定していない場所は探さない(self) -> None:
+        """現場の声:「仕掛台帳用の2つ目は設定なしなら探さないでしょ?」。以前はマスタの
+        フォルダも予備で見ていた。2つ目を空にしたら、1つ目だけを見る。"""
+        user_settings.save(config.KEY_LOT_DB_DIR2, "")
+        master = Path(user_settings.get(config.KEY_MASTER_DB_DIR))
+        write_ledger(master, "SIKALOT.sqlite3", "仕掛ロット", [lot("M000001")])
+        self.assertEqual(sync_sources.lot_search_dirs(), [self.first])
+        result = data_sync.import_lot_ledger(self.conn)
+        self.assertEqual(self.local("SELECT COUNT(*) FROM 仕掛ロット"), [(0,)])
+        [message] = [e for e in result.errors if "仕掛台帳" in e]
+        self.assertNotIn(str(master), message)
+
     def test_2つ目を設定していなければ足さない(self) -> None:
         user_settings.save(config.KEY_LOT_DB_DIR2, "")
         write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [lot("A000001")])

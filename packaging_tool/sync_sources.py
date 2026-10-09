@@ -182,12 +182,11 @@ def find_threshold_db(directory: Optional[Path] = None) -> Optional[Path]:
 def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
     """仕掛台帳の3ファイルを探す。見つかったものだけ返す。
 
-    共有フォルダに届かない端末もあるので、起動フォルダに置かれた
-    コピーも探す(共有 → 起動フォルダ の順)。
+    **設定した場所だけを見る**(1つ目 → 2つ目。2つ目は設定していれば)。
     """
     found: dict[str, Path] = {}
-    # フォルダを明示されたときはそこだけを見る。省略時だけ
-    # 「1つ目 → 2つ目(設定していれば)→ マスタのフォルダ」の順に探す。
+    # フォルダを明示されたときはそこだけを見る。省略時は
+    # 「1つ目 → 2つ目(設定していれば)」の順に探す。
     # **ファイルごとに**探すので、1つ目に無いファイルだけ2つ目から読む
     candidates = ([Path(directory)] if directory is not None else lot_search_dirs())
     for table, filename in config.LOT_DB_FILES.items():
@@ -221,12 +220,13 @@ def describe_dir(base: Path, wanted: Iterable[str]) -> str:
 
 
 def lot_search_dirs() -> list[Path]:
-    """仕掛台帳を探すフォルダの順(1つ目 → 2つ目 → マスタのフォルダ)。"""
-    out: list[Path] = []
-    for base in [*config.lot_db_dirs(), config.master_db_dir()]:
-        if base not in out:
-            out.append(base)
-    return out
+    """仕掛台帳を探すフォルダの順(1つ目 → 2つ目。2つ目は設定していれば)。
+
+    **設定していない場所は見ない。** 以前は予備としてマスタのフォルダも見ていたが、
+    画面からは「設定していない道を探している」ようにしか見えなかった(現場の声:
+    「仕掛台帳用の2つ目は設定なしなら探さないでしょ?」)。
+    """
+    return config.lot_db_dirs()
 
 
 def find_second_lot_dbs() -> dict[str, Path]:
