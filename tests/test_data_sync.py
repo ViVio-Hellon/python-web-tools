@@ -463,14 +463,16 @@ class DedupeScriptTests(unittest.TestCase):
         for number in range(1, 7):
             self.assertIn(f"管理番号={number} 送信ID=", text)
 
-    def test_手元のDBは消さずに取り込み直しを案内する(self) -> None:
-        """設定画面の警告は手元の作業用DBを数えている。手元は取り込みで入れ替わる
-        ので `--local --fix` は断る(共有に残っていればまた戻ってくる)。"""
-        err = io.StringIO()
-        with mock.patch.object(sys, "argv", ["dedupe", "--local", "--fix"]), \
-                contextlib.redirect_stderr(err):
-            self.assertEqual(self.script.main(), 1)
-        self.assertIn("取り込み直して", err.getvalue())
+    def test_local_fixは手元の重複を消す(self) -> None:
+        """設定の「--fix を実行」と同じ決め方で、この端末の重複を消す(共有には触らない)。"""
+        out = io.StringIO()
+        with mock.patch.object(config, "DB_PATH", self.src), \
+                mock.patch.object(sys, "argv", ["dedupe", "--local", "--fix"]), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(self.script.main(), 0)
+        self.assertIn("この端末の重複を消しました: 資材パレット注文管理 4件", out.getvalue())
+        drop, total = self.script.duplicates(self.open(), "資材パレット注文管理", shared=False)
+        self.assertEqual((drop, total), ([], 2))
 
     def test_localは手元の作業用DBを数える(self) -> None:
         out = io.StringIO()

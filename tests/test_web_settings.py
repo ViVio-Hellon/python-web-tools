@@ -2395,8 +2395,8 @@ class BehaviorSaveTests(DataWebTestCase):
 
 
 class DedupeApiTests(DataWebTestCase):
-    """設定画面から、共有の「同じ内容の行」を数えて片付ける(現場の依頼:
-    「--fix を付けて実行が必要な場合、設定で行えるように」)。"""
+    """設定画面の「--fix を実行(重複を消す)」(現場の依頼:「--fixしますってはっきり言って
+    処理しなさい」「数えるとか何を数えてるのかわかんねぇ」)。"""
 
     def setUp(self) -> None:
         super().setUp()
@@ -2427,34 +2427,36 @@ class DedupeApiTests(DataWebTestCase):
     def backups(self) -> list[Path]:
         return sorted(self.dir.glob("*.bak-*"))
 
-    def test_共有と手元の重なりを数える(self) -> None:
-        self.put("A", "B", "A", "B")
-        body = self.client.get("/api/settings/dedupe", headers=self.auth()).get_json()
-        row = next(t for t in body["shared"] if t["table"] == self.table)
-        self.assertEqual((row["total"], row["dupes"]), (4, 2))
-        self.assertEqual(body["shared_total"], 2)
-        self.assertIn("2件 消し", body["plan"])
-        self.assertEqual(body["button"], "控えを取って片付け、取り込み直す")
-        self.assertIn("管理者認証", body["blocked"])
-        # 原因を追う手がかり(各行の管理番号・送信ID)
-        self.assertIn("管理番号=1 送信ID=", row["samples"][0]["ids"][0])
-        # 共有にまだ無い表は「見られない」ではなく「まだ無い」
-        seen = next(t for t in body["shared"] if t["table"] == config.TBL_ORDER_COMMENT_SEEN)
-        self.assertEqual((seen["missing"], seen["error"]), (True, ""))
+    def admin(self) -> None:
+        from packaging_tool import selection_session
+        session = selection_session.get_session(sqlite3.connect(":memory:"))
+        session.admin = True
+        self.addCleanup(setattr, session, "admin", False)
 
-    def test_共有を消すのは管理者だけ(self) -> None:
-        self.put("A", "A")
+    def test_管理者認証が無ければ断る_共有に重複が無くても(self) -> None:
+        """関門はいつも通す(押す前に数えて分けると、数えたあとに書かれた行で話が変わる)。"""
+        self.put("A", "B")
         res = self.client.post("/api/settings/dedupe", json={}, headers=self.auth())
         self.assertEqual(res.status_code, 403)
         self.assertIn("管理者認証", res.get_json()["error"]["message"])
+        self.assertEqual(self.backups(), [])
+
+    def test_資材モードの権限が無ければ断る(self) -> None:
+        from packaging_tool import master_admin
+        self.admin()
+        self.put("A", "A")
+        with mock.patch.object(master_admin, "can_edit",
+                               return_value=(False, "この端末には資材モードの権限がありません。")):
+            res = self.client.post("/api/settings/dedupe", json={}, headers=self.auth())
+        self.assertEqual(res.status_code, 403)
+        self.assertIn("資材モード", res.get_json()["error"]["message"])
         self.assertEqual(self.shared(), ["A", "A"])
         self.assertEqual(self.backups(), [])
 
-    def test_控えを取ってから共有を片付け_取り込み直す(self) -> None:
-        from app.routes import settings as routes
+    def test_控えを取ってから共有の重複を消し_取り込み直す(self) -> None:
+        self.admin()
         self.put("A", "B", "A", "B", "C")
-        with mock.patch.object(routes, "_dedupe_allowed", return_value=(True, "")):
-            res = self.client.post("/api/settings/dedupe", json={}, headers=self.auth())
+        res = self.client.post("/api/settings/dedupe", json={}, headers=self.auth())
         self.assertEqual(res.status_code, 202, res.get_json())
         self.wait_idle()
         self.assertEqual(self.shared(), ["A", "B", "C"])     # 先に入った行を残す
@@ -2462,25 +2464,30 @@ class DedupeApiTests(DataWebTestCase):
         with contextlib.closing(sqlite3.connect(copy)) as raw:
             self.assertEqual(raw.execute(f'SELECT COUNT(*) FROM "{self.table}"').fetchone()[0], 5)
         recent = self.client.get("/api/jobs", headers=self.auth()).get_json()["recent"][0]
-        self.assertEqual(recent["label"], "同じ内容の行を片付ける")
-        self.assertIn("2件 消しました", recent["summary"])
+        self.assertEqual(recent["label"], "--fix(重複を消す)")
+        self.assertIn("重複を 2件 消しました", recent["summary"])
+        self.assertIn("この端末の重複も無くなりました", recent["summary"])
 
-    def test_共有に無ければ消さずに取り込み直すだけ_認証は要らない(self) -> None:
+    def test_共有に重複が無ければ書かない_控えも取らない(self) -> None:
+        self.admin()
         self.put("A", "B")
-        body = self.client.get("/api/settings/dedupe", headers=self.auth()).get_json()
-        self.assertEqual(body["blocked"], "")
         res = self.client.post("/api/settings/dedupe", json={}, headers=self.auth())
         self.assertEqual(res.status_code, 202, res.get_json())
         self.wait_idle()
         self.assertEqual(self.shared(), ["A", "B"])
         self.assertEqual(self.backups(), [])
         recent = self.client.get("/api/jobs", headers=self.auth()).get_json()["recent"][0]
-        self.assertIn("同じ内容の行はありませんでした", recent["summary"])
+        self.assertIn("重複はありませんでした", recent["summary"])
 
-    def test_画面に数える_片付けるがある(self) -> None:
+    def test_画面は1つのボタンで_何をするかを書く(self) -> None:
         html = self.client.get("/settings").get_data(as_text=True)
-        for id_ in ('id="dedupeCount"', 'id="dedupeRun"', 'id="dedupeResult"'):
-            self.assertIn(id_, html)
+        self.assertIn('id="dedupeRun"', html)
+        self.assertIn("--fix を実行(重複を消す)", html)
+        for gone in ('id="dedupeCount"', 'id="dedupeResult"', ">数える<"):
+            self.assertNotIn(gone, html)
+        # 押す前の数えはもう無い
+        self.assertEqual(self.client.get("/api/settings/dedupe",
+                                         headers=self.auth()).status_code, 405)
 
 
 class SharedLinkScreenTests(DataWebTestCase):

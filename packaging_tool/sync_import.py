@@ -476,7 +476,7 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
         if same:
             result.notes.append(
                 f"{spec.sqlite_table}: 中身が同じ行が {same}件 あります"
-                "(scripts/dedupe_writeback.py で数える / 消せます)")
+                "(設定の「--fix を実行(重複を消す)」で消せます)")
 
     # 取り込んだ直後に適合範囲を計算し直す。
     #
@@ -501,38 +501,22 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
     sync_sources.note_source_read(path)
     return result
 
-# 中身の比較から外す列。送るときに振られる番号と、手元だけで持つ控え
-# (共有での番号・印をまだ送っていないか・行の出どころ)。中身ではない
-LOCAL_ONLY_COLUMNS = ("送信ID", "取込元管理番号", "印未反映", "作成元")
-
-
 def duplicate_count(conn: sqlite3.Connection, table: str,
-                    key_column: str) -> int:
-    """**中身が同じ行**の数(1件目は数えない)。
+                    key_column: str = "") -> int:
+    """手元の作業用DBの表で、**中身が同じ行**の数(1件目は数えない)。
 
-    比べないのは「送るときに振られる番号」と、手元だけの控えの列。
-    それ以外の列が全部一致していれば、同じ行が2回入っているとみなす。
-
-    **取込元管理番号(共有での番号)も比べない。** 共有で同じ注文が4回入っていても、
-    写しごとに共有での番号が違うので、比べると「重複なし」に見えていた(現場の
-    手元DBで、資材パレット注文管理 728件が「重複なし」── 共有では 180件が4回ずつ)。
+    「同じ」の決め方は `dedupe` の1か所だけ(設定の警告・`--fix`・`scripts/dedupe_writeback.py`
+    が同じ数え方になる)。取り込みと同じ形にそろえてから、比べなくてよい列(管理番号・
+    送信ID・取込元管理番号・印未反映・作成元)を除いた全部の列で比べる。
+    `key_column` は昔の呼び方のなごり(管理番号・id はもともと比べない)。
     """
+    from . import dedupe
     try:
-        columns = [r[1] for r in conn.execute(f"PRAGMA table_info([{table}])")]
-    except sqlite3.Error:                         # pragma: no cover
+        counted = dedupe.count_conn(conn, table, shared=False)
+    except sqlite3.Error:                         # 表が無い(古い手元DB・設定画面を組むだけ)
         return 0
-    compare = [c for c in columns if c not in (key_column, *LOCAL_ONLY_COLUMNS)]
-    if not compare:
-        return 0
-    names = ", ".join(f"[{c}]" for c in compare)
-    try:
-        row = conn.execute(
-            f"SELECT COALESCE(SUM(n - 1), 0) FROM"
-            f" (SELECT COUNT(*) AS n FROM [{table}]"
-            f"  GROUP BY {names} HAVING n > 1)").fetchone()
-    except sqlite3.Error:                         # pragma: no cover
-        return 0
-    return int(row[0] or 0)
+    return len(counted.drop)
+
 
 def _import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = None,
                       *, progress: Optional[Progress] = None,

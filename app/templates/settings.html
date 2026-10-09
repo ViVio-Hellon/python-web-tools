@@ -136,18 +136,19 @@
         </p>
 
         <div class="ops__row">
-          <span class="ops__name">同じ内容の行</span>
+          <span class="ops__name">重複を消す</span>
           <div class="btn-row">
-            {# 数えるのは誰でも。共有の行を消すのは管理者だけ(押したときにサーバが断る) #}
-            <button class="btn" type="button" id="dedupeCount">数える</button>
-            <button class="btn btn--commit" type="button" id="dedupeRun" hidden></button>
+            {# 管理者認証 + 資材モードの権限が無ければ、押したときにサーバが理由を返して断る #}
+            <button class="btn btn--commit" type="button" id="dedupeRun">--fix を実行(重複を消す)</button>
           </div>
         </div>
         <p class="why" id="dedupeWhy">
-          発注コメント・ボード使用実績などで、同じ1件が2回入った行を数えます。共有(梱包資材マスタ)に
-          あれば、控えを取ってから消して取り込み直せます。この端末にだけあるなら取り込み直すだけで消えます。
+          発注・発注コメント・ボード使用実績など、共有する表で<b>同じ1件が2回以上入った行</b>を消します。
+          押すと順に、①共有の梱包資材マスタを同じフォルダへ丸ごと控えとして写す
+          ②共有の重複を消す(いちばん先に入った行を残す) ③この端末へ取り込み直す
+          ④この端末に残った重複も消す、を行います。値が1つでも違う行(丈 2502.5 と 2502 など)は
+          重複とみなさず残します。管理者認証と、この端末に資材モードの権限が要ります。
         </p>
-        <pre class="job__summary" id="dedupeResult" hidden></pre>
 
         <div class="ops__row">
           <span class="ops__name">Access で作った表</span>

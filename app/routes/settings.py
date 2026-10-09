@@ -477,45 +477,32 @@ def table_refresh_run():
     return jsonify(payload), status
 
 
-@bp.get("/api/settings/dedupe")
-def dedupe_plan():
-    """同じ内容の行が、共有と手元にそれぞれ何件あるか(片付ける前に見せる)。"""
-    from packaging_tool import dedupe
-    path = data_sync.find_material_db()
-    shared = dedupe.count_path(path) if path is not None else []
-    local = dedupe.local_duplicates(get_db())
-    allowed, why = _dedupe_allowed()
-    return jsonify(settings_presenter.dedupe_plan(path, shared, local,
-                                                  blocked="" if allowed else why))
-
-
 def _dedupe_allowed() -> tuple[bool, str]:
-    """共有の行を消してよいか(マスタを直すのと同じ関門: 管理者認証 + マスタを直せる権限)。"""
+    """`--fix` を走らせてよいか(マスタを直すのと同じ関門: 管理者認証 + 資材モードの権限)。"""
     from packaging_tool import master_admin, selection_session
     conn = get_db()
     if not selection_session.get_session(conn).admin:
-        return False, "共有の行を消すには管理者認証が必要です。「パスワード」の面で認証してください。"
+        return False, "--fix(重複を消す)には管理者認証が必要です。「パスワード」の面で認証してください。"
     return master_admin.can_edit(conn, "")
 
 
 @bp.post("/api/settings/dedupe")
 def dedupe_run():
-    """共有の同じ内容の行を片付けて(控えを取ってから)、取り込み直す。
+    """`--fix`: 共有の重複を消し(控えを取ってから)、取り込み直し、この端末の重複も消す。
 
-    共有に重なりが無ければ消さずに取り込み直すだけ(手元だけの重なりはそれで消える)
-    なので、関門は**共有に消すものがあるときだけ**。
+    **関門はいつも通す**(管理者認証 + 資材モードの権限)。共有に重複があるかどうかを
+    押す前に数えて分けると、数えたあとにほかの端末が書いた行で話が変わる。
     """
     from packaging_tool import dedupe
+    allowed, why = _dedupe_allowed()
+    if not allowed:
+        return jsonify(_error("not_allowed", why)), 403
     path = data_sync.find_material_db()
     if path is None:
         from packaging_tool import sync_sources
         return jsonify(_error("no_source", sync_sources.material_db_missing_why())), 422
-    if any(c.drop for c in dedupe.count_path(path)):
-        allowed, why = _dedupe_allowed()
-        if not allowed:
-            return jsonify(_error("not_allowed", why)), 403
-    return _start("dedupe", "同じ内容の行を片付ける",
-                  lambda p: _with_conn(lambda c: dedupe.cleanup(c, path, progress=p)))
+    return _start("dedupe", "--fix(重複を消す)",
+                  lambda p: _with_conn(lambda c: dedupe.run_fix(c, path, progress=p)))
 
 
 @bp.post("/api/settings/write-back")
