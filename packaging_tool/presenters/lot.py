@@ -222,6 +222,8 @@ def build(result: lot_service.LotSearchResult) -> LotViewModel:
         final_process_count=lot.final_process_count,
         can_expand=bool(lot.width and lot.length),
         expand_reason=("" if lot.width and lot.length
+                       else "BOX実績寸法の横の欄で、使う寸法を選んでください"
+                       if lot.box_choices and not lot.box_pick
                        else "製造板幅・板丈が取得できていません"),
     )
 
@@ -296,16 +298,30 @@ def _dimension_note(lot: lot_service.LotInfo) -> str:
     return note
 
 
+def _not_chosen_yet(lot: lot_service.LotInfo, key: str) -> bool:
+    """BOX実績寸法が使えない(HOT・空)ロットで、まだ候補を選んでいない寸法か。
+
+    現場の声:「空白で良くない？今から選ぶわけだし0が入ってると混乱されるよ」。
+    使わない値の代わりに入れている 0 を、そのまま「0.000」「0.0」と出さない。
+    """
+    return (key in ("thickness", "width", "length")
+            and bool(lot.box_final_problem) and not lot.box_pick and not getattr(lot, key))
+
+
 def _lot_field(lot: lot_service.LotInfo, group: str, label: str, key: str) -> Field:
     value = getattr(lot, key)
-    if key in THICKNESS_FIELDS:
+    blank = _not_chosen_yet(lot, key)
+    if blank:
+        text = ""
+    elif key in THICKNESS_FIELDS:
         text = lot_service.format_thickness(value)
     elif key in DIMENSION_FIELDS:
         text = lot_service.format_dimension(value)
     else:
         text = str(value)
     return Field(
-        label=label, key=key, value=text or "---",
+        # 選ぶ前は空白(「---」は「値が無い」に読める。ここは、これから選ぶ)
+        label=label, key=key, value=("" if blank else text or "---"),
         # BOXコースのときだけ強調する。板厚・板幅・板丈が
         # 製造値ではなくBOX実績に差し替わっていることを示すため
         highlight=lot.is_box and key in BOX_HIGHLIGHT_FIELDS,

@@ -309,6 +309,33 @@ class SecondLotDirTests(unittest.TestCase):
 
         self.assertEqual(lot_service.search_lot(self.conn, "V000007").lot.box_final_problem, "HOT")
 
+    def test_HOTで選ぶ前の板厚_板幅_板丈は空白_資材展開は押せない(self) -> None:
+        """現場の声:「空白で良くない？今から選ぶわけだし0が入ってると混乱されるよ」。"""
+        from packaging_tool.presenters import lot as lot_presenter
+
+        self.hot_ledgers()
+        data_sync.import_lot_ledger(self.conn)
+        result = lot_service.search_lot(self.conn, "T000005")
+        view = lot_presenter.build(result)
+        dims = {f.key: f.value for f in view.lot_fields
+                if f.key in ("thickness", "width", "length")}
+        self.assertEqual(dims, {"thickness": "", "width": "", "length": ""})
+        self.assertFalse(view.can_expand)
+        self.assertIn("使う寸法を選んでください", view.expand_reason)
+        # オーダー寸法は空白にしない(使える値)
+        order = next(f.value for f in view.lot_fields if f.key == "order_width")
+        self.assertNotEqual(order, "")
+        # 選んだら、その値を出す
+        key = result.lot.box_choices[0].key
+        picked = lot_presenter.build(lot_service.search_lot(self.conn, "T000005", key))
+        dims = {f.key: f.value for f in picked.lot_fields
+                if f.key in ("thickness", "width", "length")}
+        self.assertEqual(dims, {"thickness": "100.000", "width": "1200.0", "length": "2850.0"})
+        self.assertTrue(picked.can_expand)
+        # HOT でないロットは今までどおり
+        ken = lot_presenter.build(lot_service.search_lot(self.conn, "K000008"))
+        self.assertEqual(next(f.value for f in ken.lot_fields if f.key == "width"), "1500.0")
+
     def test_HOTでもBOXでなければ製造寸法のまま_HOTでなければ1つ目のまま(self) -> None:
         self.hot_ledgers()
         data_sync.import_lot_ledger(self.conn)
