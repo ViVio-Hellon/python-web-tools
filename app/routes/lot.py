@@ -225,13 +225,32 @@ def lot_list_saved_delete():
         lot_browse_session.get_session().delete_saved(str(body.get("name", ""))))
 
 
+def _box_pick(lot_no: str, *, remember: bool) -> str:
+    """BOX最終実績寸法の候補のどれを使うか。
+
+    画面が `box_pick` を付けてきたらそれ(空なら「1つ目のまま」に戻す)。付けていなければ、
+    そのロットで前に選んだもの。`remember` のときだけ覚える(見るだけの画面では覚えない)。
+    """
+    picks = work_context.get_context().box_picks
+    if "box_pick" not in request.args:
+        return picks.get(lot_no, "")
+    pick = request.args.get("box_pick", "")
+    if remember:
+        if pick:
+            picks[lot_no] = pick
+        else:
+            picks.pop(lot_no, None)
+    return pick
+
+
 def _select(conn, lot_no: str) -> dict:
     """1件引いて、**作業中のロットとして覚える**。
 
     リボンと、このあとの資材展開がこれを見る(tkinter版が
     `SelectionPresenter` に入れていたのと同じ役割)。
     """
-    result = lot_service.search_lot(conn, lot_presenter.normalize(lot_no))
+    lot_no = lot_presenter.normalize(lot_no)
+    result = lot_service.search_lot(conn, lot_no, _box_pick(lot_no, remember=True))
     context = work_context.get_context()
     context.apply_lot(result)
 
@@ -294,7 +313,8 @@ def peek(lot_no: str):
     `/api/lot/<lot_no>` との違いはそこ1点 ── あちらは開くことが
     「選ぶ」ことでもあるので、帯も資材選択の状態機械も動く。
     """
-    result = lot_service.search_lot(get_db(), lot_presenter.normalize(lot_no))
+    lot_no = lot_presenter.normalize(lot_no)
+    result = lot_service.search_lot(get_db(), lot_no, _box_pick(lot_no, remember=False))
     view = lot_presenter.build(result)
     # 図面だけは先に取りに行く。見に行くのは読むだけの操作で、
     # 待たせる理由が無い(`_select` と同じ理由)

@@ -922,3 +922,54 @@ class ExpandIsFieldOnlyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BoxPickApiTests(LotWebTestCase):
+    """BOX最終実績寸法の候補を選ぶ(1つ目に寸法が無いBOXコースのロット)。
+
+    選んだものはサーバが覚え、表示・帯・資材展開がその寸法を使う。発注一覧の
+    「Lotを開く」(見るだけ)では覚えない。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        insert_lot(self.conn, 設計_設備コース="HOT PSW GFS KEN", BOX最終実績_板厚=0.0,
+                   BOX最終実績_板幅=0.0, BOX最終実績_板丈=0.0, BOX実績_板厚=0.0,
+                   BOX実績_板幅=0.0, BOX実績_板丈=0.0)
+        self.conn.executemany(
+            "INSERT INTO 仕掛ロット_2つ目 (ロット番号, BOX番号, BOX設計_設備名, 板厚, 板幅, 板丈, 出どころ)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [("1234567", "3", "GFS", 6.1, 1220.0, 2630.0, "BOX最終実績"),
+             ("1234567", "4", "KEN", 6.0, 1200.0, 2600.0, "BOX最終実績")])
+        self.conn.commit()
+
+    def dims(self, body: dict) -> list[str]:
+        return [f["value"] for f in body["lot_fields"] if f["key"] in ("thickness", "width", "length")]
+
+    def test_候補を並べ_選んだ寸法を使い_覚える(self) -> None:
+        body = self.get("/api/lot/1234567")
+        self.assertEqual([c["equipment"] for c in body["box_choices"]], ["GFS", "KEN"])
+        self.assertFalse(body["can_expand"])
+        self.assertIn("横の欄で", body["dimension_note"])
+        key = body["box_choices"][1]["key"]
+        picked = self.get(f"/api/lot/1234567?box_pick={key}")
+        self.assertEqual(self.dims(picked), ["6.000", "1200.0", "2600.0"])
+        self.assertTrue(picked["can_expand"])
+        self.assertIn("2つ目の KEN", picked["dimension_note"])
+        # 開き直しても覚えている
+        again = self.get("/api/lot/1234567")
+        self.assertEqual(again["box_pick"], key)
+        self.assertEqual(self.dims(again), ["6.000", "1200.0", "2600.0"])
+        # 資材展開はその寸法を製品サイズにする
+        res = self.client.post("/api/lot/expand", headers=self.auth(), json={})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertIn("1200×2600", res.get_json()["message"])
+        # 「1つ目のまま」に戻せる
+        back = self.get("/api/lot/1234567?box_pick=")
+        self.assertEqual((back["box_pick"], back["can_expand"]), ("", False))
+
+    def test_見るだけの画面では覚えない(self) -> None:
+        key = self.get("/api/lot/1234567/peek")["box_choices"][0]["key"]
+        peek = self.get(f"/api/lot/1234567/peek?box_pick={key}")
+        self.assertEqual(self.dims(peek), ["6.100", "1220.0", "2630.0"])
+        self.assertEqual(self.get("/api/lot/1234567")["box_pick"], "")

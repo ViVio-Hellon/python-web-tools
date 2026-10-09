@@ -135,6 +135,10 @@ class LotViewModel:
     # `dimension_group` は、その説明をどのまとまりの下に置くか
     dimension_note: str = ""
     dimension_group: str = ""
+    # BOX最終実績寸法の候補(仕掛台帳の2つ目の置き場所から)。BOX実績寸法のロットで、
+    # 1つ目の BOX最終実績寸法が空のときだけ並ぶ。見出しの横の選ぶ欄に出す
+    box_choices: list[dict[str, Any]] = field(default_factory=list)
+    box_pick: str = ""
     is_box: bool = False
     is_ex: bool = False
     # 試験指示票。「要 / 不要」であって、検索の成否ではない
@@ -197,6 +201,9 @@ def build(result: lot_service.LotSearchResult) -> LotViewModel:
         odr_badges=_odr_badges(lot, odr),
         dimension_note=_dimension_note(lot),
         dimension_group=f"{lot.dimension_source}寸法",
+        box_choices=[{"key": c.key, "label": c.label, "equipment": c.equipment,
+                      "selected": c.key == lot.box_pick} for c in lot.box_choices],
+        box_pick=lot.box_pick,
         is_box=lot.is_box,
         is_ex=odr.is_ex,
         test_slip=lot.test_slip_text,
@@ -264,8 +271,22 @@ def _dimension_note(lot: lot_service.LotInfo) -> str:
     """
     if not lot.is_box:
         return ""
-    return (f"設計_設備コースが {lot.box_course} のため、"
+    note = (f"設計_設備コースが {lot.box_course} のため、"
             "製造寸法ではなくBOX実績寸法を表示しています")
+    picked = lot.picked_choice
+    if picked is not None:
+        # **どの値を使っているか**を黙らない。1つ目の値ではないことを書く
+        return (f"{note}。1つ目の仕掛台帳に BOX最終実績寸法が無いため、2つ目の"
+                f" {picked.equipment or '(設備名なし)'} の{picked.source}寸法を使っています")
+    if lot.box_choices:
+        return (f"{note}。1つ目の仕掛台帳に BOX最終実績寸法がありません。"
+                "横の欄で、2つ目の仕掛台帳の BOX設計_設備名 を選ぶと、その寸法を使います")
+    if lot.box_final_missing:
+        from .. import config
+        where = ("2つ目の仕掛台帳にもありません" if config.lot_db_dir2() is not None
+                 else "2つ目の仕掛台帳の置き場所を設定すると、そちらから選べます")
+        return f"{note}。1つ目の仕掛台帳に BOX最終実績寸法がありません({where})"
+    return note
 
 
 def _lot_field(lot: lot_service.LotInfo, group: str, label: str, key: str) -> Field:
@@ -351,6 +372,8 @@ def to_dict(view: LotViewModel) -> dict[str, Any]:
         "odr_badges": [_badge_dict(b) for b in view.odr_badges],
         "dimension_note": view.dimension_note,
         "dimension_group": view.dimension_group,
+        "box_choices": view.box_choices,
+        "box_pick": view.box_pick,
         "is_box": view.is_box,
         "is_ex": view.is_ex,
         "test_slip": view.test_slip,

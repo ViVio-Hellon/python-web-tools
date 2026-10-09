@@ -87,6 +87,31 @@ def format_dimension(value: float) -> str:
 
 
 @dataclass
+class BoxChoice:
+    """BOX最終実績寸法の候補1つ(仕掛台帳の2つ目の置き場所の行。`仕掛ロット_2つ目`)。
+
+    1つ目の SIKALOT で BOX最終実績の寸法が空のロットだけに付く。ロット情報の画面で
+    「BOX実績寸法」の横に BOX設計_設備名 で並べ、選んだものの寸法を使う(現場の依頼)。
+    """
+
+    key: str = ""            # 選んだものを覚える鍵(BOX番号|設備名|寸法)。取り込み直しても変わらない
+    equipment: str = ""      # BOX設計_設備名
+    box_no: str = ""         # BOX番号
+    thickness: float = 0.0
+    width: float = 0.0
+    length: float = 0.0
+    source: str = ""         # 寸法の出どころ(BOX最終実績 / BOX実績)
+
+    @property
+    def label(self) -> str:
+        name = self.equipment or "(設備名なし)"
+        box = f"・BOX{self.box_no}" if self.box_no else ""
+        note = "" if self.source == "BOX最終実績" else f"・{self.source}"
+        return (f"{name}({format_thickness(self.thickness)} × {format_dimension(self.width)}"
+                f" × {format_dimension(self.length)}{box}{note})")
+
+
+@dataclass
 class LotInfo:
     """ロット情報ブロック(VBA `lblLot(0..11)`)。"""
 
@@ -124,6 +149,16 @@ class LotInfo:
     # (AdvanceCheck flag1)のどちらも BOX実績に差し替える前の「製造板厚」を
     # 見るため、表示用の thickness とは別に保持する
     manufactured_thickness: float = 0.0
+    # BOX最終実績の寸法が空のとき、2つ目の置き場所から控えた候補(`BoxChoice`)。
+    # BOX実績寸法のロットのときだけ付く。`box_pick` は選ばれた候補の鍵(空 = 1つ目のまま)
+    box_choices: list = field(default_factory=list)
+    box_pick: str = ""
+    # BOX実績寸法のロットで、1つ目の BOX最終実績寸法が空か(候補が無くても理由を書くため)
+    box_final_missing: bool = False
+
+    @property
+    def picked_choice(self) -> Optional["BoxChoice"]:
+        return next((c for c in self.box_choices if c.key == self.box_pick), None)
 
     @property
     def dimension_source(self) -> str:
@@ -295,8 +330,35 @@ def _box_final(row: Any, name: str) -> Any:
     return row[f"BOX最終実績_{name}"] or row[f"BOX実績_{name}"]
 
 
-def _load_lot_info(conn: sqlite3.Connection, lot_no: str) -> Optional[LotInfo]:
-    """VBA `SearchLotInfo` の移植。"""
+def _load_box_choices(conn: sqlite3.Connection, lot_no: str) -> list[BoxChoice]:
+    """そのロットの BOX最終実績寸法の候補(`仕掛ロット_2つ目`)。無ければ空。"""
+    try:
+        rows = conn.execute(
+            "SELECT BOX番号, BOX設計_設備名, 板厚, 板幅, 板丈, 出どころ FROM 仕掛ロット_2つ目"
+            " WHERE ロット番号 = ? ORDER BY 管理番号", (lot_no,)).fetchall()
+    except sqlite3.OperationalError:
+        return []                     # 表がまだ無い(古い手元DB)
+    out = []
+    for box_no, equipment, thickness, width, length, source in rows:
+        key = f"{box_no}|{equipment}|{thickness:g}|{width:g}|{length:g}"
+        out.append(BoxChoice(key=key, equipment=equipment or "", box_no=box_no or "",
+                             thickness=float(thickness or 0), width=float(width or 0),
+                             length=float(length or 0), source=source or ""))
+    return out
+
+
+def _box_final_missing(row: Any) -> bool:
+    """1つ目の BOX最終実績_板厚・板幅・板丈 のどれかが空(0)か。"""
+    return any(not (row[f"BOX最終実績_{name}"] or 0) for name in ("板厚", "板幅", "板丈"))
+
+
+def _load_lot_info(conn: sqlite3.Connection, lot_no: str,
+                   box_pick: str = "") -> Optional[LotInfo]:
+    """VBA `SearchLotInfo` の移植。
+
+    `box_pick` は BOX最終実績寸法の候補の鍵(`BoxChoice.key`)。BOX実績寸法のロットで、
+    1つ目の BOX最終実績寸法が空のときだけ効く。候補に無い鍵なら無視する(1つ目のまま)。
+    """
     # ロット番号はBOX工程ごとに複数行ありうる。VBAは `rs.EOF` 判定で
     # 先頭レコードだけを見るので、取り込み順(=Accessの物理順)の先頭を採る
     row = db.fetch_one(
@@ -344,6 +406,15 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str) -> Optional[LotInfo]:
         quality_surface=str(row["品質グレード_表面処理"] or ""),
         manufactured_thickness=row["製造板厚"],
     )
+    # 1つ目で BOX最終実績寸法が空 → 2つ目の同じロットの行から選べるようにする(現場の依頼)。
+    # **BOX実績寸法のときだけ**(製造寸法を出しているロットでは使わない)
+    if is_box and _box_final_missing(row):
+        lot.box_final_missing = True
+        lot.box_choices = _load_box_choices(conn, lot_no)
+        picked = next((c for c in lot.box_choices if c.key == box_pick), None)
+        if picked is not None:
+            lot.box_pick = picked.key
+            lot.thickness, lot.width, lot.length = picked.thickness, picked.width, picked.length
     return lot
 
 
@@ -452,7 +523,7 @@ def pack_unit_of(odr: OdrInfo, order_no: str) -> tuple[str, float]:
     return "", 0.0
 
 
-def search_lot(conn: sqlite3.Connection, lot_no: str) -> LotSearchResult:
+def search_lot(conn: sqlite3.Connection, lot_no: str, box_pick: str = "") -> LotSearchResult:
     """VBA `SearchAndDisplay` の移植。ロット番号1本で3ブロックまとめて引く。
 
     VBA版は7桁入力された時点で自動検索していた(`Page1_OnTxtLotNoChanged`)。
@@ -462,7 +533,7 @@ def search_lot(conn: sqlite3.Connection, lot_no: str) -> LotSearchResult:
     if not lot_no:
         return LotSearchResult(found=False, message="ロット番号を入力してください。")
 
-    lot = _load_lot_info(conn, lot_no)
+    lot = _load_lot_info(conn, lot_no, box_pick)
     if lot is None:
         log.debug("search_lot: ロット未発見 [%s]", lot_no)
         return LotSearchResult(found=False, message=f"未発見: ロット {lot_no}")

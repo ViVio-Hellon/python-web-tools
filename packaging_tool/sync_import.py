@@ -515,23 +515,14 @@ LOT_MERGE_KEYS: dict[str, str] = {
 }
 
 
-# 1つ目に**ロットはあるが値が空**のとき、2つ目の同じロットで埋める列のまとまり
-# (現場の質問:「SIKALOT で BOX最終実績_板厚・板幅・板丈 のデータが無かった場合、
-# パス2で見に行くってことですよね?」)。
-#
-# **まとまりごと**入れ替える(板厚だけ1つ目・板幅は2つ目、のように混ぜない)。
-# 「空」は `need` の列のどれかが 0(取り込みで空欄は 0 になる。`NULL_FALLBACKS`)。
-# 2つ目のほうも `need` が全部そろっているときだけ使う。
-#
-# ロットの表はロット番号が一意ではない(BOX工程ごとに行が分かれる)。BOX最終実績_* は
-# ロットの全行に同じ値が配られている列なので(`schema.sql`)、ロットの全行を埋めてよい。
-# 行ごとに値が違う列(BOX実績_* など)は、1つ目と2つ目の行の対応が取れないので埋めない
-LOT_FILL_GROUPS: dict[str, tuple[tuple[str, ...], tuple[str, ...], str]] = {
-    "仕掛ロット": (("BOX最終実績_設備名", "BOX最終実績_板厚", "BOX最終実績_板幅",
-                     "BOX最終実績_板丈", "BOX最終実績_枚本数"),
-                    ("BOX最終実績_板厚", "BOX最終実績_板幅", "BOX最終実績_板丈"),
-                    "BOX最終実績(板厚・板幅・板丈)"),
-}
+# BOX最終実績寸法の候補(`仕掛ロット_2つ目`)。1つ目のロットで BOX最終実績_板厚・板幅・板丈 の
+# どれかが空(取り込みで空欄は 0 になる)なら、2つ目の SIKALOT の同じロットの行を控える。
+# 1つ目と2つ目の SIKALOT は**列の中身が違う**ことがあるので、取り込み元の列名でその行を読み、
+# BOX最終実績_* に1つでも値があればそれ、無ければ BOX実績_* を使う。どちらも空なら控えない
+# (参照パス2専用の SIKALOT には BOX実績_板厚・板幅・板丈 の列が無く、BOX最終実績_板丈 は 0)
+BOX_CHOICE_TABLE = "仕掛ロット_2つ目"
+BOX_DIMENSIONS = ("板厚", "板幅", "板丈")
+BOX_CHOICE_SOURCES = ("BOX最終実績", "BOX実績")
 
 
 def _same_file(a: Optional[Path], b: Optional[Path]) -> bool:
@@ -554,6 +545,10 @@ def import_lot_table(conn: sqlite3.Connection, table: str, path: Path,
     """
     spec = import_specs.LOT_IMPORT_SPECS[table]
     log.info("仕掛台帳 取り込み: %s → %s", path.name, table)
+    if table == "仕掛ロット":
+        # 候補は1つ目・2つ目の今の中身から作り直す(前の取り込みの候補を残さない)
+        with conn:
+            conn.execute(f"DELETE FROM [{BOX_CHOICE_TABLE}]")
     mine = ImportResult()
     import_tables(
         conn, path, {table: spec},
@@ -590,8 +585,8 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
     それを使う(現場の声)。同じロット・受注が両方にあれば1つ目を正とする
     (2つ目の行は足さない)。読めなければ一言残して何もしない(1つ目の分は入っている)。
 
-    1つ目にロットはあるが**値が空**(BOX最終実績の寸法など)のときは、2つ目の同じロットの
-    値で埋める(`fill_blank_from_second`)。
+    1つ目にロットはあるが BOX最終実績の寸法が空のときは、2つ目の同じロットの行を**候補として
+    控える**(`collect_box_choices`)。どれを使うかはロット情報の画面で選ぶ(勝手に埋めない)。
     """
     spec = import_specs.LOT_IMPORT_SPECS[table]
     key = LOT_MERGE_KEYS[table]
@@ -626,7 +621,8 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
         log.exception("%s: 2つ目から足す途中でエラー", table)
         result.warnings.append(f"{table}: 2つ目の置き場所から足せませんでした({exc})")
         return 0
-    fill_blank_from_second(conn, table, rows, have, result)
+    if table == "仕掛ロット":
+        collect_box_choices(conn, rows, result)
     if added:
         result.imported[table] = result.imported.get(table, 0) + added
         what = "受注" if key == "受注番号" else "ロット"
@@ -638,52 +634,60 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
     return added
 
 
-def fill_blank_from_second(conn: sqlite3.Connection, table: str, rows: list,
-                           have: set[str], result: ImportResult) -> int:
-    """1つ目にあるロットで値が空の列を、2つ目の同じロットの値で埋める。埋めたロット数。
+def collect_box_choices(conn: sqlite3.Connection, rows: list, result: ImportResult) -> int:
+    """BOX最終実績寸法が空のロットについて、2つ目の SIKALOT の同じロットの行を候補に控える。
 
-    `LOT_FILL_GROUPS` に挙げた列だけ。1つ目に値があれば1つ目を正とする(上書きしない)。
+    控えた候補の数を返す。手元の `仕掛ロット`(1つ目 + 2つ目から足したロット)のうち、
+    BOX最終実績_板厚・板幅・板丈 のどれかが 0 のロットだけが対象。同じ設備名・同じ寸法の
+    行は1つにまとめる。
     """
-    group = LOT_FILL_GROUPS.get(table)
-    if group is None or not have:
+    blank = " OR ".join(f"COALESCE([BOX最終実績_{d}], 0) <= 0" for d in BOX_DIMENSIONS)
+    need = {str(r[0]) for r in conn.execute(
+        f"SELECT DISTINCT [ロット番号] FROM [仕掛ロット] WHERE {blank}")}
+    if not need:
         return 0
-    columns, need, label = group
-    spec = import_specs.LOT_IMPORT_SPECS[table]
-    key = LOT_MERGE_KEYS[table]
-    fallbacks = import_specs.NULL_FALLBACKS
-    convs = {col: conv for col, _src, conv in spec}
-    found: dict[str, list] = {}
+    lot_src = next(src for col, src, _conv in import_specs.LOT_IMPORT_SPECS["仕掛ロット"]
+                   if col == "ロット番号")
+    seen: set[tuple] = set()
+    values: list[tuple] = []
     for row in rows:
-        values = {col: conv(row.get(src)) for col, src, conv in spec}
-        lot = values.get(key)
-        if lot is None or str(lot) not in have or str(lot) in found:
+        lot = import_specs.to_text(row.get(lot_src))
+        if not lot or lot not in need:
             continue
-        if all((values.get(col) or 0) > 0 for col in need):
-            found[str(lot)] = [values[col] if values[col] is not None
-                               else fallbacks.get(convs[col]) for col in columns]
-    if not found:
+        for source in BOX_CHOICE_SOURCES:
+            dims = [import_specs.to_real(row.get(f"{source}_{d}")) or 0.0 for d in BOX_DIMENSIONS]
+            # **どれか1つでも値があれば候補にする。** 2つ目の実データ(参照パス2専用)は
+            # BOX最終実績_板丈 が全行 0 で、3つそろうのを待つと1件も出ない。0 は 0 のまま見せ、
+            # 使えるか(資材展開に板幅・板丈が要る)は画面で分かるようにする
+            if any(v > 0 for v in dims):
+                break
+        else:
+            continue                      # この行には寸法が1つも無い
+        equipment = import_specs.to_text(row.get("BOX設計_設備名")) or ""
+        box_no = import_specs.to_text(row.get("BOX番号")) or ""
+        key = (lot, equipment, *dims)
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append((lot, box_no, equipment, *dims, source))
+    if not values:
         return 0
-    sets = ", ".join(f"[{col}] = ?" for col in columns)
-    blank = " OR ".join(f"COALESCE([{col}], 0) <= 0" for col in need)
-    filled = 0
     try:
         with conn:
-            for lot, values in found.items():
-                cur = conn.execute(
-                    f"UPDATE [{table}] SET {sets} WHERE [{key}] = ? AND ({blank})",
-                    [*values, lot])
-                if cur.rowcount:
-                    filled += 1
+            conn.executemany(
+                f"INSERT INTO [{BOX_CHOICE_TABLE}] (ロット番号, BOX番号, BOX設計_設備名,"
+                " 板厚, 板幅, 板丈, 出どころ) VALUES (?, ?, ?, ?, ?, ?, ?)", values)
     except sqlite3.Error as exc:
-        log.exception("%s: 2つ目の値で埋める途中でエラー", table)
-        result.warnings.append(f"{table}: 2つ目の置き場所の値で埋められませんでした({exc})")
+        log.exception("BOX最終実績の候補を控えられませんでした")
+        result.warnings.append(f"仕掛ロット: 2つ目の BOX最終実績の候補を控えられませんでした({exc})")
         return 0
-    if filled:
-        result.notes.append(f"{table}: 1つ目で{label}が空のロット {filled:,}件を、"
-                            "2つ目の置き場所の値で埋めました")
-        import_diag.write(f"  [{table}] ← 2つ目 {label}が空のロット {filled}件 を埋めた")
-        log.info("%s: %sが空のロット %s件を2つ目で埋めました", table, label, filled)
-    return filled
+    lots = len({v[0] for v in values})
+    result.notes.append(f"仕掛ロット: 1つ目で BOX最終実績(板厚・板幅・板丈)が空のロット {lots:,}件に、"
+                        f"2つ目の置き場所の行 {len(values):,}件を候補として控えました"
+                        "(ロット情報の画面で選べます)")
+    import_diag.write(f"  [仕掛ロット] ← 2つ目 BOX最終実績が空のロット {lots}件 の候補 {len(values)}件")
+    log.info("BOX最終実績が空のロット %s件 に2つ目の候補 %s件", lots, len(values))
+    return len(values)
 
 
 def _counts_text(path: Path) -> str:

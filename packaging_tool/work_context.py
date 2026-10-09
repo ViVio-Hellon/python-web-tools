@@ -88,6 +88,10 @@ class WorkContext:
     #   {"width": int, "length": int}
     stock_size: dict[str, int] = field(default_factory=dict)
 
+    # ロットごとに選んだ BOX最終実績寸法の候補(`lot_service.BoxChoice.key`)。
+    # **ロットを切り替えても消さない** ── 戻ってきたとき選び直させない
+    box_picks: dict[str, str] = field(default_factory=dict)
+
     def clear(self) -> None:
         """新しいロットに移るときは前の作業を持ち越さない。
 

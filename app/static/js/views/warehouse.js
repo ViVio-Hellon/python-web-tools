@@ -679,7 +679,7 @@ async function peekLot(lotNo) {
   try {
     const body = await api.get(
       `/api/lot/${encodeURIComponent(lotNo)}/peek`);
-    lotdetail.show(body);
+    lotdetail.show(body, { peek: true });
     if (!body.found) toast(body.message || "そのロットは見つかりません", "ng");
   } catch (err) {
     toastError(err);

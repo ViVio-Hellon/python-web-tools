@@ -72,7 +72,12 @@ export function start(options) {
     }
   };
   detail.mount({ onExpand: expand,
-                 expandAbsentWhy: options.expandAbsentWhy });
+                 expandAbsentWhy: options.expandAbsentWhy,
+                 // BOX最終実績寸法を選び直した。帯の製品サイズの元と、一覧の光りを直す
+                 onReloaded: (body) => {
+                   applyRibbon(body.ribbon);
+                   if (body.list) lotlist.render(body.list);
+                 } });
 
   lotlist.start({ view: options.list, onOpen: openLot,
                   onChanged: onListChanged });

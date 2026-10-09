@@ -98,6 +98,10 @@
 .group__name { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em;
                color: var(--muted); margin: 0 0 2px;
                padding-bottom: 2px; border-bottom: 1px solid var(--rule); }
+/* BOX最終実績寸法の候補を選ぶ欄(`lotdetail.boxPicker`)。見出しの横に置く */
+.group__name--pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.group__name--pick .box-pick { font-size: var(--fs-sm); font-weight: 400; letter-spacing: 0;
+  min-width: 14em; max-width: 100%; padding: 2px 6px; }
 .group--hl .group__name { color: var(--state-error);
                           border-bottom-color: var(--state-error); }
 .fields { display: grid; grid-template-columns: repeat(2, minmax(0,1fr));

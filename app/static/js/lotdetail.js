@@ -23,6 +23,8 @@ const SPEC_POLL_MS = 700;
 const SPEC_POLL_MAX = 24;
 
 let current = null;      // いま開いているロットの詳細(資材展開の可否に使う)
+let peekMode = false;    // 見るだけで開いた(発注一覧の「Lotを開く」)。作業中のロットにしない
+let onReload = null;     // 選び直して引き直したとき、開いた画面に知らせる
 let specNo = "";         // いま出している包装仕様NO
 let specRun = 0;         // 見に行っている回。ロットを変えたら古いものは捨てる
 // 資材展開のボタンが**無い**画面で、そのとき説明文に出す「なぜ無いのか」
@@ -95,6 +97,11 @@ function groups(items, note) {
       const name = document.createElement("p");
       name.className = "group__name";
       name.textContent = group.name;
+      // BOX最終実績寸法の候補があれば、見出しの横で選ばせる(`boxPicker`)
+      if (note && note.group === group.name && note.choices && note.choices.length) {
+        name.classList.add("group__name--pick");
+        name.appendChild(boxPicker(note.choices));
+      }
       box.appendChild(name);
     }
     // 差し替えの説明は、説明している欄のすぐ上に置く(近接)
@@ -111,6 +118,44 @@ function groups(items, note) {
     box.appendChild(list);
     return box;
   });
+}
+
+/*
+  BOX最終実績寸法の候補を選ぶ欄。1つ目の仕掛台帳に BOX最終実績寸法が無いロット
+  (BOX実績寸法のときだけ)に、2つ目の仕掛台帳の同じロットの行を BOX設計_設備名 で並べる。
+  **どれを使うかはサーバが覚える**(資材展開も同じ寸法を使うため)。選んだら引き直す。
+*/
+function boxPicker(choices) {
+  const select = document.createElement("select");
+  select.className = "input box-pick";
+  select.id = "boxPick";
+  select.setAttribute("aria-label", "2つ目の仕掛台帳の BOX設計_設備名");
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "選んでください(1つ目のまま)";
+  select.appendChild(none);
+  for (const choice of choices) {
+    const option = document.createElement("option");
+    option.value = choice.key;
+    option.textContent = choice.label;
+    option.selected = Boolean(choice.selected);
+    select.appendChild(option);
+  }
+  select.addEventListener("change", () => pickBox(select.value));
+  return select;
+}
+
+async function pickBox(key) {
+  if (!current) return;
+  const base = `/api/lot/${encodeURIComponent(current.lot_no)}${peekMode ? "/peek" : ""}`;
+  try {
+    const body = await api.get(`${base}?box_pick=${encodeURIComponent(key)}`);
+    renderDetail(body);
+    // 帯(製品サイズの元になる寸法)と一覧は、開いた画面が直す
+    if (onReload) onReload(body);
+  } catch (err) {
+    toastError(err);
+  }
 }
 
 function badge(item) {
@@ -391,7 +436,8 @@ function renderDetail(view) {
   el.odrBadges.replaceChildren(...view.odr_badges.map(badge));
   el.lotFields.replaceChildren(...groups(
     view.lot_fields,
-    { group: view.dimension_group, text: view.dimension_note }));
+    { group: view.dimension_group, text: view.dimension_note,
+      choices: view.is_box ? (view.box_choices || []) : [] }));
   el.odrFields.replaceChildren(...groups(view.odr_fields));
   el.hikiRows.replaceChildren(...view.hiki.map(hikiRow));
   el.hikiCount.textContent = `${view.hiki.length} 件`;
@@ -421,7 +467,7 @@ export function stop() {
  *                 ボタンそのものが無い(テンプレートが出していない)
  *   expandAbsentWhy ボタンが無い画面で説明文に出す一文
  */
-export function mount({ onExpand = null, expandAbsentWhy = "" } = {}) {
+export function mount({ onExpand = null, expandAbsentWhy = "", onReloaded = null } = {}) {
   // ダイアログだけ id と持ち名が違う(画面の中では「ロットの詳細」、
   // このモジュールの中では単に「モーダル」)
   el.modal = document.getElementById("lotModal");
@@ -441,6 +487,7 @@ export function mount({ onExpand = null, expandAbsentWhy = "" } = {}) {
   current = null;
   specNo = "";
   absentWhy = expandAbsentWhy || "";
+  onReload = onReloaded;
 
   el.slip.addEventListener("click", () => showSlipWhy(el.slipWhy.hidden));
   el.modalClose.addEventListener("click", closeModal);
@@ -503,8 +550,12 @@ export function mount({ onExpand = null, expandAbsentWhy = "" } = {}) {
   return true;
 }
 
-/** 詳細を出して開く。見つからなかったときは開かない。 */
-export function show(view) {
+/**
+ * 詳細を出して開く。見つからなかったときは開かない。
+ * `peek` は見るだけで開いたとき(BOX最終実績寸法を選び直しても作業中のロットにしない)。
+ */
+export function show(view, { peek = false } = {}) {
+  peekMode = Boolean(peek);
   renderDetail(view);
   if (view && view.found) openModal();
 }

@@ -173,40 +173,95 @@ class SecondLotDirTests(unittest.TestCase):
                 self.assertEqual(self.local("SELECT ロット番号 FROM 仕掛ロット"), [("Y000002",)])
                 source_db.sweep_old_copies()
 
-    def test_1つ目でBOX最終実績が空なら2つ目の値で埋める(self) -> None:
-        """現場の質問:「SIKALOT で BOX最終実績_板厚・板幅・板丈 のデータが無かった場合、
-        パス2で見に行くってことですよね?」── ロットはあっても値が空なら、2つ目を見る。"""
-        def boxed(no: str, t: str, w: str, l: str, n: str = "", place: str = "") -> dict:
+    # --- BOX最終実績寸法の候補(1つ目にロットはあるが寸法が空) ------------------
+    def write_raw(self, folder: Path, columns: list[str], rows: list[dict]) -> Path:
+        """列を自由に決めた SIKALOT(**1つ目と2つ目で列の中身が違う**ことがある)。"""
+        path = folder / "SIKALOT.sqlite3"
+        conn = sqlite3.connect(path)
+        conn.execute(f'CREATE TABLE "{import_specs.LOT_SOURCE_TABLE}" ('
+                     + ", ".join(f'"{c}" TEXT' for c in columns) + ")")
+        for row in rows:
+            conn.execute(f'INSERT INTO "{import_specs.LOT_SOURCE_TABLE}" VALUES ('
+                         + ",".join("?" * len(columns)) + ")", [row.get(c, "") for c in columns])
+        conn.commit()
+        conn.close()
+        return path
+
+    def box_ledgers(self) -> None:
+        """1つ目: BOXコースで BOX最終実績が空のロットH・そろっているロットC・BOXでないロットN。
+        2つ目: 列が違う(BOX最終実績_* が無く、BOX設計_設備名・BOX番号・BOX実績_* がある)。"""
+        def first(no: str, course: str, t: str = "", w: str = "", l: str = "") -> dict:
             row = lot(no, "1つ目")
-            row.update({src("仕掛ロット", "BOX最終実績_板厚"): t, src("仕掛ロット", "BOX最終実績_板幅"): w,
-                        src("仕掛ロット", "BOX最終実績_板丈"): l, src("仕掛ロット", "BOX最終実績_枚本数"): n,
-                        src("仕掛ロット", "BOX最終実績_設備名"): place})
+            row.update({src("仕掛ロット", "設計_設備コース"): course,
+                        src("仕掛ロット", "BOX最終実績_板厚"): t, src("仕掛ロット", "BOX最終実績_板幅"): w,
+                        src("仕掛ロット", "BOX最終実績_板丈"): l})
             return row
         write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [
-            boxed("A000001", "", "", ""),                 # 空 → 2つ目で埋める
-            boxed("A000001", "", "", ""),                 # 同じロットの別の工程の行も
-            boxed("B000002", "6", "1250", ""),            # 丈だけ空 → まとまりごと2つ目に
-            boxed("C000003", "8", "1500", "3000", "40", "KEN1"),   # そろっている → 1つ目のまま
-            boxed("D000004", "", "", ""),                 # 2つ目にも無い → 空のまま
+            first("H9022S0", "HOT PSW GFS KEN"),
+            first("C000003", "HOT GFS KEN", "8", "1500", "3000"),
+            first("N000004", "HOT L-1 KEN"),
         ])
-        write_ledger(self.second, "SIKALOT.sqlite3", "仕掛ロット", [
-            boxed("A000001", "5", "1200", "2500", "30", "KEN2"),
-            boxed("B000002", "7", "1300", "2600", "31", "KEN3"),
-            boxed("C000003", "9", "9999", "9999", "99", "別"),
-            boxed("D000004", "4", "", ""),                # 2つ目も欠けている → 使わない
+        cols = ["ﾛｯﾄ番号", "BOX番号", "BOX設計_設備名", "BOX実績_板厚", "BOX実績_板幅", "BOX実績_板丈",
+                "BOX最終実績_板厚", "BOX最終実績_板幅", "BOX最終実績_板丈", "設計_設備ｺｰｽ"]
+        self.write_raw(self.second, cols, [
+            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "3", "BOX設計_設備名": "GFS",
+             "BOX最終実績_板厚": "6.1", "BOX最終実績_板幅": "1220", "BOX最終実績_板丈": "2630"},
+            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "4", "BOX設計_設備名": "KEN",
+             "BOX実績_板厚": "6", "BOX実績_板幅": "1200", "BOX実績_板丈": "2600"},      # 最終実績が無い行
+            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "5", "BOX設計_設備名": "PSW"},            # 寸法が無い → 出さない
+            # 参照パス2専用の実データの形: BOX最終実績_板丈 が 0 → 0 のまま候補にする
+            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "6", "BOX設計_設備名": "GSS",
+             "BOX最終実績_板厚": "4.52", "BOX最終実績_板幅": "127.8", "BOX最終実績_板丈": "0"},
+            {"ﾛｯﾄ番号": "C000003", "BOX番号": "2", "BOX設計_設備名": "GFS",
+             "BOX最終実績_板厚": "9", "BOX最終実績_板幅": "9999", "BOX最終実績_板丈": "9999"},
+            {"ﾛｯﾄ番号": "N000004", "BOX番号": "1", "BOX設計_設備名": "L-1",
+             "BOX最終実績_板厚": "1", "BOX最終実績_板幅": "100", "BOX最終実績_板丈": "200"},
         ])
+
+    def test_BOX最終実績が空なら2つ目の行を候補に控える_勝手に埋めない(self) -> None:
+        self.box_ledgers()
         result = data_sync.import_lot_ledger(self.conn)
-        got = self.local("SELECT ロット番号, BOX最終実績_板厚, BOX最終実績_板幅, BOX最終実績_板丈,"
-                         " BOX最終実績_枚本数, BOX最終実績_設備名, 用途名 FROM 仕掛ロット ORDER BY 管理番号")
-        self.assertEqual(got, [
-            ("A000001", 5.0, 1200.0, 2500.0, 30, "KEN2", "1つ目"),
-            ("A000001", 5.0, 1200.0, 2500.0, 30, "KEN2", "1つ目"),
-            ("B000002", 7.0, 1300.0, 2600.0, 31, "KEN3", "1つ目"),
-            ("C000003", 8.0, 1500.0, 3000.0, 40, "KEN1", "1つ目"),
-            ("D000004", 0.0, 0.0, 0.0, 0, "", "1つ目"),
+        self.assertEqual(self.local("SELECT ロット番号, BOX番号, BOX設計_設備名, 板厚, 板幅, 板丈, 出どころ"
+                                    " FROM 仕掛ロット_2つ目 ORDER BY 管理番号"), [
+            ("H9022S0", "3", "GFS", 6.1, 1220.0, 2630.0, "BOX最終実績"),
+            ("H9022S0", "4", "KEN", 6.0, 1200.0, 2600.0, "BOX実績"),
+            ("H9022S0", "6", "GSS", 4.52, 127.8, 0.0, "BOX最終実績"),
+            # N000004 は BOX でないが BOX最終実績が空なので控える(画面で出すかはロット情報が決める)
+            ("N000004", "1", "L-1", 1.0, 100.0, 200.0, "BOX最終実績"),
         ])
-        self.assertTrue(any("BOX最終実績(板厚・板幅・板丈)が空のロット 2件" in n for n in result.notes),
-                        result.notes)
+        # 1つ目の値は**書き換えない**(どれを使うかは画面で選ぶ)
+        self.assertEqual(self.local("SELECT BOX最終実績_板厚 FROM 仕掛ロット WHERE ロット番号 = 'H9022S0'"),
+                         [(0.0,)])
+        self.assertTrue(any("候補として控えました" in n for n in result.notes), result.notes)
+        # 取り込み直しても重ならない(作り直す)
+        data_sync.import_lot_ledger(self.conn)
+        self.assertEqual(self.local("SELECT COUNT(*) FROM 仕掛ロット_2つ目"), [(4,)])
+
+    def test_選んだ候補の寸法を使う(self) -> None:
+        self.box_ledgers()
+        data_sync.import_lot_ledger(self.conn)
+        plain = lot_service.search_lot(self.conn, "H9022S0").lot
+        self.assertEqual([c.equipment for c in plain.box_choices], ["GFS", "KEN", "GSS"])
+        self.assertEqual((plain.width, plain.length, plain.box_pick), (0.0, 0.0, ""))
+        key = plain.box_choices[1].key
+        picked = lot_service.search_lot(self.conn, "H9022S0", key).lot
+        self.assertEqual((picked.thickness, picked.width, picked.length), (6.0, 1200.0, 2600.0))
+        self.assertEqual(picked.box_pick, key)
+        # 候補に無い鍵は無視する(1つ目のまま)
+        self.assertEqual(lot_service.search_lot(self.conn, "H9022S0", "x|y").lot.width, 0.0)
+
+    def test_候補はBOX実績寸法で最終実績が空のときだけ(self) -> None:
+        self.box_ledgers()
+        data_sync.import_lot_ledger(self.conn)
+        self.assertEqual(lot_service.search_lot(self.conn, "C000003").lot.box_choices, [])   # そろっている
+        self.assertEqual(lot_service.search_lot(self.conn, "N000004").lot.box_choices, [])   # BOXでない
+
+    def test_2つ目が無ければ候補も無い(self) -> None:
+        self.box_ledgers()
+        user_settings.save(config.KEY_LOT_DB_DIR2, "")
+        data_sync.import_lot_ledger(self.conn)
+        self.assertEqual(self.local("SELECT COUNT(*) FROM 仕掛ロット_2つ目"), [(0,)])
+        self.assertEqual(lot_service.search_lot(self.conn, "H9022S0").lot.box_choices, [])
 
     def test_2つ目を設定していなければ足さない(self) -> None:
         user_settings.save(config.KEY_LOT_DB_DIR2, "")
@@ -283,3 +338,18 @@ class SettingsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BoxPickScreenTests(unittest.TestCase):
+    """ロット情報の画面: BOX実績寸法の横に、2つ目の候補を選ぶ欄(`lotdetail.boxPicker`)。"""
+
+    def test_BOX実績寸法のときだけ選ぶ欄を出す(self) -> None:
+        js = (Path(__file__).resolve().parent.parent / "app/static/js/lotdetail.js").read_text("utf-8")
+        self.assertIn("function boxPicker(choices)", js)
+        self.assertIn("choices: view.is_box ? (view.box_choices || []) : []", js)
+        self.assertIn("?box_pick=${encodeURIComponent(key)}", js)
+        # 見るだけの画面(発注一覧の「Lotを開く」)は peek で引き直す(作業中のロットにしない)
+        self.assertIn('peekMode ? "/peek" : ""', js)
+        warehouse = (Path(__file__).resolve().parent.parent
+                     / "app/static/js/views/warehouse.js").read_text("utf-8")
+        self.assertIn("lotdetail.show(body, { peek: true })", warehouse)
