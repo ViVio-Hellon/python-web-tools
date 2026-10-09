@@ -97,6 +97,21 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
 ORIGIN_COLUMN = "作成元"
 WRITEBACK_SPECS = [replace(spec, origin_column=ORIGIN_COLUMN) for spec in WRITEBACK_SPECS]
 
+# **一生変わらない番号**(行を作ったときに決まる)。共有に「同じ番号は1つだけ」の一意索引を
+# 作り、誰がいつ何度送っても1行しか入らないようにする(`WriteBackSpec.identity_columns`)。
+# 新しい列は作らない ── もうある番号だけを使う(入出庫履歴・ボード使用実績は番号が無いので、
+# 送る側の守り「取り込んだ行は送らない」で守る)
+IDENTITY_COLUMNS: dict[str, tuple[str, ...]] = {
+    config.TBL_WAREHOUSE_ORDER: ("発注キー",),
+    config.TBL_ORDER_COMMENT: ("コメントID",),
+    # 「見た」は、どのコメントを・どの端末が・どちら側で、で1つ
+    config.TBL_ORDER_COMMENT_SEEN: ("コメントID", "見た端末", "見た側"),
+    config.TBL_CUT_REQUEST: ("依頼ID",),
+    config.TBL_CUT_REQUEST_EVENT: ("依頼ID", "状態", "端末", "側", "日時"),
+}
+WRITEBACK_SPECS = [replace(spec, identity_columns=IDENTITY_COLUMNS.get(spec.sqlite_table, ()))
+                   for spec in WRITEBACK_SPECS]
+
 # 共有にまだ無ければ、**最初に送る端末が作る**表。
 #
 # ボード使用実績は Access 時代には無かった表で、共有の梱包資材マスタには
@@ -368,16 +383,19 @@ def ensure_guards(path: Path) -> list[str]:
     try:
         names = set(source.table_names())
         for spec in WRITEBACK_SPECS:
-            if not spec.use_op_id_guard or spec.access_table not in names:
+            if spec.access_table not in names:
+                continue
+            if not spec.use_op_id_guard and not spec.identity_columns:
                 continue
             before = outbox_sync.guard_state(source, spec)
             if before.ok:
                 continue
-            outbox_sync.ensure_op_id_column(source, spec)
+            if spec.use_op_id_guard:
+                outbox_sync.ensure_op_id_column(source, spec)
+            outbox_sync.ensure_identity_index(source, spec)
             after = outbox_sync.guard_state(source, spec)
             if after.ok:
-                lines.append(f"二重登録の防止: {spec.access_table} に送信IDの"
-                             "一意インデックスを作りました")
+                lines.append(f"二重登録の防止: {spec.access_table} に一意インデックスを作りました")
             else:
                 lines.append(f"二重登録の防止: {spec.access_table} は用意できません"
                              f"でした ── {after.why()}")

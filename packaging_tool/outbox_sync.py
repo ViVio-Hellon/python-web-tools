@@ -107,6 +107,11 @@ class WriteBackSpec:
                      変換した表だと、番号の列は自動で振られない
                      (型の無いただの列)。空のまま足すと、ほかの端末が
                      その行を番号で指せない
+    identity_columns: その行の**一生変わらない番号**の列(発注キー・コメントID など。
+                     複数なら組で1つ)。送り先に「同じ番号は1つだけ」の一意索引を作る。
+                     送信IDは送るたびに振る番号なので、不具合や古い版で送り直されると
+                     別物に見えて通ってしまう。この番号は行を作ったときに決まるので、
+                     **誰がいつ何度送っても、送り先には1行しか入らない**(空欄の行は対象外)
     origin_column  : 行の出どころの手元の列(`ORIGIN_LOCAL` / `ORIGIN_IMPORTED`)。
                      指定すると、**取り込んだ行は送る候補にしない**。
                      「送ったと記録していない行を送る」だけだと、記録が欠けたとき
@@ -129,6 +134,7 @@ class WriteBackSpec:
         default=None, compare=False)
     number_column: str = ""
     optional_columns: tuple[str, ...] = ()
+    identity_columns: tuple[str, ...] = ()
     origin_column: str = ""
 
     @property
@@ -703,6 +709,76 @@ def index_name_for(spec: WriteBackSpec) -> str:
     return f"IX_{spec.access_table}_{spec.op_id_column}"
 
 
+def identity_index_name(spec: WriteBackSpec) -> str:
+    """一生変わらない番号(`identity_columns`)の一意索引の名前。"""
+    return f"UX_{spec.access_table}_固定番号"
+
+
+def _identity_filled(spec: WriteBackSpec) -> str:
+    """番号が入っている行だけ、の条件(空欄・NULL の古い行は対象外)。"""
+    return " AND ".join(
+        f"{source_db.quote_identifier(c)} IS NOT NULL AND {source_db.quote_identifier(c)} <> ''"
+        for c in spec.identity_columns)
+
+
+def identity_duplicates(source: Any, spec: WriteBackSpec) -> int:
+    """送り先で、同じ番号の行が2行以上ある組の数(これがあると一意索引を作れない)。"""
+    cols = ", ".join(source_db.quote_identifier(c) for c in spec.identity_columns)
+    found = source.query(
+        f"SELECT COUNT(*) AS 組 FROM (SELECT 1 FROM {source_db.quote_identifier(spec.access_table)}"
+        f" WHERE {_identity_filled(spec)} GROUP BY {cols} HAVING COUNT(*) > 1)")
+    return int(found[0]["組"]) if found else 0
+
+
+# 一意索引を作れたかどうかを、ファイルの姿ごとに覚える(毎回 DDL を試さない)
+_identity_cache: dict[tuple[str, str], tuple[Optional[tuple[int, int]], bool]] = {}
+
+
+def ensure_identity_index(source: "source_db.SourceConnection",
+                          spec: WriteBackSpec) -> bool:
+    """送り先に「同じ番号は1つだけ」の一意索引を用意する。用意できていれば True。
+
+    作れないのは、送り先に**もう同じ番号の行が2行以上ある**とき(過去の事故の残り)か、
+    番号の列がまだ無いとき。そのときも送ることは止めない(止めると発注が届かない)。
+    状態は `guard_state` が画面へ出す(黙って切れたままにしない)。
+    """
+    if not spec.identity_columns:
+        return True
+    cache_key = (str(source.path), spec.access_table)
+    cached = _identity_cache.get(cache_key)
+    if cached is not None and cached[0] == _file_stamp(source.path):
+        return cached[1]
+    table = source_db.quote_identifier(spec.access_table)
+    label = f"{spec.access_table} への「同じ番号は1つだけ」の索引"
+    try:
+        have = {r["name"] for r in source.query(f"PRAGMA table_info({table})")}
+    except source_db.SourceError as exc:
+        log.debug("%s: 確かめられません: %s", label, exc)
+        return False
+    if not set(spec.identity_columns) <= have:
+        log.info("%s: 番号の列がまだありません(%s)", label,
+                 ", ".join(c for c in spec.identity_columns if c not in have))
+        return False
+    cols = ", ".join(source_db.quote_identifier(c) for c in spec.identity_columns)
+    sql = (f"CREATE UNIQUE INDEX IF NOT EXISTS "
+           f"{source_db.quote_identifier(identity_index_name(spec))}"
+           f" ON {table} ({cols}) WHERE {_identity_filled(spec)}")
+    try:
+        source.execute(sql)
+        ready = True
+        log.info("%s: 用意しました", label)
+    except source_db.SourceError as exc:
+        message = str(exc)
+        if source_db.is_lock_error(message):
+            log.debug("%s: ロック競合のため今回は見送ります(次回再試行)", label)
+            return False
+        ready = False
+        log.warning("%s: 作れませんでした(同じ番号の行が %s組 あります): %s",
+                    label, identity_duplicates(source, spec), exc)
+    _identity_cache[cache_key] = (_file_stamp(source.path), ready)
+    return ready
+
+
 def _create_op_id_index(source: "source_db.SourceConnection",
                         spec: WriteBackSpec) -> Optional[bool]:
     """送信IDの一意インデックスを作る。作れなければ**1度だけ直して**試す。
@@ -789,10 +865,18 @@ class GuardState:
     has_index: bool = False
     blanks: int = 0              # 送信IDが空文字の行(これが2つ以上だと作れない)
     error: str = ""
+    # 一生変わらない番号の一意索引(`identity_columns`。持たない表は問わない)
+    identity_columns: tuple[str, ...] = ()
+    has_identity_index: bool = True
+    identity_dupes: int = 0      # 同じ番号の行が2行以上ある組(これがあると作れない)
+    identity_missing: tuple[str, ...] = ()   # 送り先にまだ無い番号の列
 
     @property
     def ok(self) -> bool:
-        return self.has_column and self.has_index and not self.error
+        # 番号の列がまだ無い表は、番号の重なりも起きようがない。最初に送るときに
+        # 列を足して(`sync_writeback.ensure_shared_tables`)、足す前に決まりを付ける
+        identity_ok = self.has_identity_index or bool(self.identity_missing)
+        return self.has_column and self.has_index and identity_ok and not self.error
 
     def why(self) -> str:
         """効いていない理由と、次にできること。効いていれば空。"""
@@ -809,6 +893,13 @@ class GuardState:
             return (f"{self.table} に送信IDの一意インデックスがありません。"
                     "次の取り込み(起動時の自動取り込みを含む)か"
                     "「取り込み元へ反映」で作ります。")
+        if not self.has_identity_index and not self.identity_missing:
+            cols = "・".join(self.identity_columns)
+            if self.identity_dupes:
+                return (f"{self.table} に、同じ{cols}の行が{self.identity_dupes}組あるため、"
+                        "「同じ番号は1つだけ」の決まりを付けられません。重複を消すと付けられます。")
+            return (f"{self.table} に「同じ{cols}は1つだけ」の決まりがまだありません。"
+                    "次の取り込みか「取り込み元へ反映」で付けます。")
         return ""
 
 
@@ -819,11 +910,24 @@ def guard_state(source: "source_db.SourceConnection",
     `ensure_op_id_column` と違い、列も索引も作りません ── 状態を見に
     行っただけで取り込み元の形が変わるのは、見る側の期待と違います。
     """
-    state = GuardState(table=spec.access_table)
+    state = GuardState(table=spec.access_table, identity_columns=spec.identity_columns)
+    table = source_db.quote_identifier(spec.access_table)
+    if spec.identity_columns:
+        try:
+            have = {r.get("name") for r in source.query(f"PRAGMA table_info({table})")}
+            state.identity_missing = tuple(c for c in spec.identity_columns if c not in have)
+            want = identity_index_name(spec)
+            state.has_identity_index = any(
+                row.get("name") == want
+                for row in source.query(f"PRAGMA index_list({table})"))
+            if not state.has_identity_index and not state.identity_missing:
+                state.identity_dupes = identity_duplicates(source, spec)
+        except source_db.SourceError as exc:
+            state.error = str(exc)
+            return state
     if not spec.use_op_id_guard:
         state.has_column = state.has_index = True   # 使わない約束なので問わない
         return state
-    table = source_db.quote_identifier(spec.access_table)
     column = source_db.quote_identifier(spec.op_id_column)
     try:
         state.has_column = any(
@@ -857,6 +961,7 @@ def write_back(conn: sqlite3.Connection,
     result = WriteBackResult()
     for spec in specs:
         op_id_ready = spec.use_op_id_guard and ensure_op_id_column(source, spec)
+        identity_ready = bool(spec.identity_columns) and ensure_identity_index(source, spec)
         local_only = {c for c in (spec.mark_pending, spec.source_key, spec.origin_column) if c}
         if spec.optional_columns:
             # 送り先に無い列は送らない。混ぜると1行も入らなくなる
@@ -899,10 +1004,12 @@ def write_back(conn: sqlite3.Connection,
                             if spec.on_insert is not None:
                                 spec.on_insert(tx, values)
                 except source_db.SourceError as exc:
-                    if op_id_ready and source_db.is_duplicate_error(str(exc)):
-                        # 前回の送信が届いていた(送信ID重複)。エラーではなく成功
-                        log.info("%s 行%s は既に届いていました(送信ID重複)",
-                                 spec.access_table, row_id)
+                    if ((op_id_ready or identity_ready)
+                            and source_db.is_duplicate_error(str(exc))):
+                        # もう届いていた(送信IDか、一生変わらない番号が同じ行が送り先にある)。
+                        # エラーではなく成功 ── 2行目は送り先が受け付けない
+                        log.info("%s 行%s は既に届いていました(%s)",
+                                 spec.access_table, row_id, exc)
                     else:
                         log.warning("%s の1行を送れませんでした: %s",
                                     spec.access_table, exc)

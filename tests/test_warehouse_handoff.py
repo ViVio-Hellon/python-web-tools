@@ -409,3 +409,98 @@ class StockTests(HandoffBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IdentityGuardTests(HandoffBase):
+    """**共有側の守り: 一生変わらない番号が同じ行は、共有が2行目を受け付けない。**
+
+    送信ID は送るたびに振る番号なので、不具合や古い版で送り直されると別物に見えて
+    通ってしまう(現場の共有で、同じ発注キーの注文が2行ずつあった)。発注キー・
+    コメントID などは行を作ったときに決まるので、共有に「同じ番号は1つだけ」の
+    一意索引を付ければ、誰がいつ何度送っても1行しか入らない。
+    """
+
+    def order(self, lot: str) -> int:
+        made = wh.create_order(self.a, lot_no=lot, hinmei="テスト品", hatchu_code="X1",
+                               tani="台", atu=1, haba=1000, take=2000, hatchu_suu=1,
+                               terminal="GENBA-1")
+        self.assertTrue(made.ok, made.message)
+        return made.mgr_no
+
+    def resend_as_if_broken(self, table: str, row_id: int) -> None:
+        """送ったのに「まだ送っていない」に戻った、を作る(古い版の不具合・記録の破損)。"""
+        self.a.execute(f"DELETE FROM [{outbox_sync.SYNC_LOG_TABLE}]"
+                       " WHERE テーブル名 = ? AND 行ID = ?", (table, row_id))
+        self.a.commit()
+
+    def identity_indexes(self) -> list[str]:
+        return [r[0] for r in self.shared(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'UX_%'")]
+
+    def test_注文を送り直しても共有には1行だけ(self):
+        no = self.order("NEW")
+        self.send(self.a)
+        self.assertIn(f"UX_{ORDER}_固定番号", self.identity_indexes())
+        self.resend_as_if_broken(ORDER, no)
+        result = self.send(self.a)
+        self.assertEqual(result.errors, [])          # 「もう届いていた」扱い。失敗にしない
+        self.assertEqual(self.shared(f'SELECT COUNT(*) FROM "{ORDER}" WHERE LotNo = ?',
+                                     ("NEW",)), [(1,)])
+        # 届いた扱いになったので、もう送ろうとしない
+        self.assertEqual(data_sync._unsent_writeback_tables(self.a), {})
+
+    def test_コメントを送り直しても共有には1行だけ(self):
+        from packaging_tool import order_comments as oc
+        self.order("NEW")
+        self.send(self.a)
+        oc.add(self.a, self.local_no(self.a, "NEW"), "よろしく", terminal="GENBA-1",
+               side=oc.SIDE_FIELD)
+        self.send(self.a)
+        comment_no = self.a.execute(f"SELECT 管理番号 FROM [{config.TBL_ORDER_COMMENT}]").fetchone()[0]
+        self.resend_as_if_broken(config.TBL_ORDER_COMMENT, comment_no)
+        self.assertEqual(self.send(self.a).errors, [])
+        self.assertEqual(self.shared(f'SELECT COUNT(*) FROM "{config.TBL_ORDER_COMMENT}"'), [(1,)])
+
+    def test_ツールを通さずに同じ発注キーを足しても共有が断る(self):
+        """古い版の端末など、どこから来ても共有のファイル自体が受け付けない。"""
+        self.order("NEW")
+        self.send(self.a)
+        key = self.shared(f'SELECT 発注キー FROM "{ORDER}" WHERE LotNo = "NEW"')[0][0]
+        conn = sqlite3.connect(self.src)
+        self.addCleanup(conn.close)
+        with self.assertRaises(sqlite3.IntegrityError):
+            conn.execute(f'INSERT INTO "{ORDER}" (LotNo, 発注キー, 送信ID) VALUES ("NEW", ?, "other")',
+                         (key,))
+
+    def test_発注キーが空の古い行はいくつあってもよい(self):
+        """Access から来た古い注文には発注キーが無い。その行どうしは比べない。"""
+        self.order("NEW")
+        self.send(self.a)
+        conn = sqlite3.connect(self.src)
+        self.addCleanup(conn.close)
+        conn.execute(f'INSERT INTO "{ORDER}" (LotNo, 発注キー) VALUES ("OLD1", "")')
+        conn.execute(f'INSERT INTO "{ORDER}" (LotNo, 発注キー) VALUES ("OLD2", "")')
+        conn.execute(f'INSERT INTO "{ORDER}" (LotNo) VALUES ("OLD3")')
+        conn.commit()
+
+    def test_もう同じ番号が重なっている共有では決まりを付けられないと画面に出す(self):
+        """過去の事故の残りがあると索引を作れない。黙って切れたままにしない。発注は止めない。"""
+        self.order("NEW")
+        self.send(self.a)
+        conn = sqlite3.connect(self.src)
+        conn.execute(f'DROP INDEX "UX_{ORDER}_固定番号"')
+        conn.execute(f'INSERT INTO "{ORDER}" (LotNo, 発注キー) SELECT LotNo, 発注キー FROM "{ORDER}"'
+                     ' WHERE LotNo = "NEW"')
+        conn.commit()
+        conn.close()
+        outbox_sync._identity_cache.clear()
+        spec = next(s for s in sync_writeback.WRITEBACK_SPECS if s.sqlite_table == ORDER)
+        with source_db.connect(self.src) as src:
+            state = outbox_sync.guard_state(src, spec)
+        self.assertFalse(state.ok)
+        self.assertEqual(state.identity_dupes, 1)
+        self.assertIn("同じ発注キーの行が1組", state.why())
+        # 発注は止めない
+        self.order("NEXT")
+        self.assertEqual(self.send(self.a).errors, [])
+        self.assertEqual(self.shared(f'SELECT COUNT(*) FROM "{ORDER}" WHERE LotNo = "NEXT"'), [(1,)])
