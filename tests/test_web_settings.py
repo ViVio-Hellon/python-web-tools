@@ -2481,3 +2481,32 @@ class DedupeApiTests(DataWebTestCase):
         html = self.client.get("/settings").get_data(as_text=True)
         for id_ in ('id="dedupeCount"', 'id="dedupeRun"', 'id="dedupeResult"'):
             self.assertIn(id_, html)
+
+
+class SharedLinkScreenTests(DataWebTestCase):
+    """いま使う共有マスタを、どの画面でも見えるところ(帯)に出す。本番と Test環境 の取り違え防止。"""
+
+    def test_帯に共有マスタのフォルダ名を出す(self) -> None:
+        html = self.client.get("/settings").get_data(as_text=True)
+        self.assertIn('id="rb-shared"', html)
+        self.assertIn(f'>{self.dir.name}</span>', html)
+        self.assertIn(f'title="共有マスタ: {self.dir}"', html)
+
+    def test_置き場所が変わって送る物が残っていればいまの状態に出す(self) -> None:
+        from packaging_tool import db, shared_link
+        from packaging_tool.presenters import settings as presenter_mod
+        master = self.dir / config.MATERIAL_DB_NAME
+        with contextlib.closing(sqlite3.connect(master)) as raw, raw:
+            raw.execute("CREATE TABLE PalletMaster (管理番号 INTEGER)")
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        self.addCleanup(conn.close)
+        shared_link.remember(conn, self.dir / "前の共有" / config.MATERIAL_DB_NAME)
+        conn.execute("INSERT INTO ボード使用実績 (ボード幅, ボード丈, ボードタイプ, 使用日時)"
+                     " VALUES (100, 1000, 'ハードボード', '2026-10-09 10:00:00')")
+        conn.commit()
+        section = presenter_mod._material_section(master, conn)
+        [check] = [c for c in section.checks if c.label == "つながっている共有"]
+        self.assertEqual(check.level, presenter_mod.NG)
+        self.assertIn("まだ送っていないものが 1件", check.detail)

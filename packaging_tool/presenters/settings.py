@@ -452,6 +452,7 @@ def _material_section(material: Optional[Path], conn=None) -> Section:
         return section
 
     section.checks.append(Check("ファイル", material.name, OK, str(material)))
+    _link_check(section, material, conn)
 
     # **開けなかったときは、開いてみて分かったことを全部出す。**
     # 「sqlite3 として読めません」だけでは、現場も私たちも直せない
@@ -490,6 +491,33 @@ def _material_section(material: Optional[Path], conn=None) -> Section:
             "無くても動きます: " + ", ".join(optional_missing)))
     _guard_check(section, material)
     return section
+
+
+def _link_check(section: Section, material: Path, conn) -> None:
+    """この端末の中身が、どの共有マスタのものか(取り違え防止。`shared_link`)。
+
+    **読むだけ**(付け替えは送る・取り込むときに `shared_link.bind` が行う)。
+    """
+    if conn is None:
+        return
+    from .. import shared_link, sync_writeback
+    try:
+        previous = shared_link.remembered(conn)
+    except sqlite3.Error:                         # pragma: no cover - 古いDB
+        return
+    if previous is None or shared_link.same_place(previous, material):
+        section.checks.append(Check("つながっている共有", material.parent.name, OK,
+                                    f"この端末の中身は {material} のものです"))
+        return
+    pending = sum(sync_writeback._unsent_writeback_tables(conn).values())
+    link = shared_link.Link(current=str(material), previous=previous, pending=pending)
+    if link.blocked:
+        section.checks.append(Check("つながっている共有", "置き場所が変わりました", NG, link.why()))
+        return
+    section.checks.append(Check(
+        "つながっている共有", "置き場所が変わりました", INFO,
+        f"前: {previous} → いま: {material}。送る物は残っていないので、"
+        "次の取り込みで中身を入れ替えて、こちらに切り替えます"))
 
 
 def _guard_check(section: Section, material: Path) -> None:

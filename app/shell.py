@@ -165,6 +165,19 @@ def home_url(mode: str) -> str:
     return FALLBACK_URL
 
 
+def _master_dir():
+    from packaging_tool import config as tool_config
+    return tool_config.master_db_dir()
+
+
+def _shared_name() -> str:
+    """いま使う共有マスタのフォルダ名(帯に出す)。読めなければ空。"""
+    try:
+        return _master_dir().name or str(_master_dir())
+    except Exception:                         # pragma: no cover - 設定が壊れていても画面は出す
+        return ""
+
+
 def shell_context(active: str, *,
                   badges: Optional[dict[str, tuple[str, str]]] = None) -> dict[str, Any]:
     """`base.html` が必要とする値一式。
@@ -211,6 +224,9 @@ def shell_context(active: str, *,
         "screen_id": screen_lock.for_request(
             request.headers.get(screen_lock.HEADER, "")),
         "base_point": user_settings.get_position_label(),
+        # いま使う共有マスタ(フォルダ名。本番と Test環境 を取り違えないよう、どの画面でも見える)
+        "shared_name": _shared_name(),
+        "shared_path": str(_master_dir()),
         # いま何が決まっているか。画面をまたいで持つ(`work_context`)
         "ribbon": work_context.get_context().ribbon(),
         "health_poll_ms": app_config.health_poll_seconds() * 1000,

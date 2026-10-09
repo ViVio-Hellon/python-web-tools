@@ -149,7 +149,19 @@ def import_tables(
     start_pct, end_pct = progress_range
     span = max(end_pct - start_pct, 0)
 
+    # **取り違え防止**: 書き戻す表を取り込むときは、手元の中身がどの共有マスタのものかを
+    # 確かめる(`shared_link`)。前の共有向けにまだ送っていない物を残したまま、別の共有から
+    # 書き戻す表を入れると、2つの共有の中身が混ざる ── そのときは書き戻す表を入れない
+    blocked_why = ""
+    if any(t in _WRITEBACK_BY_TABLE for t in specs):
+        from . import shared_link
+        link = shared_link.bind(conn, Path(source_path))
+        blocked_why = link.why()
+
     for index, (table, spec) in enumerate(specs.items()):
+        if blocked_why and table in _WRITEBACK_BY_TABLE:
+            result.errors.append(f"{table}: 取り込みを見送りました ── {blocked_why}")
+            continue
         # テーブル単位で進める。読み取りが一番時間を食うので、その前に出す
         step_pct = start_pct + span * index // len(specs) if specs else start_pct
         step_message = f"{table} を読み込み中..."

@@ -348,6 +348,14 @@ def write_back(conn: sqlite3.Connection,
             "置くか、設定画面で置き場所を直してください。")
         return result
 
+    # **前の共有マスタ向けに作った行を、別の共有マスタへ送らない**(取り違え防止)。
+    # 置き場所が変わっていて送る物が残っていれば止める。送る物が無ければ付け替える
+    from . import shared_link
+    link = shared_link.bind(conn, path)
+    if link.blocked:
+        result.skipped_reason = link.why()
+        return result
+
     try:
         source = source_db.connect(path)
     except source_db.SourceError as exc:

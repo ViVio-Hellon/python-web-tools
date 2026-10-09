@@ -55,6 +55,8 @@
     <div class="slot"><span class="k">パレット</span><span class="v" id="rb-pallet">{{ ribbon.pallet }}</span></div>
     <div class="slot"><span class="k">製品</span><span class="v" id="rb-product">{{ ribbon.product }}</span></div>
     <div class="slot"><span class="k">拠点</span><span class="v" id="rb-base">{{ base_point }}</span></div>
+    {# いま使う共有マスタ(フォルダ名)。本番と Test環境 を取り違えないよう、どの画面でも見える #}
+    <div class="slot" title="共有マスタ: {{ shared_path }}"><span class="k">共有</span><span class="v" id="rb-shared">{{ shared_name }}</span></div>
   </div>
   <div class="ribbon__chips" id="rb-modes">
     {% for chip in ribbon.modes %}<span class="chip chip--{{ chip.kind }}">{{ chip.text }}</span>{% endfor %}
