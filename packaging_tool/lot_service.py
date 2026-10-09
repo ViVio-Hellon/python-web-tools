@@ -86,12 +86,20 @@ def format_dimension(value: float) -> str:
     return f"{value:.1f}"
 
 
+# BOX最終実績_設備名 がこれのロットは、BOX最終実績の寸法が入っていても使わない
+# (現場: HOT の BOX最終実績寸法は使うに値しない)。寸法が空のときと同じく、
+# 2つ目の仕掛台帳の同じロットの行(BOX設計寸法)から選ぶ。比べるときは前後の空白を除いて大文字で
+BOX_FINAL_UNUSABLE_EQUIPMENT = ("HOT",)
+BOX_FINAL_BLANK = "空"       # `LotInfo.box_final_problem`: 寸法のどれかが空
+
+
 @dataclass
 class BoxChoice:
     """BOX寸法の候補1つ(仕掛台帳の2つ目の置き場所の行の BOX設計寸法。`仕掛ロット_2つ目`)。
 
-    1つ目の SIKALOT で BOX最終実績の寸法が空のロットだけに付く。ロット情報の画面で
-    「BOX実績寸法」の横に BOX設計_設備名 で並べ、選んだものの寸法を使う(現場の依頼)。
+    1つ目の SIKALOT で BOX最終実績の寸法が空か、BOX最終実績_設備名が HOT のロットだけに付く。
+    ロット情報の画面で「BOX実績寸法」の横に BOX設計_設備名 で並べ、選んだものの寸法を使う
+    (現場の依頼)。
     """
 
     key: str = ""            # 選んだものを覚える鍵(BOX番号|設備名|寸法)。取り込み直しても変わらない
@@ -148,12 +156,22 @@ class LotInfo:
     # (AdvanceCheck flag1)のどちらも BOX実績に差し替える前の「製造板厚」を
     # 見るため、表示用の thickness とは別に保持する
     manufactured_thickness: float = 0.0
-    # BOX最終実績の寸法が空のとき、2つ目の置き場所から控えた候補(`BoxChoice`)。
+    # BOX最終実績の寸法が空か HOT のとき、2つ目の置き場所から控えた候補(`BoxChoice`)。
     # BOX実績寸法のロットのときだけ付く。`box_pick` は選ばれた候補の鍵(空 = 1つ目のまま)
     box_choices: list = field(default_factory=list)
     box_pick: str = ""
-    # BOX実績寸法のロットで、1つ目の BOX最終実績寸法が空か(候補が無くても理由を書くため)
-    box_final_missing: bool = False
+    # BOX実績寸法のロットで、1つ目の BOX最終実績寸法が使えない理由(候補が無くても理由を書くため)。
+    # 空 = 使える / "空" = どれかが空 / 設備名(HOT) = その設備の値は使わない(`_box_final_problem`)
+    box_final_problem: str = ""
+
+    @property
+    def box_final_missing(self) -> bool:
+        return bool(self.box_final_problem)
+
+    @property
+    def box_final_hot(self) -> bool:
+        """空だからではなく、設備名(HOT)のせいで使えないのか。"""
+        return self.box_final_problem not in ("", BOX_FINAL_BLANK)
 
     @property
     def picked_choice(self) -> Optional["BoxChoice"]:
@@ -347,9 +365,25 @@ def _load_box_choices(conn: sqlite3.Connection, lot_no: str) -> list[BoxChoice]:
     return out
 
 
-def _box_final_missing(row: Any) -> bool:
-    """1つ目の BOX最終実績_板厚・板幅・板丈 のどれかが空(0)か。"""
-    return any(not (row[f"BOX最終実績_{name}"] or 0) for name in ("板厚", "板幅", "板丈"))
+def _box_final_problem(row: Any) -> str:
+    """1つ目の BOX最終実績寸法が使えない理由。使えるなら空。
+
+    - BOX最終実績_設備名 が `BOX_FINAL_UNUSABLE_EQUIPMENT`(HOT)… その設備名を返す。
+      寸法が入っていても使わない
+    - BOX最終実績_板厚・板幅・板丈 のどれかが空(0)… `BOX_FINAL_BLANK`
+    """
+    equipment = box_final_equipment_unusable(row["BOX最終実績_設備名"])
+    if equipment:
+        return equipment
+    if any(not (row[f"BOX最終実績_{name}"] or 0) for name in ("板厚", "板幅", "板丈")):
+        return BOX_FINAL_BLANK
+    return ""
+
+
+def box_final_equipment_unusable(equipment: Any) -> str:
+    """BOX最終実績_設備名 が、寸法を使わない設備(HOT)なら、その名前(大文字)。違えば空。"""
+    name = str(equipment or "").strip().upper()
+    return name if name in BOX_FINAL_UNUSABLE_EQUIPMENT else ""
 
 
 def _load_lot_info(conn: sqlite3.Connection, lot_no: str,
@@ -357,7 +391,7 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str,
     """VBA `SearchLotInfo` の移植。
 
     `box_pick` は BOX最終実績寸法の候補の鍵(`BoxChoice.key`)。BOX実績寸法のロットで、
-    1つ目の BOX最終実績寸法が空のときだけ効く。候補に無い鍵なら無視する(1つ目のまま)。
+    1つ目の BOX最終実績寸法が空か HOT のときだけ効く。候補に無い鍵なら無視する(1つ目のまま)。
     """
     # ロット番号はBOX工程ごとに複数行ありうる。VBAは `rs.EOF` 判定で
     # 先頭レコードだけを見るので、取り込み順(=Accessの物理順)の先頭を採る
@@ -406,10 +440,15 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str,
         quality_surface=str(row["品質グレード_表面処理"] or ""),
         manufactured_thickness=row["製造板厚"],
     )
-    # 1つ目で BOX最終実績寸法が空 → 2つ目の同じロットの行から選べるようにする(現場の依頼)。
-    # **BOX実績寸法のときだけ**(製造寸法を出しているロットでは使わない)
-    if is_box and _box_final_missing(row):
-        lot.box_final_missing = True
+    # 1つ目で BOX最終実績寸法が空、または HOT の値 → 2つ目の同じロットの行から選べるようにする
+    # (現場の依頼)。**BOX実績寸法のときだけ**(製造寸法を出しているロットでは使わない)
+    problem = _box_final_problem(row) if is_box else ""
+    if problem:
+        lot.box_final_problem = problem
+        if problem != BOX_FINAL_BLANK:
+            # **HOT の寸法は使わない**(使うに値しない、と現場)。選ぶまでは空のまま ──
+            # 値を残すと、資材展開でそのまま使われてしまう(画面の説明は資材選択まで付いていかない)
+            lot.thickness = lot.width = lot.length = 0.0
         lot.box_choices = _load_box_choices(conn, lot_no)
         picked = next((c for c in lot.box_choices if c.key == box_pick), None)
         if picked is not None:

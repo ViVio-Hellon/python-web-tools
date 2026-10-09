@@ -132,7 +132,7 @@ function boxPicker(choices) {
   select.setAttribute("aria-label", "2つ目の仕掛台帳の BOX設計_設備名");
   const none = document.createElement("option");
   none.value = "";
-  none.textContent = "選んでください(1つ目のまま)";
+  none.textContent = "選んでください";
   select.appendChild(none);
   for (const choice of choices) {
     const option = document.createElement("option");

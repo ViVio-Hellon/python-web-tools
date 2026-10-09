@@ -123,8 +123,11 @@ export function render(view) {
   el.savedChips.replaceChildren(...view.saved.map(savedChip));
 
   // 入力欄はサーバの値と食い違うときだけ書き換える。無条件に代入すると
-  // 打っている途中で消える(資材選択で踏んだのと同じ問題)
-  if (el.listText.value !== view.text) el.listText.value = view.text;
+  // 打っている途中で消える(資材選択で踏んだのと同じ問題)。
+  // **打ち足した文字が送られる前なら書き換えない。** 「A12」の返事が
+  // 「3」を打った後に届くと、欄が「A12」に戻り、待っていた検索も
+  // 戻った「A12」で送られて「3」が消えていた(現場の声: 文字が差し戻る)
+  if (!textPending && el.listText.value !== view.text) el.listText.value = view.text;
   el.pageSize.value = String(view.page_size);
 
   el.saveFilter.disabled = !view.can_save;
@@ -206,9 +209,29 @@ async function useSuggest(index) {
 /* ================================================================
    送る
    ================================================================ */
-async function send(path, body = {}) {
+// 打った文字がまだ送られていない(間を置いている最中)か
+let textPending = false;
+// 送った順の番号。**追い越された返事は画面に出さない** ── 打つそばから
+// 検索するので、先に送った「A12」の返事が後の「A123」の返事より遅れて
+// 届くことがある。そのまま出すと一覧も入力欄も古いほうに戻る
+let sendSeq = 0;
+// **サーバへは1つずつ順に送る。** 検索の文字はサーバが覚えるので、同時に
+// 送るとサーバ側で順番が入れ替わり、覚えた文字が古いほうになることがある
+let sendChain = Promise.resolve();
+
+function send(path, body = {}) {
+  const seq = ++sendSeq;
+  const run = sendChain.then(() => sendNow(path, body, seq));
+  sendChain = run;
+  return run;
+}
+
+async function sendNow(path, body, seq) {
   try {
     const next = await api.post(path, body);
+    // 後から送ったぶんがある / 打ち足した文字をこれから送る → この返事は古い。
+    // 出すと一覧が古い文字のものになり、1件に絞れたときは打っている途中で開いてしまう
+    if (seq !== sendSeq || textPending) return next;
     render(next);
     if (next.message) toast(next.message, "ok");
     // **1件に絞れたらサーバが確定まで済ませて `detail` を付けて返す。**
@@ -216,6 +239,7 @@ async function send(path, body = {}) {
     if (onChanged) onChanged(next);
     return next;
   } catch (err) {
+    if (seq !== sendSeq || textPending) return null;
     // 422 は「一覧ぜんぶ + 断りの文言」が返る。表を消さずに理由だけ出す
     if (err.body && err.body.headers) render(err.body);
     toastError(err);
@@ -239,6 +263,7 @@ export function start(options) {
   // 再入場のたびに真っさらから(`nav.js`)
   suggestItems = [];
   suggestAt = -1;
+  textPending = false;
   render(options.view);
 
   // --- 行を開く ---
@@ -293,8 +318,11 @@ export function start(options) {
   let textTimer = null;
   el.listText.addEventListener("input", () => {
     clearTimeout(textTimer);
-    textTimer = setTimeout(
-      () => send("/api/lot/list/search", { text: el.listText.value }), 220);
+    textPending = true;
+    textTimer = setTimeout(() => {
+      textPending = false;
+      send("/api/lot/list/search", { text: el.listText.value });
+    }, 220);
   });
 
   el.pageSize.addEventListener("change", () =>

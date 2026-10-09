@@ -740,9 +740,12 @@ def _check_local_master(section: Section, conn) -> None:
         if same:
             section.checks.append(Check(
                 "同じ内容の行", f"{spec.sqlite_table} に {same}件", WARN,
-                "中身がまったく同じ行が重なっています。"
-                "`python scripts\\dedupe_writeback.py` で数えられます"
-                "(`--fix` を付けると、控えを取ってから消します)。"))
+                "この端末の手元のDBで、中身がまったく同じ行が重なっています"
+                "(人が2回書いたものではなく、同じ1件が2回入ったもの)。"
+                "まず共有を `python scripts\\dedupe_writeback.py --show` で数え、"
+                "重なっていれば `--fix`(控えを取ってから消す)のあと取り込み直してください。"
+                "共有に無ければ、取り込み直すと手元も消えます"
+                "(手元は `--local` で数えられます)。"))
 
     # 書き方のゆれ。**拾えてはいるが、直しておいたほうが確実**。
     # 「5x10」と小文字で書かれた行は、そろえてから固定表に当てている

@@ -260,6 +260,76 @@ class SecondLotDirTests(unittest.TestCase):
         self.assertEqual(lot_service.search_lot(self.conn, "C000003").lot.box_choices, [])   # そろっている
         self.assertEqual(lot_service.search_lot(self.conn, "N000004").lot.box_choices, [])   # BOXでない
 
+    # --- BOX最終実績_設備名 が HOT(寸法が入っていても使わない) ---------------------
+    def hot_ledgers(self) -> None:
+        """1つ目: BOX最終実績がそろっているが設備名が HOT のロットT(BOXコース)、
+        同じく HOT だが BOXでないロットU、そろっていて設備名が KEN のロットK。"""
+        def first(no: str, course: str, equipment: str) -> dict:
+            row = lot(no, "1つ目")
+            row.update({src("仕掛ロット", "設計_設備コース"): course,
+                        src("仕掛ロット", "BOX最終実績_設備名"): equipment,
+                        src("仕掛ロット", "BOX最終実績_板厚"): "8",
+                        src("仕掛ロット", "BOX最終実績_板幅"): "1500",
+                        src("仕掛ロット", "BOX最終実績_板丈"): "3000"})
+            return row
+        write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [
+            first("T000005", "HOT PSW GFS KEN", "HOT"),
+            first("V000007", "HOT GFS KEN", " hot "),     # 前後の空白・小文字でも同じ
+            first("U000006", "HOT L-1 KEN", "HOT"),
+            first("K000008", "HOT GFS KEN", "KEN"),
+        ])
+        cols = ["ﾛｯﾄ番号", "BOX番号", "BOX設計_設備名", "BOX設計_板厚", "BOX設計_板幅", "BOX設計_板丈"]
+        self.write_raw(self.second, cols, [
+            {"ﾛｯﾄ番号": no, "BOX番号": "2", "BOX設計_設備名": "PSW",
+             "BOX設計_板厚": "100", "BOX設計_板幅": "1200", "BOX設計_板丈": "2850"}
+            for no in ("T000005", "V000007", "U000006", "K000008")])
+
+    def test_BOX最終実績がHOTなら寸法があっても2つ目の候補へ(self) -> None:
+        """現場:「HOT の BOX最終実績の板厚・板幅・板丈は使用するに値しない」。"""
+        from packaging_tool.presenters import lot as lot_presenter
+
+        self.hot_ledgers()
+        result = data_sync.import_lot_ledger(self.conn)
+        self.assertEqual(self.local("SELECT DISTINCT ロット番号 FROM 仕掛ロット_2つ目 ORDER BY 1"),
+                         [("T000005",), ("U000006",), ("V000007",)])
+        self.assertTrue(any("空か HOT のロット" in n for n in result.notes), result.notes)
+
+        plain = lot_service.search_lot(self.conn, "T000005").lot
+        self.assertEqual([c.equipment for c in plain.box_choices], ["PSW"])
+        self.assertEqual(plain.box_final_problem, "HOT")
+        # **選ぶまで HOT の値は使わない**(残すと資材展開でそのまま使われる)
+        self.assertEqual((plain.thickness, plain.width, plain.length), (0.0, 0.0, 0.0))
+        note = lot_presenter._dimension_note(plain)
+        self.assertIn("BOX最終実績_設備名が HOT のため、その寸法は使いません", note)
+        self.assertIn("横の欄で", note)
+
+        picked = lot_service.search_lot(self.conn, "T000005", plain.box_choices[0].key).lot
+        self.assertEqual((picked.thickness, picked.width, picked.length), (100.0, 1200.0, 2850.0))
+        self.assertIn("2つ目の PSW のBOX設計寸法を使っています", lot_presenter._dimension_note(picked))
+
+        self.assertEqual(lot_service.search_lot(self.conn, "V000007").lot.box_final_problem, "HOT")
+
+    def test_HOTでもBOXでなければ製造寸法のまま_HOTでなければ1つ目のまま(self) -> None:
+        self.hot_ledgers()
+        data_sync.import_lot_ledger(self.conn)
+        not_box = lot_service.search_lot(self.conn, "U000006").lot
+        self.assertEqual((not_box.box_choices, not_box.box_final_problem), ([], ""))
+        self.assertEqual((not_box.width, not_box.length), (1000.0, 2000.0))
+        ken = lot_service.search_lot(self.conn, "K000008").lot
+        self.assertEqual((ken.box_choices, ken.box_final_problem), ([], ""))
+        self.assertEqual((ken.thickness, ken.width, ken.length), (8.0, 1500.0, 3000.0))
+
+    def test_HOTで2つ目が無ければ理由を書く(self) -> None:
+        from packaging_tool.presenters import lot as lot_presenter
+
+        self.hot_ledgers()
+        user_settings.save(config.KEY_LOT_DB_DIR2, "")
+        data_sync.import_lot_ledger(self.conn)
+        hot = lot_service.search_lot(self.conn, "T000005").lot
+        self.assertEqual((hot.box_choices, hot.width), ([], 0.0))
+        self.assertIn("HOT のため、その寸法は使いません(2つ目の仕掛台帳の置き場所を設定すると",
+                      lot_presenter._dimension_note(hot))
+
     def test_2つ目が無ければ候補も無い(self) -> None:
         self.box_ledgers()
         user_settings.save(config.KEY_LOT_DB_DIR2, "")

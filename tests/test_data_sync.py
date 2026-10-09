@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import shutil
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -305,6 +307,36 @@ class DedupeScriptTests(unittest.TestCase):
         self.assertTrue(copy.exists())
         self.assertNotEqual(copy, self.src)
         self.assertEqual(copy.read_bytes(), self.src.read_bytes())
+
+    def test_showは組ごとに管理番号と送信IDを出す(self) -> None:
+        """原因を追うには、どの行どうしが重なったか(送信IDが同じか違うか)が要る。"""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.script.show(self.open(), "資材パレット注文管理")
+        text = out.getvalue()
+        self.assertEqual(text.count("・3行:"), 2)
+        self.assertIn("LotNo=L0", text)
+        for number in range(1, 7):
+            self.assertIn(f"管理番号={number} 送信ID=", text)
+
+    def test_手元のDBは消さずに取り込み直しを案内する(self) -> None:
+        """設定画面の警告は手元の作業用DBを数えている。手元は取り込みで入れ替わる
+        ので `--local --fix` は断る(共有に残っていればまた戻ってくる)。"""
+        err = io.StringIO()
+        with mock.patch.object(sys, "argv", ["dedupe", "--local", "--fix"]), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(self.script.main(), 1)
+        self.assertIn("取り込み直して", err.getvalue())
+
+    def test_localは手元の作業用DBを数える(self) -> None:
+        out = io.StringIO()
+        with mock.patch.object(config, "DB_PATH", self.src), \
+                mock.patch.object(sys, "argv", ["dedupe", "--local",
+                                                "--table", "資材パレット注文管理"]), \
+                contextlib.redirect_stdout(out):
+            self.script.main()
+        self.assertIn(f"対象: {self.src}", out.getvalue())
+        self.assertIn("重複 4件", out.getvalue())
 
 
 class ImportTests(unittest.TestCase):

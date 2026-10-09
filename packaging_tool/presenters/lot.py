@@ -136,7 +136,7 @@ class LotViewModel:
     dimension_note: str = ""
     dimension_group: str = ""
     # BOX最終実績寸法の候補(仕掛台帳の2つ目の置き場所から)。BOX実績寸法のロットで、
-    # 1つ目の BOX最終実績寸法が空のときだけ並ぶ。見出しの横の選ぶ欄に出す
+    # 1つ目の BOX最終実績寸法が空か HOT のときだけ並ぶ。見出しの横の選ぶ欄に出す
     box_choices: list[dict[str, Any]] = field(default_factory=list)
     box_pick: str = ""
     is_box: bool = False
@@ -273,19 +273,26 @@ def _dimension_note(lot: lot_service.LotInfo) -> str:
         return ""
     note = (f"設計_設備コースが {lot.box_course} のため、"
             "製造寸法ではなくBOX実績寸法を表示しています")
+    # 1つ目の値が使えない理由。HOT は値が入っていても使わない(使うに値しない、と現場)ので、
+    # 「無い」とは書かずに、なぜ使わないかを書く
+    if lot.box_final_hot:
+        why = (f"1つ目の仕掛台帳の BOX最終実績_設備名が {lot.box_final_problem} のため、"
+               "その寸法は使いません")
+    else:
+        why = "1つ目の仕掛台帳に BOX最終実績寸法がありません"
     picked = lot.picked_choice
     if picked is not None:
         # **どの値を使っているか**を黙らない。1つ目の値ではないことを書く
-        return (f"{note}。1つ目の仕掛台帳に BOX最終実績寸法が無いため、2つ目の"
+        return (f"{note}。{why}。2つ目の"
                 f" {picked.equipment or '(設備名なし)'} の{picked.source}寸法を使っています")
     if lot.box_choices:
-        return (f"{note}。1つ目の仕掛台帳に BOX最終実績寸法がありません。"
+        return (f"{note}。{why}。"
                 "横の欄で、2つ目の仕掛台帳の BOX設計_設備名 を選ぶと、その寸法を使います")
     if lot.box_final_missing:
         from .. import config
         where = ("2つ目の仕掛台帳にもありません" if config.lot_db_dir2() is not None
                  else "2つ目の仕掛台帳の置き場所を設定すると、そちらから選べます")
-        return f"{note}。1つ目の仕掛台帳に BOX最終実績寸法がありません({where})"
+        return f"{note}。{why}({where})"
     return note
 
 

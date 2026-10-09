@@ -14,7 +14,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from . import config, db, import_diag, import_specs, outbox_sync, source_db
+from . import config, db, import_diag, import_specs, lot_service, outbox_sync, source_db
 from .logging_utils import get_logger
 # **他の段は名前ではなくモジュールで呼ぶ。** こうしておくと、差し替え
 # (試験の stub)の当て先が持ち主の1か所で済む ── 名前で取り込むと、
@@ -516,7 +516,9 @@ LOT_MERGE_KEYS: dict[str, str] = {
 
 
 # BOX寸法の候補(`仕掛ロット_2つ目`)。1つ目のロットで BOX最終実績_板厚・板幅・板丈 の
-# どれかが空(取り込みで空欄は 0 になる)なら、2つ目の SIKALOT の同じロットの行を控える。
+# どれかが空(取り込みで空欄は 0 になる)、または BOX最終実績_設備名 が HOT
+# (`lot_service.BOX_FINAL_UNUSABLE_EQUIPMENT`。その寸法は使うに値しない)なら、
+# 2つ目の SIKALOT の同じロットの行を控える。
 # **2つ目で読むのは BOX設計_板厚・板幅・板丈**(現場の指定。BOX最終実績ではない)。工程の行ごとに
 # 値が違うので、BOX設計_設備名 で選べるようにする。1つ目と2つ目の SIKALOT は**列の中身が違う**ので、
 # 取り込み元の列名でその行を読む。3つのどれにも値が無い行は控えない(0 は 0 のまま控える)
@@ -635,15 +637,18 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
 
 
 def collect_box_choices(conn: sqlite3.Connection, rows: list, result: ImportResult) -> int:
-    """BOX最終実績寸法が空のロットについて、2つ目の SIKALOT の同じロットの行(BOX設計寸法)を候補に控える。
+    """BOX最終実績寸法が使えないロットについて、2つ目の SIKALOT の同じロットの行(BOX設計寸法)を候補に控える。
 
     控えた候補の数を返す。手元の `仕掛ロット`(1つ目 + 2つ目から足したロット)のうち、
-    BOX最終実績_板厚・板幅・板丈 のどれかが 0 のロットだけが対象。同じ設備名・同じ寸法の
-    行は1つにまとめる。
+    BOX最終実績_板厚・板幅・板丈 のどれかが 0、または BOX最終実績_設備名 が HOT の
+    ロットだけが対象。同じ設備名・同じ寸法の行は1つにまとめる。
     """
     blank = " OR ".join(f"COALESCE([BOX最終実績_{d}], 0) <= 0" for d in BOX_DIMENSIONS)
+    unusable = ", ".join("?" for _ in lot_service.BOX_FINAL_UNUSABLE_EQUIPMENT)
     need = {str(r[0]) for r in conn.execute(
-        f"SELECT DISTINCT [ロット番号] FROM [仕掛ロット] WHERE {blank}")}
+        f"SELECT DISTINCT [ロット番号] FROM [仕掛ロット] WHERE {blank}"
+        f" OR UPPER(TRIM(COALESCE([BOX最終実績_設備名], ''))) IN ({unusable})",
+        lot_service.BOX_FINAL_UNUSABLE_EQUIPMENT)}
     if not need:
         return 0
     lot_src = next(src for col, src, _conv in import_specs.LOT_IMPORT_SPECS["仕掛ロット"]
@@ -680,11 +685,11 @@ def collect_box_choices(conn: sqlite3.Connection, rows: list, result: ImportResu
         result.warnings.append(f"仕掛ロット: 2つ目の BOX設計寸法の候補を控えられませんでした({exc})")
         return 0
     lots = len({v[0] for v in values})
-    result.notes.append(f"仕掛ロット: 1つ目で BOX最終実績(板厚・板幅・板丈)が空のロット {lots:,}件に、"
+    result.notes.append(f"仕掛ロット: 1つ目で BOX最終実績(板厚・板幅・板丈)が空か HOT のロット {lots:,}件に、"
                         f"2つ目の置き場所の BOX設計寸法 {len(values):,}件を候補として控えました"
                         "(ロット情報の画面で選べます)")
-    import_diag.write(f"  [仕掛ロット] ← 2つ目 BOX最終実績が空のロット {lots}件 の候補 {len(values)}件")
-    log.info("BOX最終実績が空のロット %s件 に2つ目の候補 %s件", lots, len(values))
+    import_diag.write(f"  [仕掛ロット] ← 2つ目 BOX最終実績が空か HOT のロット {lots}件 の候補 {len(values)}件")
+    log.info("BOX最終実績が空か HOT のロット %s件 に2つ目の候補 %s件", lots, len(values))
     return len(values)
 
 

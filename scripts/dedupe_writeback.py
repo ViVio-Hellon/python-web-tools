@@ -11,10 +11,18 @@ VER2.2.1 より前は、取り込みのたびに書き戻し対象のテーブ�
 原因は直しましたが、**すでに増えてしまった行は残ります。**
 このスクリプトはそれを数え、頼まれれば消します。
 
-    python3 scripts/dedupe_writeback.py                # 数えるだけ(既定)
+    python3 scripts/dedupe_writeback.py                # 共有の梱包資材マスタを数えるだけ(既定)
+    python3 scripts/dedupe_writeback.py --local        # この端末の手元の作業用DBを数える
+    python3 scripts/dedupe_writeback.py --show         # 重なっている行の中身も出す(原因を追うとき)
     python3 scripts/dedupe_writeback.py --fix          # 消す(控えを取ってから)
     python3 scripts/dedupe_writeback.py --file  X.sqlite3
     python3 scripts/dedupe_writeback.py --table 資材パレット注文管理
+
+【共有と手元のどちらを見るか】
+設定画面の「同じ内容の行」は**この端末の手元の作業用DB**を数えた結果です。手元は取り込みの
+たびに共有の中身で入れ替わるので、まず共有を数えます(既定)。共有に重なりがあれば `--fix`
+で消してから、各端末で取り込み直すと手元も直ります。共有に無く手元にだけあるときは、
+取り込み直せば消えます(手元を `--fix` で消す必要はありません)。
 
 【何を重複とみなすか】
 **管理番号と送信IDを除いた全部の列が一致する行**です。どちらも
@@ -63,6 +71,35 @@ def duplicates(conn: sqlite3.Connection, table: str) -> tuple[list[int], int]:
     return drop, len(rows)
 
 
+def show(conn: sqlite3.Connection, table: str, limit: int = 5) -> None:
+    """重なっている組を、比べなかった列(管理番号・送信ID)も含めて出す。
+
+    **送信IDが違う組**は、同じ1件が別の送信として2回届いたもの(書き戻しの再送)。
+    送信IDが空の組は、送信IDを書けなかった時期・別の道(表を持ってくる など)で入ったもの。
+    """
+    conn.row_factory = sqlite3.Row
+    quoted = source_db.quote_identifier(table)
+    rows = conn.execute(f"SELECT rowid AS __行, * FROM {quoted}").fetchall()
+    names = [n for n in rows[0].keys() if n not in IGNORED and n != "__行"]
+    groups: dict[tuple, list] = {}
+    for row in rows:
+        groups.setdefault(tuple(row[n] for n in names), []).append(row)
+    shown = 0
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        shown += 1
+        if shown > limit:
+            print(f"    …ほかにも組があります(先頭 {limit}組だけ出しました)")
+            break
+        first = members[0]
+        what = " / ".join(f"{n}={first[n]}" for n in names[:6])
+        print(f"    ・{len(members)}行: {what}")
+        for row in members:
+            ids = " ".join(f"{n}={row[n]}" for n in IGNORED if n in row.keys())
+            print(f"        {ids or 'rowid=' + str(row['__行'])}")
+
+
 def backup(path: Path) -> Path:
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
     copy = path.with_name(f"{path.stem}.bak-{stamp}{path.suffix}")
@@ -79,9 +116,21 @@ def main() -> int:
                         help="見るテーブル(省略時は書き戻し対象すべて)")
     parser.add_argument("--fix", action="store_true",
                         help="重複を消す(付けなければ数えるだけ)")
+    parser.add_argument("--local", action="store_true",
+                        help="この端末の手元の作業用DBを見る(設定画面の警告と同じもの)")
+    parser.add_argument("--show", action="store_true",
+                        help="重なっている行の中身(管理番号・送信IDも)を出す")
     args = parser.parse_args()
 
-    path = args.file or data_sync.find_material_db()
+    if args.local:
+        path = config.DB_PATH
+        if args.fix:
+            print("手元の作業用DBは取り込みのたびに共有の中身で入れ替わります。消さずに、"
+                  "共有を数えて(--local を外す)、設定画面から取り込み直してください。",
+                  file=sys.stderr)
+            return 1
+    else:
+        path = args.file or data_sync.find_material_db()
     if path is None or not Path(path).exists():
         print(f"梱包資材マスタが見つかりません({config.master_db_dir()})",
               file=sys.stderr)
@@ -102,6 +151,8 @@ def main() -> int:
             plan[table] = drop
             note = f"重複 {len(drop)}件" if drop else "重複なし"
             print(f"  {table}: {total}件 → {note}")
+            if args.show and drop:
+                show(conn, table)
     finally:
         conn.close()
 
