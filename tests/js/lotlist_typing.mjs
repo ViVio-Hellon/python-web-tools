@@ -54,17 +54,18 @@ globalThis.document = {
 };
 globalThis.pending = [];
 
-function view(text, rows) {
+function view(text, rows, lots = []) {
   return {
-    available: true, headers: [], rows: [], conditions: [], saved: [],
+    available: true, headers: [], rows: lots.map((lot_no) => ({ lot_no, values: [] })),
+    total: rows, conditions: [], saved: [],
     count_note: `${rows}件`, text, page_size: 200, can_save: false,
     save_why: "", empty_why: "",
   };
 }
 
 const lotlist = await import(pathToFileURL(join(work, "views", "lotlist.js")).href);
-const changed = [];
-lotlist.start({ view: view("", 553), onOpen() {}, onChanged: (next) => changed.push(next.text) });
+const opened = [];
+lotlist.start({ view: view("", 553), onOpen: (lotNo) => opened.push(lotNo) });
 
 const box = els.listText;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -110,7 +111,7 @@ check("続けて「AB」を送る", pending.map((p) => p.body.text), ["AB"]);
 pending.shift().resolve(view("AB", 5));
 await tick();
 check("最後の返事だけ出す", [box.value, els.countNote.textContent], ["AB", "5件"]);
-check("確定の知らせも最後のぶんだけ", changed, ["123", "AB"]);
+check("打っただけでは開かない", opened, []);
 
 // 3) 打っていないときは、サーバの文字に合わせる(条件を外した など)
 const clear = els.clearFilter.handlers.click;
@@ -119,6 +120,32 @@ await tick();
 pending.shift().resolve(view("", 553));
 await tick();
 check("サーバが文字を空にしたら欄も空", box.value, "");
+
+// 4) 1件に絞れても打っただけでは開かない。開くのは検索欄の Enter(1件のとき)だけ
+//    (現場の声:「7桁目を入れる前に画面がLOT詳細に移行する」「開きたくないこともある」)
+type("R6545E");
+await sleep(260);
+pending.shift().resolve(view("R6545E", 1, ["R6545E0"]));
+await tick();
+check("1件に絞れても開かない", opened, []);
+const enter = { key: "Enter", preventDefault() {} };
+await box.handlers.keydown(enter);
+check("Enter で開く", opened, ["R6545E0"]);
+// 2件以上なら Enter でも開かない
+type("R65");
+await sleep(260);
+pending.shift().resolve(view("R65", 22, ["R6500A0", "R6501A0"]));
+await tick();
+await box.handlers.keydown(enter);
+check("2件以上なら Enter でも開かない", opened, ["R6545E0"]);
+// 打ってすぐ Enter: いまの文字で絞ってから決める(古い一覧で開かない)
+type("L816X51");
+const pressed = box.handlers.keydown(enter);
+await tick();
+check("打ってすぐ Enter は、いまの文字で検索する", pending.map((p) => p.body.text), ["L816X51"]);
+pending.shift().resolve(view("L816X51", 1, ["L816X51"]));
+await pressed;
+check("その結果が1件なら開く", opened, ["R6545E0", "L816X51"]);
 
 if (failed) {
   console.log(`${failed}件 失敗`);

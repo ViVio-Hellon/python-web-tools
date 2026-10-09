@@ -187,20 +187,6 @@ class LotBrowseSession:
     def total(self, conn: sqlite3.Connection) -> int:
         return q.count(conn, self.conditions, self.text)
 
-    def only_lot(self, conn: sqlite3.Connection) -> str:
-        """1件に絞れているならそのロット番号。そうでなければ空。
-
-        **絞り込みの結果が1つになったら、それが答え**という扱いにする。
-        番号を知っているときは検索欄に打てば1件になるので、番号を打つ
-        専用の欄が要らなくなる ── 入口が2つあると、どちらに打つのが
-        正しいのかを利用者が判断しなければならない。
-        """
-        if self.total(conn) != 1:
-            return ""
-        rows = q.fetch(conn, self.conditions, text=self.text, sort=self.sort,
-                       descending=self.descending, limit=1)
-        return str(rows[0]["ロット番号"]) if rows else ""
-
 
 # ------------------------------------------------------------------
 # プロセスに1つ

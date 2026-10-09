@@ -46,17 +46,6 @@ async function openLot(lotNo) {
   }
 }
 
-/*
-  絞り込みで1件になったとき。サーバが確定まで済ませて `detail` を
-  付けて返すので、ここは開くだけ。**番号を打つ専用の欄の代わり**で、
-  7桁を打てば必ず1件になる。
-*/
-function onListChanged(view) {
-  if (!view || !view.detail) return;
-  detail.show(view.detail);
-  applyRibbon(view.ribbon);
-}
-
 export function start(options) {
   const expand = async () => {
     if (!detail.currentLot()) return;
@@ -79,8 +68,7 @@ export function start(options) {
                    if (body.list) lotlist.render(body.list);
                  } });
 
-  lotlist.start({ view: options.list, onOpen: openLot,
-                  onChanged: onListChanged });
+  lotlist.start({ view: options.list, onOpen: openLot });
 
   // 発注一覧から「このLotを開く」で来たとき。**番号を打ち直させない**
   // ── 7桁の打ち間違いは、そのまま別のロットを開いてしまう

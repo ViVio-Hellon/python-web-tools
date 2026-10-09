@@ -359,12 +359,13 @@ class PickTests(ListWebTestCase):
                          ["3333333"])
 
 
-class AutoPickTests(ListWebTestCase):
-    """**1件になったら、それが答え。**
+class NoAutoOpenTests(ListWebTestCase):
+    """**1件に絞れても勝手に開かない。**
 
-    番号を打つ専用の欄を無くしたので、ここが速い道を引き受ける。
-    規則はこれだけ ── 同じロットかどうかで分けると「打ったのに
-    開かないことがある」になり、利用者が規則を言葉にできなくなる。
+    現場の声:「7桁目を入れる前に画面がLOT詳細に移行する」「開きたくないこともある、
+    単純に有無だけ確認するケース」「どんどん絞り込むのはいいが勝手に詳細に移行しないように」。
+    開くと作業中のロットも替わる(前のロットの製品サイズ・倉庫送信の下書きが消える)ので、
+    絞り込みだけでは作業中のロットも変えない。
     """
 
     def setUp(self) -> None:
@@ -373,40 +374,39 @@ class AutoPickTests(ListWebTestCase):
         insert_hiki(self.conn, lot_no="1111111")
         insert_odr(self.conn)
 
-    def test_1件に絞れたら詳細まで返る(self) -> None:
-        """追加の往復なしにそのまま開けるようにする。"""
+    def test_1件に絞れても詳細は返さない(self) -> None:
         body = self.post("/api/lot/list/search", {"text": "1111111"})
         self.assertEqual(len(body["rows"]), 1)
-        self.assertIn("detail", body)
-        self.assertTrue(body["detail"]["found"])
-        self.assertEqual(body["detail"]["lot_no"], "1111111")
-
-    def test_1件に絞れたら作業中のロットになる(self) -> None:
-        """リボンと資材展開が見るのはここ。"""
-        body = self.post("/api/lot/list/search", {"text": "1111111"})
-        self.assertEqual(work_context.get_context().lot_no, "1111111")
-        self.assertEqual(body["ribbon"]["lot"], "1111111")
-        self.assertEqual([r["lot_no"] for r in body["rows"] if r["current"]],
-                         ["1111111"])
-
-    def test_2件以上なら確定しない(self) -> None:
-        """勝手に1つ選ぶと、選んだつもりのないロットで作業が進む。"""
-        body = self.post("/api/lot/list/search", {"text": "A5052"})
-        self.assertEqual(len(body["rows"]), 2)
-        self.assertNotIn("detail", body)
-        self.assertEqual(work_context.get_context().lot_no, "")
-
-    def test_0件でも確定しない(self) -> None:
-        body = self.post("/api/lot/list/search", {"text": "ありえない"})
+        self.assertEqual(body["total"], 1)
         self.assertNotIn("detail", body)
 
-    def test_条件で1件になっても同じ(self) -> None:
-        """検索語でも条件チップでも扱いを変えない。**規則は1つ。**"""
+    def test_番号の途中で1件になっても開かない_作業中のロットも変えない(self) -> None:
+        """6桁目で1件に絞れても、作業中のロットは前のまま。"""
+        self.client.get("/api/lot/3333333", headers=self.auth())       # 作業中のロット
+        for typed in ("1", "11", "111111", "1111111"):
+            body = self.post("/api/lot/list/search", {"text": typed})
+            self.assertNotIn("detail", body)
+            self.assertEqual(work_context.get_context().lot_no, "3333333", typed)
+        self.assertEqual(body["ribbon"]["lot"] if "ribbon" in body else "3333333", "3333333")
+
+    def test_条件で1件になっても開かない(self) -> None:
         self.post("/api/lot/list/filter/add",
                   {"column": "zaishitsu", "op": "=", "value": "A1050"})
         body = self.get()
         self.assertEqual(len(body["rows"]), 1)
-        self.assertEqual(work_context.get_context().lot_no, "2222222")
+        self.assertNotIn("detail", body)
+        self.assertEqual(work_context.get_context().lot_no, "")
+
+    def test_開くのは開く操作のときだけ(self) -> None:
+        """行のダブルクリック / Enter、検索欄の Enter(1件のとき)はこの入口を呼ぶ。"""
+        res = self.client.get("/api/lot/1111111", headers=self.auth())
+        self.assertTrue(res.get_json()["found"])
+        self.assertEqual(work_context.get_context().lot_no, "1111111")
+
+    def test_案内は開かないと書く(self) -> None:
+        body = self.get()
+        self.assertIn("開きはしません", body["search_hint"])
+        self.assertIn("Enter で開きます", body["search_hint"])
 
 
 class PageTests(ListWebTestCase):

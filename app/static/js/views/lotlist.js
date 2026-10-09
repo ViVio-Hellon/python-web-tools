@@ -18,7 +18,7 @@ const SUGGEST_DEBOUNCE_MS = 160;
 
 const el = {};
 let onOpen = null;        // 行を開いたときに呼ぶ(ダブルクリック / Enter)
-let onChanged = null;     // 一覧が返ってきたときに呼ぶ(1件確定の受け取り)
+let lastView = null;     // いま出している一覧(検索欄の Enter で、1件なら開く)
 let suggestTimer = null;
 let suggestItems = [];
 let suggestAt = -1;       // キーボードで選んでいる位置
@@ -108,6 +108,7 @@ function savedChip(name) {
 
 export function render(view) {
   if (!view) return;
+  lastView = view;
   el.listCard.hidden = !view.available;
   if (!view.available) return;
 
@@ -234,9 +235,6 @@ async function sendNow(path, body, seq) {
     if (seq !== sendSeq || textPending) return next;
     render(next);
     if (next.message) toast(next.message, "ok");
-    // **1件に絞れたらサーバが確定まで済ませて `detail` を付けて返す。**
-    // 番号を打つ専用の欄を無くしたぶん、ここが速い道を引き受ける
-    if (onChanged) onChanged(next);
     return next;
   } catch (err) {
     if (seq !== sendSeq || textPending) return null;
@@ -259,7 +257,7 @@ export function start(options) {
     el[id] = document.getElementById(id);
   }
   onOpen = options.onOpen;
-  onChanged = options.onChanged;
+  lastView = null;
   // 再入場のたびに真っさらから(`nav.js`)
   suggestItems = [];
   suggestAt = -1;
@@ -323,6 +321,24 @@ export function start(options) {
       textPending = false;
       send("/api/lot/list/search", { text: el.listText.value });
     }, 220);
+  });
+
+  // **打っただけでは開かない**(1件に絞れても)。有るかどうかだけ見たいことがある。
+  // 開くのは、1件のときに Enter を押したとき(行のダブルクリック / Enter と同じく、意図した操作)
+  el.listText.addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    let view = lastView;
+    if (textPending) {             // 打ち終えてすぐ Enter: いまの文字で絞ってから決める
+      clearTimeout(textTimer);
+      textPending = false;
+      view = (await send("/api/lot/list/search", { text: el.listText.value })) || lastView;
+    }
+    if (view && view.total === 1 && view.rows.length === 1 && onOpen) {
+      onOpen(view.rows[0].lot_no);
+    } else if (view && view.total > 1) {
+      toast(`${view.total} 件あります。行を選んで開いてください`, "ok");
+    }
   });
 
   el.pageSize.addEventListener("change", () =>

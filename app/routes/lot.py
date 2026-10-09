@@ -93,33 +93,19 @@ def _list_view(conn, available: bool) -> dict:
     return view.to_dict()
 
 
-def _list_state(message: str = "", status: int = 200, *, auto: bool = True):
-    """一覧を返す。**1件に絞れていたらその場で確定する。**
+def _list_state(message: str = "", status: int = 200):
+    """一覧を返す。**1件に絞れても、ここでは開かない(作業中のロットにもしない)。**
 
-    「絞り込んだ結果が1つになったら、それが答え」という扱い。番号を
-    打つ専用の欄を無くしたぶん、ここが速い道を引き受ける。
-    確定すると詳細(`detail`)も一緒に返るので、画面は追加の往復なしに
-    そのまま開ける。
-
-    `auto` を切るのは、既に1件検索を済ませた直後だけ ── そこで
-    もう一度引くと同じ問い合わせを2回することになる。
+    以前は1件になった時点で確定して詳細まで返していた。7桁目を打つ前に
+    詳細へ移ってしまい、「有るかどうかだけ見たい」ができなかった(現場の声:
+    「どんどん絞り込むのはいいが勝手に詳細に移行しないように」)。しかも開くと
+    作業中のロットが替わり、前のロットの製品サイズや倉庫送信の下書きが消える。
+    開くのは行のダブルクリック / Enter と、検索欄で Enter(1件のとき)だけ。
     """
     conn = get_db()
     available = lot_presenter.has_data(conn)
-    detail = None
-    if available and auto:
-        # **規則はこれだけ: 1件になったら開く。** 同じロットかどうかで
-        # 分けたくなるが、そうすると「打ったのに開かないことがある」に
-        # なり、利用者が規則を言葉にできなくなる
-        only = lot_browse_session.get_session().only_lot(conn)
-        if only:
-            detail = _select(conn, only)
-
     body = _list_view(conn, available)
     body["message"] = message
-    if detail is not None:
-        body["detail"] = detail
-        body["ribbon"] = work_context.get_context().ribbon()
     return jsonify(body), status
 
 
