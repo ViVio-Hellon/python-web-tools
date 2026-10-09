@@ -209,7 +209,7 @@ def lot_db_dir2() -> Optional[Path]:
         ファイルが無い         … そのファイルは2つ目から読む(`sync_sources.find_lot_dbs`)
         ファイルに対象が無い   … 取り込みのあとに、2つ目にだけあるロット・受注を足す
                                  (`sync_import.merge_second_lot`)
-        ロットはあるが値が空   … BOX最終実績の寸法が空なら、2つ目の同じロットの行を候補に控え、
+        ロットはあるが値が空   … BOX最終実績の寸法が空なら、2つ目の同じロットの行の BOX設計寸法を候補に控え、
                                  ロット情報の画面で選ぶ(`sync_import.collect_box_choices`)
     """
     from . import user_settings

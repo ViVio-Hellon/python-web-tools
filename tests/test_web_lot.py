@@ -925,7 +925,7 @@ if __name__ == "__main__":
 
 
 class BoxPickApiTests(LotWebTestCase):
-    """BOX最終実績寸法の候補を選ぶ(1つ目に寸法が無いBOXコースのロット)。
+    """2つ目の BOX設計寸法の候補を選ぶ(1つ目に BOX最終実績寸法が無いBOXコースのロット)。
 
     選んだものはサーバが覚え、表示・帯・資材展開がその寸法を使う。発注一覧の
     「Lotを開く」(見るだけ)では覚えない。
@@ -939,8 +939,8 @@ class BoxPickApiTests(LotWebTestCase):
         self.conn.executemany(
             "INSERT INTO 仕掛ロット_2つ目 (ロット番号, BOX番号, BOX設計_設備名, 板厚, 板幅, 板丈, 出どころ)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [("1234567", "3", "GFS", 6.1, 1220.0, 2630.0, "BOX最終実績"),
-             ("1234567", "4", "KEN", 6.0, 1200.0, 2600.0, "BOX最終実績")])
+            [("1234567", "3", "GFS", 6.1, 1220.0, 2630.0, "BOX設計"),
+             ("1234567", "4", "KEN", 6.0, 1200.0, 2600.0, "BOX設計")])
         self.conn.commit()
 
     def dims(self, body: dict) -> list[str]:
@@ -955,7 +955,7 @@ class BoxPickApiTests(LotWebTestCase):
         picked = self.get(f"/api/lot/1234567?box_pick={key}")
         self.assertEqual(self.dims(picked), ["6.000", "1200.0", "2600.0"])
         self.assertTrue(picked["can_expand"])
-        self.assertIn("2つ目の KEN", picked["dimension_note"])
+        self.assertIn("2つ目の KEN のBOX設計寸法", picked["dimension_note"])
         # 開き直しても覚えている
         again = self.get("/api/lot/1234567")
         self.assertEqual(again["box_pick"], key)

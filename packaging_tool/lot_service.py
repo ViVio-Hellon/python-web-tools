@@ -88,7 +88,7 @@ def format_dimension(value: float) -> str:
 
 @dataclass
 class BoxChoice:
-    """BOX最終実績寸法の候補1つ(仕掛台帳の2つ目の置き場所の行。`仕掛ロット_2つ目`)。
+    """BOX寸法の候補1つ(仕掛台帳の2つ目の置き場所の行の BOX設計寸法。`仕掛ロット_2つ目`)。
 
     1つ目の SIKALOT で BOX最終実績の寸法が空のロットだけに付く。ロット情報の画面で
     「BOX実績寸法」の横に BOX設計_設備名 で並べ、選んだものの寸法を使う(現場の依頼)。
@@ -100,15 +100,14 @@ class BoxChoice:
     thickness: float = 0.0
     width: float = 0.0
     length: float = 0.0
-    source: str = ""         # 寸法の出どころ(BOX最終実績 / BOX実績)
+    source: str = ""         # 寸法の出どころ(BOX設計)
 
     @property
     def label(self) -> str:
         name = self.equipment or "(設備名なし)"
         box = f"・BOX{self.box_no}" if self.box_no else ""
-        note = "" if self.source == "BOX最終実績" else f"・{self.source}"
         return (f"{name}({format_thickness(self.thickness)} × {format_dimension(self.width)}"
-                f" × {format_dimension(self.length)}{box}{note})")
+                f" × {format_dimension(self.length)}{box})")
 
 
 @dataclass
@@ -335,7 +334,8 @@ def _load_box_choices(conn: sqlite3.Connection, lot_no: str) -> list[BoxChoice]:
     try:
         rows = conn.execute(
             "SELECT BOX番号, BOX設計_設備名, 板厚, 板幅, 板丈, 出どころ FROM 仕掛ロット_2つ目"
-            " WHERE ロット番号 = ? ORDER BY 管理番号", (lot_no,)).fetchall()
+            # 工程の順(BOX番号の小さい順)に並べる
+            " WHERE ロット番号 = ? ORDER BY CAST(BOX番号 AS INTEGER), 管理番号", (lot_no,)).fetchall()
     except sqlite3.OperationalError:
         return []                     # 表がまだ無い(古い手元DB)
     out = []

@@ -515,14 +515,14 @@ LOT_MERGE_KEYS: dict[str, str] = {
 }
 
 
-# BOX最終実績寸法の候補(`仕掛ロット_2つ目`)。1つ目のロットで BOX最終実績_板厚・板幅・板丈 の
+# BOX寸法の候補(`仕掛ロット_2つ目`)。1つ目のロットで BOX最終実績_板厚・板幅・板丈 の
 # どれかが空(取り込みで空欄は 0 になる)なら、2つ目の SIKALOT の同じロットの行を控える。
-# 1つ目と2つ目の SIKALOT は**列の中身が違う**ことがあるので、取り込み元の列名でその行を読み、
-# BOX最終実績_* に1つでも値があればそれ、無ければ BOX実績_* を使う。どちらも空なら控えない
-# (参照パス2専用の SIKALOT には BOX実績_板厚・板幅・板丈 の列が無く、BOX最終実績_板丈 は 0)
+# **2つ目で読むのは BOX設計_板厚・板幅・板丈**(現場の指定。BOX最終実績ではない)。工程の行ごとに
+# 値が違うので、BOX設計_設備名 で選べるようにする。1つ目と2つ目の SIKALOT は**列の中身が違う**ので、
+# 取り込み元の列名でその行を読む。3つのどれにも値が無い行は控えない(0 は 0 のまま控える)
 BOX_CHOICE_TABLE = "仕掛ロット_2つ目"
 BOX_DIMENSIONS = ("板厚", "板幅", "板丈")
-BOX_CHOICE_SOURCES = ("BOX最終実績", "BOX実績")
+BOX_CHOICE_SOURCE = "BOX設計"
 
 
 def _same_file(a: Optional[Path], b: Optional[Path]) -> bool:
@@ -635,7 +635,7 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
 
 
 def collect_box_choices(conn: sqlite3.Connection, rows: list, result: ImportResult) -> int:
-    """BOX最終実績寸法が空のロットについて、2つ目の SIKALOT の同じロットの行を候補に控える。
+    """BOX最終実績寸法が空のロットについて、2つ目の SIKALOT の同じロットの行(BOX設計寸法)を候補に控える。
 
     控えた候補の数を返す。手元の `仕掛ロット`(1つ目 + 2つ目から足したロット)のうち、
     BOX最終実績_板厚・板幅・板丈 のどれかが 0 のロットだけが対象。同じ設備名・同じ寸法の
@@ -654,14 +654,12 @@ def collect_box_choices(conn: sqlite3.Connection, rows: list, result: ImportResu
         lot = import_specs.to_text(row.get(lot_src))
         if not lot or lot not in need:
             continue
-        for source in BOX_CHOICE_SOURCES:
-            dims = [import_specs.to_real(row.get(f"{source}_{d}")) or 0.0 for d in BOX_DIMENSIONS]
-            # **どれか1つでも値があれば候補にする。** 2つ目の実データ(参照パス2専用)は
-            # BOX最終実績_板丈 が全行 0 で、3つそろうのを待つと1件も出ない。0 は 0 のまま見せ、
-            # 使えるか(資材展開に板幅・板丈が要る)は画面で分かるようにする
-            if any(v > 0 for v in dims):
-                break
-        else:
+        source = BOX_CHOICE_SOURCE
+        dims = [import_specs.to_real(row.get(f"{source}_{d}")) or 0.0 for d in BOX_DIMENSIONS]
+        # **どれか1つでも値があれば候補にする。** 参照パス2専用の SIKALOT には板丈が 0 の行も
+        # ある(例: N7154X0 = 4.52 × 127.8 × 0)。0 は 0 のまま見せ、使えるか(資材展開に
+        # 板幅・板丈が要る)は画面で分かるようにする
+        if not any(v > 0 for v in dims):
             continue                      # この行には寸法が1つも無い
         equipment = import_specs.to_text(row.get("BOX設計_設備名")) or ""
         box_no = import_specs.to_text(row.get("BOX番号")) or ""
@@ -679,11 +677,11 @@ def collect_box_choices(conn: sqlite3.Connection, rows: list, result: ImportResu
                 " 板厚, 板幅, 板丈, 出どころ) VALUES (?, ?, ?, ?, ?, ?, ?)", values)
     except sqlite3.Error as exc:
         log.exception("BOX最終実績の候補を控えられませんでした")
-        result.warnings.append(f"仕掛ロット: 2つ目の BOX最終実績の候補を控えられませんでした({exc})")
+        result.warnings.append(f"仕掛ロット: 2つ目の BOX設計寸法の候補を控えられませんでした({exc})")
         return 0
     lots = len({v[0] for v in values})
     result.notes.append(f"仕掛ロット: 1つ目で BOX最終実績(板厚・板幅・板丈)が空のロット {lots:,}件に、"
-                        f"2つ目の置き場所の行 {len(values):,}件を候補として控えました"
+                        f"2つ目の置き場所の BOX設計寸法 {len(values):,}件を候補として控えました"
                         "(ロット情報の画面で選べます)")
     import_diag.write(f"  [仕掛ロット] ← 2つ目 BOX最終実績が空のロット {lots}件 の候補 {len(values)}件")
     log.info("BOX最終実績が空のロット %s件 に2つ目の候補 %s件", lots, len(values))

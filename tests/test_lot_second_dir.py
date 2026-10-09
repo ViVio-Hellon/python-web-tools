@@ -201,21 +201,24 @@ class SecondLotDirTests(unittest.TestCase):
             first("C000003", "HOT GFS KEN", "8", "1500", "3000"),
             first("N000004", "HOT L-1 KEN"),
         ])
-        cols = ["ﾛｯﾄ番号", "BOX番号", "BOX設計_設備名", "BOX実績_板厚", "BOX実績_板幅", "BOX実績_板丈",
+        # 参照パス2専用の SIKALOT の形(44列。BOX実績_板厚・板幅・板丈 は無い)。読むのは BOX設計_*
+        cols = ["ﾛｯﾄ番号", "BOX番号", "BOX設計_設備名", "BOX設計_板厚", "BOX設計_板幅", "BOX設計_板丈",
                 "BOX最終実績_板厚", "BOX最終実績_板幅", "BOX最終実績_板丈", "設計_設備ｺｰｽ"]
         self.write_raw(self.second, cols, [
-            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "3", "BOX設計_設備名": "GFS",
-             "BOX最終実績_板厚": "6.1", "BOX最終実績_板幅": "1220", "BOX最終実績_板丈": "2630"},
             {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "4", "BOX設計_設備名": "KEN",
-             "BOX実績_板厚": "6", "BOX実績_板幅": "1200", "BOX実績_板丈": "2600"},      # 最終実績が無い行
-            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "5", "BOX設計_設備名": "PSW"},            # 寸法が無い → 出さない
-            # 参照パス2専用の実データの形: BOX最終実績_板丈 が 0 → 0 のまま候補にする
-            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "6", "BOX設計_設備名": "GSS",
-             "BOX最終実績_板厚": "4.52", "BOX最終実績_板幅": "127.8", "BOX最終実績_板丈": "0"},
+             "BOX設計_板厚": "100", "BOX設計_板幅": "544", "BOX設計_板丈": "544",
+             # BOX最終実績は**読まない**(現場の指定)
+             "BOX最終実績_板厚": "9", "BOX最終実績_板幅": "9", "BOX最終実績_板丈": "9"},
+            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "2", "BOX設計_設備名": "PSW",
+             "BOX設計_板厚": "100", "BOX設計_板幅": "1200", "BOX設計_板丈": "2850"},
+            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "5", "BOX設計_設備名": "GFS"},            # 寸法が無い → 出さない
+            # 板丈が 0 の行(実データの N7154X0 = 4.52 × 127.8 × 0)→ 0 のまま候補にする
+            {"ﾛｯﾄ番号": "H9022S0", "BOX番号": "6", "BOX設計_設備名": "TLV",
+             "BOX設計_板厚": "4.52", "BOX設計_板幅": "127.8", "BOX設計_板丈": "0"},
             {"ﾛｯﾄ番号": "C000003", "BOX番号": "2", "BOX設計_設備名": "GFS",
-             "BOX最終実績_板厚": "9", "BOX最終実績_板幅": "9999", "BOX最終実績_板丈": "9999"},
+             "BOX設計_板厚": "9", "BOX設計_板幅": "9999", "BOX設計_板丈": "9999"},
             {"ﾛｯﾄ番号": "N000004", "BOX番号": "1", "BOX設計_設備名": "L-1",
-             "BOX最終実績_板厚": "1", "BOX最終実績_板幅": "100", "BOX最終実績_板丈": "200"},
+             "BOX設計_板厚": "1", "BOX設計_板幅": "100", "BOX設計_板丈": "200"},
         ])
 
     def test_BOX最終実績が空なら2つ目の行を候補に控える_勝手に埋めない(self) -> None:
@@ -223,11 +226,11 @@ class SecondLotDirTests(unittest.TestCase):
         result = data_sync.import_lot_ledger(self.conn)
         self.assertEqual(self.local("SELECT ロット番号, BOX番号, BOX設計_設備名, 板厚, 板幅, 板丈, 出どころ"
                                     " FROM 仕掛ロット_2つ目 ORDER BY 管理番号"), [
-            ("H9022S0", "3", "GFS", 6.1, 1220.0, 2630.0, "BOX最終実績"),
-            ("H9022S0", "4", "KEN", 6.0, 1200.0, 2600.0, "BOX実績"),
-            ("H9022S0", "6", "GSS", 4.52, 127.8, 0.0, "BOX最終実績"),
+            ("H9022S0", "4", "KEN", 100.0, 544.0, 544.0, "BOX設計"),
+            ("H9022S0", "2", "PSW", 100.0, 1200.0, 2850.0, "BOX設計"),
+            ("H9022S0", "6", "TLV", 4.52, 127.8, 0.0, "BOX設計"),
             # N000004 は BOX でないが BOX最終実績が空なので控える(画面で出すかはロット情報が決める)
-            ("N000004", "1", "L-1", 1.0, 100.0, 200.0, "BOX最終実績"),
+            ("N000004", "1", "L-1", 1.0, 100.0, 200.0, "BOX設計"),
         ])
         # 1つ目の値は**書き換えない**(どれを使うかは画面で選ぶ)
         self.assertEqual(self.local("SELECT BOX最終実績_板厚 FROM 仕掛ロット WHERE ロット番号 = 'H9022S0'"),
@@ -241,11 +244,12 @@ class SecondLotDirTests(unittest.TestCase):
         self.box_ledgers()
         data_sync.import_lot_ledger(self.conn)
         plain = lot_service.search_lot(self.conn, "H9022S0").lot
-        self.assertEqual([c.equipment for c in plain.box_choices], ["GFS", "KEN", "GSS"])
+        # 工程の順(BOX番号の小さい順)に並ぶ
+        self.assertEqual([c.equipment for c in plain.box_choices], ["PSW", "KEN", "TLV"])
         self.assertEqual((plain.width, plain.length, plain.box_pick), (0.0, 0.0, ""))
         key = plain.box_choices[1].key
         picked = lot_service.search_lot(self.conn, "H9022S0", key).lot
-        self.assertEqual((picked.thickness, picked.width, picked.length), (6.0, 1200.0, 2600.0))
+        self.assertEqual((picked.thickness, picked.width, picked.length), (100.0, 544.0, 544.0))
         self.assertEqual(picked.box_pick, key)
         # 候補に無い鍵は無視する(1つ目のまま)
         self.assertEqual(lot_service.search_lot(self.conn, "H9022S0", "x|y").lot.width, 0.0)
