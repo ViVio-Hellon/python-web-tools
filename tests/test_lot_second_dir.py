@@ -129,6 +129,50 @@ class SecondLotDirTests(unittest.TestCase):
         self.assertFalse([e for e in result.errors if e.startswith("仕掛ロット:")], result.errors)
         self.assertTrue(any("2つ目" in w for w in result.warnings), result.warnings)
 
+    def test_ファイルごと_ロットごとに2つ目を見る(self) -> None:
+        """現場の質問の例そのまま。**1つ目を丸ごと捨てて2つ目へ移るのではない。**
+
+            1つ目: SIKALOT が無い          → SIKALOT だけ 2つ目から
+            1つ目: SIKAHIKI がある         → 1つ目を使い続ける。
+                   その中にロットが無い     → そのロットの引当だけ 2つ目の SIKAHIKI から
+            1つ目: SIKAODR が無い          → SIKAODR だけ 2つ目から
+        """
+        write_ledger(self.first, "SIKAHIKI.sqlite3", "仕掛引当", [hiki("X000001", "J1")])
+        write_ledger(self.second, "SIKALOT.sqlite3", "仕掛ロット",
+                     [lot("X000001", "2つ目"), lot("Y000002", "2つ目")])
+        write_ledger(self.second, "SIKAHIKI.sqlite3", "仕掛引当",
+                     [hiki("X000001", "J9"), hiki("Y000002", "J2")])
+        write_ledger(self.second, "SIKAODR.sqlite3", "仕掛受注",
+                     [order("J1", "2つ目"), order("J2", "2つ目")])
+        found = sync_sources.find_lot_dbs()
+        self.assertEqual({t: p.parent for t, p in found.items()},
+                         {"仕掛ロット": self.second, "仕掛引当": self.first, "仕掛受注": self.second})
+        data_sync.import_lot_ledger(self.conn)
+        # X の引当は1つ目のまま(J1。2つ目の J9 で上書きしない)。Y は1つ目に無いので2つ目から
+        self.assertEqual(sorted(self.local("SELECT ロット番号, 受注番号 FROM 仕掛引当")),
+                         [("X000001", "J1"), ("Y000002", "J2")])
+        self.assertTrue(lot_service.search_lot(self.conn, "Y000002").found)
+
+    def test_1つ目が空や表の無いファイルなら2つ目を読む(self) -> None:
+        """「データが無い」も、ファイルが無いときと同じく2つ目にある分が入る。"""
+        write_ledger(self.second, "SIKALOT.sqlite3", "仕掛ロット", [lot("Y000002")])
+        for case in ("空", "表が無い", "0バイト"):
+            with self.subTest(case=case):
+                path = self.first / "SIKALOT.sqlite3"
+                path.unlink(missing_ok=True)
+                if case == "空":
+                    write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [])
+                elif case == "表が無い":
+                    conn = sqlite3.connect(path)
+                    conn.execute("CREATE TABLE other(x)")
+                    conn.commit()
+                    conn.close()
+                else:
+                    path.write_bytes(b"")
+                data_sync.import_lot_ledger(self.conn)
+                self.assertEqual(self.local("SELECT ロット番号 FROM 仕掛ロット"), [("Y000002",)])
+                source_db.sweep_old_copies()
+
     def test_2つ目を設定していなければ足さない(self) -> None:
         user_settings.save(config.KEY_LOT_DB_DIR2, "")
         write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [lot("A000001")])
