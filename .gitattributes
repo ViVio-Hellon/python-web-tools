@@ -15,6 +15,9 @@
 *.bat text eol=crlf
 *.vbs text eol=crlf
 
+# 開発環境(Claude Code のクラウド)の起動時スクリプト。bash は CRLF だと動かないので LF に決める
+*.sh text eol=lf
+
 # 差分に出しても読めないもの。
 # 手元の業務DBは追跡していない(`.gitignore` を参照)。この指定は、
 # うっかり `git add -f` で入ったときにテキスト扱いされないための保険。
