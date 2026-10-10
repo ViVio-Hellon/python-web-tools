@@ -538,7 +538,8 @@ def _import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = Non
         # **どこで何が見えたかまで言う。** 置いてあるのに「見つかりません」と出たとき、
         # フォルダに届いていないのか・名前が違うのかが分からなかった(現場の声)
         names = list(config.LOT_DB_FILES.values())
-        seen = [sync_sources.describe_dir(d, names) for d in searched]
+        # 2つ目はそのフォルダで探した名前(2つ目のファイル名)で言う
+        seen = [sync_sources.describe_dir(d, sync_sources.lot_names_for(d)) for d in searched]
         result.errors.append(
             "仕掛台帳(" + "・".join(names) + ")が見つかりません。見た場所:\n  "
             + "\n  ".join(seen))

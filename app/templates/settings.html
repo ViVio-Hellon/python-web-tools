@@ -379,6 +379,17 @@
                {% if not state.lot_dir2_real %}hidden{% endif %}
         >→ {{ state.lot_dir2_real }}</small>
 
+        {# 仕掛台帳の2つ目のファイル名(`config.lot_db2_files`)。1つ目は決まった名前のまま。
+           名前は変えてよいが、中身の要る列はそろえる約束(現場)。足りなければ「いまの状態」に出る #}
+        {% for f in state.lot_files2 %}
+        <label for="lotFile2_{{ loop.index }}">2つ目の名前({{ f.first }} の代わり)</label>
+        <span class="pathrow">
+          <input class="input" id="lotFile2_{{ loop.index }}" data-lot-file2="{{ f.table }}"
+                 value="{{ f.name }}" spellcheck="false" autocomplete="off"
+                 placeholder="空なら {{ f.first }}">
+        </span>
+        {% endfor %}
+
         {# 看板(在庫薄警告)マスタ。梱包資材マスタとは別ファイル
            (Form状態管理・看板_*の8テーブル)。見つからなくても
            在庫薄警告を使わない端末には支障が無いので、既定は

@@ -987,6 +987,26 @@ def find(directory: Path, *names: str) -> Optional[Path]:
     return None
 
 
+def find_named(directory: Path, name: str) -> Optional[Path]:
+    """打たれたファイル名で探す(仕掛台帳の2つ目)。
+
+    拡張子まで打たれていればまずその名前そのもの、無ければ / 見つからなければ
+    `find` と同じく `.sqlite3` / `.db` を付けて探す。
+    """
+    directory = Path(directory)
+    name = (name or "").strip()
+    if not name:
+        return None
+    if Path(name).suffix:
+        candidate = directory / name
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:                          # 共有に届かない
+            return None
+    return find(directory, name)
+
+
 def list_source_files(directory: Path) -> list[Path]:
     """フォルダにある取り込み元らしいファイル。設定画面に出す。"""
     directory = Path(directory)

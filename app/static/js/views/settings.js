@@ -214,6 +214,11 @@ function renderStatus(state) {
   el.masterDir.value = state.master_dir;
   el.lotDir.value = state.lot_dir;
   el.lotDir2.value = state.lot_dir2 || "";
+  // 2つ目のファイル名(表ごと)。空なら1つ目と同じ名前
+  for (const f of state.lot_files2 || []) {
+    const box = document.querySelector(`[data-lot-file2="${f.table}"]`);
+    if (box) box.value = f.name;
+  }
   el.kanbanDir.value = state.kanban_dir;
   el.thresholdDir.value = state.threshold_dir;
   el.exportDir.value = state.export_dir;
@@ -518,6 +523,8 @@ export function start(state, jobState, masterFrame) {
       master_dir: el.masterDir.value,
       lot_dir: el.lotDir.value,
       lot_dir2: el.lotDir2.value,
+      lot_files2: Object.fromEntries(
+        [...document.querySelectorAll("[data-lot-file2]")].map((box) => [box.dataset.lotFile2, box.value])),
       kanban_dir: el.kanbanDir.value,
       threshold_dir: el.thresholdDir.value,
     };

@@ -425,6 +425,73 @@ class SecondLotDirTests(unittest.TestCase):
         data_sync.import_lot_ledger(self.conn)
         self.assertFalse(lot_service.search_lot(self.conn, "R6545E0").lot.course_unknown)
 
+    # --- 2つ目のファイル名(現場の依頼: 2つ目は名前を変えて置く。1つ目は SIKALOT 等のまま) ------
+    def name_second(self, **names: str) -> None:
+        saved = user_settings.get(config.KEY_LOT_DB2_FILES)
+        self.addCleanup(user_settings.save, config.KEY_LOT_DB2_FILES, saved or {})
+        user_settings.save(config.KEY_LOT_DB2_FILES, names)
+
+    def test_2つ目は設定したファイル名で読む_1つ目は決まった名前のまま(self) -> None:
+        self.name_second(仕掛ロット="SIKALOT_圧縮.sqlite3", 仕掛引当="引当_2", 仕掛受注="")
+        write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [lot("A000001")])
+        # 2つ目に「SIKALOT.sqlite3」(同じ名前)を置いても、もう読まない ── 混乱のもと
+        write_ledger(self.second, "SIKALOT.sqlite3", "仕掛ロット", [lot("Z000099")])
+        write_ledger(self.second, "SIKALOT_圧縮.sqlite3", "仕掛ロット", [lot("B000002")])
+        write_ledger(self.second, "引当_2.db", "仕掛引当", [hiki("B000002", "J2")])   # 拡張子なしの名前 → .db も見る
+        write_ledger(self.second, "SIKAODR.sqlite3", "仕掛受注", [order("J2", "2つ目")])  # 空欄 → 1つ目と同じ名前
+        self.assertEqual(config.lot_db2_files(), {"仕掛ロット": "SIKALOT_圧縮.sqlite3",
+                                                  "仕掛引当": "引当_2", "仕掛受注": "SIKAODR.sqlite3"})
+        extra = sync_sources.find_second_lot_dbs()
+        self.assertEqual({t: p.name for t, p in extra.items()},
+                         {"仕掛ロット": "SIKALOT_圧縮.sqlite3", "仕掛引当": "引当_2.db",
+                          "仕掛受注": "SIKAODR.sqlite3"})
+        data_sync.import_lot_ledger(self.conn)
+        self.assertEqual(sorted(self.local("SELECT ロット番号 FROM 仕掛ロット")),
+                         [("A000001",), ("B000002",)])
+        self.assertEqual(self.local("SELECT ロット番号, 受注番号 FROM 仕掛引当"), [("B000002", "J2")])
+
+    def test_1つ目に無いファイルは2つ目の名前で読む(self) -> None:
+        self.name_second(仕掛ロット="SIKALOT_圧縮.sqlite3")
+        write_ledger(self.second, "SIKALOT_圧縮.sqlite3", "仕掛ロット", [lot("B000002")])
+        found = sync_sources.find_lot_dbs()
+        self.assertEqual(found["仕掛ロット"], self.second / "SIKALOT_圧縮.sqlite3")
+        data_sync.import_lot_ledger(self.conn)
+        self.assertEqual(self.local("SELECT ロット番号 FROM 仕掛ロット"), [("B000002",)])
+
+    def test_見つからないときは2つ目を2つ目の名前で言う(self) -> None:
+        self.name_second(仕掛ロット="SIKALOT_圧縮.sqlite3")
+        (self.second / "SIKALOT.sqlite3").write_bytes(b"")
+        result = data_sync.import_lot_ledger(self.conn)
+        [message] = [e for e in result.errors if "仕掛台帳" in e]
+        self.assertIn(f"{self.second}: 開けましたが該当するファイルがありません"
+                      "(ある取り込み元: SIKALOT.sqlite3)", message)
+
+    def test_2つ目の足りない列を言う(self) -> None:
+        """約束「名前は変えても、中身の要る列は必ずそろえる」。圧縮版には 設計_設備ｺｰｽ・実績_設備ｺｰｽ が無い。
+        BOX実績_板厚・板幅・板丈 は古い形式の予備なので、2つ目に無くてよい。"""
+        self.compressed("R6545E0")
+        path = self.second / "SIKALOT.sqlite3"
+        self.assertEqual(sync_sources.second_missing_columns(path, "仕掛ロット")[:2],
+                         [src("仕掛ロット", "用途コード"), src("仕掛ロット", "用途名")])
+        lacking = sync_sources.second_missing_columns(path, "仕掛ロット")
+        self.assertIn("設計_設備ｺｰｽ", lacking)
+        self.assertIn("実績_設備ｺｰｽ", lacking)
+        self.assertNotIn("BOX実績_板厚", lacking)
+        full = write_ledger(self.second, "SIKALOT_full.sqlite3", "仕掛ロット", [lot("A")])
+        self.assertEqual(sync_sources.second_missing_columns(full, "仕掛ロット"), [])
+
+    def test_いまの状態に2つ目の名前と足りない列が出る(self) -> None:
+        from packaging_tool.presenters import settings as presenter
+        self.compressed("R6545E0")                      # 2つ目の SIKALOT(圧縮版)。名前は既定のまま
+        section = presenter._lot_section(sync_sources.find_lot_dbs())
+        checks = {c.label: c for c in section.checks}
+        lot2 = checks["2つ目 SIKALOT.sqlite3"]
+        self.assertEqual(lot2.level, presenter.WARN)
+        self.assertTrue(lot2.value.startswith("足りない列: "), lot2.value)
+        self.assertIn("設計_設備ｺｰｽ", lot2.value)
+        self.assertIn("BOX かどうか分かりません", lot2.detail)
+        self.assertEqual(checks["2つ目 SIKAHIKI.sqlite3"].value, "見つかりません")
+
     def test_2つ目が無ければ候補も無い(self) -> None:
         self.box_ledgers()
         user_settings.save(config.KEY_LOT_DB_DIR2, "")
@@ -493,6 +560,48 @@ class SecondLotDirTests(unittest.TestCase):
             data_sync.auto_import(self.conn)
         self.assertIn(("C000003",), self.local("SELECT ロット番号 FROM 仕掛ロット"))
         self.assertTrue(first.exists())
+
+
+class SecondNamesSettingsTests(unittest.TestCase):
+    """設定画面の保存(`presenters.settings.save`)。2つ目のファイル名も置き場所と同じく管理者パスワードが要る。"""
+
+    def setUp(self) -> None:
+        saved = user_settings.get(config.KEY_LOT_DB2_FILES)
+        self.addCleanup(user_settings.save, config.KEY_LOT_DB2_FILES, saved or {})
+        user_settings.save(config.KEY_LOT_DB2_FILES, {})
+
+    def test_パスワード無しでは変えられず_同じ名前なら聞かない(self) -> None:
+        from packaging_tool.presenters import settings as presenter
+        result = presenter.save(lot_files2={"仕掛ロット": "SIKALOT_圧縮.sqlite3"})
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, presenter.REFUSE_NEED_PASSWORD)
+        self.assertIn("仕掛台帳の2つ目のファイル名", result.message)
+        self.assertEqual(config.lot_db2_files(), dict(config.LOT_DB_FILES))
+        same = presenter.save(lot_files2={"仕掛ロット": "SIKALOT.sqlite3", "仕掛引当": ""})
+        self.assertTrue(same.ok, same.message)
+
+    def test_パスワードがあれば保存し_空欄は1つ目と同じ名前(self) -> None:
+        from packaging_tool import admin_password
+        from packaging_tool.presenters import settings as presenter
+        with mock.patch.object(admin_password, "verify", return_value=True):
+            result = presenter.save(lot_files2={"仕掛ロット": " SIKALOT_圧縮.sqlite3 ", "仕掛受注": ""},
+                                    password="x")
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(config.lot_db2_files(), {"仕掛ロット": "SIKALOT_圧縮.sqlite3",
+                                                  "仕掛引当": "SIKAHIKI.sqlite3",
+                                                  "仕掛受注": "SIKAODR.sqlite3"})
+
+    def test_フォルダを打ったら断る(self) -> None:
+        from packaging_tool.presenters import settings as presenter
+        result = presenter.save(lot_files2={"仕掛ロット": r"\\srv\台帳\SIKALOT.sqlite3"})
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, presenter.REFUSE_BAD_INPUT)
+        self.assertIn("ファイル名に使えない文字", result.message)
+
+    def test_配布設定に入れられる(self) -> None:
+        from packaging_tool import distribution
+        self.assertIn(config.KEY_LOT_DB2_FILES, distribution.ITEM_KEYS)
+        self.assertEqual(distribution._show({"仕掛ロット": "A.sqlite3", "仕掛引当": "B"}), "A.sqlite3 / B")
 
 
 @unittest.skipUnless(__import__("importlib").util.find_spec("flask"), "Flask が無い")

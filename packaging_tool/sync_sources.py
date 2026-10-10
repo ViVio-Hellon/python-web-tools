@@ -186,17 +186,50 @@ def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
     (`config.LOT_DB_DIR`)、2つ目は設定していれば。
     """
     found: dict[str, Path] = {}
-    # フォルダを明示されたときはそこだけを見る。省略時は
+    # フォルダを明示されたときはそこだけを(1つ目の名前で)見る。省略時は
     # 「1つ目 → 2つ目(設定していれば)」の順に探す。
-    # **ファイルごとに**探すので、1つ目に無いファイルだけ2つ目から読む
-    candidates = ([Path(directory)] if directory is not None else lot_search_dirs())
-    for table, filename in config.LOT_DB_FILES.items():
-        for base in candidates:
-            path = source_db.find(base, filename)
+    # **ファイルごとに**探すので、1つ目に無いファイルだけ2つ目から読む。
+    # 2つ目は**2つ目のファイル名**で探す(`config.lot_db2_files`)
+    if directory is not None:
+        for table, filename in config.LOT_DB_FILES.items():
+            path = source_db.find(Path(directory), filename)
             if path is not None:
                 found[table] = path
-                break
+        return found
+    second = find_second_lot_dbs()
+    for table, filename in config.LOT_DB_FILES.items():
+        path = source_db.find(config.lot_db_dir(), filename) or second.get(table)
+        if path is not None:
+            found[table] = path
     return found
+
+
+# 2つ目のファイルに**無くてよい**列(取り込みが読む列のうち)。BOX実績_板厚・板幅・板丈 は、
+# BOX最終実績_* が無い古い形式の写しのときだけ使う予備(`lot_service._box_final`)。2つ目は BOX最終実績_* を持つ
+SECOND_NOT_NEEDED = frozenset({"BOX実績_板厚", "BOX実績_板幅", "BOX実績_板丈"})
+
+
+def second_missing_columns(path: Path, table: str) -> list[str]:
+    """2つ目のファイルに**足りない列**(取り込み元の列名)。現場の約束「名前は変えても、中身の要る列は
+    必ずそろえる」を設定画面で確かめるため。読めなければ空(読めないことは別のところで言う)。"""
+    from . import import_specs
+    try:
+        have = set(source_db.columns(Path(path), import_specs.LOT_SOURCE_TABLE))
+    except (source_db.SourceError, OSError):
+        return []
+    if not have:
+        return []
+    may_lack = import_specs.OPTIONAL_COLUMNS.get(table, frozenset()) | SECOND_NOT_NEEDED
+    return [src for _col, src, _conv in import_specs.LOT_IMPORT_SPECS[table]
+            if src not in have and src not in may_lack]
+
+
+def lot_names_for(base: Path) -> list[str]:
+    """そのフォルダで探す仕掛台帳のファイル名(1つ目は決まった名前、2つ目は設定した名前)。"""
+    second = config.lot_db_dir2()
+    if second is not None and Path(base) == second and second != config.lot_db_dir():
+        return list(config.lot_db2_files().values())
+    return list(config.LOT_DB_FILES.values())
 
 def describe_dir(base: Path, wanted: Iterable[str]) -> str:
     """そのフォルダで何が見えたか(見つからないときに**理由まで**言うため)。
@@ -237,11 +270,11 @@ def find_second_lot_dbs() -> dict[str, Path]:
     ここから足りない分を足す(`sync_import.merge_second_lot`)。
     """
     second = config.lot_db_dir2()
-    if second is None:
+    if second is None or second == config.lot_db_dir():
         return {}
     found: dict[str, Path] = {}
-    for table, filename in config.LOT_DB_FILES.items():
-        path = source_db.find(second, filename)
+    for table, filename in config.lot_db2_files().items():
+        path = source_db.find_named(second, filename)
         if path is not None:
             found[table] = path
     return found

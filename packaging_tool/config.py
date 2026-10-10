@@ -222,6 +222,25 @@ def lot_db_dir2() -> Optional[Path]:
     return None
 
 
+def lot_db2_files() -> dict[str, str]:
+    """仕掛台帳の**2つ目の**ファイル名(手元のテーブル名 → ファイル名)。
+
+    現場の依頼:「2つ目はファイル名も指定できるように。SIKALOT は名前が同じでも圧縮版だったように、
+    混乱を招く。名前を変えておかないと持ち運びもしにくい」。**1つ目は LOT_DB_FILES のまま**。
+    条件(現場の約束): 名前は変えても、中身の要る列は必ずそろえる(設定画面の「いまの状態」で確かめる)。
+    設定していない表は1つ目と同じ名前(今までどおり)。
+    """
+    from . import user_settings
+    configured = user_settings.get(KEY_LOT_DB2_FILES)
+    names = dict(LOT_DB_FILES)
+    if isinstance(configured, dict):
+        for table in LOT_DB_FILES:
+            value = configured.get(table)
+            if isinstance(value, str) and value.strip():
+                names[table] = value.strip()
+    return names
+
+
 def lot_db_dirs() -> list[Path]:
     """仕掛台帳を探すフォルダ(1つ目 → 2つ目)。同じフォルダは2度並べない。"""
     first = lot_db_dir()
@@ -269,6 +288,8 @@ KEY_ACCDB_DIR_LEGACY = "accdb_dir"
 KEY_LOT_DB_DIR = "lot_db_dir"
 # 仕掛台帳の2つ目の置き場所(1つ目で見つからないときに見る。`lot_db_dir2`)
 KEY_LOT_DB_DIR2 = "lot_db_dir2"
+# 仕掛台帳の2つ目のファイル名({手元のテーブル名: ファイル名}。`lot_db2_files`)
+KEY_LOT_DB2_FILES = "lot_db2_files"
 KEY_KANBAN_DB_DIR = "kanban_db_dir"
 KEY_THRESHOLD_DB_DIR = "threshold_db_dir"
 KEY_EXPORT_DIR = "export_dir"

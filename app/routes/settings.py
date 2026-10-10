@@ -143,6 +143,8 @@ def save():
         master_dir=pick("master_dir"),
         lot_dir=pick("lot_dir"),
         lot_dir2=pick("lot_dir2"),
+        # 2つ目のファイル名 {表: 名前}。送られたときだけ触る
+        lot_files2=body["lot_files2"] if "lot_files2" in body else None,
         kanban_dir=pick("kanban_dir"),
         threshold_dir=pick("threshold_dir"),
         auto_import=bool(body["auto_import"]) if "auto_import" in body else None,
