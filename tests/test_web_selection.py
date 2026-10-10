@@ -3387,3 +3387,13 @@ class SnapshotTilingTests(ChangeCandidateTests):
         # 次の軸へ(同じ内容の軸は飛ばすので B とは限らない)
         self.change()
         self.assertIn(self.session().placement_method, ("別案B", "別案C"))
+
+
+class SelectionSplitTests(unittest.TestCase):
+    def test_配置図と資材の選択は5対5(self) -> None:
+        """現場の声:「配置図と資材の選択を画面比 6:4 ぐらいに(今 7:3 ぐらい)」→ 測ると 5.7:4.3 だったので、
+        資材の選択を広くする 5:5 に決めた。"""
+        import re
+        css = (Path(__file__).resolve().parent.parent / "app/static/css/layout.css").read_text("utf-8")
+        rule = re.search(r"\.split--selection \{ grid-template-columns: ([^;]+);", css).group(1)
+        self.assertEqual(rule, "minmax(0, 1fr) minmax(0, 1fr)")
