@@ -140,6 +140,54 @@ class OnePcBothModesTests(CommentTestBase):
                          [("c1", "倉庫"), ("c1", "現場")])
 
 
+class ReadAllTests(CommentTestBase):
+    """**まとめて既読**(現場の声:「取り込んだものを全部見るのは厳しい」)。
+    この端末の「新」の印だけを消し、**相手には「見た」と伝えない**(現場の判断)。"""
+
+    def unread_total(self, conn, who: str, side: str) -> int:
+        return sum(s.unread for s in oc.summaries(conn, terminal=who, side=side).values())
+
+    def test_この端末の新しいコメントを全部既読にし_相手には見たと伝えない(self):
+        self.order("NEW")
+        self.write(self.a, "NEW", "至急でお願いします", "GENBA-1", oc.SIDE_FIELD)
+        self.write(self.a, "L1", "寸法を確認してください", "GENBA-1", oc.SIDE_FIELD)
+        self.send(self.a)
+        self.refresh(self.b)
+        self.assertEqual(self.unread_total(self.b, "SOUKO", oc.SIDE_MATERIAL), 2)
+        self.assertEqual(oc.mark_all_read(self.b, terminal="SOUKO", side=oc.SIDE_MATERIAL), 2)
+        self.assertEqual(self.unread_total(self.b, "SOUKO", oc.SIDE_MATERIAL), 0)
+        self.assertEqual(oc.mark_all_read(self.b, terminal="SOUKO", side=oc.SIDE_MATERIAL), 0)
+        # 「見た」は残さない ── 書いた現場には「相手はまだ見ていません」のまま
+        self.assertEqual(self.b.execute(f"SELECT COUNT(*) FROM {oc.SEEN_TABLE}").fetchone()[0], 0)
+        self.send(self.b)
+        self.refresh(self.a)
+        self.assertEqual([oc.seen_text(c) for c in oc.comments_for(
+            self.a, self.local_no(self.a, "NEW"), terminal="GENBA-1") if c.mine],
+            ["相手はまだ見ていません"])
+
+    def test_既読は取り込みをまたいでも残り_あとから届いた分は新しく数える(self):
+        self.order("NEW")
+        self.write(self.a, "NEW", "1件目", "GENBA-1", oc.SIDE_FIELD)
+        self.send(self.a)
+        self.refresh(self.b)
+        oc.mark_all_read(self.b, terminal="SOUKO", side=oc.SIDE_MATERIAL)
+        self.write(self.a, "NEW", "2件目", "GENBA-1", oc.SIDE_FIELD)
+        self.send(self.a)
+        self.refresh(self.b)
+        self.assertEqual(self.unread_total(self.b, "SOUKO", oc.SIDE_MATERIAL), 1)
+
+    def test_現場側でも使え_側ごとに別(self):
+        """1台で両方のモードを使う端末でも、倉庫で既読にしたものは現場では既読にならない。"""
+        self.order("NEW")
+        self.write(self.b, "L1", "倉庫から", "SOUKO", oc.SIDE_MATERIAL)
+        self.write(self.a, "L1", "現場から", "GENBA-1", oc.SIDE_FIELD)
+        self.send(self.a)
+        self.send(self.b)
+        self.refresh(self.a)
+        self.assertEqual(oc.mark_all_read(self.a, terminal="GENBA-1", side=oc.SIDE_FIELD), 1)
+        self.assertEqual(self.unread_total(self.a, "GENBA-1", oc.SIDE_FIELD), 0)
+
+
 class SeenTests(CommentTestBase):
     """**相手がコメントを見たか**(現場の声:「見たか見てないかを分かるようにしてほしい」)。
 

@@ -1040,6 +1040,43 @@ class OrderDetailTests(WarehouseWebTestCase):
             self.assertIn(field["key"], row["values"], field)
 
 
+class ReadAllCommentsWebTests(WarehouseWebTestCase):
+    """新しいコメントの**まとめて既読**(現場・倉庫とも)。この端末の「新」だけを消し、相手には伝えない。"""
+
+    def test_現場も倉庫もボタンがあり_押すと新しいコメントが0になる(self) -> None:
+        from packaging_tool import order_comments as oc
+        made = svc.create_order(self.conn, lot_no="7654321", hinmei="パレット", hatchu_code="P9",
+                                tani="台", atu=3.0, haba=1000, take=2000, hatchu_suu=2)
+        oc.add(self.conn, made.mgr_no, "至急で", terminal="GENBA-9", side=oc.SIDE_FIELD)
+        oc.add(self.conn, made.mgr_no, "了解", terminal="SOUKO-9", side=oc.SIDE_MATERIAL)
+        self.conn.commit()
+        for mode in ("field-allowed", "material"):
+            html = self.clients[mode].get("/warehouse").get_data(as_text=True)
+            self.assertIn('id="readAllComments"', html)
+            self.assertIn("まとめて既読", html)
+        before = self.clients["material"].get("/api/warehouse/orders", headers=self.auth()).get_json()
+        self.assertEqual(before["unread_comments"], 1)              # 現場が書いた1件
+        res = self.clients["material"].post("/api/warehouse/comments/read-all", json={},
+                                            headers=self.auth())
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["count"], 1)
+        self.assertIn("相手には「見た」と伝えていません", res.get_json()["message"])
+        after = self.clients["material"].get("/api/warehouse/orders", headers=self.auth()).get_json()
+        self.assertEqual(after["unread_comments"], 0)
+        self.assertEqual(self.conn.execute(f"SELECT COUNT(*) FROM {oc.SEEN_TABLE}").fetchone()[0], 0)
+        # 現場側の「新」(倉庫が書いた1件)はそのまま
+        field = self.clients["field-allowed"].get("/api/warehouse/orders", headers=self.auth()).get_json()
+        self.assertEqual(field["unread_comments"], 1)
+
+    def test_押す前に確かめ_押したら一覧を出し直す(self) -> None:
+        js = (Path(__file__).resolve().parent.parent / "app/static/js/views/warehouse.js").read_text("utf-8")
+        handler = js.split('el.readAllComments.addEventListener("click"')[1].split("\n    });")[0]
+        self.assertIn("await confirmBox(", handler)
+        self.assertIn("相手には「見た」と伝えません", handler)
+        self.assertIn("load();", handler)
+        self.assertIn("el.readAllComments.hidden = !view.unread_comments;", js)
+
+
 class CutRequestWebTests(WarehouseWebTestCase):
     """切断依頼(`cut_requests`)。倉庫連携の画面で、送った / 届いた依頼を見る・開く・切った・取り消し。"""
 

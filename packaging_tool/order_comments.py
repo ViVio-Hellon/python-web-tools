@@ -227,6 +227,30 @@ def mark_read(conn: sqlite3.Connection, mgr_no: int, *,
     return added
 
 
+def mark_all_read(conn: sqlite3.Connection, *, terminal: str, side: str) -> int:
+    """**この端末・この側で、まだ開いていないコメントを全部「読んだ」ことにする。** 読んだことにした件数。
+
+    現場の声:「取り込んだものを全部見るのは厳しい。まとめて既読にしたい」。消すのは
+    この端末の「新」の印だけ(`発注コメント既読`)。**相手には「見た」と伝えない**
+    (`発注コメント閲覧` に書かない ── 実際には読んでいないので。現場の判断)。
+    """
+    read = _read_ids(conn, side)
+    try:
+        rows = conn.execute(
+            f"SELECT コメントID, 書いた端末, 書いた側 FROM {TABLE} WHERE コメントID <> ''").fetchall()
+    except sqlite3.Error:
+        return 0                       # 表がまだ無い(古い手元DB)
+    unread = [cid for cid, who, writer_side in rows
+              if cid not in read and not _mine(who, writer_side, terminal, side)]
+    if not unread:
+        return 0
+    with conn:
+        conn.executemany(f"INSERT OR IGNORE INTO {READ_TABLE} (コメントID, 側) VALUES (?, ?)",
+                         [(cid, side) for cid in unread])
+    log.info("コメントをまとめて既読にしました: %s件(%s %s。相手には伝えない)", len(unread), side, terminal)
+    return len(unread)
+
+
 def add(conn: sqlite3.Connection, mgr_no: int, text: str, *,
         terminal: str, side: str) -> CommentResult:
     """書く。**未確認の発注にだけ**。書いたものは自分では既読。"""

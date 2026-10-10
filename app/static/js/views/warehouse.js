@@ -59,6 +59,7 @@ function render(view) {
     el.unreadComments.textContent = `新しいコメント ${view.unread_comments}`;
     el.unreadComments.title = "相手が書いたコメントのうち、この端末でまだ開いていないもの";
   }
+  if (el.readAllComments) el.readAllComments.hidden = !view.unread_comments;
   // 発注のタブ: 相手が書いた、まだ開いていないコメントがあれば光る
   setTabNews(el.ordersTabBadge, view.unread_comments ? `新${view.unread_comments}` : "");
   // 数字だけでは何の数か読めない(現場の声:「未確認 4とはなんだ」)。
@@ -904,7 +905,7 @@ export function start(state, material, lotPeekWhy) {
   draftAt = 0;
   exBlankKeys = state.ex_blank_keys || [];
   draftIsEx = false;
-  for (const id of ["reach", "rows", "listNote", "found", "pending", "unreadComments", "q", "refresh",
+  for (const id of ["reach", "rows", "listNote", "found", "pending", "unreadComments", "readAllComments", "q", "refresh",
                     "sendComment",
                     "send", "clearForm", "sendStatus", "cancelled", "exNote",
                     "drafts", "draftPrev", "draftNext", "draftPos", "draftNote",
@@ -936,6 +937,24 @@ export function start(state, material, lotPeekWhy) {
   load();
 
   el.refresh.addEventListener("click", () => pull());
+  // 新しいコメントをまとめて既読に(現場の声:「取り込んだものを全部見るのは厳しい」)。
+  // **この端末の「新」の印を消すだけ**で、相手には「見た」と伝えない(実際には読んでいないので)
+  if (el.readAllComments) {
+    el.readAllComments.addEventListener("click", async () => {
+      const ok = await confirmBox(
+        "新しいコメントを全部、この端末で既読にします(いま一覧に出ていない発注の分も含みます)。\n"
+        + "相手には「見た」と伝えません。中身を読みたいものがあれば、先に開いてください。",
+        { ok: "まとめて既読にする" });
+      if (!ok) return;
+      try {
+        const body = await api.post("/api/warehouse/comments/read-all", {});
+        toast(body.message, "ok");
+        load();
+      } catch (err) {
+        toastError(err);
+      }
+    });
+  }
   // **開いたらすぐ一度見に行く。** 見張りの最初の回は 15 秒後なので、それまでは
   // 開く前に手元へ取り込んだ分しか出ず、送ったばかりの発注が最大 15 秒見えなかった
   // (通し点検: 倉庫が開いてから 14.6 秒後に出た)。変わっていなければ何もしない

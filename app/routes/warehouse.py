@@ -390,6 +390,18 @@ def comments():
     return jsonify(body)
 
 
+@bp.post("/api/warehouse/comments/read-all")
+def comments_read_all():
+    """新しいコメントを**まとめて既読**にする(この端末・この側だけ)。
+
+    相手には「見た」と伝えない(共有へは何も送らない)。消えるのはこの端末の「新」の印だけ。
+    """
+    count = order_comments.mark_all_read(get_db(), terminal=svc.this_terminal(), side=_side())
+    message = (f"新しいコメント {count}件を既読にしました(相手には「見た」と伝えていません)。"
+               if count else "新しいコメントはありません。")
+    return jsonify({"ok": True, "count": count, "message": message})
+
+
 @bp.post("/api/warehouse/comment")
 def comment():
     """コメントを書く。**未確認の発注にだけ**(確認・取り消しで固定)。
