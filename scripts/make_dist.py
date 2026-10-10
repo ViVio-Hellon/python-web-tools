@@ -13,7 +13,7 @@ r"""配布用フォルダを作る
 配りたいときは、先に設定画面の「配布設定」で書き出しておいてください
 (ツールの直下の `配布設定\`。配った先が起動時に読み込みます)。
 
-    python scripts\make_dist.py                     # ツールの隣に「梱包資材総合ツール_VERx.y.z」
+    python scripts\make_dist.py                     # ツールの隣に「資材複合ツール_VERx.y.z」
     python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定
     python scripts\make_dist.py --zip               # zip も作る
     python scripts\make_dist.py --no-settings       # 配布設定を入れない
@@ -54,6 +54,9 @@ DEV_ONLY: tuple[str, ...] = ("src-tauri", ".github")
 # デスクトップ版の exe。GitHub Actions(Windows)が作る `PackagingTool.exe` を、
 # 配るときはこの名前でフォルダの直下に置く(押す物が分かる名前にする)
 EXE_NAME = "梱包資材総合ツール.exe"
+# 作る配布フォルダの名前(既定の置き場所 `ツールの隣\<これ>_VER版`)。現場の指示で「資材複合ツール」。
+# 中の exe の名前・画面の名前は変えない(フォルダの名前だけ)
+DIST_FOLDER_NAME = "資材複合ツール"
 # exe を探す場所(先に見つかったもの)。`--exe` で指定もできる
 EXE_CANDIDATES: tuple[str, ...] = (
     "PackagingTool.exe",
@@ -234,9 +237,14 @@ def _memo(lines: list[str]) -> str:
     ])
 
 
+def default_out() -> Path:
+    """既定の作る場所: ツールの隣の「資材複合ツール_VER版」。"""
+    return ROOT.parent / f"{DIST_FOLDER_NAME}_VER{_version()}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="配布用フォルダを作る")
-    parser.add_argument("--out", help="作る場所(既定: ツールの隣に「梱包資材総合ツール_VER版」)")
+    parser.add_argument("--out", help=f"作る場所(既定: ツールの隣に「{DIST_FOLDER_NAME}_VER版」)")
     parser.add_argument("--no-settings", action="store_true",
                         help="配布設定(ツール直下の 配布設定 フォルダ)を入れない")
     parser.add_argument("--force", action="store_true",
@@ -245,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--exe", help="入れるデスクトップ版の exe(既定: 直下の PackagingTool.exe など)")
     args = parser.parse_args(argv)
 
-    out = Path(args.out) if args.out else ROOT.parent / f"梱包資材総合ツール_VER{_version()}"
+    out = Path(args.out) if args.out else default_out()
     try:
         _out, lines = build(out, with_settings=not args.no_settings,
                             force=args.force, make_zip=args.zip,

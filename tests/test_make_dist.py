@@ -17,6 +17,14 @@ _spec.loader.exec_module(make_dist)
 
 
 class MakeDistTests(unittest.TestCase):
+    def test_既定の配布フォルダの名前は資材複合ツール_VER版(self) -> None:
+        """現場の指示「配布フォルダの名前を 資材複合ツール に」。中の exe の名前は変えない。"""
+        version = json.loads((_ROOT / "config" / "app.json").read_text(encoding="utf-8"))["version"]
+        out = make_dist.default_out()
+        self.assertEqual(out.name, f"資材複合ツール_VER{version}")
+        self.assertEqual(out.parent, _ROOT.parent)                 # ツールの隣
+        self.assertEqual(make_dist.EXE_NAME, "梱包資材総合ツール.exe")
+
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
