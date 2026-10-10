@@ -1463,6 +1463,9 @@ class RepoRootTests(unittest.TestCase):
         # デスクトップ版の外枠の**ソース**と、それを作る GitHub Actions。
         # 配るのは作った exe だけ(`make_dist.DEV_ONLY`)
         "src-tauri", ".github",
+        # Claude Code の開発環境の設定(クラウドのセッション開始時に試験の部品を入れる)。
+        # 配らない(`make_dist.DEV_ONLY`)
+        ".claude",
     }
 
     def test_直下には配るものだけ(self) -> None:

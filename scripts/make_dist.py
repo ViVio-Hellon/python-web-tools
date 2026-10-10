@@ -49,7 +49,8 @@ INCLUDE: tuple[str, ...] = (
 
 # リポジトリには置くが配らないもの(デスクトップ版の外枠のソースと、それを作る仕組み)。
 # 配るのは作った exe だけ(下の `EXE_NAME`)
-DEV_ONLY: tuple[str, ...] = ("src-tauri", ".github")
+# .claude は Claude Code の開発環境の設定(クラウドのセッション開始時に試験の部品を入れる)。現場には要らない
+DEV_ONLY: tuple[str, ...] = ("src-tauri", ".github", ".claude")
 
 # デスクトップ版の exe。GitHub Actions(Windows)が作る `PackagingTool.exe` を、
 # 配るときはこの名前でフォルダの直下に置く(押す物が分かる名前にする)
