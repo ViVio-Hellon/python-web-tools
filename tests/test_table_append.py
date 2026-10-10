@@ -157,6 +157,37 @@ class AppendOrdersTests(unittest.TestCase):
         found = self.candidate(table_bring.plan(str(self.access)))
         self.assertEqual((found.append_rows, found.append_same), (3, 2))
 
+    def test_足したら共有の重複をいつも片付けて二重登録の防止を付ける(self) -> None:
+        """現場の指示:「吸収機能使用時は常時動かしてください」。端末が送り返した写し
+        (〜VER4.8.2 の事故の残り。送信ID付き・ほかは同じ)と、発注キーの重なりがあっても、
+        足したあとに消えて「同じ番号は1つだけ」の索引が付く。Access から来た行は消さない。"""
+        conn = sqlite3.connect(self.master)
+        conn.execute(f'INSERT INTO "{TABLE}" SELECT 9, 登録日時, LotNo, 品名, 発注コード, 発注数,'
+                     " 単位, 材質, 調質, 厚, 幅, 丈, 用途コード, 納入先, 取り消し済, 取り消し日時,"
+                     " 確認済み, 確認日時, 'op-copy-' || 管理番号, 送信端末, 発注キー"
+                     f' FROM "{TABLE}" WHERE 管理番号 IN (1, 3)')
+        conn.commit()
+        conn.close()
+        index = f"UX_{TABLE}_固定番号"
+        result = table_bring.refresh(None, str(self.access), [TABLE])
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(result.appended, [(TABLE, 2, 2)])
+        self.assertEqual(result.deduped, {TABLE: 2})
+        self.assertIn("続けて共有の重複を確かめました", result.message)
+        rows = self.rows()
+        # 写し(#9 が2行)だけ消え、足した2行は写しの続きの番号(10・11)
+        self.assertEqual([r["管理番号"] for r in rows], [1, 2, 3, 10, 11])
+        self.assertEqual(rows[2]["送信ID"], "op-tool-1")
+        names = [r["name"] for r in source_db.read_query(
+            self.master, "SELECT name FROM sqlite_master WHERE type = 'index'")]
+        self.assertIn(index, names)
+        self.assertNotIn("二重登録の防止", result.message)              # 用意できたので言わない
+        # 2回目: 足す行も消す行も無い。控えも増やさない
+        again = table_bring.refresh(None, str(self.access), [TABLE])
+        self.assertEqual((again.appended, again.deduped), ([(TABLE, 0, 4)], {}))
+        self.assertIn("重複はありませんでした", again.message)
+        self.assertEqual(len(self.rows()), 5)
+
     def test_見分ける列が無ければ足さない(self) -> None:
         conn = sqlite3.connect(self.access)
         conn.execute(f'ALTER TABLE "{TABLE}" RENAME COLUMN "LotNo" TO "ロット"')

@@ -169,6 +169,8 @@ class BringResult:
     kept_old: list[tuple[str, str]] = field(default_factory=list)
     # 無い行だけ足した表: (表, 足した行数, もうあった行数)
     appended: list[tuple[str, int, int]] = field(default_factory=list)
+    # 足したあとに共有から消した重複: {表: 行数}(`_clean_after_append`)
+    deduped: dict[str, int] = field(default_factory=dict)
 
 
 # Access が自分のために持っている表。**持ってこない。**
@@ -969,10 +971,17 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
                                   f"ませんでした: {table} ── {exc}")
                 log.warning("表を Access の最新にできませんでした: %s: %s", table, exc)
 
+    cleaned: Optional["dedupe.FixResult"] = None
+    guard_notes: list[str] = []
+    if appended:
+        cleaned, guard_notes = _clean_after_append(dest)
+
     follow = []
     if conn is not None:
         from .master_common import _follow
-        for table in [t for t, _b, _a in done] + [t for t, n, _s in appended if n]:
+        removed = list(cleaned.removed) if cleaned is not None else []
+        for table in dict.fromkeys([t for t, _b, _a in done]
+                                   + [t for t, n, _s in appended if n] + removed):
             said = _follow(conn, dest, table).lstrip("。")
             if said:
                 follow.append(f"{table}: {said}")
@@ -987,6 +996,12 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     if appended:
         message += "Access にしか無い行を足しました: " + "、".join(
             f"{t}({n:,}件。もうあった {s:,}件には触っていません)" for t, n, s in appended) + "。"
+    if cleaned is not None:
+        message += (" 続けて共有の重複を確かめました: " + _one_line(cleaned.summary())
+                    if cleaned.ok else
+                    " ただし共有の重複を片付けられませんでした: " + cleaned.error + "。")
+    if guard_notes:
+        message += " 二重登録の防止: " + "、".join(guard_notes) + "。"
     message += f"(書いたファイル: {dest})"
     if kept_old:
         message += (" 作り直す前の表は "
@@ -1000,7 +1015,45 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
         message += " ただし次はできませんでした: " + "、".join(failed)
     return BringResult(not failed, message, "" if not failed else REFUSE_WRITE_FAILED,
                        backup=str(backup), refreshed=done, kept_old=kept_old,
-                       appended=appended)
+                       appended=appended,
+                       deduped=dict(cleaned.removed) if cleaned is not None else {})
+
+
+def _one_line(text: str) -> str:
+    return " ".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def _clean_after_append(dest: Path) -> tuple["dedupe.FixResult", list[str]]:
+    """Access にしか無い行を足したら、**いつも**共有の重複を消し、「同じ番号は1つだけ」の
+    索引を確かめる(現場の指示:「吸収機能使用時は常時動かしてください」)。
+
+    中身は設定の「--fix を実行」の共有の分と同じ(`dedupe.fix_shared`。消すものがあるときだけ
+    控えを取ってから消す)。索引は重複が消えたあとで作る(重なったままだと作れない)。
+    戻り値: (片付けの結果, 索引を用意できなかった表の一言)。足した行は消さない ──
+    片付けに失敗しても足したことは取り消さず、一言で知らせる。
+    """
+    from . import dedupe, outbox_sync, sync_writeback
+    fixed = dedupe.fix_shared(dest)
+    import_diag.write("  足したあとの重複の片付け: "
+                      + (_one_line(fixed.summary()) if fixed.ok else f"✕ {fixed.error}"))
+    notes: list[str] = []
+    try:
+        with source_db.connect(dest) as source:
+            for spec in sync_writeback.WRITEBACK_SPECS:
+                if not spec.identity_columns:
+                    continue
+                if outbox_sync.ensure_identity_index(source, spec):
+                    continue
+                state = outbox_sync.guard_state(source, spec)
+                if state.identity_missing:
+                    continue                 # 表・列がまだ無い(最初に送った端末が作る)
+                notes.append(f"{spec.access_table} は用意できませんでした"
+                             + (f"(同じ番号の行が {state.identity_dupes}組 あります)"
+                                if state.identity_dupes else
+                                "(ほかの端末が書いている最中でした。次に送るときに作り直します)"))
+    except source_db.SourceError as exc:
+        notes.append(f"確かめられませんでした({exc})")
+    return fixed, notes
 
 
 # ------------------------------------------------------------------
