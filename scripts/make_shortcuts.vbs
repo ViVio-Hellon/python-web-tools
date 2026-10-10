@@ -22,12 +22,13 @@ EXE_NAME = U("68B1 5305 8CC7 6750 7DCF 5408 30C4 30FC 30EB") & ".exe"   ' 梱包資
 BROWSER = U("0028 30D6 30E9 30A6 30B6 7248 0029")                       ' (ブラウザ版)
 DESKTOP = U("0028 30C7 30B9 30AF 30C8 30C3 30D7 7248 0029")             ' (デスクトップ版)
 
-Dim shell, fso, here, made, missing
+Dim shell, fso, here, made, missing, failed
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 here = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 made = ""
 missing = ""
+failed = ""
 
 MakeLink APP_NAME & BROWSER & ".lnk", "Start.vbs", False
 MakeLink APP_NAME & DESKTOP & ".lnk", EXE_NAME, True
@@ -37,6 +38,9 @@ If made <> "" Then
     msg = "ショートカットを作りました(場所: " & here & "):" & made
 Else
     msg = "ショートカットは1つも作れませんでした(場所: " & here & ")。"
+End If
+If failed <> "" Then
+    msg = msg & vbCrLf & vbCrLf & "次は作れませんでした:" & failed
 End If
 If missing <> "" Then
     msg = msg & vbCrLf & vbCrLf & "次は見つからないので作っていません:" & missing
@@ -61,11 +65,19 @@ Sub MakeLink(linkName, targetName, useIcon)
         missing = missing & vbCrLf & "  " & targetName
         Exit Sub
     End If
+    ' 作れなかったときは、止まらずに結果の窓で知らせる
+    On Error Resume Next
     Set lnk = shell.CreateShortcut(fso.BuildPath(here, linkName))
     lnk.TargetPath = target
     lnk.WorkingDirectory = here
     lnk.Description = APP_NAME & "を起動する"
     If useIcon Then lnk.IconLocation = target & ",0"
     lnk.Save
+    If Err.Number <> 0 Then
+        failed = failed & vbCrLf & "  " & linkName & "(" & Err.Description & ")"
+        Err.Clear
+        Exit Sub
+    End If
+    On Error GoTo 0
     made = made & vbCrLf & "  " & linkName & " → " & targetName
 End Sub

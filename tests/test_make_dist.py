@@ -161,6 +161,9 @@ class ShortcutScriptTests(unittest.TestCase):
         self.assertIn("fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))", text)
         # 結果は WScript.Echo(cscript では文字で出るので止まらない)
         self.assertNotIn("msgbox", text.lower())
+        # 作れなかったときは止まらずに知らせる(WSH のエラーの窓で止めない)
+        self.assertIn("On Error Resume Next", text)
+        self.assertIn("次は作れませんでした:", text)
 
     def test_配布フォルダに入る(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -170,16 +173,26 @@ class ShortcutScriptTests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "win32", "Windows の cscript で本当に作る")
     def test_Windowsでは本当に2つのショートカットができる(self) -> None:
+        """本当に cscript で押す。**日本語の名前まで確かめるのは日本語の Windows(コードページ 932)だけ**
+        ── WSH のショートカットは、システムの文字コードに無い文字の名前を保存できないことがあり、
+        CI の英語の Windows では日本語の名前の .lnk ができなかった(現場の PC は 932)。
+        どの Windows でも、押して止まらずに終わること・押した結果の文は確かめる。"""
+        import ctypes
         import shutil
         import subprocess
         with tempfile.TemporaryDirectory() as tmp:
-            tool = Path(tmp) / "資材複合ツール_VER9"
+            tool = Path(tmp) / "tool_VER9"
             (tool / "scripts").mkdir(parents=True)
             shutil.copy2(self.PATH, tool / "scripts" / "make_shortcuts.vbs")
             (tool / "Start.vbs").write_bytes(b"' x\r\n")
             (tool / make_dist.EXE_NAME).write_bytes(b"MZ")
             done = subprocess.run(["cscript", "//nologo", str(tool / "scripts" / "make_shortcuts.vbs")],
                                   capture_output=True, timeout=60)
-            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-            for name in ("資材複合ツール(ブラウザ版).lnk", "資材複合ツール(デスクトップ版).lnk"):
-                self.assertTrue((tool / name).exists(), name)
+            acp = ctypes.windll.kernel32.GetACP()
+            said = done.stdout.decode(f"cp{acp}", "replace") + done.stderr.decode(f"cp{acp}", "replace")
+            links = sorted(p.name for p in tool.glob("*.lnk"))
+            seen = f"cp{acp} / 終了 {done.returncode} / できた {links} / 出力: {said}"
+            self.assertEqual(done.returncode, 0, seen)
+            if acp != 932:
+                self.skipTest(f"日本語の名前は日本語の Windows でだけ確かめる({seen})")
+            self.assertEqual(links, ["資材複合ツール(デスクトップ版).lnk", "資材複合ツール(ブラウザ版).lnk"], seen)
