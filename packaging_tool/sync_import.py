@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from . import config, db, import_diag, import_specs, lot_service, outbox_sync, source_db
 from .logging_utils import get_logger
@@ -575,8 +575,38 @@ LOT_MERGE_KEYS: dict[str, str] = {
 # 値が違うので、BOX設計_設備名 で選べるようにする。1つ目と2つ目の SIKALOT は**列の中身が違う**ので、
 # 取り込み元の列名でその行を読む。3つのどれにも値が無い行は控えない(0 は 0 のまま控える)
 BOX_CHOICE_TABLE = "仕掛ロット_2つ目"
+# 設計_設備ｺｰｽ の列が無いファイル(2つ目の圧縮版 SIKALOT)から入ったロット。BOX かどうか
+# 決められないので、ロット情報の画面で製造寸法に断り書きを付ける(現場の判断「つなぎなので案2」。
+# 圧縮版に 設計_設備ｺｰｽ・実績_設備ｺｰｽ が入れば、ここには何も入らなくなる)
+COURSE_UNKNOWN_TABLE = "仕掛ロット_コース不明"
 BOX_DIMENSIONS = ("板厚", "板幅", "板丈")
 BOX_CHOICE_SOURCE = "BOX設計"
+
+
+def _course_source() -> str:
+    """設計_設備コースの取り込み元の列名(`ｺｰｽ` は半角カナ)。"""
+    return next(src for col, src, _conv in import_specs.LOT_IMPORT_SPECS["仕掛ロット"]
+                if col == "設計_設備コース")
+
+
+def _lacks_course(path: Path) -> bool:
+    """その SIKALOT に 設計_設備ｺｰｽ の列が無いか(2つ目の圧縮版)。読めなければ「無い」とは言わない。"""
+    try:
+        columns = source_db.columns(path, import_specs.LOT_SOURCE_TABLE)
+    except (source_db.SourceError, sqlite3.Error):
+        return False
+    return bool(columns) and _course_source() not in columns
+
+
+def _mark_course_unknown(conn: sqlite3.Connection, lots: Optional[Iterable[str]] = None) -> None:
+    """BOX かどうか決められないロットを控える。`lots` を省くと手元の仕掛ロット全部。"""
+    with conn:
+        if lots is None:
+            conn.execute(f"INSERT OR IGNORE INTO [{COURSE_UNKNOWN_TABLE}] (ロット番号)"
+                         " SELECT DISTINCT ロット番号 FROM [仕掛ロット]")
+        else:
+            conn.executemany(f"INSERT OR IGNORE INTO [{COURSE_UNKNOWN_TABLE}] (ロット番号)"
+                             " VALUES (?)", [(lot,) for lot in lots])
 
 
 def _same_file(a: Optional[Path], b: Optional[Path]) -> bool:
@@ -595,7 +625,12 @@ def import_lot_table(conn: sqlite3.Connection, table: str, path: Path,
     """仕掛台帳の1表を取り込む。2つ目の置き場所があれば、足りない分をそこから足す。
 
     1つ目のファイルが**読めなかった**ときは、2つ目のファイルを1つ目として読む
-    (ファイルが無いときと同じ扱い。手元の古い中身に足すだけにしない)。
+    (ファイルが無いときと同じ扱い)。ただし2つ目の SIKALOT は**圧縮版で列が違う**
+    (設計_設備ｺｰｽ・実績_設備ｺｰｽ などが無い)ので、1つ目の代わりにはならない。そこから入った
+    ロットは BOX かどうか決められず、`COURSE_UNKNOWN_TABLE` に控えて画面で断る。
+
+    1つ目のファイルが**読めるが0行**のときは、手元の前の中身を消さない(取り込みの決まり
+    「0行の表は手元を消さない」)。そのうえで、手元に無いロットだけを2つ目から足す。
     """
     spec = import_specs.LOT_IMPORT_SPECS[table]
     log.info("仕掛台帳 取り込み: %s → %s", path.name, table)
@@ -603,6 +638,7 @@ def import_lot_table(conn: sqlite3.Connection, table: str, path: Path,
         # 候補は1つ目・2つ目の今の中身から作り直す(前の取り込みの候補を残さない)
         with conn:
             conn.execute(f"DELETE FROM [{BOX_CHOICE_TABLE}]")
+            conn.execute(f"DELETE FROM [{COURSE_UNKNOWN_TABLE}]")
     mine = ImportResult()
     import_tables(
         conn, path, {table: spec},
@@ -626,8 +662,14 @@ def import_lot_table(conn: sqlite3.Connection, table: str, path: Path,
             if table in mine.imported:
                 # 2つ目で読めた。1つ目の「読めません」は残さない(入ったのに失敗に見える)
                 mine.errors = [e for e in mine.errors if not e.startswith(f"{table}:")]
+                if table == "仕掛ロット" and _lacks_course(second):
+                    _mark_course_unknown(conn)
         else:
+            if table == "仕掛ロット" and mine.imported.get(table) and _lacks_course(path):
+                _mark_course_unknown(conn)        # 読んだ1つ目にも 設計_設備ｺｰｽ が無い
             merge_second_lot(conn, table, second, mine)
+    elif table == "仕掛ロット" and mine.imported.get(table) and _lacks_course(path):
+        _mark_course_unknown(conn)                # 1つ目が無く、2つ目を1つ目として読んだ
     result.merge(mine)
 
 
@@ -639,8 +681,8 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
     それを使う(現場の声)。同じロット・受注が両方にあれば1つ目を正とする
     (2つ目の行は足さない)。読めなければ一言残して何もしない(1つ目の分は入っている)。
 
-    1つ目にロットはあるが BOX最終実績の寸法が空のときは、2つ目の同じロットの行を**候補として
-    控える**(`collect_box_choices`)。どれを使うかはロット情報の画面で選ぶ(勝手に埋めない)。
+    1つ目にロットはあるが BOX最終実績の寸法が空か BOX最終実績_設備名 が HOT のときは、2つ目の
+    同じロットの行を**候補として控える**(`collect_box_choices`)。どれを使うかはロット情報の画面で選ぶ(勝手に埋めない)。
     """
     spec = import_specs.LOT_IMPORT_SPECS[table]
     key = LOT_MERGE_KEYS[table]
@@ -676,6 +718,8 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
         result.warnings.append(f"{table}: 2つ目の置き場所から足せませんでした({exc})")
         return 0
     if table == "仕掛ロット":
+        if keys and rows and _course_source() not in rows[0]:
+            _mark_course_unknown(conn, keys)      # 圧縮版から足したロットは BOX か決められない
         collect_box_choices(conn, rows, result)
     if added:
         result.imported[table] = result.imported.get(table, 0) + added
@@ -737,7 +781,7 @@ def collect_box_choices(conn: sqlite3.Connection, rows: list, result: ImportResu
         result.warnings.append(f"仕掛ロット: 2つ目の BOX設計寸法の候補を控えられませんでした({exc})")
         return 0
     lots = len({v[0] for v in values})
-    result.notes.append(f"仕掛ロット: 1つ目で BOX最終実績(板厚・板幅・板丈)が空か HOT のロット {lots:,}件に、"
+    result.notes.append(f"仕掛ロット: BOX最終実績(板厚・板幅・板丈)が空か HOT のロット {lots:,}件に、"
                         f"2つ目の置き場所の BOX設計寸法 {len(values):,}件を候補として控えました"
                         "(ロット情報の画面で選べます)")
     import_diag.write(f"  [仕掛ロット] ← 2つ目 BOX最終実績が空か HOT のロット {lots}件 の候補 {len(values)}件")

@@ -182,7 +182,8 @@ def find_threshold_db(directory: Optional[Path] = None) -> Optional[Path]:
 def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
     """仕掛台帳の3ファイルを探す。見つかったものだけ返す。
 
-    **設定した場所だけを見る**(1つ目 → 2つ目。2つ目は設定していれば)。
+    **決まった場所だけを見る**(1つ目 → 2つ目)。1つ目は設定が無ければ既定の共有
+    (`config.LOT_DB_DIR`)、2つ目は設定していれば。
     """
     found: dict[str, Path] = {}
     # フォルダを明示されたときはそこだけを見る。省略時は
@@ -222,7 +223,7 @@ def describe_dir(base: Path, wanted: Iterable[str]) -> str:
 def lot_search_dirs() -> list[Path]:
     """仕掛台帳を探すフォルダの順(1つ目 → 2つ目。2つ目は設定していれば)。
 
-    **設定していない場所は見ない。** 以前は予備としてマスタのフォルダも見ていたが、
+    **ほかの場所は見ない**(1つ目は設定が無ければ既定の共有)。以前は予備としてマスタのフォルダも見ていたが、
     画面からは「設定していない道を探している」ようにしか見えなかった(現場の声:
     「仕掛台帳用の2つ目は設定なしなら探さないでしょ?」)。
     """

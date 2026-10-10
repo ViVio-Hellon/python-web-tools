@@ -272,6 +272,10 @@ def _dimension_note(lot: lot_service.LotInfo) -> str:
     値だけ黙って変えると、製造寸法だと思って読まれる。
     """
     if not lot.is_box:
+        if getattr(lot, "course_unknown", False):
+            # 2つ目の圧縮版 SIKALOT には 設計_設備ｺｰｽ が無い。黙って製造寸法を出さない(現場の判断「案2」)
+            return ("1つ目の仕掛台帳にこのロットが無い(または読めない)ため2つ目から出しています。2つ目には設計_設備コースが無いため、"
+                    "BOX かどうか分かりません。製造寸法を表示しています")
         return ""
     note = (f"設計_設備コースが {lot.box_course} のため、"
             "製造寸法ではなくBOX実績寸法を表示しています")

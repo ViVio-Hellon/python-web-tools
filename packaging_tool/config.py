@@ -209,8 +209,11 @@ def lot_db_dir2() -> Optional[Path]:
         ファイルが無い         … そのファイルは2つ目から読む(`sync_sources.find_lot_dbs`)
         ファイルに対象が無い   … 取り込みのあとに、2つ目にだけあるロット・受注を足す
                                  (`sync_import.merge_second_lot`)
-        ロットはあるが値が空   … BOX最終実績の寸法が空なら、2つ目の同じロットの行の BOX設計寸法を候補に控え、
-                                 ロット情報の画面で選ぶ(`sync_import.collect_box_choices`)
+        ロットはあるが値が空   … BOX最終実績の寸法が空か BOX最終実績_設備名 が HOT なら、2つ目の同じ
+                                 ロットの行の BOX設計寸法を候補に控え、ロット情報の画面で選ぶ
+                                 (`sync_import.collect_box_choices`)
+    2つ目の SIKALOT は圧縮版で、設計_設備ｺｰｽ・実績_設備ｺｰｽ などが無い。2つ目から入ったロットは
+    BOX かどうか決められないので、製造寸法を出して画面で断る(`sync_import.COURSE_UNKNOWN_TABLE`)
     """
     from . import user_settings
     configured = user_settings.get(KEY_LOT_DB_DIR2)

@@ -164,6 +164,9 @@ class LotInfo:
     # BOX実績寸法のロットで、1つ目の BOX最終実績寸法が使えない理由(候補が無くても理由を書くため)。
     # 空 = 使える / "空" = どれかが空 / 設備名(HOT) = その設備の値は使わない(`_box_final_problem`)
     box_final_problem: str = ""
+    # 設計_設備ｺｰｽ の無いファイル(2つ目の圧縮版 SIKALOT)から入ったロット。BOX かどうか
+    # 決められないので製造寸法を出し、画面で断る(`sync_import.COURSE_UNKNOWN_TABLE`)
+    course_unknown: bool = False
 
     @property
     def box_final_missing(self) -> bool:
@@ -361,6 +364,15 @@ def _box_final(row: Any, name: str) -> Any:
     return row[f"BOX最終実績_{name}"] or row[f"BOX実績_{name}"]
 
 
+def _course_unknown(conn: sqlite3.Connection, lot_no: str) -> bool:
+    """設計_設備ｺｰｽ の無いファイルから入ったロットか(`仕掛ロット_コース不明`)。"""
+    try:
+        return conn.execute("SELECT 1 FROM 仕掛ロット_コース不明 WHERE ロット番号 = ?",
+                            (lot_no,)).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False                  # 表がまだ無い(古い手元DB)
+
+
 def _load_box_choices(conn: sqlite3.Connection, lot_no: str) -> list[BoxChoice]:
     """そのロットの BOX最終実績寸法の候補(`仕掛ロット_2つ目`)。無ければ空。"""
     try:
@@ -457,6 +469,8 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str,
         quality_surface=str(row["品質グレード_表面処理"] or ""),
         manufactured_thickness=row["製造板厚"],
     )
+    if not course:
+        lot.course_unknown = _course_unknown(conn, lot_no)
     # 1つ目で BOX最終実績寸法が空、または HOT の値 → 2つ目の同じロットの行から選べるようにする
     # (現場の依頼)。**BOX実績寸法のときだけ**(製造寸法を出しているロットでは使わない)
     problem = _box_final_problem(row) if is_box else ""

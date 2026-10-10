@@ -154,7 +154,11 @@ class SecondLotDirTests(unittest.TestCase):
         self.assertTrue(lot_service.search_lot(self.conn, "Y000002").found)
 
     def test_1つ目が空や表の無いファイルなら2つ目を読む(self) -> None:
-        """「データが無い」も、ファイルが無いときと同じく2つ目にある分が入る。"""
+        """「データが無い」も2つ目にある分が入る。
+
+        表が無い・0バイトはファイルが無いときと同じ(2つ目を1つ目として読む)。**表はあるが0行**
+        のときは手元の前の中身を消さず(0行の表は手元を消さない)、手元に無いロットだけを2つ目から
+        足す。この試験は手元が空から始めるので、どちらでも Y000002 だけになる。"""
         write_ledger(self.second, "SIKALOT.sqlite3", "仕掛ロット", [lot("Y000002")])
         for case in ("空", "表が無い", "0バイト"):
             with self.subTest(case=case):
@@ -189,7 +193,8 @@ class SecondLotDirTests(unittest.TestCase):
 
     def box_ledgers(self) -> None:
         """1つ目: BOXコースで BOX最終実績が空のロットH・そろっているロットC・BOXでないロットN。
-        2つ目: 列が違う(BOX最終実績_* が無く、BOX設計_設備名・BOX番号・BOX実績_* がある)。"""
+        2つ目: 列が違う(BOX設計_設備名・BOX番号・BOX設計_* がある。本物の圧縮版は BOX実績_板厚・
+        板幅・板丈 と 設計_設備ｺｰｽ が無いが、ここでは 設計_設備ｺｰｽ を空で持たせている)。"""
         def first(no: str, course: str, t: str = "", w: str = "", l: str = "") -> dict:
             row = lot(no, "1つ目")
             row.update({src("仕掛ロット", "設計_設備コース"): course,
@@ -356,6 +361,69 @@ class SecondLotDirTests(unittest.TestCase):
         self.assertEqual((hot.box_choices, hot.width), ([], 0.0))
         self.assertIn("HOT のため、その寸法は使いません(2つ目の仕掛台帳の置き場所を設定すると",
                       lot_presenter._dimension_note(hot))
+
+    # --- 2つ目の圧縮版 SIKALOT(設計_設備ｺｰｽ が無い)から入ったロット ---------------------
+    def compressed(self, *lots: str, with_course: bool = False) -> None:
+        """2つ目の圧縮版 SIKALOT。本物は 設計_設備ｺｰｽ・実績_設備ｺｰｽ が無い(後日足す予定)。"""
+        cols = ["ﾛｯﾄ番号", src("仕掛ロット", "製造板厚"), src("仕掛ロット", "製造板幅"),
+                src("仕掛ロット", "製造板丈"), "BOX設計_設備名", "BOX最終実績_板厚",
+                "BOX最終実績_板幅", "BOX最終実績_板丈"]
+        if with_course:
+            cols.append(src("仕掛ロット", "設計_設備コース"))
+        self.write_raw(self.second, cols, [
+            {"ﾛｯﾄ番号": no, src("仕掛ロット", "製造板厚"): "6.75",
+             src("仕掛ロット", "製造板幅"): "216.5", src("仕掛ロット", "製造板丈"): "851.5",
+             "BOX設計_設備名": "PSW", "BOX最終実績_板厚": "7.1", "BOX最終実績_板幅": "1305",
+             "BOX最終実績_板丈": "2720", src("仕掛ロット", "設計_設備コース"): "HOT PSW GFS KEN"}
+            for no in lots])
+
+    def test_圧縮版から足したロットはBOXか分からないと断って製造寸法を出す(self) -> None:
+        """現場の判断「つなぎなので案2」。黙って製造寸法を出さない。1つ目のロットには付けない。"""
+        from packaging_tool.presenters import lot as lot_presenter
+        write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [lot("A000001")])
+        self.compressed("R6545E0")
+        data_sync.import_lot_ledger(self.conn)
+        only2 = lot_service.search_lot(self.conn, "R6545E0").lot
+        self.assertTrue(only2.course_unknown)
+        self.assertFalse(only2.is_box)
+        self.assertEqual((only2.thickness, only2.width, only2.length), (6.75, 216.5, 851.5))
+        self.assertIn("BOX かどうか分かりません。製造寸法を表示しています",
+                      lot_presenter._dimension_note(only2))
+        first = lot_service.search_lot(self.conn, "A000001").lot
+        self.assertFalse(first.course_unknown)
+        self.assertEqual(lot_presenter._dimension_note(first), "")
+
+    def test_1つ目にSIKALOTが無く圧縮版を読んだら全ロットで断る(self) -> None:
+        from packaging_tool.presenters import lot as lot_presenter
+        self.compressed("R6545E0", "L816X51")
+        data_sync.import_lot_ledger(self.conn)
+        self.assertEqual(sorted(self.local("SELECT ロット番号 FROM 仕掛ロット_コース不明")),
+                         [("L816X51",), ("R6545E0",)])
+        self.assertIn("BOX かどうか分かりません",
+                      lot_presenter._dimension_note(lot_service.search_lot(self.conn, "L816X51").lot))
+
+    def test_1つ目が読めず圧縮版を読んでも断る(self) -> None:
+        (self.first / "SIKALOT.sqlite3").write_bytes(b"not sqlite" * 100)
+        self.compressed("R6545E0")
+        data_sync.import_lot_ledger(self.conn)
+        self.assertTrue(lot_service.search_lot(self.conn, "R6545E0").lot.course_unknown)
+
+    def test_圧縮版に設計_設備ｺｰｽが入ればBOXとして扱い断らない(self) -> None:
+        """後日、圧縮版に 設計_設備ｺｰｽ が入ったら、ツールを変えずに BOX の扱いになる。"""
+        self.compressed("R6545E0", with_course=True)
+        data_sync.import_lot_ledger(self.conn)
+        info = lot_service.search_lot(self.conn, "R6545E0").lot
+        self.assertFalse(info.course_unknown)
+        self.assertTrue(info.is_box)
+        self.assertEqual((info.width, info.length), (1305.0, 2720.0))
+        self.assertEqual(self.local("SELECT COUNT(*) FROM 仕掛ロット_コース不明"), [(0,)])
+
+    def test_取り込み直すと前の控えを残さない(self) -> None:
+        self.compressed("R6545E0")
+        data_sync.import_lot_ledger(self.conn)
+        write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [lot("R6545E0")])
+        data_sync.import_lot_ledger(self.conn)
+        self.assertFalse(lot_service.search_lot(self.conn, "R6545E0").lot.course_unknown)
 
     def test_2つ目が無ければ候補も無い(self) -> None:
         self.box_ledgers()
