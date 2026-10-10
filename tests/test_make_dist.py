@@ -41,6 +41,8 @@ class MakeDistTests(unittest.TestCase):
         self.assertFalse(list(out.rglob("*.pyc")))
         self.assertTrue((out / "packaging_tool" / "distribution.py").exists())
         self.assertTrue((out / "配布メモ.txt").exists())
+        memo = (out / "配布メモ.txt").read_text(encoding="utf-8-sig")
+        self.assertIn("scripts\\make_shortcuts.vbs", memo)          # 配った先ですること
 
     def test_配布設定フォルダは入れると決めたときだけ(self) -> None:
         from unittest import mock
@@ -113,3 +115,52 @@ class MakeDistTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShortcutScriptTests(unittest.TestCase):
+    """配った先で押す `scripts\\make_shortcuts.vbs`(現場の依頼: 配布フォルダを配ったあとに押して、
+    Start.vbs と exe のショートカットを**そのときの場所**で作る)。"""
+
+    PATH = _ROOT / "scripts" / "make_shortcuts.vbs"
+
+    def text(self) -> str:
+        return self.PATH.read_bytes().decode("cp932")
+
+    def test_CP932_CRLF_BOMなし(self) -> None:
+        data = self.PATH.read_bytes()
+        self.assertNotEqual(data[:3], b"\xef\xbb\xbf")
+        self.assertNotIn(b"\n", data.replace(b"\r\n", b""))       # LF だけの行が無い
+        self.assertIn("資材複合ツール", self.text())                  # CP932 として正しい語になる
+
+    def test_Start_vbsとexeを指す_場所は押したときのフォルダ(self) -> None:
+        text = self.text()
+        self.assertIn(f'Const EXE_NAME = "{make_dist.EXE_NAME}"', text)
+        self.assertIn('"Start.vbs"', text)
+        self.assertIn("(ブラウザ版).lnk", text)
+        self.assertIn("(デスクトップ版).lnk", text)
+        # scripts の1つ上(ツールのフォルダ)を、押したときの場所から求める
+        self.assertIn("fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))", text)
+        # 結果は WScript.Echo(cscript では文字で出るので止まらない)
+        self.assertNotIn("msgbox", text.lower())
+
+    def test_配布フォルダに入る(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out, _lines = make_dist.build(Path(tmp) / "dist", with_settings=False)
+            self.assertEqual((out / "scripts" / "make_shortcuts.vbs").read_bytes(),
+                             self.PATH.read_bytes())
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows の cscript で本当に作る")
+    def test_Windowsでは本当に2つのショートカットができる(self) -> None:
+        import shutil
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            tool = Path(tmp) / "資材複合ツール_VER9"
+            (tool / "scripts").mkdir(parents=True)
+            shutil.copy2(self.PATH, tool / "scripts" / "make_shortcuts.vbs")
+            (tool / "Start.vbs").write_bytes(b"' x\r\n")
+            (tool / make_dist.EXE_NAME).write_bytes(b"MZ")
+            done = subprocess.run(["cscript", "//nologo", str(tool / "scripts" / "make_shortcuts.vbs")],
+                                  capture_output=True, timeout=60)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            for name in ("資材複合ツール(ブラウザ版).lnk", "資材複合ツール(デスクトップ版).lnk"):
+                self.assertTrue((tool / name).exists(), name)

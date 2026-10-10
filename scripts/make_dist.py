@@ -195,6 +195,9 @@ def build(out: Path, *, with_settings: bool = True, force: bool = False,
         raise SystemExit("配ってはいけないものが入ったため、作るのをやめました: "
                          + ", ".join(sorted(set(leaked))))
 
+    # 配った先で押すもの(現場の依頼)。指す先はその PC での場所なので、ここでは作らない
+    lines.append("配った先で scripts\\make_shortcuts.vbs をダブルクリックすると、ツールのフォルダに"
+                 "Start.vbs と exe のショートカットができます(指す先はその PC での場所)。")
     files = sum(1 for p in out.rglob("*") if p.is_file())
     lines.append(f"ファイル数: {files}")
     (out / "配布メモ.txt").write_text(_memo(lines), encoding="utf-8-sig")
