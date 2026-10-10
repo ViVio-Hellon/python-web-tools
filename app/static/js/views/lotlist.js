@@ -13,6 +13,7 @@ import { api } from "../api.js";
 import { promptBox } from "../askbox.js";
 import { onLeave, pageSignal } from "../nav.js";
 import { toast, toastError } from "../toast.js";
+import { halfUpperAscii } from "../halfwidth.js";
 
 const SUGGEST_DEBOUNCE_MS = 160;
 
@@ -314,7 +315,22 @@ export function start(options) {
 
   // --- 一覧検索 ---
   let textTimer = null;
-  el.listText.addEventListener("input", () => {
+  // 全角で入った英数字は半角の大文字に直す(IME で変換中のあいだは触らない ── 打ち終えてから)
+  const tidyText = () => {
+    const box = el.listText;
+    const fixed = halfUpperAscii(box.value);
+    if (fixed === box.value) return false;
+    const at = box.selectionStart;
+    box.value = fixed;
+    if (at !== null && box.setSelectionRange) box.setSelectionRange(at, at);
+    return true;
+  };
+  el.listText.addEventListener("compositionend", () => {
+    // 変換を確定したら直し、直した文字で探し直す
+    if (tidyText()) el.listText.dispatchEvent(new Event("input"));
+  });
+  el.listText.addEventListener("input", (e) => {
+    if (!e?.isComposing) tidyText();
     clearTimeout(textTimer);
     textPending = true;
     textTimer = setTimeout(() => {

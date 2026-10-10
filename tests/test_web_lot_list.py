@@ -191,6 +191,21 @@ class FilterTests(ListWebTestCase):
         body = self.post("/api/lot/list/search", {"text": "A1050"})
         self.assertEqual(self.lots(body), ["2222222"])
 
+    def test_全角で打った英数字でも見つかる(self) -> None:
+        """現場の声: IME が日本語のまま打つと見つからない。全角の英数字は半角にして探す(貼り付けも)。"""
+        body = self.post("/api/lot/list/search", {"text": "ａ１０５０"})
+        self.assertEqual(self.lots(body), ["2222222"])
+        self.assertEqual(body["text"], "a1050")
+        body = self.post("/api/lot/list/search", {"text": "１１１１１１１　"})
+        self.assertEqual(self.lots(body), ["1111111"])
+
+    def test_検索欄は英数字を打つ欄と伝える(self) -> None:
+        """IME はオフにできない。inputmode で「英数字を打つ欄」と伝え、半角英数で始めさせる。"""
+        html = (Path(__file__).resolve().parent.parent / "app/templates/lot.html").read_text("utf-8")
+        box = html.split('id="listText"')[1].split(">")[0]
+        self.assertIn('inputmode="url"', box)
+        self.assertIn('spellcheck="false"', box)
+
     def test_0件のときは何をすればよいか言う(self) -> None:
         body = self.post("/api/lot/list/search", {"text": "ありえない"})
         self.assertEqual(body["rows"], [])

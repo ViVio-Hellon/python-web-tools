@@ -61,7 +61,11 @@
         <label class="seek__label" for="listText">
           <span class="gl" aria-hidden="true">🔎</span>ロットを探す
         </label>
+        {# inputmode="url": Windows の日本語 IME に「英数字を打つ欄」と伝え、半角英数で始めさせる
+           (IME をオフにはできない。日本語で探すときは 半角/全角 キーで切り替えられる)。
+           全角で入った英数字は halfwidth.js が半角の大文字に直す #}
         <input class="input seek__input" id="listText" type="search"
+               inputmode="url" autocapitalize="characters" spellcheck="false"
                autocomplete="off" autofocus
                placeholder="ロット番号・用途・材質・寸法…"
                value="{{ list_view.text }}">

@@ -30,6 +30,10 @@ SAVED_MAX = 20
 NAME_MAX = 24
 
 
+# 全角の英数字・記号(！〜～)と全角の空白 → 半角
+_HALF = {**{c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}, 0x3000: 0x20}
+
+
 @dataclass
 class OpResult:
     ok: bool = True
@@ -77,7 +81,9 @@ class LotBrowseSession:
         return OpResult(True, "条件をすべて外しました")
 
     def set_text(self, text: str) -> OpResult:
-        self.text = (text or "").strip()
+        # 全角の英数字・記号は半角に(画面の `halfwidth.js` と同じ。貼り付けた文字にも効かせる)。
+        # 照合は大文字・小文字を区別しないので、ここでは大文字にしない
+        self.text = (text or "").translate(_HALF).strip()
         return OpResult(True, "")
 
     # ------------------------------------------------------------------

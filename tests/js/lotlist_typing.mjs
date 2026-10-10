@@ -22,6 +22,8 @@ const work = mkdtempSync(join(tmpdir(), "lotlist_"));
 mkdirSync(join(work, "views"));
 copyFileSync(join(ROOT, "app", "static", "js", "views", "lotlist.js"),
              join(work, "views", "lotlist.js"));
+// 全角→半角の直しは本物を使う(差し替えない)
+copyFileSync(join(ROOT, "app", "static", "js", "halfwidth.js"), join(work, "halfwidth.js"));
 
 // 返事は試験側が手で出す(`globalThis.pending` に溜める)
 writeFileSync(join(work, "api.js"), `
@@ -42,6 +44,7 @@ function makeEl() {
   return {
     value: "", hidden: false, textContent: "", disabled: false, handlers,
     addEventListener(type, fn) { handlers[type] = fn; },
+    dispatchEvent(event) { if (handlers[event.type]) handlers[event.type](event); return true; },
     replaceChildren() {}, setAttribute() {}, querySelectorAll() { return []; },
     classList: { toggle() {}, add() {}, remove() {} },
   };
@@ -138,6 +141,30 @@ pending.shift().resolve(view("R65", 22, ["R6500A0", "R6501A0"]));
 await tick();
 await box.handlers.keydown(enter);
 check("2件以上なら Enter でも開かない", opened, ["R6545E0"]);
+
+// 5) 全角で入った英数字は半角の大文字に直して探す(現場の声: IME が日本語のまま打つと見つからない)
+pending.splice(0);
+type("ｒ６５４５ｅ");
+check("全角の英数字は半角の大文字に直す", box.value, "R6545E");
+await sleep(260);
+check("直した文字で探す", pending.map((p) => p.body.text), ["R6545E"]);
+pending.shift().resolve(view("R6545E", 1, ["R6545E0"]));
+await tick();
+
+// 6) IME で変換中のあいだは触らない。確定したら直して探し直す
+box.value = "ｒ６";
+box.handlers.input({ isComposing: true });
+check("変換中は直さない", box.value, "ｒ６");
+box.handlers.compositionend({ type: "compositionend" });
+check("確定したら直す", box.value, "R6");
+await sleep(260);
+check("確定した文字で探す", pending.map((p) => p.body.text), ["R6"]);
+pending.shift().resolve(view("R6", 3, []));
+await tick();
+
+// 7) かな・漢字は変えない(用途名で探せるように)
+type("ｼﾞﾃﾝｼﾔ 自転車");
+check("かな・漢字はそのまま", box.value, "ｼﾞﾃﾝｼﾔ 自転車");
 // 打ってすぐ Enter: いまの文字で絞ってから決める(古い一覧で開かない)
 type("L816X51");
 const pressed = box.handlers.keydown(enter);
