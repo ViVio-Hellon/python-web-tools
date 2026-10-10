@@ -14,8 +14,13 @@
 ' ===================================================================
 Option Explicit
 
-Const APP_NAME = "資材複合ツール"
-Const EXE_NAME = "梱包資材総合ツール.exe"
+' ファイルの名前は文字の番号(Unicode)で組み立てる。.vbs はシステムの文字コードで読まれるので、
+' 日本語をそのまま書くと、日本語でない Windows では名前が化ける(結果の文は化けても困らない)
+Dim APP_NAME, EXE_NAME, BROWSER, DESKTOP
+APP_NAME = U("8CC7 6750 8907 5408 30C4 30FC 30EB")              ' 資材複合ツール
+EXE_NAME = U("68B1 5305 8CC7 6750 7DCF 5408 30C4 30FC 30EB") & ".exe"   ' 梱包資材総合ツール.exe
+BROWSER = U("0028 30D6 30E9 30A6 30B6 7248 0029")                       ' (ブラウザ版)
+DESKTOP = U("0028 30C7 30B9 30AF 30C8 30C3 30D7 7248 0029")             ' (デスクトップ版)
 
 Dim shell, fso, here, made, missing
 Set shell = CreateObject("WScript.Shell")
@@ -24,8 +29,8 @@ here = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 made = ""
 missing = ""
 
-MakeLink APP_NAME & "(ブラウザ版).lnk", "Start.vbs", False
-MakeLink APP_NAME & "(デスクトップ版).lnk", EXE_NAME, True
+MakeLink APP_NAME & BROWSER & ".lnk", "Start.vbs", False
+MakeLink APP_NAME & DESKTOP & ".lnk", EXE_NAME, True
 
 Dim msg
 If made <> "" Then
@@ -37,6 +42,17 @@ If missing <> "" Then
     msg = msg & vbCrLf & vbCrLf & "次は見つからないので作っていません:" & missing
 End If
 WScript.Echo msg
+
+' "8CC7 6750" のような文字の番号の並びを文字列にする
+Function U(codes)
+    Dim parts, i, s
+    parts = Split(codes, " ")
+    s = ""
+    For i = 0 To UBound(parts)
+        s = s & ChrW(CLng("&H" & parts(i)))
+    Next
+    U = s
+End Function
 
 Sub MakeLink(linkName, targetName, useIcon)
     Dim target, lnk

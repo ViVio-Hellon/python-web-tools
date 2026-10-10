@@ -69,11 +69,32 @@ def new_operation_id() -> str:
     return secrets.token_hex(3)
 
 
+# 同じ秒に振ったエラー番号の末尾(秒 → 使った末尾)。**同じ秒に同じ番号を2度振らない**ため。
+# 末尾は16進2桁なので、覚えておかないと同じ秒の2件が 1/256 で同じ番号になる(実際に試験で当たった)
+_REFS_KEEP = 8                      # 覚えておく秒の数(古い秒から捨てる)
+_ref_lock = threading.Lock()
+_refs_used: "collections.OrderedDict[str, set[str]]" = collections.OrderedDict()
+
+
 def new_error_ref(now: Optional[datetime] = None) -> str:
     """エラー番号。**番号を見ただけで、いつのことか分かる**形にする
-    (現場から口頭で聞いても、どの日のどのあたりかが分かる)。"""
+    (現場から口頭で聞いても、どの日のどのあたりかが分かる)。
+
+    同じ秒の番号は、この端末(このプロセス)の中では重ならない。1秒に256件を超えたら
+    末尾を4桁にする(そこまで出ることは無いが、黙って重ねない)。"""
     now = now or datetime.now()
-    return f"E{now:%y%m%d-%H%M%S}-{secrets.token_hex(1)}"
+    stamp = f"E{now:%y%m%d-%H%M%S}"
+    with _ref_lock:
+        used = _refs_used.setdefault(stamp, set())
+        _refs_used.move_to_end(stamp)
+        while len(_refs_used) > _REFS_KEEP:
+            _refs_used.popitem(last=False)
+        width = 1 if len(used) < 256 else 2
+        suffix = secrets.token_hex(width)
+        while suffix in used:
+            suffix = secrets.token_hex(width)
+        used.add(suffix)
+    return f"{stamp}-{suffix}"
 
 
 def begin_operation(info: dict) -> contextvars.Token:

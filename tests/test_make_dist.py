@@ -132,12 +132,31 @@ class ShortcutScriptTests(unittest.TestCase):
         self.assertNotIn(b"\n", data.replace(b"\r\n", b""))       # LF だけの行が無い
         self.assertIn("資材複合ツール", self.text())                  # CP932 として正しい語になる
 
+    def names(self) -> dict[str, str]:
+        """`NAME = U("8CC7 6750 …") [& ".exe"]` を文字にもどす(.vbs の中では文字の番号で持つ)。"""
+        import re
+        out = {}
+        for name, codes, tail in re.findall(r'^(\w+) = U\("([0-9A-F ]+)"\)(?: & "([^"]*)")?',
+                                            self.text(), re.M):
+            out[name] = "".join(chr(int(c, 16)) for c in codes.split()) + tail
+        return out
+
+    def test_日本語の名前は文字の番号で持つ(self) -> None:
+        """英語の Windows(CI)でも名前が化けないように。実際に CI で
+        「資材複合ツール(ブラウザ版).lnk」が化けた名前でできていた。"""
+        self.assertEqual(self.names(), {
+            "APP_NAME": make_dist.DIST_FOLDER_NAME, "EXE_NAME": make_dist.EXE_NAME,
+            "BROWSER": "(ブラウザ版)", "DESKTOP": "(デスクトップ版)"})
+        for line in self.text().splitlines():
+            code = line.split("'", 1)[0]                    # 注釈は除く
+            if '"' in code:
+                quoted = code.split('"')[1::2]
+                self.assertFalse(any(".lnk" in q and not q.isascii() for q in quoted), line)
+
     def test_Start_vbsとexeを指す_場所は押したときのフォルダ(self) -> None:
         text = self.text()
-        self.assertIn(f'Const EXE_NAME = "{make_dist.EXE_NAME}"', text)
-        self.assertIn('"Start.vbs"', text)
-        self.assertIn("(ブラウザ版).lnk", text)
-        self.assertIn("(デスクトップ版).lnk", text)
+        self.assertIn('MakeLink APP_NAME & BROWSER & ".lnk", "Start.vbs", False', text)
+        self.assertIn('MakeLink APP_NAME & DESKTOP & ".lnk", EXE_NAME, True', text)
         # scripts の1つ上(ツールのフォルダ)を、押したときの場所から求める
         self.assertIn("fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))", text)
         # 結果は WScript.Echo(cscript では文字で出るので止まらない)

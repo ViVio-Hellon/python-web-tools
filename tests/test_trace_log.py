@@ -17,7 +17,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -243,6 +243,24 @@ class PruneTests(TraceTestCase):
 # ==================================================================
 # 読む側
 # ==================================================================
+class ErrorRefTests(unittest.TestCase):
+    def test_同じ秒のエラー番号は重ならない(self) -> None:
+        """末尾は16進2桁。CI で同じ秒の2件が同じ番号になり、番号で引くと2件出た
+        (`test_一覧は新しい順で絞り込める` が 1/256 で落ちていた)。"""
+        when = datetime(2026, 10, 10, 8, 33, 17)
+        draws = iter(["e8", "e8", "e8", "3c"])
+        with mock.patch.object(logging_utils.secrets, "token_hex", lambda n: next(draws)):
+            first = logging_utils.new_error_ref(when)
+            second = logging_utils.new_error_ref(when)
+        self.assertEqual(first, "E261010-083317-e8")
+        self.assertEqual(second, "E261010-083317-3c")
+
+    def test_1秒に256件を超えても重ならない(self) -> None:
+        when = datetime(2026, 10, 10, 8, 33, 18)
+        refs = {logging_utils.new_error_ref(when) for _ in range(300)}
+        self.assertEqual(len(refs), 300)
+
+
 class ReadTests(TraceTestCase):
     def test_一覧は新しい順で絞り込める(self) -> None:
         log.error("ボードが選べない")
