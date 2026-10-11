@@ -92,6 +92,7 @@ ITEMS: tuple[tuple[str, str, bool], ...] = (
     (config.KEY_SPEC_SHEET_URL, "包装仕様書の図面URL", True),
     (config.KEY_AUTO_IMPORT, "起動時の自動取り込み", True),
     (config.KEY_EXPORT_DIR, "書き出し先", True),
+    (config.KEY_ORDER_CSV_DIR, "発注CSVの出力先", True),
     (admin_password.KEY, "管理者パスワード", True),
     (user_settings.KEY_POSITION, "拠点(ラインごとに違う)", False),
 )

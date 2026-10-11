@@ -179,6 +179,8 @@ class SettingsViewModel:
     kanban_dir: str = ""
     threshold_dir: str = ""
     export_dir: str = ""
+    # 倉庫連携の発注CSVの出力先(空なら書き出し先と同じ)
+    order_csv_dir: str = ""
     # 実際に見に行く道。**相対で書いたときに「どこを見ているか」を出す**
     master_dir_real: str = ""
     lot_dir_real: str = ""
@@ -186,6 +188,7 @@ class SettingsViewModel:
     kanban_dir_real: str = ""
     threshold_dir_real: str = ""
     export_dir_real: str = ""
+    order_csv_dir_real: str = ""
     path_base: str = ""            # 相対の起点(アプリのフォルダ)
 
     # --- 動作 ---
@@ -259,6 +262,8 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
         kanban_dir_real=str(config.kanban_db_dir()),
         threshold_dir_real=str(config.threshold_db_dir()),
         export_dir_real=str(config.export_dir()),
+        order_csv_dir=_order_csv_typed(),
+        order_csv_dir_real=str(config.order_csv_dir()),
         path_base=str(config.BASE_DIR),
         auto_import=bool(user_settings.get(config.KEY_AUTO_IMPORT,
                                            config.AUTO_IMPORT_DEFAULT)),
@@ -1322,6 +1327,10 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
                                else ""),
         "export_dir_real": (view.export_dir_real
                             if view.export_dir_real != view.export_dir else ""),
+        "order_csv_dir": view.order_csv_dir,
+        # 空(書き出し先と同じ)のときも、実際に出る場所は出す
+        "order_csv_dir_real": (view.order_csv_dir_real
+                               if view.order_csv_dir_real != view.order_csv_dir else ""),
         "path_base": view.path_base,
         "auto_import": view.auto_import,
         "position": view.position,
@@ -1414,6 +1423,12 @@ def _protected_changes(master_dir: Optional[str], lot_dir: Optional[str],
     return changed
 
 
+def _order_csv_typed() -> str:
+    """打ってある発注CSVの出力先。打っていなければ空(書き出し先と同じ所に出る)。"""
+    value = user_settings.get(config.KEY_ORDER_CSV_DIR)
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _lot_files2_cleaned(sent: dict) -> dict[str, str]:
     """送られた2つ目のファイル名を、保存する形にする。空・知らない表は1つ目の名前(今までどおり)。"""
     names = dict(config.LOT_DB_FILES)
@@ -1431,7 +1446,8 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
          kanban_dir: Optional[str] = None,
          threshold_dir: Optional[str] = None,
          lot_dir2: Optional[str] = None,
-         lot_files2: Optional[dict] = None) -> SaveResult:
+         lot_files2: Optional[dict] = None,
+         order_csv_dir: Optional[str] = None) -> SaveResult:
     """設定を保存する。**渡されたものだけ**を触る。
 
     `None` は「この項目は今回いじらない」の意味。画面が一部だけ送って
@@ -1494,6 +1510,10 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
         user_settings.save(config.KEY_KANBAN_DB_DIR, kanban_dir.strip())
     if threshold_dir is not None:
         user_settings.save(config.KEY_THRESHOLD_DB_DIR, threshold_dir.strip())
+    if order_csv_dir is not None:
+        # **管理者パスワードは要らない**(書き出し先と同じ理由。出力をどこに置くかは
+        # その端末の都合で、変えても全員の見えるデータは変わらない)
+        user_settings.save(config.KEY_ORDER_CSV_DIR, order_csv_dir.strip())
     if auto_import is not None:
         user_settings.save(config.KEY_AUTO_IMPORT, bool(auto_import))
     if spec_url is not None:

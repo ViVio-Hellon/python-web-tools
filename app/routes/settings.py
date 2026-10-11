@@ -147,6 +147,8 @@ def save():
         lot_files2=body["lot_files2"] if "lot_files2" in body else None,
         kanban_dir=pick("kanban_dir"),
         threshold_dir=pick("threshold_dir"),
+        # 倉庫連携の発注CSVの出力先(パスワードは要らない)
+        order_csv_dir=pick("order_csv_dir"),
         auto_import=bool(body["auto_import"]) if "auto_import" in body else None,
         spec_url=pick("spec_sheet_url"),
         position=pick("position"),

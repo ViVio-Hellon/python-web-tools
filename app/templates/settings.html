@@ -421,6 +421,20 @@
         <small class="why real" id="thresholdDirReal"
                {% if not state.threshold_dir_real %}hidden{% endif %}
         >→ {{ state.threshold_dir_real }}</small>
+
+        {# 倉庫連携の「CSVで出す」(集計・発注データ)の出力先。**読む場所ではなく出す場所**なので
+           管理者パスワードは要らない。空なら書き出し先(ボード人気度と同じ所)に出る #}
+        <label for="orderCsvDir">発注CSVの出力先</label>
+        <span class="pathrow">
+          <input class="input" id="orderCsvDir" value="{{ state.order_csv_dir }}"
+                 spellcheck="false" autocomplete="off"
+                 placeholder="空なら書き出し先と同じ">
+          <button class="btn btn--find" type="button" data-browse="orderCsvDir">
+            <span class="gl">▸</span>参照…</button>
+        </span>
+        <small class="why real" id="orderCsvDirReal"
+               {% if not state.order_csv_dir_real %}hidden{% endif %}
+        >→ {{ state.order_csv_dir_real }}</small>
       </div>
       {# 置き場所を**変えるとき**だけ要る。押す前から出すと、変えない人まで
          打つことになるので、断られてから出す(理由はサーバが持つ) #}

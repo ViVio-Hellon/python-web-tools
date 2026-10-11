@@ -41,9 +41,11 @@ Pythonのプロセスは再起動しないため)。権限を足した理由が
 """
 from __future__ import annotations
 
+from datetime import date
+
 from flask import Blueprint, jsonify, render_template, request
 
-from packaging_tool import (access_control, data_sync, modes, order_comments,
+from packaging_tool import (access_control, config, data_sync, modes, order_comments,
                             stock_reserve, warehouse_service as svc, work_context)
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import warehouse as presenter
@@ -167,6 +169,10 @@ def page():
         lot_peek_why=LOT_PEEK_WHY,
         expand_absent_why=LOT_PEEK_WHY,
         cut_state=_cut_list(get_db()),
+        # CSVで出す: 期間の初めの値(今月の1日〜今日)と出る場所(設定タブで変えられる)
+        export_start=date.today().replace(day=1).isoformat(),
+        export_end=date.today().isoformat(),
+        export_dir=str(config.order_csv_dir()),
         **shell_context("warehouse", badges=_rail_badge(view, _cut_unread(mode))),
     )
 
@@ -431,6 +437,33 @@ def stock_plan():
         return jsonify({"stock": None,
                         "message": "使える在庫がありません(ほかの発注が持ち出し待ちにしている分は使えません)。"})
     return jsonify({"stock": view})
+
+
+@bp.post("/api/warehouse/export")
+def export_csv():
+    """発注を期間で絞ってCSVに出す(集計 / 発注データ)。**どちらのモードからも出せる。**
+
+    出す先は設定タブの「発注CSVの出力先」。**ブラウザへ渡さず、その場所へ書く**
+    (現場の決まり: ダウンロードはしない)。書いた場所を返す。
+    出す前に共有の変化を取り込む ── ほかの端末が送った発注も入れるため。
+    """
+    from packaging_tool import order_export
+    body = request.get_json(silent=True) or {}
+    start = order_export.parse_day(body.get("start"))
+    end = order_export.parse_day(body.get("end"))
+    if start is None or end is None:
+        field = "start" if start is None else "end"
+        return jsonify({"error": {"code": "invalid", "field": field,
+                                  "message": "開始日と終了日を入れてください。"}}), 400
+    conn = get_db()
+    try:
+        data_sync.refresh_orders(conn, only_if_changed=True)
+    except Exception:                               # noqa: BLE001 - 手元の発注で出す
+        log.exception("CSVの前の取り込み直しに失敗(手元の発注で出します)")
+    result = order_export.export(conn, str(body.get("kind") or ""), start, end)
+    if not result.ok:
+        return jsonify({"error": {"code": "export_failed", "message": result.message}}), 422
+    return jsonify({"ok": True, "message": result.message, "path": str(result.path)})
 
 
 @field_only.post("/api/warehouse/drafts/discard")

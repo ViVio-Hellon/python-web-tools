@@ -822,6 +822,27 @@ async function send(confirmDuplicate = false) {
   }
 }
 
+/** 期間を決めてCSVに出す(集計 / 発注データ)。 */
+async function exportCsv(button) {
+  const status = document.getElementById("exportStatus");
+  const start = document.getElementById("exportStart");
+  const end = document.getElementById("exportEnd");
+  button.disabled = true;
+  try {
+    const body = await api.post("/api/warehouse/export", {
+      kind: button.dataset.export, start: start.value, end: end.value,
+    });
+    setStatus(status, body.message, "ok");
+    toast("CSVを書き出しました", "ok");
+  } catch (err) {
+    setStatus(status, err.message, "ng");
+    if (err.field === "start") start.focus();
+    if (err.field === "end") end.focus();
+  } finally {
+    button.disabled = false;
+  }
+}
+
 /** 下書きで打ち直した発注数を、その下書きに書き戻す(行を移る前・送る前)。 */
 function keepDraftQty() {
   if (!drafts.length || !el.fields.hatchu_suu) return;
@@ -1107,6 +1128,10 @@ export function start(state, material, lotPeekWhy) {
   toggles.attach(el.periodGroup, "period", load);
   if (el.cancelled) el.cancelled.addEventListener("change", load);
 
+  // 期間を決めてCSVに出す。**ブラウザには渡さない**(設定タブの出力先へ書く)。書いた場所を出す
+  for (const button of document.querySelectorAll("[data-export]")) {
+    button.addEventListener("click", () => exportCsv(button));
+  }
   if (el.send) el.send.addEventListener("click", () => send());
   if (el.clearForm) {
     el.clearForm.addEventListener("click", () => {

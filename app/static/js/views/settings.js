@@ -222,6 +222,7 @@ function renderStatus(state) {
   el.kanbanDir.value = state.kanban_dir;
   el.thresholdDir.value = state.threshold_dir;
   el.exportDir.value = state.export_dir;
+  el.orderCsvDir.value = state.order_csv_dir || "";
   // 相対で書かれたときだけ、実際に見に行く先を出す(サーバが決める)
   showReal(el.masterDirReal, state.master_dir_real);
   showReal(el.lotDirReal, state.lot_dir_real);
@@ -229,6 +230,7 @@ function renderStatus(state) {
   showReal(el.kanbanDirReal, state.kanban_dir_real);
   showReal(el.thresholdDirReal, state.threshold_dir_real);
   showReal(el.exportDirReal, state.export_dir_real);
+  showReal(el.orderCsvDirReal, state.order_csv_dir_real);
   el.autoImport.checked = state.auto_import;
   el.position.value = state.position;
   el.specUrl.value = state.spec_sheet_url;
@@ -438,7 +440,7 @@ async function startJob(path, body) {
 // ------------------------------------------------------------------
 export function start(state, jobState, masterFrame) {
   for (const id of ["statusGrid", "importWhy", "masterDir", "lotDir", "lotDir2", "kanbanDir", "thresholdDir",
-                    "exportDir", "exportDirReal", "exportUsage",
+                    "exportDir", "exportDirReal", "exportUsage", "orderCsvDir", "orderCsvDirReal",
                     "masterDirReal", "lotDirReal", "lotDir2Real", "kanbanDirReal",
                     "thresholdDirReal", "autoImport",
                     "position", "specUrl", "specUrlProblem",
@@ -527,6 +529,7 @@ export function start(state, jobState, masterFrame) {
         [...document.querySelectorAll("[data-lot-file2]")].map((box) => [box.dataset.lotFile2, box.value])),
       kanban_dir: el.kanbanDir.value,
       threshold_dir: el.thresholdDir.value,
+      order_csv_dir: el.orderCsvDir.value,
     };
     // 欄が出ているあいだだけ送る。**打っていないのに送らない**
     if (!el.pathAuth.hidden) body.password = el.pathPassword.value;

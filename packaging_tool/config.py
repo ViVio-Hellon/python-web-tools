@@ -271,6 +271,19 @@ def export_dir() -> Path:
     return DEFAULT_EXPORT_DIR
 
 
+def order_csv_dir() -> Path:
+    """倉庫連携の発注CSVの出力先。設定画面(置き場所)の値を優先し、空なら書き出し先と同じ。
+
+    ボード人気度の書き出し先とは**別に持つ**。同じ欄を使うと、人気度を出す場所を
+    変えただけで発注のCSVの出る場所まで動いてしまう。
+    """
+    from . import user_settings
+    configured = user_settings.get(KEY_ORDER_CSV_DIR)
+    if isinstance(configured, str) and configured.strip():
+        return resolve_dir(configured)
+    return export_dir()
+
+
 def threshold_db_dir() -> Path:
     """いま使うパレット閾値マスタのフォルダ。設定画面の値を優先する。"""
     from . import user_settings
@@ -293,6 +306,8 @@ KEY_LOT_DB2_FILES = "lot_db2_files"
 KEY_KANBAN_DB_DIR = "kanban_db_dir"
 KEY_THRESHOLD_DB_DIR = "threshold_db_dir"
 KEY_EXPORT_DIR = "export_dir"
+# 倉庫連携の発注CSV(集計・発注データ)の出力先(`order_csv_dir`)
+KEY_ORDER_CSV_DIR = "order_csv_dir"
 # 「表を持ってくる」で Access を変換するツール(accdb_converter)のフォルダ
 KEY_CONVERTER_DIR = "converter_dir"
 KEY_AUTO_IMPORT = "auto_import_on_start"
