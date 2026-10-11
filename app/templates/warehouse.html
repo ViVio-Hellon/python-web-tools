@@ -190,12 +190,12 @@
         <label for="exportEnd" class="sr">終了日</label>
         <input class="input" type="date" id="exportEnd" value="{{ export_end }}">
         <button class="btn btn--commit" type="button" data-export="summary">
-          <span class="gl">▸</span>集計(サイズ×発注コード)</button>
+          <span class="gl">▸</span>集計(確認済み・サイズ×発注コード)</button>
         <button class="btn btn--commit" type="button" data-export="rows">
           <span class="gl">▸</span>発注データ</button>
       </div>
       <p class="why">出力先: <span id="exportDir">{{ export_dir }}</span>(設定タブの「置き場所」→「発注CSVの出力先」で変えられます)。
-        集計は取り消した発注と、発注数が 0 か空(EX・在庫で全部まかなえた発注など)の発注を数えません。発注データは期間内の発注をそのまま出します。</p>
+        集計は<b>倉庫が確認した発注だけ</b>を数えます(取り消した発注と、発注数が 0 か空(EX・在庫で全部まかなえた発注など)の発注も数えません)。発注データは期間内の発注をそのまま出します。</p>
       <p class="status" id="exportStatus" hidden></p>
 
       {# 主(太字)と従(小さい灰色)の2行組。**どれを畳むかはサーバが

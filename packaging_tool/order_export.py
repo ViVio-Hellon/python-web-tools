@@ -12,7 +12,9 @@
 (`lot_service.build_hinmei`)。品名にサイズが無い行(1P0113 の角材・松板など)は、
 品名をそのままサイズの欄に入れて、品名ごとに数えます。
 
-【数えないもの(集計だけ)】
+【集計は倉庫が確認したものだけ】(現場の指示)
+倉庫が「確認済み」にした発注だけを数えます。まだ確認していない発注は数えません。
+そのうえで数えないもの:
     取り消した発注 … 発注として成り立っていない
     発注数が 0 か空の行 … EX受注(本番では 0 で入っている)・在庫で全部まかなえた発注など。
                           足しても台数は変わらず、「EX 0台」のような行ができるだけなので入れない
@@ -127,16 +129,20 @@ class Summary:
     lines: list[list[str]] = field(default_factory=list)   # 見出しを除く
     counted: int = 0           # 数えた発注の数
     cancelled: int = 0         # 取り消したので数えなかった
+    unconfirmed: int = 0       # 倉庫がまだ確認していないので数えなかった
     no_qty: int = 0            # 発注数が 0 か空(EX など)で数えなかった
 
 
 def summarize(rows: list[sqlite3.Row]) -> Summary:
-    """サイズ × 発注コード × 単位 ごとの発注数の合計。同じ組み合わせは足す。"""
+    """サイズ × 発注コード × 単位 ごとの発注数の合計。**倉庫が確認したものだけ**。同じ組み合わせは足す。"""
     got = Summary()
     groups: dict[tuple, dict[str, Any]] = {}
     for row in rows:
         if _cancelled(row):
             got.cancelled += 1
+            continue
+        if str(row["確認済み"] or "").strip() != "1":
+            got.unconfirmed += 1
             continue
         qty = import_specs.to_number(row["発注数"])
         if qty is None or qty == 0:
@@ -204,7 +210,9 @@ def export(conn: sqlite3.Connection, kind: str, start: date, end: date,
     if kind == KIND_SUMMARY:
         summary = summarize(picked.rows)
         lines = [list(SUMMARY_COLUMNS), *summary.lines]
-        notes = [f"{period} の発注 {summary.counted}件を、{len(summary.lines)}行にまとめました"]
+        notes = [f"{period} の倉庫が確認した発注 {summary.counted}件を、{len(summary.lines)}行にまとめました"]
+        if summary.unconfirmed:
+            notes.append(f"倉庫がまだ確認していない {summary.unconfirmed}件は数えていません")
         if summary.cancelled:
             notes.append(f"取り消した {summary.cancelled}件は数えていません")
         if summary.no_qty:

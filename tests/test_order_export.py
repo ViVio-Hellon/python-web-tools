@@ -42,11 +42,12 @@ def make_db() -> sqlite3.Connection:
 
 
 def add(conn, when, hinmei, code, qty, *, unit="台", cancelled="", width=1385, length=2770.5,
-        lot="L1"):
+        lot="L1", confirmed="1"):
     conn.execute(
         "INSERT INTO 資材パレット注文管理 (登録日時, LotNo, 品名, 発注コード, 単位, 厚, 幅, 丈, 発注数,"
-        " 取り消し済, 発注キー) VALUES (?, ?, ?, ?, ?, 3.0, ?, ?, ?, ?, lower(hex(randomblob(8))))",
-        (when, lot, hinmei, code, unit, width, length, qty, cancelled))
+        " 取り消し済, 確認済み, 発注キー)"
+        " VALUES (?, ?, ?, ?, ?, 3.0, ?, ?, ?, ?, ?, lower(hex(randomblob(8))))",
+        (when, lot, hinmei, code, unit, width, length, qty, cancelled, confirmed))
     conn.commit()
 
 
@@ -72,7 +73,10 @@ class ExportTests(unittest.TestCase):
         add(self.conn, "2026-10-01 08:00:00", "タイト　　1400x3150", "059551", 3)
         add(self.conn, "2026/10/05 15:20:11", "タイト　　1400x3150", "059551", 10)   # 書き方違い
         add(self.conn, "2026-10-05 16:00:00", "タイト　SP-18　1550x3100", "052212", 4)
-        add(self.conn, "2026-10-06 09:00:00", "5×10　　1550x3100", "050054", 2, cancelled="1")
+        add(self.conn, "2026-10-06 09:00:00", "5×10　　1550x3100", "050054", 2, cancelled="1",
+            confirmed="")
+        # 倉庫がまだ確認していない(集計には入れない。発注データには入れる)
+        add(self.conn, "2026-10-06 10:00:00", "タイト　　1400x3150", "059551", 50, confirmed="")
         add(self.conn, "2026-10-07 09:00:00", "EX", "", None, unit="")
         add(self.conn, "2026-10-07 10:00:00", "EX", "", 0, unit="")            # 本番の EX は 0
         add(self.conn, "2026-10-08 09:00:00", "角材 丈:1001-1999", "K-01", 6, unit="本")
@@ -93,13 +97,14 @@ class ExportTests(unittest.TestCase):
             ["角材 丈:1001-1999", "", "", "K-01", "本", "6", "1", "角材 丈:1001-1999"],
         ])
         self.assertIn("取り消した 1件は数えていません", got.message)
+        self.assertIn("倉庫がまだ確認していない 1件は数えていません", got.message)
         self.assertIn("発注数が 0 か空(EX など)の 2件は数えていません", got.message)
         self.assertIn(str(got.path), got.message)
 
     def test_発注データはそのまま(self) -> None:
         got, rows = self.export(order_export.KIND_ROWS)
         self.assertEqual(rows[0], list(order_export.ROW_COLUMNS))
-        self.assertEqual(len(rows) - 1, 7, "期間内の7件(取り消し・EX も入れる)")
+        self.assertEqual(len(rows) - 1, 8, "期間内の8件(取り消し・未確認・EX も入れる)")
         first = dict(zip(rows[0], rows[1]))
         self.assertEqual((first["品名"], first["発注数"], first["幅"], first["丈"]),
                          ("タイト　　1400x3150", "3", "1385", "2770.5"), "丸めない")
