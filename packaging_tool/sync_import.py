@@ -739,8 +739,13 @@ def collect_box_choices(conn: sqlite3.Connection, rows: list, result: ImportResu
     控えた候補の数を返す。手元の `仕掛ロット`(1つ目 + 2つ目から足したロット)のうち、
     BOX最終実績_板厚・板幅・板丈 のどれかが 0、または BOX最終実績_設備名 が HOT の
     ロットだけが対象。同じ設備名・同じ寸法の行は1つにまとめる。
+    **コイル形状(製造板丈 0)は板厚・板幅だけを見る**(丈 0 が正しい値。`lot_service.is_coil`)。
     """
-    blank = " OR ".join(f"COALESCE([BOX最終実績_{d}], 0) <= 0" for d in BOX_DIMENSIONS)
+    def missing(dims) -> str:
+        return " OR ".join(f"COALESCE([BOX最終実績_{d}], 0) <= 0" for d in dims)
+    coil = "(COALESCE([製造板丈], -1) = 0)"
+    blank = (f"({coil} AND ({missing(lot_service.BOX_COIL_DIMENSIONS)}))"
+             f" OR (NOT {coil} AND ({missing(lot_service.BOX_PLATE_DIMENSIONS)}))")
     unusable = ", ".join("?" for _ in lot_service.BOX_FINAL_UNUSABLE_EQUIPMENT)
     need = {str(r[0]) for r in conn.execute(
         f"SELECT DISTINCT [ロット番号] FROM [仕掛ロット] WHERE {blank}"

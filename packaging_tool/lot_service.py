@@ -92,6 +92,29 @@ def format_dimension(value: float) -> str:
 BOX_FINAL_UNUSABLE_EQUIPMENT = ("HOT",)
 BOX_FINAL_BLANK = "空"       # `LotInfo.box_final_problem`: 寸法のどれかが空
 
+# BOX最終実績寸法で「そろっている」とみなすのに要る寸法。**コイル形状のロットは丈が 0 で正しい**
+# (現場:「板形状とコイル形状があり、丈 0 はコイル形状」)ので、板厚・板幅だけを見る
+BOX_PLATE_DIMENSIONS = ("板厚", "板幅", "板丈")
+BOX_COIL_DIMENSIONS = ("板厚", "板幅")
+
+
+def is_coil(row: Any) -> bool:
+    """コイル形状のロットか。**製造板丈が 0** なら コイル(空・読めないならコイルとしない)。
+
+    1つ目の SIKALOT の「形状」(10 = 板、20・30 = 製造板丈 0)とぴったり対応していた
+    (2026-10-11 の写し 11,694行)。「形状」は2つ目の圧縮版に無いので、両方にある製造板丈で見る。
+    **BOX最終実績の丈が 0 なだけではコイルとしない** ── 板のロットでも、最後の実績が圧延
+    (L-2・L-3・HOT)の途中だと丈が 0 で記録される(例 L8114H0: 製造 0.8×1250×2200、
+    最終実績 1.11×1270×0)。それは「まだ板の寸法が無い」なので、今までどおり候補から選ぶ。
+    """
+    value = import_specs.to_real(row["製造板丈"])
+    return value is not None and value == 0
+
+
+def box_final_dimensions(row: Any) -> tuple[str, ...]:
+    """そのロットで BOX最終実績寸法に要る寸法(コイルは板厚・板幅だけ)。"""
+    return BOX_COIL_DIMENSIONS if is_coil(row) else BOX_PLATE_DIMENSIONS
+
 
 @dataclass
 class BoxChoice:
@@ -397,11 +420,12 @@ def _box_final_problem(row: Any) -> str:
     - BOX最終実績_設備名 が `BOX_FINAL_UNUSABLE_EQUIPMENT`(HOT)… その設備名を返す。
       寸法が入っていても使わない
     - BOX最終実績_板厚・板幅・板丈 のどれかが空(0)… `BOX_FINAL_BLANK`
+      **コイル形状(製造板丈 0)は板厚・板幅だけを見る**(丈 0 が正しい値。`is_coil`)
     """
     equipment = box_final_equipment_unusable(row["BOX最終実績_設備名"])
     if equipment:
         return equipment
-    if any(not (row[f"BOX最終実績_{name}"] or 0) for name in ("板厚", "板幅", "板丈")):
+    if any(not (row[f"BOX最終実績_{name}"] or 0) for name in box_final_dimensions(row)):
         return BOX_FINAL_BLANK
     return ""
 

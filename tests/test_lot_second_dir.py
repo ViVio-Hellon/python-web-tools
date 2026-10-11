@@ -265,6 +265,62 @@ class SecondLotDirTests(unittest.TestCase):
         self.assertEqual(lot_service.search_lot(self.conn, "C000003").lot.box_choices, [])   # そろっている
         self.assertEqual(lot_service.search_lot(self.conn, "N000004").lot.box_choices, [])   # BOXでない
 
+    # --- コイル形状(製造板丈 0)は BOX最終実績の丈 0 が正しい値 ---------------------
+    def coil_ledgers(self) -> None:
+        """1つ目: コイル(製造板丈 0・最終実績 1.715×940.2×0)のロットL、
+        板(製造板丈 2200)なのに最終実績の丈が 0 のロットP(圧延の途中。実データの L8114H0)、
+        コイルで最終実績が3つとも空のロットE。2つ目には3ロットとも候補がある。"""
+        def first(no: str, made_length: str, t: str, w: str, l: str) -> dict:
+            row = lot(no, "1つ目")
+            row.update({src("仕掛ロット", "設計_設備コース"): "HOT L-1 L-3 DL2 GSS KEN",
+                        src("仕掛ロット", "製造板丈"): made_length,
+                        src("仕掛ロット", "BOX最終実績_設備名"): "KEN",
+                        src("仕掛ロット", "BOX最終実績_板厚"): t, src("仕掛ロット", "BOX最終実績_板幅"): w,
+                        src("仕掛ロット", "BOX最終実績_板丈"): l})
+            return row
+        write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [
+            first("L5400E0", "0.0", "1.715", "940.2", "0.0"),
+            first("L8114H0", "2200.0", "1.110", "1270.00", "0.0"),
+            first("E000009", "0.0", "", "", ""),
+        ])
+        cols = ["ﾛｯﾄ番号", "BOX番号", "BOX設計_設備名", "BOX設計_板厚", "BOX設計_板幅", "BOX設計_板丈"]
+        self.write_raw(self.second, cols, [
+            {"ﾛｯﾄ番号": no, "BOX番号": "3", "BOX設計_設備名": "L-3",
+             "BOX設計_板厚": "6.1", "BOX設計_板幅": "1220", "BOX設計_板丈": "2630"}
+            for no in ("L5400E0", "L8114H0", "E000009")])
+
+    def test_コイルは丈0が正しい値_候補も断りも出さない(self) -> None:
+        """現場:「板形状とコイル形状があり、丈 0 はコイル形状」。"""
+        from packaging_tool.presenters import lot as lot_presenter
+
+        self.coil_ledgers()
+        data_sync.import_lot_ledger(self.conn)
+        coil = lot_service.search_lot(self.conn, "L5400E0").lot
+        self.assertEqual(coil.box_final_problem, "")
+        self.assertEqual(coil.box_choices, [])
+        self.assertEqual((coil.thickness, coil.width, coil.length), (1.715, 940.2, 0.0))
+        self.assertNotIn("ありません", lot_presenter._dimension_note(coil))
+        view = lot_presenter.build(lot_service.search_lot(self.conn, "L5400E0"))
+        length = next(f.value for f in view.lot_fields if f.key == "length")
+        self.assertEqual(length, "0.0", "丈は空欄にせず 0 と出す")
+        self.assertEqual(self.local("SELECT COUNT(*) FROM 仕掛ロット_2つ目 WHERE ロット番号 = 'L5400E0'"),
+                         [(0,)])
+
+    def test_板で最終実績の丈が0なら今までどおり候補から選ぶ(self) -> None:
+        """丈 0 だけではコイルとしない(製造板丈で見る)。圧延の途中の記録は「まだ板の寸法が無い」。"""
+        self.coil_ledgers()
+        data_sync.import_lot_ledger(self.conn)
+        plate = lot_service.search_lot(self.conn, "L8114H0").lot
+        self.assertEqual(plate.box_final_problem, lot_service.BOX_FINAL_BLANK)
+        self.assertEqual([c.equipment for c in plate.box_choices], ["L-3"])
+
+    def test_コイルでも最終実績が空なら候補から選ぶ(self) -> None:
+        self.coil_ledgers()
+        data_sync.import_lot_ledger(self.conn)
+        empty = lot_service.search_lot(self.conn, "E000009").lot
+        self.assertEqual(empty.box_final_problem, lot_service.BOX_FINAL_BLANK)
+        self.assertEqual(len(empty.box_choices), 1)
+
     # --- BOX最終実績_設備名 が HOT(寸法が入っていても使わない) ---------------------
     def hot_ledgers(self) -> None:
         """1つ目: BOX最終実績がそろっているが設備名が HOT のロットT(BOXコース)、
