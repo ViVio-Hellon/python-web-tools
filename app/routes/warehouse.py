@@ -312,6 +312,10 @@ def send():
     use = _to_int(body.get("use_stock"))
     reserve = None
     if use:
+        # **丸めない。** 発注数は整数だけ(10.5 を 10 にして元の数を作り違えない)
+        if len(orders) != 1 or presenter._qty(orders[0]["hatchu_suu"]) is None:
+            return jsonify({"error": {"code": "invalid", "field": "hatchu_suu",
+                                      "message": "発注数は整数で入れてください。"}}), 400
         reserve, refusal = _stock_to_use(conn, orders, use, from_draft=bool(body.get("from_draft")))
         if refusal is not None:
             return refusal
@@ -342,7 +346,7 @@ def send():
     stock_note = ""
     if reserve is not None:
         # **在庫を使ったことを倉庫へ知らせる。** 発注数が減った理由と元の数が分かるように
-        qty = int(float(orders[0]["hatchu_suu"] or 0))
+        qty = presenter._qty(orders[0]["hatchu_suu"])
         order_comments.add(conn, result.mgr_nos[0], stock_reserve.comment_text(
             reserve["size"][0], reserve["size"][1], reserve["takes"],
             before=qty + use, after=qty), terminal=terminal, side=_side())
@@ -399,7 +403,7 @@ def _stock_to_use(conn, orders: list[dict], use: int, *, from_draft: bool):
         log.exception("在庫を確かめる前の取り込み直しに失敗(手元の在庫で確かめます)")
     found = stock_reserve.offer(conn, *size)
     if found.total < use:
-        qty = int(float(orders[0]["hatchu_suu"] or 0))
+        qty = presenter._qty(orders[0]["hatchu_suu"])
         log.info("在庫が足りなくなっていたので送りませんでした: %s×%s 引く%s台 / 使える%s台",
                  size[0], size[1], use, found.total)
         return None, (jsonify({

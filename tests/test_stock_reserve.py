@@ -390,6 +390,14 @@ class StockWebTests(unittest.TestCase):
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) FROM 資材パレット注文管理").fetchone()[0], 0)
 
+    def test_在庫を使うとき発注数を丸めない(self) -> None:
+        """10.5 を 10 にして「元の発注数」を作り違えない。整数でなければ断る。"""
+        res = self.send(hatchu_suu="7.5", use_stock=3)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.get_json()["error"]["field"], "hatchu_suu")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM パレット在庫引当").fetchone()[0], 0)
+
     def test_下書きでなければ在庫は充てない(self) -> None:
         res = self.field.post("/api/warehouse/send", json={**FIELDS, "use_stock": 3},
                               headers=self.auth())
