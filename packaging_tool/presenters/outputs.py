@@ -354,6 +354,10 @@ def _order_normal(session: Any) -> dict[str, Any]:
         "tani": row.unit,
         "hatchu_suu": str(packages) if packages > 0 else "",
         **_common(session),
+        # パレットの寸法。**送る欄ではない**(幅・丈はロットの板の寸法)。倉庫連携が
+        # 同じ幅×丈の在庫を探して「在庫分を引きますか?」を出すのに使う(`stock_reserve`)
+        "pallet_width": session.palette.width,
+        "pallet_length": session.palette.length,
     }
 
 

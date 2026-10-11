@@ -64,6 +64,17 @@
       {# 送る前に知っておいてほしいこと(納入先の違う引当が混ざっている など)。
          **言葉はサーバが決める**(`presenters/outputs.draft_notice`) #}
       <p class="status status--warn" id="draftNotice" hidden></p>
+      {# 同じ幅×丈の在庫があるとき(`presenters/warehouse.stock_view`)。**言葉はサーバが決める**。
+         「在庫分を引く」で発注数を減らし、送ると置き場に「持出」の印が付く #}
+      <div class="status status--warn stockoffer" id="stockOffer" hidden>
+        <p id="stockAsk"></p>
+        <p class="num" id="stockChange"></p>
+        <div class="btn-row">
+          <button class="btn btn--commit" type="button" id="stockUse">在庫分を引く</button>
+          <button class="btn" type="button" id="stockSkip">引かない</button>
+          <button class="btn" type="button" id="stockUndo" hidden>やめる(発注数を戻す)</button>
+        </div>
+      </div>
       <p class="why" id="draftNote" hidden>
         下書きの値は<b>発注数のほかは打ち直せません</b> ──
         資材選択がロットから引いた値なので、ここで書き替えると倉庫が
@@ -294,6 +305,10 @@
 
 {% block head %}
 <style>
+  /* 在庫の案内。文・発注数の変わり方・ボタンを縦に積む(`.status` は横並び) */
+  .stockoffer { display:grid; gap:6px; justify-items:start; margin-top:8px;
+                background:var(--sunken); border-left-color:var(--act-select); color:var(--ink); }
+  .stockoffer p { margin:0; }
   /* やり取り。**自分の書き込みと相手の書き込みを見分けられる**ように並べる */
   .comments { margin-top:14px; border-top:1px solid var(--rule); padding-top:10px; }
   .comments h3 { font-size:1em; margin:0 0 6px; }

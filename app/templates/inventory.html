@@ -198,6 +198,9 @@
           指で押しにくいときは「＋」で大きくしてください(図はスクロールできます)。
         </p>
         <p class="status status--warn" id="mapMissing" hidden></p>
+        {# 倉庫連携で在庫を充てた発注の、まだ持ち出していない台数。図の印(棚の上の数字)は
+           小さいので、どの棚から何台かを字でも出す #}
+        <p class="status status--warn" id="mapWaiting" hidden></p>
 
         {# 編集の道具は編集中だけ出す。ふだん見えていると、押せてしまう #}
         <div id="mapEditBox" hidden>
@@ -280,6 +283,8 @@
           </table>
         </div>
         <p class="why" id="listNote">{{ state.message }}</p>
+        {# 1つの棚を開いたとき、その棚の持ち出し待ち(どのロットの分か) #}
+        <ul class="why waiting" id="waitingDetail" hidden></ul>
       </div>
     </section>
   </div>
@@ -370,6 +375,12 @@
   #map .pos:hover rect { stroke:var(--focus); stroke-width:2; }
   #map .pos:focus-visible rect { stroke:var(--focus); stroke-width:3; }
   #map .pos text { pointer-events:none; user-select:none; }
+  /* 持ち出し待ちのある棚。**色だけで示さない**ので、縁を太くし、棚の上に台数を出す */
+  #map .pos--waiting > rect { stroke:var(--act-select); stroke-width:2.5; }
+  #map .pos .waitmark rect { fill:var(--act-select); stroke:none; }
+  #map .pos .waitmark text { fill:var(--act-select-fg); font-size:var(--fs-2xs); }
+  #map .pos--short .waitmark rect { fill:var(--act-danger); }
+  .waiting { margin:6px 0 0; padding-left:1.2em; }
   /* 編集中は掴めることを見た目でも示す(棚検索と同じ) */
   #map.map--editing .pos { cursor:grab; }
   #map.map--editing .pos rect { stroke-dasharray:3 2; }

@@ -44,7 +44,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, render_template, request
 
 from packaging_tool import (access_control, data_sync, modes, order_comments,
-                            warehouse_service as svc, work_context)
+                            stock_reserve, warehouse_service as svc, work_context)
 from packaging_tool.logging_utils import get_logger
 from packaging_tool.presenters import warehouse as presenter
 
@@ -148,6 +148,10 @@ def page():
     drafts = work_context.get_context().peek_pending_orders()
     if drafts:
         log.info("倉庫送信の下書きを %s 行 出します", len(drafts))
+    if len(drafts) == 1 and mode == modes.FIELD:
+        # 同じ幅×丈の在庫があれば「在庫分を引きますか?」を出す(現場だけ。出すのは現場)
+        drafts[0]["stock"] = presenter.stock_view(
+            get_db(), drafts[0], drafts[0].get("hatchu_suu"))
     return render_template(
         "warehouse.html",
         state=presenter.to_dict(view),
@@ -304,7 +308,25 @@ def send():
                                       "message": f"このロット({lot_no})は、すでに倉庫へ送信されています。"},
                             "ask": presenter.already_sent_ask(lot_no, sent)}), 409
 
-    result = svc.create_orders(conn, orders, terminal=svc.this_terminal())
+    # 「在庫分を引く」を押して送った。**送る直前に共有の最新で確かめ直す**
+    use = _to_int(body.get("use_stock"))
+    reserve = None
+    if use:
+        reserve, refusal = _stock_to_use(conn, orders, use, from_draft=bool(body.get("from_draft")))
+        if refusal is not None:
+            return refusal
+        orders[0]["stock_used"] = use
+
+    terminal = svc.this_terminal()
+    after = None
+    if reserve is not None:
+        def after(tx, rows, _made):
+            # 発注と同じトランザクションで引当を残す(片方だけ残さない)
+            stock_reserve.write_reserve(
+                tx, order_key=rows[0]["発注キー"], lot_no=rows[0]["LotNo"],
+                width=reserve["size"][0], length=reserve["size"][1],
+                takes=reserve["takes"], terminal=terminal)
+    result = svc.create_orders(conn, orders, terminal=terminal, after=after)
     if not result.ok:
         return jsonify({"ok": False, "message": result.message,
                         "error": {"code": "rejected", "message": result.message}}), 422
@@ -316,7 +338,16 @@ def send():
         # 送るときに添えたコメント。発注と一緒に取り込み元へ届く
         # (まとめて送ったときは1行目に付ける。同じ文を行の数だけ積まない)
         order_comments.add(conn, result.mgr_nos[0], note,
-                           terminal=svc.this_terminal(), side=_side())
+                           terminal=terminal, side=_side())
+    stock_note = ""
+    if reserve is not None:
+        # **在庫を使ったことを倉庫へ知らせる。** 発注数が減った理由と元の数が分かるように
+        qty = int(float(orders[0]["hatchu_suu"] or 0))
+        order_comments.add(conn, result.mgr_nos[0], stock_reserve.comment_text(
+            reserve["size"][0], reserve["size"][1], reserve["takes"],
+            before=qty + use, after=qty), terminal=terminal, side=_side())
+        stock_note = (f" 在庫から {use}台 使います({stock_reserve.describe(reserve['takes'])})。"
+                      "簡易在庫の図に「持出」の印を付けました。")
     # 倉庫へ届けるのが仕事なので、押した直後に送りにいく。
     # **画面には何も出さない** ── 手元の登録はもう終わっており、
     # 届かなくても次の「取り込み元へ反映」でまとめて送られる
@@ -332,8 +363,70 @@ def send():
         message = (f"発注を{rows}この端末に登録しましたが、共有フォルダに届かないため、まだ倉庫には"
                    "届いていません。つながると自動で送ります(一覧に「未送信」と出ている間は届いていません)。")
         log.warning("共有フォルダが見えないため、発注を手元に預かりました: 管理番号=%s", result.mgr_nos)
+    message += stock_note
     return jsonify({"ok": True, "message": message, "queued": queued,
                     "mgr_no": result.mgr_nos[0], "mgr_nos": result.mgr_nos})
+
+
+def _to_int(value) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(number, 0)
+
+
+# 在庫を充てられない送り方のときの断り
+STOCK_ONLY_DRAFT = "在庫を充てられるのは、資材選択から届いた1行の発注だけです。"
+
+
+def _stock_to_use(conn, orders: list[dict], use: int, *, from_draft: bool):
+    """「在庫分を引く」で引いた台数を、いまの在庫で確かめる。
+
+    戻り値は (使う置き場, None) か (None, 断りの応答)。
+    **送る直前に共有の最新を取り込んでから**確かめる(コメントを書く前と同じ)。
+    ほかの端末が先に使った・払い出したなら送らずに、いま使える台数を返す。
+    寸法は画面から受け取らない ── 下書き(サーバが預かっているもの)から取る。
+    """
+    drafts = work_context.get_context().peek_pending_orders()
+    size = presenter.draft_pallet(drafts[0]) if len(drafts) == 1 else None
+    if not from_draft or len(orders) != 1 or orders[0].get("is_ex_order") or size is None:
+        return None, (jsonify({"error": {"code": "bad_stock", "field": "hatchu_suu",
+                                         "message": STOCK_ONLY_DRAFT}}), 400)
+    try:
+        data_sync.refresh_orders(conn, only_if_changed=True)
+    except Exception:                               # noqa: BLE001 - 手元の在庫で確かめる
+        log.exception("在庫を確かめる前の取り込み直しに失敗(手元の在庫で確かめます)")
+    found = stock_reserve.offer(conn, *size)
+    if found.total < use:
+        qty = int(float(orders[0]["hatchu_suu"] or 0))
+        log.info("在庫が足りなくなっていたので送りませんでした: %s×%s 引く%s台 / 使える%s台",
+                 size[0], size[1], use, found.total)
+        return None, (jsonify({
+            "error": {"code": "stock_changed", "field": "hatchu_suu",
+                      "message": (f"在庫が変わりました(ほかの端末が先に使った・払い出した)。"
+                                  f"いま使える在庫は {found.total}台 です。発注数を {qty + use} に"
+                                  "戻したので、もう一度確かめてから送ってください。")},
+            "before": qty + use,
+            "stock": presenter.stock_view(conn, drafts[0], qty + use)}), 409)
+    return {"size": size, "takes": stock_reserve.plan(found, use)}, None
+
+
+@field_only.post("/api/warehouse/stock/plan")
+def stock_plan():
+    """「在庫分を引く」を押した。いまの発注数で、何台をどの置き場から使うかを返す。
+
+    **まだ何も書かない。** 決まるのは「倉庫へ送信」を押したとき(`send`)。
+    """
+    body = request.get_json(silent=True) or {}
+    drafts = work_context.get_context().peek_pending_orders()
+    if len(drafts) != 1 or presenter.draft_pallet(drafts[0]) is None:
+        return jsonify({"error": {"code": "bad_stock", "message": STOCK_ONLY_DRAFT}}), 400
+    view = presenter.stock_view(get_db(), drafts[0], body.get("qty"))
+    if view is None:
+        return jsonify({"stock": None,
+                        "message": "使える在庫がありません(ほかの発注が持ち出し待ちにしている分は使えません)。"})
+    return jsonify({"stock": view})
 
 
 @field_only.post("/api/warehouse/drafts/discard")

@@ -89,6 +89,11 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   access_table=config.TBL_CUT_REQUEST_EVENT,
                   key_column="管理番号",
                   number_column="管理番号"),
+    # 発注に在庫を充てた記録(引当・持出)。足すだけ。全端末の図に「持出」の印を出す
+    WriteBackSpec(sqlite_table=config.TBL_STOCK_RESERVE,
+                  access_table=config.TBL_STOCK_RESERVE,
+                  key_column="管理番号",
+                  number_column="管理番号"),
 ]
 
 # **取り込んだ行は送らない**(全表)。送るのは、この端末で作った行だけ。
@@ -108,6 +113,7 @@ IDENTITY_COLUMNS: dict[str, tuple[str, ...]] = {
     config.TBL_ORDER_COMMENT_SEEN: ("コメントID", "見た端末", "見た側"),
     config.TBL_CUT_REQUEST: ("依頼ID",),
     config.TBL_CUT_REQUEST_EVENT: ("依頼ID", "状態", "端末", "側", "日時"),
+    config.TBL_STOCK_RESERVE: ("引当ID",),
 }
 WRITEBACK_SPECS = [replace(spec, identity_columns=IDENTITY_COLUMNS.get(spec.sqlite_table, ()))
                    for spec in WRITEBACK_SPECS]
@@ -153,6 +159,14 @@ SHARED_TABLE_DDL: dict[str, str] = {
         " 依頼ID TEXT NOT NULL DEFAULT '', 状態 TEXT NOT NULL DEFAULT '',"
         " 端末 TEXT NOT NULL DEFAULT '', 側 TEXT NOT NULL DEFAULT '',"
         " 日時 TEXT NOT NULL DEFAULT '')"),
+    config.TBL_STOCK_RESERVE: (
+        f'CREATE TABLE IF NOT EXISTS "{config.TBL_STOCK_RESERVE}" ('
+        " 管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " 引当ID TEXT NOT NULL DEFAULT '', 発注キー TEXT NOT NULL DEFAULT '',"
+        " LotNo TEXT NOT NULL DEFAULT '', 幅 INTEGER NOT NULL DEFAULT 0,"
+        " 丈 INTEGER NOT NULL DEFAULT 0, 位置 TEXT NOT NULL DEFAULT '',"
+        " 区分 TEXT NOT NULL DEFAULT '', 台数 INTEGER NOT NULL DEFAULT 0,"
+        " 端末 TEXT NOT NULL DEFAULT '', 日時 TEXT NOT NULL DEFAULT '')"),
 }
 
 

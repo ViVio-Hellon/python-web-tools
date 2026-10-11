@@ -210,6 +210,20 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("側", "側", to_text),
         ("日時", "日時", to_text),
     ],
+    # 発注に在庫を充てた記録(引当・持出)。全端末が書き戻しで足していく
+    config.TBL_STOCK_RESERVE: [
+        ("引当ID", "引当ID", to_text),
+        ("発注キー", "発注キー", to_text),
+        ("LotNo", "LotNo", to_text),
+        # 小数を切り捨てない(在庫の行と同じ寸法で突き合わせる)
+        ("幅", "幅", lambda v: to_number(v) or 0),
+        ("丈", "丈", lambda v: to_number(v) or 0),
+        ("位置", "位置", to_text),
+        ("区分", "区分", to_text),
+        ("台数", "台数", lambda v: to_int(v) or 0),
+        ("端末", "端末", to_text),
+        ("日時", "日時", to_text),
+    ],
     "CornerboardMaster": [
         ("アングル丈", "アングル丈", to_int),
         ("データラベル", "データラベル", to_text),
@@ -456,7 +470,8 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
                                                config.TBL_ORDER_COMMENT,
                                                config.TBL_ORDER_COMMENT_SEEN,
                                                config.TBL_CUT_REQUEST,
-                                               config.TBL_CUT_REQUEST_EVENT})
+                                               config.TBL_CUT_REQUEST_EVENT,
+                                               config.TBL_STOCK_RESERVE})
                                    | frozenset(THRESHOLD_TABLES))
 
 # **取り込み元に無くても知らせない列**(表 → 取り込み元の列名)。

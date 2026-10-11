@@ -36,7 +36,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from . import db, import_specs, outbox_sync
 from .logging_utils import get_logger
@@ -136,7 +136,9 @@ def create_order(
 
 
 def create_orders(conn: sqlite3.Connection, orders: list[dict], *,
-                  terminal: Optional[str] = None) -> OrdersResult:
+                  terminal: Optional[str] = None,
+                  after: Optional[Callable[[sqlite3.Connection, list[dict], list[int]], None]] = None,
+                  ) -> OrdersResult:
     """VBA `WriteWarehouseRows`(+ `SendWarehouseRow`・`frmSendConfirm` の数量検証)の移植。
 
     **全行を1回で登録する。途中で失敗したら1行も残さない。**
@@ -151,6 +153,10 @@ def create_orders(conn: sqlite3.Connection, orders: list[dict], *,
     こちらからは「EXである」と分かる合図(品名 `EX`)だけを送る ──
     中途半端な値を入れると、届いた側の突き合わせで混乱する。
     どのロットのEXかは LotNo と寸法で分かるので、そこは通常どおり入れる。
+
+    `after` は、登録した行(`発注キー` を含む中身)と管理番号を受け取り、**同じ
+    トランザクションの中で**書き足す(在庫の引当 `stock_reserve.write_reserve`)。
+    そこで失敗すれば発注も残さない ── 「発注は減らしたのに引当が無い」を作らない。
     """
     if not orders:
         return OrdersResult(False, "送る発注がありません。")
@@ -176,6 +182,8 @@ def create_orders(conn: sqlite3.Connection, orders: list[dict], *,
             conn.execute("BEGIN IMMEDIATE")
             for values in rows:
                 made.append(conn.execute(sql, [values[c] for c in columns]).lastrowid)
+            if after is not None:
+                after(conn, rows, made)
             conn.commit()
             return OrdersResult(True, "倉庫へ発注を送信しました。" if len(rows) == 1
                                 else f"倉庫へ発注を{len(rows)}行まとめて送信しました。", made)
@@ -187,6 +195,11 @@ def create_orders(conn: sqlite3.Connection, orders: list[dict], *,
                         attempt, MAX_SEND_RETRY + 1, exc)
             if "locked" not in last_error.lower() and "busy" not in last_error.lower():
                 break
+        except Exception:
+            # `after` が書き足しの途中で落ちた。発注も残さずに開いたロックを返す
+            if conn.in_transaction:
+                conn.rollback()
+            raise
     return OrdersResult(False, f"発注登録に失敗しました({last_error})。"
                                "1行も登録していません。時間をおいてもう一度送信してください。")
 
@@ -223,7 +236,9 @@ def _order_values(order: dict, *, now: str, sender: str) -> tuple[dict, str]:
             qty = int(order.get("hatchu_suu"))
         except (TypeError, ValueError):
             return {}, "発注数を入力してください。"
-        if qty <= 0:
+        # **在庫で全部まかなえたときだけ 0 を通す**(`stock_used`)。倉庫には
+        # 「在庫から使う」ことと元の発注数がコメントで届く
+        if qty < 0 or (qty == 0 and not order.get("stock_used")):
             return {}, "発注数は1以上を入力してください。"
 
     return {

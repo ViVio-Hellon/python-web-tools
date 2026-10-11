@@ -19,7 +19,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .. import config, pallet_service
+from .. import config, pallet_service, stock_reserve
 
 # 一覧の列。VBA `hdrStk0`〜`hdrStk6` の並びをそのまま引き継ぐ。
 #   (見出し, DBの列名, 数値か)
@@ -32,6 +32,10 @@ STOCK_COLUMNS: tuple[tuple[str, str, bool], ...] = (
     ("在庫数", "在庫数", True),
     ("更新日時", "更新日時", False),
 )
+# 一覧に出す列。VBA の並びの**うしろに**「持出待ち」を足す(前の7列の並びは変えない)。
+# 倉庫連携で在庫を充てた発注が、その行(幅×丈×置き場)からまだ持ち出していない台数
+WAITING_LABEL = "持出待ち"
+LIST_COLUMNS: tuple[tuple[str, str, bool], ...] = STOCK_COLUMNS + ((WAITING_LABEL, "", True),)
 
 # 入力の候補。VBA のプリセットボタンに対応する。
 # **打つ手間を減らすためのもの**で、ここに無い値も入れられる
@@ -71,6 +75,10 @@ class MapPosition:
     h: float
     state: str = STATE_EMPTY
     count: int = 0               # その棚にあるパレットの種類数
+    # 倉庫連携で在庫を充てた発注が、この棚からまだ持ち出していない台数(図の「持出」の印)
+    waiting: int = 0
+    # 持ち出し待ちが在庫数より多い(古い版で払い出した・同時に払い出した)。ずれに気づかせる
+    short: bool = False
 
 
 @dataclass
@@ -88,6 +96,8 @@ class MapView:
     background_scale: float = 1.0
     # 在庫にはあるのに図に無い位置。図から押せないので気づかせる
     missing: list[str] = field(default_factory=list)
+    # 持ち出し待ちのある棚を1行で(図の印は小さいので、字でも出す)
+    waiting_note: str = ""
     # 配置編集。押す前に「いま動かせるのか」が読めるように画面へ渡す
     editing: bool = False
     dirty: bool = False
@@ -100,7 +110,7 @@ class MapView:
 @dataclass
 class InventoryViewModel:
     rows: list[dict[str, Any]] = field(default_factory=list)
-    columns: tuple[tuple[str, str, bool], ...] = STOCK_COLUMNS
+    columns: tuple[tuple[str, str, bool], ...] = LIST_COLUMNS
     map: MapView = field(default_factory=MapView)
     # 何を出しているのか。一覧だけ見ても分かるようにする
     caption: str = ""
@@ -114,6 +124,8 @@ class InventoryViewModel:
     # 資材選択から渡ってきたか。**渡された寸法だと画面に書く**ために持つ
     # (打っていないのに欄が埋まっている理由が読めないと不気味に映る)
     from_selection: bool = False
+    # 1つの棚を開いたとき、その棚の持ち出し待ち(どのロットの分か)
+    waiting_detail: list[str] = field(default_factory=list)
 
 
 # ------------------------------------------------------------------
@@ -138,6 +150,8 @@ def build_map(conn: sqlite3.Connection, *,
     plan = session.plan
     hit = hit or set()
     counts = position_counts(conn)
+    held = stock_reserve.waiting_by_position(conn)
+    short = short_positions(conn)
 
     positions = []
     for item in plan.positions:
@@ -152,7 +166,8 @@ def build_map(conn: sqlite3.Connection, *,
             state = STATE_EMPTY
         positions.append(MapPosition(
             name=item.name, x=item.x, y=item.y, w=item.w, h=item.h,
-            state=state, count=count))
+            state=state, count=count, waiting=held.get(_key(item.name), 0),
+            short=_key(item.name) in short))
 
     return MapView(
         width=plan.width, height=plan.height, positions=positions,
@@ -162,7 +177,43 @@ def build_map(conn: sqlite3.Connection, *,
         background_scale=plan.background.scale,
         missing=plan.unknown(sorted(counts_to_names(conn))),
         editing=session.editing, dirty=session.dirty,
+        waiting_note=_waiting_note(conn),
     )
+
+
+def _waiting_note(conn: sqlite3.Connection) -> str:
+    """「持ち出し待ち: A1 2台・S1 1台」。無ければ空。
+
+    図の印は棚の上の小さな数字なので、**どの棚から何台か**を字でも出す。
+    """
+    names: dict[str, str] = {}
+    totals: dict[str, int] = {}
+    for w in stock_reserve.waiting(conn):
+        key = _key(w.position)
+        names.setdefault(key, w.position)
+        totals[key] = totals.get(key, 0) + w.count
+    if not totals:
+        return ""
+    return "持ち出し待ち: " + "・".join(f"{names[k]} {totals[k]}台" for k in sorted(totals))
+
+
+def short_positions(conn: sqlite3.Connection) -> set[str]:
+    """持ち出し待ちが在庫数より多い棚(`_key` の形)。
+
+    古い版の端末で払い出した(持出が残らない)・2台が同時に払い出したときに起きる。
+    黙って印を出し続けると「まだ持ち出していない」に見えるので、ずれていると示す。
+    """
+    from .. import db
+    rows = db.fetch_all(
+        conn,
+        "SELECT 幅, 丈, 位置, 在庫数 FROM PalletMaster WHERE TRIM(位置) <> ''",
+        caller_name="presenters.inventory.short_positions") or []
+    stock: dict[tuple, int] = {}
+    for r in rows:
+        place = (stock_reserve._size(r["幅"]), stock_reserve._size(r["丈"]), _key(r["位置"]))
+        stock[place] = stock.get(place, 0) + int(r["在庫数"] or 0)
+    return {place[2] for place, count in stock_reserve.waiting_by_place(conn).items()
+            if count > stock.get(place, 0)}
 
 
 def position_counts(conn: sqlite3.Connection) -> dict[str, int]:
@@ -212,9 +263,15 @@ def _background_url(plan) -> str:
 # ------------------------------------------------------------------
 # 一覧
 # ------------------------------------------------------------------
-def row_dict(row: sqlite3.Row) -> dict[str, Any]:
-    """一覧の1行。表に出す列だけを、表示できる形にして返す。"""
+def row_dict(row: sqlite3.Row, held: Optional[dict[tuple, int]] = None) -> dict[str, Any]:
+    """一覧の1行。表に出す列だけを、表示できる形にして返す。
+
+    `held` は (幅, 丈, 位置) ごとの持ち出し待ち(`stock_reserve.waiting_by_place`)。
+    """
     data = {label: _cell(row, column) for label, column, _ in STOCK_COLUMNS}
+    place = (stock_reserve._size(row["幅"]), stock_reserve._size(row["丈"]), _key(row["位置"]))
+    waiting = (held or {}).get(place, 0)
+    data[WAITING_LABEL] = waiting or ""
     # 払出で使う識別子。幅・丈・位置の3つで1行が決まる(VBAと同じ)
     data["key"] = {"width": row["幅"], "length": row["丈"], "position": row["位置"]}
     data["list_managed"] = (row["リスト管理"] or "").strip() == "要"
@@ -236,7 +293,8 @@ def search(conn: sqlite3.Connection, width: int, length: int,
         mode = "exact"
     result = pallet_service.search_pallets(conn, width, length, mode)
     label = next(name for key, name, _ in SEARCH_MODES if key == mode)
-    rows = [row_dict(r) for r in result.rows]
+    held = stock_reserve.waiting_by_place(conn)
+    rows = [row_dict(r, held) for r in result.rows]
     return InventoryViewModel(
         rows=rows,
         map=build_map(conn, hit=result.matched_positions),
@@ -250,14 +308,35 @@ def search(conn: sqlite3.Connection, width: int, length: int,
 
 def at_position(conn: sqlite3.Connection, position: str) -> InventoryViewModel:
     """1つの棚の中身(VBA `ShowInventoryByLocation`)。"""
-    rows = [row_dict(r) for r in pallet_service.pallets_at_position(conn, position)]
+    held = stock_reserve.waiting_by_place(conn)
+    rows = [row_dict(r, held) for r in pallet_service.pallets_at_position(conn, position)]
     return InventoryViewModel(
         rows=rows,
         map=build_map(conn, active=position),
         caption=f"位置 {position} の在庫",
         message="" if rows else f"位置 {position} には在庫がありません。",
         found=len(rows),
+        waiting_detail=waiting_detail(conn, position),
     )
+
+
+def waiting_detail(conn: sqlite3.Connection, position: str) -> list[str]:
+    """その棚の持ち出し待ちを、どのロットの分か分かる形で。古い順。"""
+    key = _key(position)
+    return [f"{w.width}×{w.length} {w.count}台 ── Lot {w.lot_no or '---'}"
+            f"({_short_time(w.since)} に引当)"
+            for w in stock_reserve.waiting(conn) if _key(w.position) == key]
+
+
+def _short_time(text: str) -> str:
+    """「2026-10-11 14:02:33」→「10/11 14:02」。読めなければそのまま。"""
+    value = (text or "").strip().replace("/", "-")
+    try:
+        day, clock = value.split(" ")[:2]
+        _, month, date = day.split("-")
+        return f"{int(month)}/{int(date)} {clock[:5]}"
+    except ValueError:
+        return text or ""
 
 
 def initial(conn: sqlite3.Connection) -> InventoryViewModel:
@@ -299,6 +378,7 @@ def to_dict(view: InventoryViewModel) -> dict[str, Any]:
         "width_text": view.width_text,
         "length_text": view.length_text,
         "from_selection": view.from_selection,
+        "waiting_detail": view.waiting_detail,
     }
 
 
@@ -314,8 +394,10 @@ def map_dict(view: MapView) -> dict[str, Any]:
         "editing": view.editing,
         "dirty": view.dirty,
         "missing": view.missing,
+        "waiting_note": view.waiting_note,
         "positions": [{"name": p.name, "x": p.x, "y": p.y, "w": p.w, "h": p.h,
-                       "state": p.state, "count": p.count}
+                       "state": p.state, "count": p.count,
+                       "waiting": p.waiting, "short": p.short}
                       for p in view.positions],
     }
 

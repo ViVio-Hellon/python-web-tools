@@ -56,7 +56,7 @@ def page():
         symbol_presets=inv.SYMBOL_PRESETS,
         industry_presets=inv.INDUSTRY_PRESETS,
         unit_presets=inv.UNIT_PRESETS,
-        columns=inv.STOCK_COLUMNS,
+        columns=inv.LIST_COLUMNS,
         **shell_context("inventory"),
     )
 

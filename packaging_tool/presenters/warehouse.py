@@ -26,6 +26,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from .. import stock_reserve
 from .. import warehouse_service as svc
 
 # 一覧の列。VBA `frmWarehouseOrder` の並びをそのまま引き継ぐ。
@@ -534,3 +535,68 @@ def already_sent_ask(lot_no: str, sent: list[dict]) -> dict[str, Any]:
         "compact": True,
         "fields": fields,
     }
+
+
+# ------------------------------------------------------------------
+# 在庫を充てる(`stock_reserve`)
+# ------------------------------------------------------------------
+def draft_pallet(draft: dict) -> Optional[tuple[Any, Any]]:
+    """下書きのパレットの幅×丈。在庫を充てられない下書き(EX・1P0113・寸法なし)は None。"""
+    if not draft or draft.get("is_ex_order"):
+        return None
+    width, length = draft.get("pallet_width"), draft.get("pallet_length")
+    try:
+        if float(width) > 0 and float(length) > 0:
+            return stock_reserve._size(width), stock_reserve._size(length)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _qty(text: Any) -> Optional[int]:
+    try:
+        value = float(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+    return int(value) if value.is_integer() else None
+
+
+def stock_view(conn: sqlite3.Connection, draft: dict, qty_text: Any) -> Optional[dict[str, Any]]:
+    """下書きのパレットと同じ幅×丈の在庫と、「在庫分を引く」を押したらどうなるか。
+
+    使える在庫(在庫数 − ほかの発注の持ち出し待ち)が無ければ None ── 案内を出さない。
+    **言葉はここで決める**(画面は並べるだけ)。
+    """
+    size = draft_pallet(draft)
+    if size is None:
+        return None
+    found = stock_reserve.offer(conn, *size)
+    if not found.total:
+        return None
+    width, length = size
+    where = "・".join(f"{p.position} に {p.free}台" for p in found.places)
+    view: dict[str, Any] = {
+        "total": found.total,
+        "ask": (f"※在庫があります: {width}×{length} が {where}(計 {found.total}台)。"
+                "在庫分を発注数から引きますか?"),
+        "use": 0, "before": None, "after": None, "change": "", "why": "",
+        "used_text": "", "takes": [],
+    }
+    qty = _qty(qty_text)
+    if qty is None or qty <= 0:
+        view["why"] = "発注数を入れてから「在庫分を引く」を押してください。"
+        return view
+    use = min(found.total, qty)
+    takes = stock_reserve.plan(found, use)
+    after = qty - use
+    view.update({
+        "use": use, "before": qty, "after": after,
+        "change": f"発注数 {qty} → {after}",
+        "takes": [{"position": t.position, "count": t.count} for t in takes],
+        "used_text": (f"在庫から {use}台 使います({stock_reserve.describe(takes)})。"
+                      f"「倉庫へ送信」を押すと発注数 {after} で送り、倉庫へのコメントを1件付け、"
+                      "簡易在庫の図のその置き場に「持出」の印を付けます。"
+                      + ("在庫で全部まかなえるので、倉庫には発注数 0 で知らせます。"
+                         if after == 0 else "")),
+    })
+    return view

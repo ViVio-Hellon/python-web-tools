@@ -2438,6 +2438,8 @@ class SendTests(SelectionWebTestCase):
         orders = work_context.get_context().pending_orders
         self.assertEqual(len(orders), 1)
         self.assertEqual(orders[0]["hatchu_code"], "P9")
+        # パレットの寸法も持っていく(倉庫連携が同じ幅×丈の在庫を探す。送る欄ではない)
+        self.assertEqual((orders[0]["pallet_width"], orders[0]["pallet_length"]), (1100, 2000))
         # 発注一覧にはまだ何も入っていない
         self.assertEqual(self.get("/api/warehouse/orders")["found"], 0)
 

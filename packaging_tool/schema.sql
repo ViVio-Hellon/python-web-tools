@@ -370,6 +370,27 @@ CREATE TABLE IF NOT EXISTS 切断依頼状態 (
 );
 CREATE INDEX IF NOT EXISTS idx_cut_request_event ON 切断依頼状態(依頼ID);
 
+-- パレット在庫引当: 発注に在庫を充てた記録(`stock_reserve.py`)。**足すだけ**(書き直さない)。
+--   引当 … 倉庫連携で「在庫分を引く」を押して送ったとき。置き場ごとに1行
+--   持出 … その置き場でそのサイズを払い出したとき。古い引当から順に充てる
+-- 発注ごと・置き場ごとの「引当 − 持出」(取り消した発注は数えない)が、簡易在庫の図の
+-- 「持出」の印になる。`引当ID` は行を作ったときに振る世界で1つの番号
+CREATE TABLE IF NOT EXISTS パレット在庫引当 (
+    管理番号    INTEGER PRIMARY KEY AUTOINCREMENT,
+    引当ID      TEXT NOT NULL DEFAULT '',
+    発注キー    TEXT NOT NULL DEFAULT '',
+    LotNo       TEXT NOT NULL DEFAULT '',
+    幅          INTEGER NOT NULL DEFAULT 0,
+    丈          INTEGER NOT NULL DEFAULT 0,
+    位置        TEXT NOT NULL DEFAULT '',
+    区分        TEXT NOT NULL DEFAULT '',
+    台数        INTEGER NOT NULL DEFAULT 0,
+    端末        TEXT NOT NULL DEFAULT '',
+    日時        TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_stock_reserve_key ON パレット在庫引当(発注キー);
+CREATE INDEX IF NOT EXISTS idx_stock_reserve_place ON パレット在庫引当(幅, 丈, 位置);
+
 CREATE INDEX IF NOT EXISTS idx_warehouse_order_lotno ON 資材パレット注文管理(LotNo);
 CREATE INDEX IF NOT EXISTS idx_warehouse_order_status ON 資材パレット注文管理(取り消し済, 確認済み);
 

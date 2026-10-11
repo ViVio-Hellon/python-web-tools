@@ -84,7 +84,14 @@ function drawMap(map) {
     group.setAttribute("data-name", pos.name);
     if (pos.name === picked) group.classList.add("is-selected");
     // 読み上げと吹き出しの両方に、押すと何が起きるかを書く
-    const what = pos.count ? `${pos.count}種類` : "在庫なし";
+    let what = pos.count ? `${pos.count}種類` : "在庫なし";
+    // 倉庫連携で在庫を充てた発注の、まだ持ち出していない台数(`stock_reserve`)
+    if (pos.waiting) {
+      group.classList.add("pos--waiting");
+      if (pos.short) group.classList.add("pos--short");
+      what += `・持ち出し待ち ${pos.waiting}台`
+        + (pos.short ? "(在庫数より多い。払い出しの記録がずれています)" : "");
+    }
     group.setAttribute("aria-label", `位置 ${pos.name}(${what})`);
 
     const rect = document.createElementNS(SVG_NS, "rect");
@@ -103,6 +110,8 @@ function drawMap(map) {
     title.textContent = `位置 ${pos.name} — ${what}`;
 
     group.append(rect, text, title);
+    // 配置編集中は出さない(掴んで動かすあいだ、札だけ元の場所に残るため)
+    if (pos.waiting && !map.editing) group.appendChild(waitMark(pos));
     // 掴みしろは**編集中だけ**。出しっぱなしにすると、見るだけのときに
     // 「掴める」と読めてしまう
     if (map.editing) group.appendChild(mapedit.grip(pos));
@@ -122,6 +131,10 @@ function drawMap(map) {
   // 保存していない図があれば、タブを閉じるときに聞く(`unsaved.js`)
   unsaved.mark("inventory", Boolean(map.dirty));
 
+  // 持ち出し待ちのある棚を字でも出す(図の数字は小さい)
+  el.mapWaiting.hidden = !map.waiting_note;
+  el.mapWaiting.textContent = map.waiting_note || "";
+
   // 在庫にはあるのに図に無い位置。図から押せないので黙っていない
   el.mapMissing.hidden = !map.missing.length;
   if (map.missing.length) {
@@ -138,6 +151,34 @@ function drawMap(map) {
   }));
 
   drawEditBar(map);
+}
+
+/**
+ * 棚の上に出す持ち出し待ちの台数。棚は細い(14×33 ほど)ので中には書かず、
+ * **棚の上に**小さな札で出す。在庫数より多いとき(記録のずれ)は赤い札。
+ */
+function waitMark(pos) {
+  const mark = document.createElementNS(SVG_NS, "g");
+  mark.setAttribute("class", "waitmark");
+  const label = String(pos.waiting);
+  // 字は --fs-2xs(10)。札は字より少し大きく
+  const w = Math.max(14, 8 + label.length * 7);
+  const h = 14;
+  const x = pos.x + pos.w / 2 - w / 2;
+  // 図の上端に貼り付いた棚は、札が図の外に出るので下に付ける
+  const y = pos.y >= h + 2 ? pos.y - h - 2 : pos.y + pos.h + 2;
+  const box = document.createElementNS(SVG_NS, "rect");
+  box.setAttribute("x", x);
+  box.setAttribute("y", y);
+  box.setAttribute("width", w);
+  box.setAttribute("height", h);
+  box.setAttribute("rx", "3");
+  const text = document.createElementNS(SVG_NS, "text");
+  text.setAttribute("x", x + w / 2);
+  text.setAttribute("y", y + h / 2);
+  text.textContent = label;
+  mark.append(box, text);
+  return mark;
 }
 
 /** 配置編集の道具立て。**編集中だけ出す。** */
@@ -167,6 +208,14 @@ function drawRows(view) {
   el.caption.textContent = view.caption || "";
   el.listNote.textContent = view.message || "";
   el.listNote.hidden = !view.message;
+  // 開いた棚の持ち出し待ち(どのロットの分か)
+  const waiting = view.waiting_detail || [];
+  el.waitingDetail.hidden = !waiting.length;
+  el.waitingDetail.replaceChildren(...waiting.map((line) => {
+    const li = document.createElement("li");
+    li.textContent = `持ち出し待ち: ${line}`;
+    return li;
+  }));
   clearSelection();
 }
 
@@ -221,7 +270,9 @@ function select(tr, row) {
   el.pkSize.textContent = `${row["幅"]} × ${row["丈"]}`;
   el.pkPos.textContent = row["位置"] || "---";
   el.pkSym.textContent = row["記号"] || "---";
-  el.pkStock.textContent = row["在庫数"];
+  el.pkStock.textContent = row["持出待ち"]
+    ? `${row["在庫数"]}(うち持ち出し待ち ${row["持出待ち"]}台。払い出すと印が減ります)`
+    : row["在庫数"];
   el.iqty.disabled = false;
   el.iqty.max = row["在庫数"];
   el.issue.disabled = false;
@@ -409,7 +460,8 @@ function afterFailure(err) {
 
 // ------------------------------------------------------------------
 export function start(state) {
-  for (const id of ["w", "l", "search", "clear", "status", "map", "mapMissing",
+  for (const id of ["w", "l", "search", "clear", "status", "map", "mapMissing", "mapWaiting",
+                    "waitingDetail",
                     "mapWrap", "zoomIn", "zoomOut", "zoomNow", "zoomWhy",
                     "rows", "found", "caption", "listNote", "refresh",
                     "rw", "rl", "rqty", "rpos", "rsym", "rind", "runit", "rnote",

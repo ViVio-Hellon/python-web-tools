@@ -774,6 +774,8 @@ async function send(confirmDuplicate = false) {
   // 全行を1回で登録し、1行でもだめなら1行も登録しない ── 片方だけが倉庫に
   // 届くと、倉庫は半分だけ用意してしまう
   if (drafts.length > 1) values.rows = drafts.map((d) => ({ ...d }));
+  // 「在庫分を引く」で引いた台数。サーバが送る直前の在庫で確かめ直す
+  if (stockUsed) values.use_stock = stockUsed;
   // 倉庫へのひとこと。**発注の欄ではない**ので、下書きでも打てる
   if (el.sendComment) values.comment = el.sendComment.value.trim();
   if (confirmDuplicate) values.confirm_duplicate = true;
@@ -787,9 +789,25 @@ async function send(confirmDuplicate = false) {
     for (const node of Object.values(el.fields)) node.value = "";
     if (el.sendComment) el.sendComment.value = "";
     draftStore.done(el.sendComment, ...Object.values(el.fields));
+    stock = null;
+    stockUsed = 0;
     if (values.rows) { drafts = []; showDraft(); } else dropDraft();
     await load();
   } catch (err) {
+    // 送る直前に在庫が減っていた(ほかの端末が先に使った・払い出した)。
+    // 発注数を引く前に戻し、いまの在庫で出し直す
+    if (err.code === "stock_changed" && err.body) {
+      if (el.fields.hatchu_suu && err.body.before !== undefined) {
+        el.fields.hatchu_suu.value = String(err.body.before);
+        keepDraftQty();
+      }
+      stock = err.body.stock || null;
+      stockUsed = 0;
+      stockSkipped = false;
+      showStock();
+      setStatus(el.sendStatus, err.message, "ng");
+      return;
+    }
     // 同じロットをもう送ってある。**何を送ってあるかを見せてから**続けるかを訊く
     if (err.code === "already_sent" && err.body && err.body.ask && !confirmDuplicate) {
       if (await askWith(err.body.ask)) return send(true);
@@ -868,7 +886,82 @@ function applyDraftLock(on) {
   if (el.draftNote) el.draftNote.hidden = !on;
 }
 
+/* ================================================================
+   在庫を充てる(`presenters/warehouse.stock_view`)
+
+   下書きのパレットと同じ幅×丈の在庫があれば聞く。**押すまでは何も変えない。**
+   「在庫分を引く」で発注数を減らし、「倉庫へ送信」で決まる(置き場に「持出」の印)。
+   ================================================================ */
+/** いまの下書きで使える在庫(サーバが組み立てたもの)。無ければ null。 */
+let stock = null;
+/** 「在庫分を引く」で引いた台数。送信で運ぶ。 */
+let stockUsed = 0;
+/** 引く前の発注数(「やめる」で戻す)。 */
+let stockBefore = "";
+/** 「引かない」を押した。 */
+let stockSkipped = false;
+
+function showStock() {
+  const box = el.stockOffer;
+  if (!box) return;
+  const on = drafts.length === 1 && Boolean(stock);
+  box.hidden = !on;
+  if (!on) return;
+  let ask = stock.ask;
+  let change = stock.change || stock.why || "";
+  if (stockUsed) {
+    ask = stock.used_text;
+    change = stock.change;
+  } else if (stockSkipped) {
+    ask = `在庫は使いません(使える在庫 ${stock.total}台)。`;
+    change = "";
+  }
+  el.stockAsk.textContent = ask;
+  el.stockChange.textContent = change;
+  el.stockChange.hidden = !change;
+  el.stockUse.hidden = Boolean(stockUsed);
+  el.stockSkip.hidden = Boolean(stockUsed) || stockSkipped;
+  el.stockUndo.hidden = !stockUsed;
+}
+
+/** 「在庫分を引く」。いまの発注数で、何台をどこから使うかをサーバに決めてもらう。 */
+async function useStock() {
+  const qty = el.fields.hatchu_suu ? el.fields.hatchu_suu.value.trim() : "";
+  try {
+    const body = await api.post("/api/warehouse/stock/plan", { qty });
+    stock = body.stock || null;
+    if (!stock) {
+      setStatus(el.sendStatus, body.message, "warn");
+    } else if (!stock.use) {
+      setStatus(el.sendStatus, stock.why, "warn");
+      if (el.fields.hatchu_suu) el.fields.hatchu_suu.focus();
+    } else {
+      stockBefore = qty;
+      stockUsed = stock.use;
+      stockSkipped = false;
+      el.fields.hatchu_suu.value = String(stock.after);
+      keepDraftQty();
+      setStatus(el.sendStatus, "", "ok");
+    }
+  } catch (err) {
+    toastError(err);
+  }
+  showStock();
+}
+
+/** 「やめる」。発注数を引く前に戻す。 */
+function undoStock() {
+  if (stockUsed && el.fields.hatchu_suu) {
+    el.fields.hatchu_suu.value = stockBefore;
+    keepDraftQty();
+  }
+  stockUsed = 0;
+  stockSkipped = false;
+  showStock();
+}
+
 function showDraft() {
+  showStock();
   const box = el.drafts;
   if (!box) return;
   box.hidden = !drafts.length;
@@ -903,6 +996,10 @@ export function start(state, material, lotPeekWhy) {
   isMaterial = material;
   drafts = [];          // 再入場のたびに真っさらから(`nav.js`)
   draftAt = 0;
+  stock = null;
+  stockUsed = 0;
+  stockBefore = "";
+  stockSkipped = false;
   exBlankKeys = state.ex_blank_keys || [];
   draftIsEx = false;
   for (const id of ["reach", "rows", "listNote", "found", "pending", "unreadComments", "readAllComments", "q", "refresh",
@@ -910,6 +1007,7 @@ export function start(state, material, lotPeekWhy) {
                     "send", "clearForm", "sendStatus", "cancelled", "exNote",
                     "drafts", "draftPrev", "draftNext", "draftPos", "draftNote",
                     "draftNotice", "cutRows", "cutEmpty", "cutUnread",
+                    "stockOffer", "stockAsk", "stockChange", "stockUse", "stockSkip", "stockUndo",
                     "listTabs", "ordersTabBadge", "cutsTabBadge"]) {
     el[id] = document.getElementById(id);
   }
@@ -1020,6 +1118,8 @@ export function start(state, material, lotPeekWhy) {
       // ある(道具が組み立てた値を直したいときは、一度消して打ち直す)
       drafts = [];
       draftAt = 0;
+      stock = null;
+      stockUsed = 0;
       // 先に錠を外す。外さないと、EXの下書きを消したあとも
       // 発注コード欄が押せないまま残る
       applyExLock(false);
@@ -1037,6 +1137,13 @@ export function start(state, material, lotPeekWhy) {
       drafts = JSON.parse(el.drafts.dataset.orders || "[]");
     } catch {
       drafts = [];
+    }
+    // 在庫の案内は1行の下書きだけ(1P0113 の2行には出さない)
+    stock = drafts.length === 1 ? (drafts[0].stock || null) : null;
+    if (el.stockUse) {
+      el.stockUse.addEventListener("click", useStock);
+      el.stockSkip.addEventListener("click", () => { stockSkipped = true; showStock(); });
+      el.stockUndo.addEventListener("click", undoStock);
     }
     el.draftPrev.addEventListener("click", () => { keepDraftQty(); draftAt -= 1; showDraft(); });
     el.draftNext.addEventListener("click", () => { keepDraftQty(); draftAt += 1; showDraft(); });

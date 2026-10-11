@@ -740,8 +740,15 @@ def issue(
     length: int,
     position: str,
     qty: int,
+    terminal: Optional[str] = None,
 ) -> TransactionResult:
-    """VBA `btnDispatch_Click` の移植(払出処理)。"""
+    """VBA `btnDispatch_Click` の移植(払出処理)。
+
+    その置き場・そのサイズに**持ち出し待ち**(倉庫連携で在庫を充てた発注)があれば、
+    払い出した台数を古い引当から順に「持出」として同じトランザクションで残す
+    (`stock_reserve.consume`)。図の「持出」の印がその分だけ減る。
+    """
+    from . import stock_reserve
     if qty <= 0:
         return TransactionResult(ok=False, message="数量は1以上を入力してください。")
 
@@ -789,8 +796,23 @@ def issue(
                 "VALUES (?, ?, ?, ?, ?, '払出', ?, ?, ?, '')",
                 (width, length, row["業界"], row["記号"], position, qty, new_stock, now),
             )
+            consumed = stock_reserve.consume(
+                conn, width=width, length=length, position=position, qty=qty,
+                terminal=terminal if terminal is not None else _this_terminal(), now=now)
     except sqlite3.Error as exc:
         log.warning("issue: エラー %s", exc)
         return TransactionResult(ok=False, message=f"データベース更新に失敗しました。({exc})")
 
-    return TransactionResult(ok=True, message=f"払い出しを登録しました(在庫数: {new_stock})。", new_stock=new_stock)
+    return TransactionResult(
+        ok=True, new_stock=new_stock,
+        message=f"払い出しを登録しました(在庫数: {new_stock})。"
+                + stock_reserve.consumed_note(consumed))
+
+
+def _this_terminal() -> str:
+    """この端末の名前(持出の記録に残す)。分からなければ空。"""
+    try:
+        from . import warehouse_service
+        return warehouse_service.this_terminal()
+    except Exception:                       # noqa: BLE001 - 名前が無くても払い出しは止めない
+        return ""
