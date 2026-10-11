@@ -36,27 +36,40 @@ WINDOWS = os.name == "nt"
 
 
 def children(pid: int) -> list[int]:
-    """pid の子孫(孫も)。"""
+    """pid の子孫(孫も)。
+
+    **親より先に生まれたプロセスは子として数えない。** Windows は終わったプロセスの番号を
+    使い回し、子の側の「親の番号」は書き換えない。親が先に終わった無関係なプロセス
+    (CI では exe を組み立てたときの vctip)の「親の番号」が、たまたまこの exe の子孫の
+    番号と同じになると、子孫に見えてしまう(「止めても残ったプロセスがあります: [vctip]」で落ちた)。
+    """
     if WINDOWS:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }"],
+             "Get-CimInstance Win32_Process | ForEach-Object"
+             " { \"$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.Ticks)\" }"],
             capture_output=True, text=True).stdout
-        pairs = [tuple(map(int, line.split())) for line in out.splitlines() if line.strip()]
+        rows = []
+        for line in out.splitlines():
+            cols = line.split()
+            if len(cols) >= 2 and all(c.isdigit() for c in cols[:2]):
+                born = int(cols[2]) if len(cols) > 2 and cols[2].isdigit() else 0
+                rows.append((int(cols[0]), int(cols[1]), born))
     else:
-        pairs = []
+        rows = []
         for name in os.listdir("/proc"):
             if name.isdigit():
                 try:
-                    stat = Path(f"/proc/{name}/stat").read_text()
-                    pairs.append((int(name), int(stat.rsplit(")", 1)[1].split()[1])))
+                    fields = Path(f"/proc/{name}/stat").read_text().rsplit(")", 1)[1].split()
+                    rows.append((int(name), int(fields[1]), int(fields[19])))
                 except (OSError, ValueError, IndexError):
                     pass
+    born_at = {child: born for child, _, born in rows}
     found, frontier = [], [pid]
     while frontier:
         parent = frontier.pop()
-        for child, ppid in pairs:
-            if ppid == parent and child not in found:
+        for child, ppid, born in rows:
+            if ppid == parent and child not in found and born >= born_at.get(parent, 0):
                 found.append(child)
                 frontier.append(child)
     return found
