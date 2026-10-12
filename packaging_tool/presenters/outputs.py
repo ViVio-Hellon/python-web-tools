@@ -247,8 +247,16 @@ def build_orders(session: Any) -> list[dict[str, Any]]:
     `send_refusal()` で先に確かめてある。
     """
     if session.presenter.is_ex_order:
-        # **EX受注は中身を送らない。** 実データは別の職場から別途届き、
-        # そちらが優先される。こちらから半端な値を送ると突き合わせで
+        # **パレットを選んだなら通常どおり送る**(現場の声:「EXモードでリストのパレットを
+        # 何を選んでも品名 EX になる。パレット選択なしで倉庫連携へ移ったときだけ品名 EX、
+        # パレットを選んだ場合は通常どおりデータを反映させる」)
+        if ex_pallet_chosen(session):
+            rows = _build_rows(session)
+            for row in rows:
+                row["notice"] = " ".join(filter(None, [EX_WITH_PALLET_NOTICE, row.get("notice", "")]))
+            return rows
+        # **EX受注でパレットを選んでいなければ中身を送らない。** 実データは別の職場から
+        # 別途届き、そちらが優先される。こちらから半端な値を送ると突き合わせで
         # 混乱するので、EXだと分かる最小限だけにする。
         #
         # **組み立てたあとに上から潰す**(VBA の `g_SendRows` 上書きと
@@ -256,6 +264,17 @@ def build_orders(session: Any) -> list[dict[str, Any]]:
         # **それぞれの組み立てには一切手を入れない**
         return [_as_ex_order(row) for row in _ex_source_rows(session)]
     return _build_rows(session)
+
+
+# EXモードでパレットを選んで送るときに下書きへ添える一言
+EX_WITH_PALLET_NOTICE = ("EXオーダーですが、パレットを選んだので品名・発注コード・発注数を通常どおり送ります"
+                         "(EXの合図だけを送るときは、パレットを選ばずに倉庫送信してください)。")
+
+
+def ex_pallet_chosen(session: Any) -> bool:
+    """EXモードで、パレットを一覧から選んでいるか(発注コードのある行)。1P0113 はパレットを使わない。"""
+    return (not session.presenter.mode_1p0113 and session.palette.is_set
+            and session.pallet_row is not None and bool((session.pallet_row.code or "").strip()))
 
 
 def _build_rows(session: Any) -> list[dict[str, Any]]:

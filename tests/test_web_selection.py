@@ -648,6 +648,23 @@ class ModeFromLotTests(SelectionWebTestCase):
         self.assertTrue(row["haba"])
         self.assertTrue(row["take"])
 
+    def test_EX受注でもパレットを選んだら通常どおり送る(self) -> None:
+        """現場の声:「EXモードでパレットを何を選んでも品名 EX になる。パレット選択なしで倉庫連携へ
+        移ったときだけ品名 EX、パレットを選んだ場合は通常どおりデータを反映させる」。"""
+        from packaging_tool.presenters import outputs
+
+        insert_pallet(self.conn, width=1100, length=2000, code="P9", unit="枚", symbol="EX2方向")
+        self.search(EX_輸出区分="EX")
+        self.post("/api/selection/pallet/pick", {"width": 1100, "length": 2000, "symbol": "EX2方向"})
+        rows = outputs.build_orders(self.session())
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertNotEqual(row["hinmei"], outputs.EX_HINMEI)
+        self.assertIn("1100x2000", row["hinmei"])
+        self.assertEqual((row["hatchu_code"], row["tani"]), ("P9", "枚"))
+        self.assertNotIn("is_ex_order", row)
+        self.assertIn("パレットを選んだので", row["notice"])
+
     def test_1P0113なら裸梱包の帯が出る(self) -> None:
         state = self.search(包装仕様NO="1P0113")
         self.assertEqual(state["banner"]["kind"], "1p0113")
