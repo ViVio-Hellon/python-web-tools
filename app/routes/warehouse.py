@@ -327,7 +327,11 @@ def send():
                                       "field": field, "row": index}}), 400
         orders.append(values)
 
-    if body.get("from_draft"):
+    # ロット検索なしの下書き(`outputs.no_lot_draft`)は LotNo を打ち込むので、作業中のロットと照らさない。
+    # **どちらの下書きかは、サーバが預かっている下書きで決める**(画面から届いた印は信じない)
+    held = work_context.get_context().peek_pending_orders()
+    no_lot = bool(body.get("from_draft")) and bool(held) and bool(held[0].get("no_lot"))
+    if body.get("from_draft") and not no_lot:
         working = (work_context.get_context().lot_no or "").strip()
         if not working:
             return jsonify({"error": {

@@ -193,9 +193,18 @@ def send_refusal(session: Any) -> Optional[Refusal]:
     別途届き、そちらが優先される。こちらから送るのは「EXである」と
     分かる最小限の合図だけなので、パレットも発注コードも要らない
     (`build_orders` が中身を EX 用に差し替える)。
+
+    **ロット検索なしでも、パレットを一覧から選んでいれば送れる**(`no_lot_draft`)。
+    品名・発注コード・単位だけを入れた下書きにし、残りの必須欄は倉庫連携で打つ。
     """
     if session.presenter.lot_result is None:
-        return Refusal("先にロット検索でロットを確定してください。", NEEDS_LOT)
+        if no_lot_draft(session):
+            return None
+        if session.presenter.mode_1p0113:
+            # 角材・松板はロットの梱包数で数を決める。パレットを選んでも送れないので、パレットの話はしない
+            return Refusal("先にロット検索でロットを確定してください。", NEEDS_LOT)
+        return Refusal("先にロット検索でロットを確定してください"
+                       "(ロット検索なしで送るときは、パレットを一覧から選んでください)。", NEEDS_LOT)
 
     if session.presenter.is_ex_order:
         return None
@@ -246,6 +255,8 @@ def build_orders(session: Any) -> list[dict[str, Any]]:
     通常は1行、1P0113 は角材と松板の2行。前提が満たされていることは
     `send_refusal()` で先に確かめてある。
     """
+    if session.presenter.lot_result is None:
+        return [_order_no_lot(session)]
     if session.presenter.is_ex_order:
         # **パレットを選んだなら通常どおり送る**(現場の声:「EXモードでリストのパレットを
         # 何を選んでも品名 EX になる。パレット選択なしで倉庫連携へ移ったときだけ品名 EX、
@@ -264,6 +275,49 @@ def build_orders(session: Any) -> list[dict[str, Any]]:
         # **それぞれの組み立てには一切手を入れない**
         return [_as_ex_order(row) for row in _ex_source_rows(session)]
     return _build_rows(session)
+
+
+# ロット検索なしで送るときに下書きへ添える一言
+NO_LOT_NOTICE = ("ロット検索をしていないので、品名・発注コード・単位だけを入れました。"
+                 "LotNo・発注数などの必須の欄は打ち込んでください(この下書きはどの欄も打ち直せます)。")
+
+
+def no_lot_draft(session: Any) -> bool:
+    """ロット検索なしで、パレットを一覧から選んでいるか(発注コードのある行)。
+
+    現場の声:「LOT検索なしで資材選択しても資材連携できるようにしてほしい。パレット自体は
+    製品サイズを入力して検索しパレット決定はする。LOTデータなしでもここで資材連携に品名と
+    発注コードは展開できるはず。残りの必須欄は自分で埋める方式になる」
+    1P0113(角材・松板)はロットの梱包数から数を決めるので、ロットが要る。
+    """
+    return (session.presenter.lot_result is None and not session.presenter.mode_1p0113
+            and session.palette.is_set and session.pallet_row is not None
+            and bool((session.pallet_row.code or "").strip()))
+
+
+def _order_no_lot(session: Any) -> dict[str, Any]:
+    """ロット検索なしの下書き。品名・発注コード・単位だけ入れ、ロットから来る欄は空にする。
+
+    幅・丈は**ロットの板の寸法**の欄(`_common`)なので、製品サイズやパレットの寸法では埋めない。
+    `no_lot` は倉庫連携が「下書きでも打ち直せる」「作業中のロットと照らさない」と決める印
+    (サーバが預かっている下書きの方を見る。画面から届いた印は信じない)。
+    """
+    row = session.pallet_row
+    return {
+        "lot_no": "",
+        "hinmei": lot_service.build_hinmei(
+            row.industry, row.symbol, session.palette.width, session.palette.length),
+        "hatchu_code": row.code,
+        "tani": row.unit,
+        "hatchu_suu": "",
+        "zaisitu": "", "choshitu": "", "atu": "", "haba": "", "take": "",
+        "nounyusaki": "", "yoto_code": "", "juchu_no": "", "lot_orders": "",
+        # 在庫の確かめ(同じ幅×丈の在庫を引くか)はロットが無くても使える
+        "pallet_width": session.palette.width,
+        "pallet_length": session.palette.length,
+        "no_lot": True,
+        "notice": NO_LOT_NOTICE,
+    }
 
 
 # EXモードでパレットを選んで送るときに下書きへ添える一言

@@ -1056,7 +1056,8 @@ function showDraft() {
     node.value = order[key] === undefined || order[key] === null ? "" : String(order[key]);
   }
   applyExLock(order.is_ex_order);
-  applyDraftLock(true);
+  // ロット検索なしの下書きは、品名・発注コード・単位のほかを自分で打つ(どの欄も打ち直せる)
+  applyDraftLock(!order.no_lot);
   el.draftPos.textContent = `${draftAt + 1} / ${drafts.length}`;
   el.draftPrev.disabled = draftAt === 0;
   el.draftNext.disabled = draftAt === drafts.length - 1;
