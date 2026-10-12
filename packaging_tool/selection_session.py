@@ -112,6 +112,9 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
     # **発注コードと単位はここにしか無い** ── 幅と丈だけでは決まらず、
     # 同じ寸法でも記号違いで別のコードになる。倉庫送信と帳票が見る
     pallet_row: Optional[svc.PalletSizeRow] = None
+    # EXのとき、台(`pallet_row`)と一緒に発注する「枚」の行。1P0113 の角材と松板のように
+    # 2行まとめて倉庫へ送る(現場の声:「台と枚を同時に発注できるようにして下さい」)
+    ex_sheet_row: Optional[svc.PalletSizeRow] = None
 
     # --- ボード (VBA `cboBoardType` / `lstSelectedBoards*`) ---
     board_type: str = ""
@@ -283,6 +286,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self.direct_width = self.direct_length = ""
         self.live_product_width = self.live_product_length = ""
         self.pallet_row = None
+        self.ex_sheet_row = None
         self.invalidate_placement()
         self._sync_ribbon()
 
@@ -368,6 +372,48 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                 REFUSE_NOT_LISTED)
         self.pallet_row = row
         return BoardOpResult(True, "")
+
+    # --- EX: 台と枚を一緒に発注する ------------------------------------
+    def pair_ex_sheet(self, width: int, length: int, symbol: str,
+                      row_id: Optional[int] = None) -> Optional[BoardOpResult]:
+        """EXで台を決めてあるときに「枚」の行を決めた → 台と一緒に発注する枚にする。
+
+        **台(パレット)は変えない。** ボードを載せる寸法は台のもの。
+        同じ枚の行をもう一度決めると外す。当てはまらなければ None(ふつうに選ぶ)。
+        """
+        if not (self.presenter.is_ex_order and _is_unit(self.pallet_row, svc.UNIT_DAI)):
+            return None
+        row = svc.find_pallet_row(self.presenter.conn, width, length, symbol,
+                                  row_id=row_id, last_hosozai=self.presenter.last_hosozai,
+                                  is_ex_order=True)
+        if not _is_unit(row, svc.UNIT_MAI):
+            return None
+        if self.ex_sheet_row is not None and self.ex_sheet_row.id == row.id:
+            self.ex_sheet_row = None
+            self.presenter.user_log.log(f"[EX] 一緒に発注する枚を外しました: {row.width} x {row.length}")
+            return BoardOpResult(True, "台と一緒に発注する「枚」を外しました(台だけを送ります)。")
+        self.ex_sheet_row = row
+        self.presenter.user_log.log(
+            f"[EX] 台と一緒に発注する枚: {row.width} x {row.length} {row.symbol} コード {row.code}",
+            emphasis=True)
+        return BoardOpResult(True, f"台と一緒に「枚」{row.width}×{row.length}(コード {row.code or '---'})"
+                                   "も発注します。倉庫連携へ2行まとめて渡します。")
+
+    def keep_ex_sheet(self, before_row: Optional[svc.PalletSizeRow],
+                      before_sheet: Optional[svc.PalletSizeRow]) -> None:
+        """パレットを決め直したあと、一緒に発注する枚を決め直す。
+
+        台を選び直しても、決めてあった枚はそのまま(同じ単位の行だけを入れ替える)。
+        先に枚を決めてから台を決めたら、その枚を一緒に発注する枚にする。
+        枚だけを決めているとき・EXでないときは持たない。
+        """
+        if not (self.presenter.is_ex_order and _is_unit(self.pallet_row, svc.UNIT_DAI)):
+            self.ex_sheet_row = None
+            return
+        if _is_unit(before_row, svc.UNIT_MAI):
+            self.ex_sheet_row = before_row
+        else:
+            self.ex_sheet_row = before_sheet
 
     def decide_stack_for_row(self, width: int, length: int, symbol: str,
                              product_width: int, product_length: int) -> bool:
@@ -1075,6 +1121,10 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             "is_ex_order": self.presenter.is_ex_order,
             "is_1p1185_mode": self.presenter.mode_1p1185.is_1p1185,
         }
+
+
+def _is_unit(row: Optional[svc.PalletSizeRow], unit: str) -> bool:
+    return row is not None and (row.unit or "").strip() == unit
 
 
 # ------------------------------------------------------------------

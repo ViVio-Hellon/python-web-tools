@@ -775,7 +775,7 @@ async function send(confirmDuplicate = false) {
   // 届くと、倉庫は半分だけ用意してしまう
   if (drafts.length > 1) values.rows = drafts.map((d) => ({ ...d }));
   // 一緒に送るオーダー(チェックしたもの)。サーバが確かめて発注の行に入れる
-  if (drafts.length === 1 && drafts[0].orders) values.orders = pickedOrders();
+  if (drafts.length && drafts[0].orders) values.orders = pickedOrders();
   // 「在庫分を引く」で引いた台数。サーバが送る直前の在庫で確かめ直す
   if (stockUsed) values.use_stock = stockUsed;
   // 倉庫へのひとこと。**発注の欄ではない**ので、下書きでも打てる
@@ -991,14 +991,17 @@ function undoStock() {
    納入先のオーダー(ロット検索で選んだもの)は外せない。
    ================================================================ */
 function pickedOrders() {
-  return [...document.querySelectorAll("#orderPickList input[data-order]")]
-    .filter((box) => box.checked).map((box) => box.dataset.order);
+  // 画面の欄ではなく下書きの値から読む(2行目を出しているあいだは欄が隠れている)
+  const block = drafts.length ? drafts[0].orders : null;
+  if (!block) return [];
+  return block.items.filter((item) => item.checked || item.picked).map((item) => item.order_no);
 }
 
 function showOrders() {
   const box = document.getElementById("orderPick");
   if (!box) return;
-  const block = drafts.length === 1 ? drafts[0].orders : null;
+  // オーダーの選び方は1行目(パレット。EXの台と枚なら台)に付いてくる。1行目を出しているときだけ見せる
+  const block = drafts.length && draftAt === 0 ? drafts[0].orders : null;
   box.hidden = !block;
   if (!block) return;
   document.getElementById("orderPickLead").textContent = block.lead;

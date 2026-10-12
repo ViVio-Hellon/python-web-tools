@@ -50,6 +50,7 @@ from .logging_utils import get_logger
 #     ここ               寸法の確定と、ボードの一覧・手動追加
 # ------------------------------------------------------------------
 from .pallet_common import (  # noqa: F401
+    UNIT_DAI, UNIT_MAI,
     ApplyResult, AutoSelectPalletResult, BoardRow, KIND_LEN2, KIND_WIDTH2,
     MAX_NEAR_MISS_LOGS, Palette, PalletSizeRow, ProductSize, SelectedBoard,
     SelectedBoards, UNITS_DEFAULT, UNITS_WITH_HOSOZAI, _is_numeric,

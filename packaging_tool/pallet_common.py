@@ -186,8 +186,10 @@ def is_suppressed_matrix(
 # **書き写していたせいで、製品サイズを入れた後の一覧だけこの規則が
 # 抜け落ちていた** ── サイズで当たる行が単位に関わらず全部出ていた
 # (現場の声)。関数に切り出して、次に増えても抜けないようにする
-UNITS_DEFAULT = ("台",)
-UNITS_WITH_HOSOZAI = ("台", "枚")
+UNIT_DAI = "台"
+UNIT_MAI = "枚"
+UNITS_DEFAULT = (UNIT_DAI,)
+UNITS_WITH_HOSOZAI = (UNIT_DAI, UNIT_MAI)
 
 
 def allowed_units(last_hosozai: str, ex: bool = False) -> tuple[str, ...]:

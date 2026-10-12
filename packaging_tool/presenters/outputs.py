@@ -336,9 +336,51 @@ def _build_rows(session: Any) -> list[dict[str, Any]]:
         return _orders_1p0113(session)
     order = _order_normal(session)
     notice = draft_notice(session, order)
+    sheet = ex_sheet_row(session)
+    if sheet is not None:
+        notice = " ".join(filter(None, [EX_SHEET_NOTICE, notice]))
     if notice:
         order["notice"] = notice
-    return [order]
+    if sheet is None:
+        return [order]
+    return [order, _order_sheet(order, sheet)]
+
+
+# EXで台と枚を一緒に送るときに下書きへ添える一言
+EX_SHEET_NOTICE = ("台と枚を2行まとめて送ります(1行目が台、2行目が枚)。"
+                   "枚の発注数は入れていないので、2行目に移って入れてください。")
+
+
+def ex_sheet_row(session: Any) -> Any:
+    """EXで台と一緒に発注する「枚」の行(`SelectionSession.pair_ex_sheet`)。無ければ None。
+
+    台を一覧から選んでいて(発注コードのある行)、枚にも発注コードがあるときだけ。
+    """
+    sheet = getattr(session, "ex_sheet_row", None)
+    row = session.pallet_row
+    if (not session.presenter.is_ex_order or session.presenter.mode_1p0113
+            or sheet is None or not (sheet.code or "").strip()
+            or row is None or (row.unit or "").strip() != "台" or not (row.code or "").strip()):
+        return None
+    return sheet
+
+
+def _order_sheet(order: dict[str, Any], sheet: Any) -> dict[str, Any]:
+    """台と一緒に送る「枚」の行。ロット・納入先・オーダーの欄は台の行と同じ。
+
+    品名・発注コード・単位は枚の行から。**発注数は入れない** ── 台の数(梱包数)と
+    同じとは限らないので、決めつけずに倉庫連携で入れてもらう。
+    """
+    return {
+        **order,
+        "hinmei": lot_service.build_hinmei(sheet.industry, sheet.symbol, sheet.width, sheet.length),
+        "hatchu_code": sheet.code,
+        "tani": sheet.unit,
+        "hatchu_suu": "",
+        "pallet_width": sheet.width,
+        "pallet_length": sheet.length,
+        "notice": "",
+    }
 
 
 # ------------------------------------------------------------------

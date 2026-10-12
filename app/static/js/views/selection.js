@@ -175,6 +175,11 @@ function scheduleLiveList() {
   }, 300);
 }
 
+/** 一覧の行の鍵。同じ寸法・記号でも発注コードの違う行があるので、管理番号まで入れる。 */
+function rowKey(item) {
+  return `${item.width}x${item.length}:${item.symbol}:${item.id || ""}`;
+}
+
 function row(item) {
   const tr = document.createElement("tr");
   if (item.is_ex) tr.classList.add("ex");
@@ -187,7 +192,7 @@ function row(item) {
   // **行そのもの**(PalletMaster の管理番号)。同じ寸法・記号でも発注コードの違う行が
   // あるので、決めるときはこの番号で伝える(寸法だけだと別の行のコードで送っていた)
   tr.dataset.id = item.id || "";
-  tr.dataset.key = `${item.width}x${item.length}:${item.symbol}:${item.id || ""}`;
+  tr.dataset.key = rowKey(item);
   // マウスを乗せたときだけ、そのパレットの単位・コードを見せる
   // (VBA `DynamicTip` に相当)。押さなくても分かるようにする
   tr.title = item.note;
@@ -196,6 +201,8 @@ function row(item) {
   // ここでの `on` はまだ最終確定のサーバ側 `picked` の初期反映で、
   // 選び直した分は `applySelection()` が上書きする
   if (item.picked) tr.classList.add("on");
+  // EXで台と一緒に発注する「枚」の行
+  if (item.paired) tr.classList.add("pair");
 
   item.values.forEach((value, index) => {
     const td = document.createElement("td");
@@ -221,13 +228,18 @@ function render(next) {
   // どの行が最終確定しているかはサーバが `picked` で返す。まだ
   // クリックで選んでいる途中(`pickedPalletRow`)なら、そちらを優先する
   el.palletRows.replaceChildren(...next.rows.map(row));
+  // EXで「枚」の行を決めたら、それは台と一緒に発注する枚(`ex_pair_note`)。選んでいる行は台のまま
+  if (pickedPalletRow && next.rows.some((r) => r.paired && rowKey(r) === pickedPalletRow.key)) {
+    pickedPalletRow = null;
+  }
   if (!pickedPalletRow) {
     const pickedItem = next.rows.find((r) => r.picked);
     if (pickedItem) {
+      // 鍵は行の `data-key` と同じ形(管理番号まで)。違う形だと一致せず、選んだ行の光りが消えていた
       pickedPalletRow = {
         width: String(pickedItem.width), length: String(pickedItem.length),
-        symbol: pickedItem.symbol || "",
-        key: `${pickedItem.width}x${pickedItem.length}:${pickedItem.symbol}`,
+        symbol: pickedItem.symbol || "", id: String(pickedItem.id || ""),
+        key: rowKey(pickedItem),
       };
     }
   }
@@ -235,6 +247,12 @@ function render(next) {
   const pickedRow = picked(el.palletRows);
   if (pickedRow) pickedRow.scrollIntoView({ block: "nearest" });
   el.listNote.textContent = next.list_note;
+  if (el.exPair) {
+    el.exPair.hidden = !next.ex_pair_note;
+    el.exPair.textContent = next.ex_pair_note || "";
+    el.exPair.classList.toggle("status--ok", Boolean(next.ex_pair_set));
+    el.exPair.classList.toggle("status--ng", !next.ex_pair_set);
+  }
 
   // 入力欄は**サーバが変えたときだけ**書き換える。
   // どの操作でも画面ぜんぶが返ってくる設計なので、無条件に代入すると
@@ -694,7 +712,7 @@ export function start(initial) {
       // 描き直せなくても次の操作で最新になる
     }
   });
-  for (const id of ["lotCaption", "banner", "listNote", "palletRows", "rowNote",
+  for (const id of ["lotCaption", "banner", "listNote", "palletRows", "rowNote", "exPair",
                     "palWidth", "palLength", "prodWidth", "prodLength",
                     "sizeStatus", "decideWhy", "productFrom", "exOnlyWhy",
                     "showOnStock",

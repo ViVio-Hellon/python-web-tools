@@ -203,14 +203,16 @@ def _apply_orders(drafts: list[dict]) -> None:
     if not choice:
         return
     delivery = outputs.delivery_of(choice)
+    lot_wide = _lot_wide(drafts)
     for draft in drafts:
         if delivery is not None:
             draft["nounyusaki"] = delivery
         # 2行(1P0113 の角材・松板)はロット全体の数なので、全オーダーを含める
         every = [o["order_no"] for o in choice["orders"]]
-        fields = outputs.order_fields(choice, every if len(drafts) > 1 else None)
+        fields = outputs.order_fields(choice, every if lot_wide else None)
         draft["juchu_no"], draft["lot_orders"] = fields["juchu_no"], fields["lot_orders"]
-    if len(drafts) == 1 and drafts[0].get("pallet_width"):
+    # 発注数を梱包数で決め直すのは1行目(パレット・EXなら台)だけ。EXの枚は人が入れる
+    if not lot_wide and drafts[0].get("pallet_width"):
         included = outputs.order_fields(choice)["included"]
         qty = outputs.packages_for(choice, included)
         if qty is not None:
@@ -219,6 +221,15 @@ def _apply_orders(drafts: list[dict]) -> None:
                                        drafts[0].get("lot_no", ""))
         if block:
             drafts[0]["orders"] = block
+
+
+def _lot_wide(drafts: list[dict]) -> bool:
+    """ロット全体の数で送る2行(1P0113 の角材・松板)か。
+
+    EXの台と枚(`outputs.ex_sheet_row`)も2行だが、どちらもパレット一覧の行(寸法を持つ)で、
+    オーダーの選び方は1行のときと同じ(含めるオーダーは画面のチェック)。
+    """
+    return len(drafts) > 1 and not all(d.get("pallet_width") for d in drafts)
 
 
 def _cut_unread(mode: str) -> int:
@@ -446,7 +457,8 @@ def _set_orders(orders: list[dict], picked_list):
         return None
     every = [o["order_no"] for o in choice["orders"]]
     included = None
-    if len(orders) > 1:
+    # どちらの2行かは、サーバが預かっている下書きで決める(画面から届いた値は寸法を持たない)
+    if len(orders) > 1 and _lot_wide(work_context.get_context().peek_pending_orders() or orders):
         included = every
     elif isinstance(picked_list, list):
         stray = [str(o) for o in picked_list if str(o) not in every]

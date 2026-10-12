@@ -120,6 +120,15 @@ def pick_pallet():
     if width is None or length is None:
         return jsonify(_error("bad_size", "一覧から行を選んでください。")), 400
 
+    # **EXで台を決めてあるときに「枚」の行を決めた** → 台と一緒に発注する枚にする。
+    # 台(ボードを載せる寸法)は変えない(`SelectionSession.pair_ex_sheet`)
+    paired = session.pair_ex_sheet(width, length, str(body.get("symbol", "")),
+                                   row_id=_parse_int(body.get("id")))
+    if paired is not None:
+        _prepare_warehouse_draft(session)
+        return _state(session, message=paired.message)
+
+    before_row, before_sheet = session.pallet_row, session.ex_sheet_row
     applied = session.apply_pallet(str(width), str(length))
     if not applied.ok:
         return jsonify(_error("bad_size", applied.message)), 400
@@ -127,6 +136,7 @@ def pick_pallet():
                                      row_id=_parse_int(body.get("id")))
     if not picked.ok:
         return _apply(session, picked)
+    session.keep_ex_sheet(before_row, before_sheet)
 
     # 2山積なら、この行がどう当たったか(幅2山 / 丈2山・回転)で2山の向きを
     # 決める。画面に「パレット検索」は無く、一覧から選ぶのが検索の代わり
@@ -286,6 +296,7 @@ def search_pallet():
         return _state(session, message=result.message, found=False), 422
 
     session.stack_dir = result.stack_dir
+    before_row, before_sheet = session.pallet_row, session.ex_sheet_row
     session.apply_pallet(str(result.width), str(result.length))
     # 決まった行を**サーバにも覚えさせる**(tkinter版 `_select_pallet_row`)。
     # 発注コードと単位は一覧の行にしか無いので、覚えないと画面上は行が
@@ -296,6 +307,7 @@ def search_pallet():
     if not picked.ok:
         log.warning("自動選定した %s×%s %s を一覧から引けませんでした: %s",
                     result.width, result.length, result.symbol, picked.message)
+    session.keep_ex_sheet(before_row, before_sheet)
 
     # **ここまで来たら製品サイズも確定させる。** 「載るパレットを探して
     # 見つかった」のだから、載ることはもう確かめてある。もう一度
