@@ -20,6 +20,7 @@ SQLiteへ取り込む(設定画面、または `scripts/import_source.py --lot-o
 """
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -617,11 +618,19 @@ def pack_unit_of(odr: OdrInfo, order_no: str) -> tuple[str, float]:
     return "", 0.0
 
 
-def search_lot(conn: sqlite3.Connection, lot_no: str, box_pick: str = "") -> LotSearchResult:
+def search_lot(conn: sqlite3.Connection, lot_no: str, box_pick: str = "",
+               order_pick: str = "") -> LotSearchResult:
     """VBA `SearchAndDisplay` の移植。ロット番号1本で3ブロックまとめて引く。
 
     VBA版は7桁入力された時点で自動検索していた(`Page1_OnTxtLotNoChanged`)。
     桁数チェックは呼び出し側(UI)の責務とし、ここでは空文字だけ弾く。
+
+    `order_pick` … ロット検索で選んだオーダー(`work_context.picked_order`)。
+    このロットの引当にあれば、受注情報(EX・包装仕様NO・取引先など)を**そのオーダーのもの**にする。
+    資材選択の特殊モード(EX・1P0113・プロテック・1P1185・包装材)はここから決まるので、
+    選んだのに先頭のオーダーで決まると、特殊オーダーを選んでも資材選択にフラグが立たない
+    (VBA は引当行のクリックで `Page1_OnLstHikiClick` がモードを決め直していた)。
+    梱包単位・納入先の辞書は**ロット全体のまま**(梱包数・納入先の混在はロット全体で数える)。
     """
     lot_no = (lot_no or "").strip()
     if not lot_no:
@@ -639,6 +648,13 @@ def search_lot(conn: sqlite3.Connection, lot_no: str, box_pick: str = "") -> Lot
         if row.order_no and row.order_no not in order_nos:
             order_nos.append(row.order_no)
     odr = _load_odr(conn, order_nos)
+    order_pick = (order_pick or "").strip()
+    if order_pick and order_pick in order_nos and order_pick != odr.order_no:
+        chosen = _load_odr(conn, [order_pick])
+        if chosen.order_no:
+            odr = dataclasses.replace(
+                chosen, pack_unit_weight=odr.pack_unit_weight,
+                pack_unit_count=odr.pack_unit_count, delivery_names=odr.delivery_names)
     _apply_spec_override(odr, lot)
 
     return LotSearchResult(found=True, message=f"ロット {lot_no}", lot=lot, hiki=hiki, odr=odr)

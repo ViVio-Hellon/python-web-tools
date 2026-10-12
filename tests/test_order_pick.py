@@ -23,6 +23,11 @@ from tests.test_web_selection import SelectionWebTestCase, insert_pallet
 LOT = "1234567"
 
 
+def delivery_shown(body: dict) -> str:
+    """受注情報の欄に出ている納入先名称。"""
+    return next(f["value"] for f in body["odr_fields"] if f["label"] == "納入先名称")
+
+
 class OrderPickTests(SelectionWebTestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -117,7 +122,7 @@ class OrderPickTests(SelectionWebTestCase):
         self.click("00000002")
         body = self.open_lot()
         self.assertEqual([h["order_no"] for h in body["hiki"] if h["selected"]], ["M200"])
-        self.assertEqual(body["order_no"], "M200")
+        self.assertEqual(delivery_shown(body), "M社")
 
     def test_別のロットに移ると選んだオーダーは外れる(self) -> None:
         self.open_lot()
@@ -154,6 +159,83 @@ class OrderPickTests(SelectionWebTestCase):
         self.assertEqual(res.status_code, 200, res.get_json())
         row = self.conn.execute("SELECT 納入先, 受注番号 FROM 資材パレット注文管理").fetchone()
         self.assertEqual(tuple(row), ("A社", "A100・M200"))
+
+
+class PickedOrderModeTests(OrderPickTests):
+    """1ロットに複数オーダーがあるとき、選んだオーダーで資材選択の特殊モードが決まる
+
+    現場の声:「1LOT1オーダーの場合は特殊モードは発火するが、1LOT複数オーダーの場合に
+    オーダー選択(特殊オーダー)しても、資材選択に特殊モードのフラグが立っていない状態で開く」
+    (VBA `Page1_OnLstHikiClick` は引当行のクリックでモードを決め直していた)
+    """
+
+    # 親の試験をもう一度回さない
+    for _name in [n for n in dir(OrderPickTests) if n.startswith("test_")]:
+        locals()[_name] = None
+    del _name
+
+    def setUp(self) -> None:
+        super().setUp()
+        # 受注番号のいちばん小さい A100 は普通のオーダー。M200 が EX、Z300 が 1P0113
+        self.conn.execute("UPDATE 仕掛受注 SET EX_輸出区分 = 'EX' WHERE 受注番号 = 'M200'")
+        self.conn.execute("UPDATE 仕掛受注 SET 包装仕様NO = '1P0113' WHERE 受注番号 = 'Z300'")
+        self.conn.commit()
+
+    def presenter(self):
+        from packaging_tool import selection_session
+        return selection_session.get_session(self.conn).presenter
+
+    def test_開いただけなら先頭のオーダーのモード(self) -> None:
+        self.open_lot()
+        self.assertFalse(self.presenter().is_ex_order)
+        self.assertFalse(self.presenter().mode_1p0113)
+
+    def test_EXのオーダーを選ぶと資材選択がEXになる(self) -> None:
+        self.open_lot()
+        body = self.click("00000002")                   # M200(EX)
+        self.assertTrue(body["is_ex"])
+        self.assertTrue(self.presenter().is_ex_order)
+        from packaging_tool import selection_session
+        self.assertTrue(selection_session.get_session(self.conn).ex_only, "EXオンリーも自動で入る")
+        self.assertTrue(work_context.get_context().is_ex)
+        self.assertIn("ribbon", body, "帯の印も直す")
+
+    def test_1P0113のオーダーを選ぶと資材選択が1P0113になる(self) -> None:
+        self.open_lot()
+        self.click("00000001")                          # Z300(1P0113)
+        self.assertTrue(self.presenter().mode_1p0113)
+        self.assertEqual(work_context.get_context().packaging_spec, "1P0113")
+
+    def test_普通のオーダーを選び直すと特殊モードは外れる(self) -> None:
+        self.open_lot()
+        self.click("00000002")                          # M200(EX)
+        self.click("00000003")                          # A100(普通)
+        self.assertFalse(self.presenter().is_ex_order)
+        self.assertFalse(self.presenter().mode_1p0113)
+
+    def test_開き直しても選んだオーダーのモードのまま(self) -> None:
+        self.open_lot()
+        self.click("00000002")                          # M200(EX)
+        body = self.open_lot()
+        self.assertTrue(body["is_ex"])
+        self.assertEqual(delivery_shown(body), "M社")
+        self.assertTrue(self.presenter().is_ex_order)
+
+    def test_見るだけの窓で押してもモードは変えない(self) -> None:
+        self.open_lot()
+        self.click("00000002", pick=False)
+        self.assertFalse(self.presenter().is_ex_order)
+
+    def test_梱包数と納入先の混在はロット全体のまま(self) -> None:
+        result = lot_service.search_lot(self.conn, LOT, order_pick="M200")
+        self.assertEqual(result.odr.order_no, "M200")
+        self.assertTrue(result.odr.is_ex)
+        self.assertEqual(lot_service.calc_total_packages(result), 3)
+        self.assertEqual(len(lot_service.hiki_delivery_names(result)), 3)
+
+    def test_このロットに無いオーダーは使わない(self) -> None:
+        result = lot_service.search_lot(self.conn, LOT, order_pick="X999")
+        self.assertEqual(result.odr.order_no, "A100")
 
 
 class OrderSummaryTests(unittest.TestCase):

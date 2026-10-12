@@ -231,7 +231,11 @@ function applyOdrSwitch(body, hikiNo) {
   }
   // 図面は受注番号ではなく包装仕様NOに紐づく。切り替わったなら見に行き直す
   specStart(body.packaging_spec || "");
-  if (body.picked) toast(`オーダー ${body.order_no} で発注します(倉庫連携の納入先になります)`, "ok");
+  if (body.picked) {
+    toast(`オーダー ${body.order_no} で発注します(倉庫連携の納入先になります)`, "ok");
+    // 選んだオーダーで資材選択の特殊モード(EX・1P0113 など)を決め直した。帯の印を直す
+    if (onReload) onReload(body);
+  }
 }
 
 /*

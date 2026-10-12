@@ -236,8 +236,12 @@ def _select(conn, lot_no: str) -> dict:
     `SelectionPresenter` に入れていたのと同じ役割)。
     """
     lot_no = lot_presenter.normalize(lot_no)
-    result = lot_service.search_lot(conn, lot_no, _box_pick(lot_no, remember=True))
     context = work_context.get_context()
+    # 開き直したロットで前に選んだオーダーがあれば、受注情報も資材選択の特殊モードも
+    # **そのオーダーで**決める(別のロットなら選んだオーダーは外れる)
+    picked = context.picked_order if context.lot_no == lot_no else ""
+    result = lot_service.search_lot(conn, lot_no, _box_pick(lot_no, remember=True),
+                                    order_pick=picked)
     context.apply_lot(result)
 
     # 資材選択の状態機械にも通す(VBA `SearchAndDisplay` 末尾)。
@@ -267,29 +271,7 @@ def _select(conn, lot_no: str) -> dict:
     # 取得は別スレッドなので、この応答は待たない
     if view.packaging_spec and spec_sheet.is_valid_no(view.packaging_spec):
         spec_sheet.get_fetcher().prefetch(view.packaging_spec)
-    body = lot_presenter.to_dict(view)
-    if result.found:
-        _show_picked_order(conn, body, result)
-    return body
-
-
-def _show_picked_order(conn, body: dict, result) -> None:
-    """開き直したロットで、前に選んだオーダーがあれば、その行を選択中にし受注情報もそれにする。
-
-    選んだオーダーは倉庫連携の納入先になる。開き直したときに先頭のオーダーが選ばれて見えると、
-    どのオーダーで発注するのかが画面と食い違う。
-    """
-    picked = work_context.get_context().picked_order
-    row = next((r for r in result.hiki if r.order_no == picked), None)
-    if not picked or row is None or picked == result.odr.order_no:
-        return
-    found = lot_service.load_odr_for_hiki_row(conn, result.lot.lot_no, row.hiki_no)
-    if found is None:
-        return
-    odr, _hiki, lot = found
-    body.update(lot_presenter.build_odr_switch(odr, lot))
-    for item in body.get("hiki", []):
-        item["selected"] = item.get("order_no") == picked
+    return lot_presenter.to_dict(view)
 
 
 @bp.get("/api/lot/<lot_no>")
@@ -331,6 +313,24 @@ def peek(lot_no: str):
     return jsonify(lot_presenter.to_dict(view))
 
 
+def _apply_picked_order(conn, lot_no: str, order_no: str) -> None:
+    """選んだオーダーで、資材選択の特殊モード(EX・1P0113・プロテック・1P1185・包装材)を決め直す。
+
+    VBA `Page1_OnLstHikiClick` は引当行のクリックでモードを決め直していた。以前の Python 版は
+    受注情報の表示だけを差し替えていたので、1ロットに複数オーダーがあって特殊オーダーを
+    選んでも、資材選択は先頭のオーダー(受注番号のいちばん小さいもの)のモードのまま開いた。
+    同じロットなので、決めたパレットや製品サイズは消さない(`apply_lot` は別のロットのときだけ捨てる)。
+    """
+    result = lot_service.search_lot(conn, lot_no, _box_pick(lot_no, remember=False),
+                                    order_pick=order_no)
+    if not result.found:
+        return
+    context = work_context.get_context()
+    context.apply_lot(result)
+    selection_session.get_session(conn).apply_lot(
+        result, product_width=context.product_width, product_length=context.product_length)
+
+
 @bp.get("/api/lot/<lot_no>/hiki/<hiki_no>")
 def odr_for_hiki_row(lot_no: str, hiki_no: str):
     """引当情報の行をクリックしたら、受注情報をその行のものに差し替える
@@ -366,10 +366,14 @@ def odr_for_hiki_row(lot_no: str, hiki_no: str):
     odr, hiki, lot = found
     # **ロット検索の画面で押したときだけ**、選んだオーダーとして覚える(倉庫連携の納入先と、
     # 発注に含めるオーダーの既定になる)。発注一覧の「Lotを開く」(見るだけ)では覚えない
+    context = work_context.get_context()
     picked = (request.args.get("pick") == "1" and current_mode() == modes.FIELD
-              and work_context.get_context().pick_order(lot_no, odr.order_no))
+              and context.pick_order(lot_no, odr.order_no))
     body = lot_presenter.build_odr_switch(odr, lot)
     body["picked"] = bool(picked)
+    if picked:
+        _apply_picked_order(conn, lot_no, odr.order_no)
+        body["ribbon"] = context.ribbon()
     # 引当一覧のどの行が選ばれているかも塗り直す(サーバが決める。
     # 画面が別に覚えると、別のロットを引いたときに前の選択が残る)
     body["hiki"] = [
