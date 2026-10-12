@@ -260,6 +260,9 @@ def _order_values(order: dict, *, now: str, sender: str) -> tuple[dict, str]:
         # コメントを結ぶ鍵(`order_comments`)。管理番号は手元でも共有でも
         # 変わりうるので、作るときに世界で1つの番号を振る
         "発注キー": uuid.uuid4().hex,
+        # この発注に含めたオーダーと、そのロットの全オーダー(倉庫の一覧に出す)
+        "受注番号": db.sanitize_for_db(order.get("juchu_no") or ""),
+        "ロットの受注": db.sanitize_for_db(order.get("lot_orders") or ""),
     }, ""
 
 

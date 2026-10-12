@@ -88,6 +88,11 @@ class WorkContext:
     #   {"width": int, "length": int}
     stock_size: dict[str, int] = field(default_factory=dict)
 
+    # ロット検索で引当の行を押して選んだオーダー(受注番号)。倉庫連携の**納入先**と、
+    # 発注に含めるオーダーの既定になる(現場: 選んだオーダーで資材を発注することがある)。
+    # ロットが変わったら外す(`clear`)。空なら、ロットを開いたときに受注情報に出たオーダー
+    picked_order: str = ""
+
     # ロットごとに選んだ BOX最終実績寸法の候補(`lot_service.BoxChoice.key`)。
     # **ロットを切り替えても消さない** ── 戻ってきたとき選び直させない
     box_picks: dict[str, str] = field(default_factory=dict)
@@ -110,6 +115,7 @@ class WorkContext:
         self.map_items = []
         self.map_arrived = False
         self.stock_size = {}
+        self.picked_order = ""
 
     # --- ロット検索 -------------------------------------------------
     def apply_lot(self, result: Any) -> None:
@@ -157,6 +163,14 @@ class WorkContext:
         self.map_arrived = True
         log.info("置き場をまとめて見る: %s件 (Lot %s)",
                  len(self.map_items), self.lot_no)
+
+    def pick_order(self, lot_no: str, order_no: str) -> bool:
+        """ロット検索で選んだオーダーを覚える。**作業中のロットのときだけ**(見るだけの窓は除く)。"""
+        if not lot_no or lot_no != self.lot_no or not order_no:
+            return False
+        self.picked_order = order_no
+        log.info("選んだオーダー: %s (Lot %s)", order_no, lot_no)
+        return True
 
     def set_stock_size(self, width: int, length: int) -> None:
         """簡易在庫へ渡すパレット寸法。**渡すだけで、探すのは在庫の仕事**。"""

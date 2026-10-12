@@ -58,7 +58,7 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   match_columns=("登録日時", "LotNo", "品名"),
                   unique_column="発注キー",
                   number_column="管理番号",
-                  optional_columns=("送信端末", "発注キー")),
+                  optional_columns=("送信端末", "発注キー", "受注番号", "ロットの受注")),
     WriteBackSpec(sqlite_table=config.TBL_STOCK_HISTORY,
                   access_table=config.TBL_STOCK_HISTORY,
                   key_column="id",
@@ -177,7 +177,9 @@ SHARED_TABLE_DDL: dict[str, str] = {
 #            発注は届ける(`optional_columns`)── 取り消しの絞り込みが
 #            効かないだけで、発注が止まるよりよい
 SHARED_ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
-    config.TBL_WAREHOUSE_ORDER: (("送信端末", "TEXT"), ("発注キー", "TEXT")),
+    config.TBL_WAREHOUSE_ORDER: (("送信端末", "TEXT"), ("発注キー", "TEXT"),
+                                 # この発注に含めたオーダー・そのロットの全オーダー(VER4.8.26)
+                                 ("受注番号", "TEXT"), ("ロットの受注", "TEXT")),
 }
 
 

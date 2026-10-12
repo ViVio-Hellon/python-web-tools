@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from .. import lot_service, printing, reports
+from .. import lot_service, printing, reports, work_context
 from .. import special_packaging as spk
 from ..logging_utils import get_logger
 
@@ -268,21 +268,91 @@ def _build_rows(session: Any) -> list[dict[str, Any]]:
     return [order]
 
 
+# ------------------------------------------------------------------
+# オーダー(受注番号)。同じロットでもオーダーごとに資材が違うことがある
+# ------------------------------------------------------------------
+JOIN = "・"
+
+
+def order_choice(session: Any) -> Optional[dict[str, Any]]:
+    """このロットのオーダーと、発注の納入先にするオーダー(代表)。オーダーが無ければ None。
+
+    代表は**ロット検索で選んだオーダー**(`WorkContext.picked_order`)。選んでいなければ、
+    ロットを開いたときに受注情報に出たオーダー(`odr.order_no`。以前からの納入先と同じ)。
+    梱包数はオーダーごと(`lot_service.packages_by_order`)。計算できなければ `None` と理由。
+    """
+    result = session.presenter.lot_result
+    if result is None or not getattr(result, "found", False):
+        return None
+    orders = list(dict.fromkeys(row.order_no for row in result.hiki if row.order_no))
+    if not orders:
+        return None
+    picked = work_context.get_context().picked_order
+    by_user = picked in orders
+    if not by_user:
+        picked = result.odr.order_no if result.odr.order_no in orders else orders[0]
+    counts, reason = lot_service.packages_by_order(result)
+    return {
+        "picked": picked,
+        "picked_by_user": by_user,
+        "reason": reason,
+        "orders": [{"order_no": o,
+                    "delivery": result.odr.delivery_names.get(o, "").strip(),
+                    "packages": counts.get(o) if counts is not None else None,
+                    "picked": o == picked}
+                   for o in orders],
+    }
+
+
+def order_fields(choice: Optional[dict[str, Any]], included: Optional[list[str]] = None
+                 ) -> dict[str, Any]:
+    """発注の行に入れるオーダーの値(受注番号・ロットの受注)。`included` が無ければ既定。
+
+    既定: ロット検索でオーダーを選んだならそのオーダーだけ、選んでいなければ全オーダー
+    (発注数はロット全体のまま。以前と同じ)。代表は必ず先頭に入れる。
+    """
+    if not choice:
+        return {"juchu_no": "", "lot_orders": ""}
+    every = [o["order_no"] for o in choice["orders"]]
+    if included is None:
+        included = [choice["picked"]] if choice["picked_by_user"] else every
+    keep = [choice["picked"]] + [o for o in every if o in included and o != choice["picked"]]
+    return {"juchu_no": JOIN.join(keep), "lot_orders": JOIN.join(every), "included": keep}
+
+
+def packages_for(choice: Optional[dict[str, Any]], included: list[str]) -> Optional[int]:
+    """含めたオーダーの梱包数の合計。どれかが計算できなければ None。"""
+    if not choice:
+        return None
+    counts = {o["order_no"]: o["packages"] for o in choice["orders"]}
+    if any(counts.get(o) is None for o in included):
+        return None
+    return sum(counts[o] for o in included)
+
+
+def delivery_of(choice: Optional[dict[str, Any]]) -> Optional[str]:
+    """代表のオーダーの納入先。分からなければ None(呼ぶ側は今までの値を使う)。"""
+    if not choice:
+        return None
+    return next((o["delivery"] for o in choice["orders"] if o["picked"]), None)
+
+
 def draft_notice(session: Any, order: dict[str, Any]) -> str:
     """送る前に知らせること。**納入先の違う引当が混ざっているとき**(VBA で足した案内)。
 
-    倉庫へ送る納入先は1つ(受注情報の先頭の引当のもの)、発注数はロット全体。
-    納入先が違ってもパレットは同じことがあるので**分けずに送る**が、そのことを
-    知らずに送ると、倉庫はどの納入先の分か取り違える。
+    倉庫へ送る納入先は1つ(代表のオーダーのもの。`order_choice`)。以前は「先頭の引当」と
+    書いていたが、実際は受注番号のいちばん小さいオーダーで、ロット検索で選んでも変わらなかった。
+    ほかのオーダーを一緒に送るかは、倉庫連携の「一緒に送るオーダー」で選ぶ。
     """
     names = lot_service.hiki_delivery_names(session.presenter.lot_result)
     if len(names) < 2:
         return ""
-    qty = order.get("hatchu_suu") or ""
+    choice = order_choice(session)
+    which = "ロット検索で選んだ" if choice and choice["picked_by_user"] else "受注情報に出ている"
+    picked = choice["picked"] if choice else ""
     return ("このロットには納入先の違う引当があります(" + "・".join(names) + ")。"
-            f"倉庫には 納入先: {order.get('nounyusaki') or '---'}(先頭の引当)、"
-            "発注数: " + (f"{qty}(ロット全体)" if qty else "送信の欄で入力")
-            + " で送ります。")
+            f"倉庫には 納入先: {order.get('nounyusaki') or '---'}({which}オーダー {picked})"
+            " で送ります。ほかのオーダーを一緒に送るかは下の「一緒に送るオーダー」で選んでください。")
 
 
 def _ex_source_rows(session: Any) -> list[dict[str, Any]]:
@@ -327,14 +397,20 @@ def _common(session: Any) -> dict[str, Any]:
     """
     result = session.presenter.lot_result
     lot, odr = result.lot, result.odr
+    choice = order_choice(session)
+    fields = order_fields(choice)
     return {
         "zaisitu": lot.zaishitsu,
         "choshitu": lot.choshitsu,
         "atu": lot_service.format_thickness(lot.thickness),
         "haba": lot_service.format_dimension(lot.width),
         "take": lot_service.format_dimension(lot.length),
-        "nounyusaki": odr.delivery_name,
+        # **納入先は代表のオーダーのもの**(ロット検索で選んだオーダー。選んでいなければ
+        # 受注情報に出たオーダー = 以前と同じ)。以前は選んでも変わらなかった(現場の声)
+        "nounyusaki": delivery_of(choice) or odr.delivery_name,
         "yoto_code": lot.yoto_code,
+        "juchu_no": fields["juchu_no"],
+        "lot_orders": fields["lot_orders"],
     }
 
 
@@ -347,6 +423,11 @@ def _order_normal(session: Any) -> dict[str, Any]:
         row.industry, row.symbol, session.palette.width, session.palette.length)
     # 発注数は梱包数の見積り。計算不可(-1)や0のときは空欄にする(VBA踏襲)
     packages = lot_service.calc_total_packages(result)
+    # ロット検索でオーダーを選んだなら、そのオーダーの梱包数(まとめるオーダーは倉庫連携で選ぶ)
+    choice = order_choice(session)
+    if choice and choice["picked_by_user"]:
+        picked = packages_for(choice, [choice["picked"]])
+        packages = picked if picked is not None else -1
     return {
         "lot_no": lot.lot_no,
         "hinmei": hinmei,

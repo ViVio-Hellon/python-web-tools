@@ -64,6 +64,13 @@
       {# 送る前に知っておいてほしいこと(納入先の違う引当が混ざっている など)。
          **言葉はサーバが決める**(`presenters/outputs.draft_notice`) #}
       <p class="status status--warn" id="draftNotice" hidden></p>
+      {# このロットのオーダーが2つ以上あるとき。**同じ資材で一緒に送るオーダー**を選ぶ
+         (`presenters/warehouse.orders_block`)。言葉はサーバが決める。納入先のオーダーは外せない #}
+      <div class="status orderpick" id="orderPick" hidden>
+        <p id="orderPickLead"></p>
+        <ul class="orderpick__list" id="orderPickList"></ul>
+        <p class="why" id="orderPickWhy" hidden></p>
+      </div>
       {# 同じ幅×丈の在庫があるとき(`presenters/warehouse.stock_view`)。**言葉はサーバが決める**。
          「在庫分を引く」で発注数を減らし、送ると置き場に「持出」の印が付く #}
       <div class="status status--warn stockoffer" id="stockOffer" hidden>
@@ -325,6 +332,11 @@
   .stockoffer { display:grid; gap:6px; justify-items:start; margin-top:8px;
                 background:var(--sunken); border-left-color:var(--act-select); color:var(--ink); }
   .stockoffer p { margin:0; }
+  .orderpick { display:grid; gap:6px; justify-items:start; margin-top:8px;
+               background:var(--sunken); border-left-color:var(--accent); color:var(--ink); }
+  .orderpick p { margin:0; }
+  .orderpick__list { list-style:none; margin:0; padding:0; display:grid; gap:4px; }
+  .orderpick__list label { display:flex; gap:8px; align-items:center; font-family:var(--mono); }
   .exportrow { margin-top:6px; flex-wrap:wrap; }
   #exportStatus { white-space:pre-line; }
   .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }

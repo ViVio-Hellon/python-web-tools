@@ -150,6 +150,8 @@ def page():
     drafts = work_context.get_context().peek_pending_orders()
     if drafts:
         log.info("倉庫送信の下書きを %s 行 出します", len(drafts))
+    if drafts and mode == modes.FIELD:
+        _apply_orders(drafts)
     if len(drafts) == 1 and mode == modes.FIELD:
         # 同じ幅×丈の在庫があれば「在庫分を引きますか?」を出す(現場だけ。出すのは現場)
         drafts[0]["stock"] = presenter.stock_view(
@@ -175,6 +177,48 @@ def page():
         export_dir=str(config.order_csv_dir()),
         **shell_context("warehouse", badges=_rail_badge(view, _cut_unread(mode))),
     )
+
+
+def _order_choice(lot_no: str):
+    """いまのロットのオーダー(`outputs.order_choice`)。資材選択のロットと違えば None。"""
+    from packaging_tool import selection_session
+    from packaging_tool.presenters import outputs
+    session = selection_session.get_session(get_db())
+    result = session.presenter.lot_result
+    if result is None or not getattr(result, "found", False) or result.lot.lot_no != lot_no:
+        return None
+    return outputs.order_choice(session)
+
+
+def _apply_orders(drafts: list[dict]) -> None:
+    """下書きを、**いま選んでいるオーダー**に合わせ直す(納入先・含めるオーダー・発注数)。
+
+    下書きはパレットを決めたときに作るので、そのあとロット検索でオーダーを選び直すと古くなる。
+    開くたびに作り直す。EX は中身を送らないので触らない。
+    """
+    from packaging_tool.presenters import outputs
+    if drafts[0].get("is_ex_order"):
+        return
+    choice = _order_choice(drafts[0].get("lot_no", ""))
+    if not choice:
+        return
+    delivery = outputs.delivery_of(choice)
+    for draft in drafts:
+        if delivery is not None:
+            draft["nounyusaki"] = delivery
+        # 2行(1P0113 の角材・松板)はロット全体の数なので、全オーダーを含める
+        every = [o["order_no"] for o in choice["orders"]]
+        fields = outputs.order_fields(choice, every if len(drafts) > 1 else None)
+        draft["juchu_no"], draft["lot_orders"] = fields["juchu_no"], fields["lot_orders"]
+    if len(drafts) == 1 and drafts[0].get("pallet_width"):
+        included = outputs.order_fields(choice)["included"]
+        qty = outputs.packages_for(choice, included)
+        if qty is not None:
+            drafts[0]["hatchu_suu"] = str(qty) if qty > 0 else ""
+        block = presenter.orders_block(choice, drafts[0].get("hatchu_suu", ""),
+                                       drafts[0].get("lot_no", ""))
+        if block:
+            drafts[0]["orders"] = block
 
 
 def _cut_unread(mode: str) -> int:
@@ -314,6 +358,12 @@ def send():
                                       "message": f"このロット({lot_no})は、すでに倉庫へ送信されています。"},
                             "ask": presenter.already_sent_ask(lot_no, sent)}), 409
 
+    # **オーダー。** 下書きなら、含めたオーダー(画面のチェック)と納入先をサーバで決め直す
+    if body.get("from_draft"):
+        refusal = _set_orders(orders, body.get("orders"))
+        if refusal is not None:
+            return refusal
+
     # 「在庫分を引く」を押して送った。**送る直前に共有の最新で確かめ直す**
     use = _to_int(body.get("use_stock"))
     reserve = None
@@ -376,6 +426,38 @@ def send():
     message += stock_note
     return jsonify({"ok": True, "message": message, "queued": queued,
                     "mgr_no": result.mgr_nos[0], "mgr_nos": result.mgr_nos})
+
+
+def _set_orders(orders: list[dict], picked_list):
+    """発注の行に、含めたオーダー・ロットの全オーダー・代表のオーダーの納入先を入れる。
+
+    含めるオーダーは画面のチェック(`orders`)。**このロットに無いオーダーは断る**。
+    代表(納入先のオーダー)は必ず含める。2行(1P0113)はロット全体なので全オーダー。
+    """
+    from packaging_tool.presenters import outputs
+    if not orders or orders[0].get("is_ex_order"):
+        return None
+    choice = _order_choice(orders[0]["lot_no"])
+    if not choice:
+        return None
+    every = [o["order_no"] for o in choice["orders"]]
+    included = None
+    if len(orders) > 1:
+        included = every
+    elif isinstance(picked_list, list):
+        stray = [str(o) for o in picked_list if str(o) not in every]
+        if stray:
+            return jsonify({"error": {"code": "invalid", "field": "orders",
+                                      "message": f"このロットに無いオーダーです: {'・'.join(stray)}。"
+                                                 "画面を開き直してください。"}}), 400
+        included = [str(o) for o in picked_list]
+    fields = outputs.order_fields(choice, included)
+    delivery = outputs.delivery_of(choice)
+    for order in orders:
+        order["juchu_no"], order["lot_orders"] = fields["juchu_no"], fields["lot_orders"]
+        if delivery is not None:
+            order["nounyusaki"] = delivery
+    return None
 
 
 def _to_int(value) -> int:

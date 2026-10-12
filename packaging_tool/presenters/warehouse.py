@@ -46,6 +46,8 @@ ORDER_COLUMNS: tuple[tuple[str, bool, bool], ...] = (
     ("丈", True, False),
     ("用途コード", False, False),
     ("納入先", False, True),
+    # この発注に含めたオーダー(受注番号・ロットの受注から `order_summary` が作る)
+    ("オーダー", False, True),
     ("状態", False, False),
     ("送信端末", False, False),
 )
@@ -96,11 +98,13 @@ ORDER_VIEW: tuple[ViewColumn, ...] = (
     ViewColumn("材質 / 調質", "材質", ("調質",), width="7%"),
     ViewColumn("厚 / 幅×丈", "厚", ("幅", "丈"), sep=" × ",
                numeric=True, width="8%"),
-    ViewColumn("納入先", "納入先", width="8%"),
+    # 下段はこの発注に含めたオーダー。**同じロットでもオーダーごとに資材が違う**ことがあり、
+    # 同じロットで違う資材が届いても倉庫が迷わないように、含めていないオーダーも書く
+    ViewColumn("納入先 / オーダー", "納入先", ("オーダー",), width="11%"),
     ViewColumn("状態", "状態", kind="status", width="7%"),
     # どの現場が送ったか。**現場が複数台**なので、取り消せない行が
     # 「なぜ押せないのか」を一覧で読めるようにする
-    ViewColumn("送った端末", "送信端末", width="10%"),
+    ViewColumn("送った端末", "送信端末", width="7%"),
 )
 # 1行を開いたときに出す項目の並び。**VBA `frmWarehouseOrder` の
 # `lstOrders_Click` が埋めていた13個のラベル**と同じ並びにしてある
@@ -128,6 +132,7 @@ ORDER_DETAIL: tuple[tuple[str, str, bool], ...] = (
     ("丈", "丈", False),
     ("用途コード", "用途コード", False),
     ("納入先", "納入先", False),
+    ("オーダー", "オーダーの内訳", False),
     ("管理番号", "管理番号", False),
     ("送った端末", "送信端末", False),
 )
@@ -329,6 +334,56 @@ def _unsent_order_ids(conn: sqlite3.Connection) -> set[int]:
         return set()
 
 
+def order_summary(item: dict, *, short: bool = False) -> str:
+    """この発注に含めたオーダー。ロットのほかのオーダーで含めていないものも書く。
+
+    `short` は一覧の欄(狭い)用:「M200・Z300(3件中2件)」。行を開いた欄には全部書く。
+    """
+    from .outputs import JOIN
+    included = [o for o in str(item.get("受注番号") or "").split(JOIN) if o.strip()]
+    every = [o for o in str(item.get("ロットの受注") or "").split(JOIN) if o.strip()]
+    if not included:
+        return ""                 # 古い版の発注・手で起こした発注
+    others = [o for o in every if o not in included]
+    if short:
+        if len(every) > 1:
+            return f"{JOIN.join(included)}({len(every)}件中{len(included)}件)"
+        return included[0]
+    if others:
+        return (f"{JOIN.join(included)}(このロットのほかのオーダー {JOIN.join(others)} は"
+                "この発注に含まない)")
+    if len(every) > 1:
+        return f"{JOIN.join(included)}(このロットの全オーダー)"
+    return included[0]
+
+
+def orders_block(choice: Optional[dict], qty_text: str, lot_no: str) -> Optional[dict[str, Any]]:
+    """倉庫連携の下書きに出す「一緒に送るオーダー」。オーダーが2つ以上のときだけ。"""
+    from .outputs import order_fields
+    if not choice or len(choice["orders"]) < 2:
+        return None
+    included = order_fields(choice)["included"]
+    picked = next(o for o in choice["orders"] if o["picked"])
+    which = "ロット検索で選んだ" if choice["picked_by_user"] else "受注情報に出ている"
+    return {
+        "lead": (f"このロット({lot_no})はオーダーが {len(choice['orders'])}件あります。"
+                 "同じ資材で一緒に送るオーダーにチェックを付けてください。発注数はチェックしたオーダーの"
+                 "梱包数の合計です(手で直すこともできます)。"
+                 f"納入先は{which}オーダー {picked['order_no']}"
+                 f"({picked['delivery'] or '納入先なし'})です。"
+                 "倉庫の一覧には、含めたオーダーと含めなかったオーダーが出ます。"),
+        "reason": ("" if all(o["packages"] is not None for o in choice["orders"])
+                   else f"梱包数を計算できません({choice['reason']})。発注数は手で入れてください。"),
+        "items": [{"order_no": o["order_no"],
+                   "label": (f"{o['order_no']}  {o['delivery'] or '納入先なし'}  "
+                             + (f"{o['packages']}梱包" if o["packages"] is not None else "梱包数不明")
+                             + ("  ← 納入先のオーダー" if o["picked"] else "")),
+                   "packages": o["packages"], "picked": o["picked"],
+                   "checked": o["order_no"] in included}
+                  for o in choice["orders"]],
+    }
+
+
 def _row(item: dict, *, is_material: bool, terminal: str = "",
          notes: Optional[dict] = None, unsent: Optional[set] = None) -> OrderRow:
     from .. import order_comments
@@ -346,7 +401,9 @@ def _row(item: dict, *, is_material: bool, terminal: str = "",
         latest_comment=note.latest if note else "",
         comment_why=order_comments.closed_why(item),
         mgr_no=item.get("管理番号", 0),
-        values={label: _cell(item.get(label)) for label, _, _ in ORDER_COLUMNS},
+        values={**{label: _cell(item.get(label)) for label, _, _ in ORDER_COLUMNS},
+                "オーダー": order_summary(item, short=True),
+                "オーダーの内訳": order_summary(item)},
         status=status,
         # **確認は倉庫だけ。** 現場からできてしまうと、倉庫が実際に
         # 受け取ったかに関わらず現場の都合で確認済みにでき、確認という

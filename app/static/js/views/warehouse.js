@@ -774,6 +774,8 @@ async function send(confirmDuplicate = false) {
   // 全行を1回で登録し、1行でもだめなら1行も登録しない ── 片方だけが倉庫に
   // 届くと、倉庫は半分だけ用意してしまう
   if (drafts.length > 1) values.rows = drafts.map((d) => ({ ...d }));
+  // 一緒に送るオーダー(チェックしたもの)。サーバが確かめて発注の行に入れる
+  if (drafts.length === 1 && drafts[0].orders) values.orders = pickedOrders();
   // 「在庫分を引く」で引いた台数。サーバが送る直前の在庫で確かめ直す
   if (stockUsed) values.use_stock = stockUsed;
   // 倉庫へのひとこと。**発注の欄ではない**ので、下書きでも打てる
@@ -981,8 +983,63 @@ function undoStock() {
   showStock();
 }
 
+/* ================================================================
+   一緒に送るオーダー(`presenters/warehouse.orders_block`)
+
+   同じロットでもオーダーごとに資材が違うことがある。同じ資材で一緒に送るオーダーに
+   チェックを付け、発注数はその梱包数の合計にする(手で直すこともできる)。
+   納入先のオーダー(ロット検索で選んだもの)は外せない。
+   ================================================================ */
+function pickedOrders() {
+  return [...document.querySelectorAll("#orderPickList input[data-order]")]
+    .filter((box) => box.checked).map((box) => box.dataset.order);
+}
+
+function showOrders() {
+  const box = document.getElementById("orderPick");
+  if (!box) return;
+  const block = drafts.length === 1 ? drafts[0].orders : null;
+  box.hidden = !block;
+  if (!block) return;
+  document.getElementById("orderPickLead").textContent = block.lead;
+  const why = document.getElementById("orderPickWhy");
+  why.hidden = !block.reason;
+  why.textContent = block.reason || "";
+  const list = document.getElementById("orderPickList");
+  list.replaceChildren(...block.items.map((item) => {
+    const li = document.createElement("li");
+    const label = document.createElement("label");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.dataset.order = item.order_no;
+    check.dataset.packages = item.packages === null ? "" : String(item.packages);
+    check.checked = item.checked || item.picked;
+    // 納入先のオーダーは外せない(外すと納入先が決まらない)
+    check.disabled = item.picked;
+    check.addEventListener("change", ordersChanged);
+    label.append(check, document.createTextNode(item.label));
+    li.appendChild(label);
+    return li;
+  }));
+}
+
+/** チェックを変えた。発注数をチェックしたオーダーの梱包数の合計に直す(分からなければ触らない)。 */
+function ordersChanged() {
+  const boxes = [...document.querySelectorAll("#orderPickList input[data-order]")].filter((b) => b.checked);
+  if (!el.fields.hatchu_suu || boxes.some((b) => b.dataset.packages === "")) return;
+  // 在庫を引いていたら、元の数が変わるので引く前に戻す(引き直すかはもう一度押して決める)
+  if (stockUsed) undoStock();
+  const total = boxes.reduce((sum, b) => sum + Number(b.dataset.packages), 0);
+  el.fields.hatchu_suu.value = total > 0 ? String(total) : "";
+  keepDraftQty();
+  for (const item of drafts[0].orders.items) {
+    item.checked = boxes.some((b) => b.dataset.order === item.order_no);
+  }
+}
+
 function showDraft() {
   showStock();
+  showOrders();
   const box = el.drafts;
   if (!box) return;
   box.hidden = !drafts.length;

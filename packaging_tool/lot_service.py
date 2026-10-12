@@ -770,25 +770,54 @@ def _calc_total_packages(result: LotSearchResult) -> tuple[int, str]:
     """`calc_total_packages` / `calc_total_packages_reason` の共通実装。
 
     引当行を引当番号順に処理し、最終実績数(BOX最終実績_枚本数)を
-    上から食い潰しながら梱包数を積み上げる。
+    上から食い潰しながら梱包数を積み上げる(行ごとの数は `_package_rows`)。
     次の場合は計算不可として `(PACKAGES_UNKNOWN, 理由)` を返す:
         - 引当調整NOを持つ行が1件でも混ざる
         - 1枚重量が出せない(比重や寸法が無い)のに kg 梱包の行がある
           → 過少カウントを避けるため
     """
+    rows, reason = _package_rows(result)
+    if reason:
+        return PACKAGES_UNKNOWN, reason
+    total = sum(packages for _order, packages in rows)
+    log.debug("calc_total_packages 完了: 総梱包数=%s", total)
+    return total, ""
+
+
+def packages_by_order(result: LotSearchResult) -> tuple[Optional[dict[str, int]], str]:
+    """受注番号ごとの梱包数(引当の並びの順)。計算できなければ (None, 理由)。
+
+    発注をオーダーごとに分けて送るとき、まとめるオーダーの梱包数を足して発注数にする
+    (現場: 同じロットでもオーダーごとに資材が違うことがある)。足し方はロット全体の
+    発注数(`calc_total_packages`)と同じで、全オーダーを足すとロット全体と一致する。
+    """
+    rows, reason = _package_rows(result)
+    if reason:
+        return None, reason
+    counts: dict[str, int] = {}
+    for order_no in dict.fromkeys(row.order_no for row in result.hiki if row.order_no):
+        counts[order_no] = 0
+    for order_no, packages in rows:
+        if order_no:
+            counts[order_no] = counts.get(order_no, 0) + packages
+    return counts, ""
+
+
+def _package_rows(result: LotSearchResult) -> tuple[list[tuple[str, int]], str]:
+    """引当行ごとの (受注番号, 梱包数)。計算不可なら ([], 理由)。"""
     if any(row.type_flag == HIKI_ADJUSTED for row in result.hiki):
         log.debug("calc_total_packages: 引当調整NO混在のため計算不可")
-        return PACKAGES_UNKNOWN, REASON_ADJUSTED
+        return [], REASON_ADJUSTED
 
     per_sheet = weight_per_sheet(result.lot, result.odr.specific_gravity)
     if per_sheet <= 0:
         for row in result.hiki:
             if pack_unit_of(result.odr, row.order_no)[0] == "kg":
                 log.debug("calc_total_packages: 1枚重量0かつkg種別混在のため計算不可")
-                return PACKAGES_UNKNOWN, REASON_WEIGHT_UNKNOWN
+                return [], REASON_WEIGHT_UNKNOWN
 
     remaining = result.lot.final_process_count
-    total = 0
+    out: list[tuple[str, int]] = []
     for row in result.hiki:
         if remaining <= 0:
             break
@@ -818,13 +847,11 @@ def _calc_total_packages(result: LotSearchResult) -> tuple[int, str]:
         else:
             packages = 1             # 梱包単位が分からない行は1梱包とみなす
 
-        total += packages
+        out.append((row.order_no, packages))
         remaining -= actual
-        log.debug("calc_total_packages: 受注=%s 数量=%s 梱包=%s 累計=%s 残=%s",
-                  row.order_no, actual, packages, total, remaining)
-
-    log.debug("calc_total_packages 完了: 総梱包数=%s", total)
-    return total, ""
+        log.debug("calc_total_packages: 受注=%s 数量=%s 梱包=%s 残=%s",
+                  row.order_no, actual, packages, remaining)
+    return out, ""
 
 
 def build_hinmei(industry: str, symbol: str, width: int, length: int) -> str:

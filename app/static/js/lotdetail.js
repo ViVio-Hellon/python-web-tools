@@ -196,8 +196,11 @@ function hikiRow(row) {
 async function onHikiClick(hikiNo) {
   if (!current || !hikiNo) return;
   try {
+    // ロット検索の画面で押したときは「このオーダーで発注する」として覚えてもらう
+    // (倉庫連携の納入先になる)。見るだけで開いた窓(発注一覧の「Lotを開く」)では覚えない
+    const pick = peekMode ? "" : "?pick=1";
     const body = await api.get(
-      `/api/lot/${encodeURIComponent(current.lot_no)}/hiki/${encodeURIComponent(hikiNo)}`);
+      `/api/lot/${encodeURIComponent(current.lot_no)}/hiki/${encodeURIComponent(hikiNo)}${pick}`);
     applyOdrSwitch(body, hikiNo);
   } catch (err) {
     toastError(err);
@@ -228,6 +231,7 @@ function applyOdrSwitch(body, hikiNo) {
   }
   // 図面は受注番号ではなく包装仕様NOに紐づく。切り替わったなら見に行き直す
   specStart(body.packaging_spec || "");
+  if (body.picked) toast(`オーダー ${body.order_no} で発注します(倉庫連携の納入先になります)`, "ok");
 }
 
 /*

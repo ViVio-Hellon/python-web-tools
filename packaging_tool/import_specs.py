@@ -298,6 +298,9 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("送信端末", "送信端末", to_text),
         # 発注を見分ける鍵。コメントをこれで結ぶ(無い発注は `#共有の管理番号`)
         ("発注キー", "発注キー", to_text),
+        # この発注に含めたオーダーと、そのロットの全オーダー(古い版の発注には無い)
+        ("受注番号", "受注番号", to_text),
+        ("ロットの受注", "ロットの受注", to_text),
     ],
     "PalletMaster": [
         # 小数を切り捨てない(PalletMaster に 幅 2.5 の行がある)
@@ -487,7 +490,7 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
 OPTIONAL_COLUMNS: dict[str, frozenset[str]] = {
     "仕掛ロット": frozenset({"BOX実績_枚本数", "前々工程実績_枚本数", "前工程実績_枚本数"}),
     # 最初に送った端末が共有に足す列(`sync_writeback.SHARED_ADDED_COLUMNS`)
-    config.TBL_WAREHOUSE_ORDER: frozenset({"送信端末", "発注キー"}),
+    config.TBL_WAREHOUSE_ORDER: frozenset({"送信端末", "発注キー", "受注番号", "ロットの受注"}),
 }
 
 # 梱包資材マスタ.sqlite3 ではなく、**看板マスタ.sqlite3(別ファイル)** から

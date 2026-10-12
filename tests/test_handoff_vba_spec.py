@@ -229,7 +229,8 @@ class SelectionSendTests(SelectionWebTestCase):
         order = work_context.get_context().pending_orders[0]
         self.assertEqual(order["nounyusaki"], "納入先A")
         self.assertIn("納入先の違う引当があります(納入先A・納入先B)", order["notice"])
-        self.assertIn("納入先: 納入先A(先頭の引当)", order["notice"])
+        # 「先頭の引当」は誤りだった(実際は受注情報に出ているオーダー)。選び方は倉庫連携で
+        self.assertIn("納入先: 納入先A(受注情報に出ているオーダー O1)", order["notice"])
 
     def test_納入先が1つなら知らせない(self) -> None:
         self.insert_hiki(self.conn, order_no="O1", no="00000001")
