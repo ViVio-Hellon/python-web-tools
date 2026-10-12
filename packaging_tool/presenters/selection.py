@@ -1792,7 +1792,8 @@ def list_rows(session: Any) -> list[Any]:
             pallet_length_text=session.direct_length,
             show_all=session.show_all,
             last_hosozai=session.presenter.last_hosozai,
-            is_1p1185_mode=session.presenter.mode_1p1185.is_1p1185)
+            is_1p1185_mode=session.presenter.mode_1p1185.is_1p1185,
+            is_ex_order=session.presenter.is_ex_order)
 
     return svc.list_pallet_sizes(
         conn, last_hosozai=session.presenter.last_hosozai, **flags)

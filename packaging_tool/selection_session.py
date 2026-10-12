@@ -360,7 +360,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         # **押した行そのもの**(管理番号)で引く。同じ寸法・記号でも発注コードの
         # 違う行があり、寸法だけで引くと一覧に出ていない行のコードで送っていた
         row = svc.find_pallet_row(self.presenter.conn, width, length, symbol,
-                                  row_id=row_id, last_hosozai=self.presenter.last_hosozai)
+                                  row_id=row_id, last_hosozai=self.presenter.last_hosozai,
+                                  is_ex_order=self.presenter.is_ex_order)
         if row is None:
             return BoardOpResult(
                 False, f"{width}×{length} {symbol} は一覧にありません。",

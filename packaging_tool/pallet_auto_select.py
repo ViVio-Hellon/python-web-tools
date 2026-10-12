@@ -33,7 +33,7 @@ log = get_logger("board_selection.pallet_auto")
 
 @tag_area("パレット")
 def _listable(row: sqlite3.Row, *, ex_only_mode: bool, show_all: bool,
-              last_hosozai: str) -> bool:
+              last_hosozai: str, is_ex_order: bool = False) -> bool:
     """パレット一覧に出せる行か。**一覧に出せないパレットを自動で決めない。**
 
     VBA で直した不具合: 自動検索の候補選びは単位を見ておらず、一覧には
@@ -44,7 +44,7 @@ def _listable(row: sqlite3.Row, *, ex_only_mode: bool, show_all: bool,
     if ex_only_mode:
         return is_ex
     # 「EXまで表示」が外すのはEX除外だけ。**単位の条件は残す**(現場の指示)
-    return (show_all or not is_ex) and unit_allowed(row["単位"], last_hosozai)
+    return (show_all or not is_ex) and unit_allowed(row["単位"], last_hosozai, is_ex_order)
 
 
 def auto_select_pallet(
@@ -157,7 +157,7 @@ def auto_select_pallet(
 
             # EXフィルタで落ちた分はVBA同様ログに出さない(件数が多すぎるため)
             if not _listable(row, ex_only_mode=ex_only_mode, show_all=show_all,
-                             last_hosozai=last_hosozai):
+                             last_hosozai=last_hosozai, is_ex_order=is_ex_order):
                 continue
 
             size_ok = _size_ok(row, search_w, search_l, pass_def.tolerance)
@@ -273,7 +273,7 @@ def auto_select_pallet(
         industry = row["業界"] or "一般"
         # 一覧に出せないパレット(EX・単位)は、強制入替えでも決めない
         if not _listable(row, ex_only_mode=ex_only_mode, show_all=show_all,
-                         last_hosozai=last_hosozai):
+                         last_hosozai=last_hosozai, is_ex_order=is_ex_order):
             continue
         if not (row["巾適合min"] <= fb_w <= row["巾適合max"] and row["丈適合min"] <= fb_l <= row["丈適合max"]):
             continue

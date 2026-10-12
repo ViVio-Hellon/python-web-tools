@@ -190,13 +190,20 @@ UNITS_DEFAULT = ("台",)
 UNITS_WITH_HOSOZAI = ("台", "枚")
 
 
-def unit_allowed(unit: str, last_hosozai: str) -> bool:
-    """この単位の行を一覧に出してよいか。"""
-    allowed = (UNITS_WITH_HOSOZAI
-               if last_hosozai and last_hosozai not in (
-                   material_service.HOSOZAI_ANGLE, "一致なし")
-               else UNITS_DEFAULT)
-    return (unit or "").strip() in allowed
+def allowed_units(last_hosozai: str, ex: bool = False) -> tuple[str, ...]:
+    """一覧に出す単位。保護材が確定しているとき・**EXモードのとき**は台と枚。
+
+    EXモード(EXオンリーを含む)は「枚」で数えるパレットもあり、台だけでは現物が
+    一覧に出てこなかった(現場の声:「EXモードまたはEXオンリーのとき、台と枚をリストに」)。
+    """
+    if ex or (last_hosozai and last_hosozai not in (material_service.HOSOZAI_ANGLE, "一致なし")):
+        return UNITS_WITH_HOSOZAI
+    return UNITS_DEFAULT
+
+
+def unit_allowed(unit: str, last_hosozai: str, ex: bool = False) -> bool:
+    """この単位の行を一覧に出してよいか。`ex` は EXモード(`is_ex_order`)。"""
+    return (unit or "").strip() in allowed_units(last_hosozai, ex)
 
 @dataclass
 class BoardRow:

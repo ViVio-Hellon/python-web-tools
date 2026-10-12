@@ -22,7 +22,7 @@ from .logging_utils import get_logger
 from .pallet_common import (KIND_LEN2, KIND_WIDTH2, MAX_NEAR_MISS_LOGS,
                             PASS_LOOSE_TOLERANCE,
                             UNITS_DEFAULT, UNITS_WITH_HOSOZAI,
-                            AutoSelectPalletResult,
+                            AutoSelectPalletResult, allowed_units,
                             PalletSizeRow, _build_pass_defs, _category_ok,
                             _fit_range_inverted, _fit_range_ok, _is_numeric,
                             _keta_ok, _pass_tag, _physically_fits,
@@ -36,7 +36,7 @@ log = get_logger("board_selection.pallet_list")
 
 def find_pallet_row(conn: sqlite3.Connection, width: int, length: int, symbol: str,
                     *, row_id: Optional[int] = None,
-                    last_hosozai: str = "") -> Optional[PalletSizeRow]:
+                    last_hosozai: str = "", is_ex_order: bool = False) -> Optional[PalletSizeRow]:
     """一覧で選んだ PalletMaster の1行を引く(発注コード・単位の出どころ)。
 
     **同じ幅・丈・記号の行は何行もある**(例: タイト 1400×2650 に
@@ -64,7 +64,7 @@ def find_pallet_row(conn: sqlite3.Connection, width: int, length: int, symbol: s
     rows = [r for r in rows if same(r)]
     if not rows:
         return None
-    listed = [r for r in rows if unit_allowed(r["単位"], last_hosozai)]
+    listed = [r for r in rows if unit_allowed(r["単位"], last_hosozai, is_ex_order)]
     return _row_to_pallet_size_row((listed or rows)[0])
 
 def list_pallet_sizes(
@@ -108,7 +108,7 @@ def list_pallet_sizes(
         if ex_only_mode:
             if not is_ex:
                 continue
-        elif not unit_allowed(row["単位"], last_hosozai) or (is_ex and not show_all):
+        elif not unit_allowed(row["単位"], last_hosozai, is_ex_order) or (is_ex and not show_all):
             # 「EXまで表示」が外すのはEX除外だけ。単位の条件は残す
             continue
 
@@ -123,6 +123,7 @@ def search_pallet_direct(
     show_all: bool = False,
     last_hosozai: str = "",
     is_1p1185_mode: bool = False,
+    is_ex_order: bool = False,
 ) -> list[PalletSizeRow]:
     """VBA `btnAutoSelectPallet_Click`の「直接検索モード」の移植。
 
@@ -151,7 +152,7 @@ def search_pallet_direct(
         symbol = (row["記号"] or "").strip()
         is_ex = "EX" in symbol.upper()
         # 「EXまで表示」が外すのはEX除外だけ。単位の条件は残す
-        if not unit_allowed(row["単位"], last_hosozai) or (is_ex and not show_all):
+        if not unit_allowed(row["単位"], last_hosozai, is_ex_order) or (is_ex and not show_all):
             continue
 
         result.append(_row_to_pallet_size_row(row))
@@ -338,9 +339,9 @@ def list_pallets_for_product(
         # 関わらず全部出ていた(現場の声:「単位"台"での絞り込みのはずが
         # サイズでヒットするものすべて表示している」)
         # 「EXまで表示」でも外さない(現場の指示)。
-        if not unit_allowed(row["単位"], last_hosozai):
+        if not unit_allowed(row["単位"], last_hosozai, is_ex_order):
             rejects.log(f"  ×除外: {label} 単位が{row['単位'] or '(なし)'}です"
-                        f"(出すのは{'/'.join(UNITS_WITH_HOSOZAI if last_hosozai and last_hosozai not in (material_service.HOSOZAI_ANGLE, '一致なし') else UNITS_DEFAULT)})")
+                        f"(出すのは{'/'.join(allowed_units(last_hosozai, is_ex_order))})")
             continue
 
         if industry == "5×10":
