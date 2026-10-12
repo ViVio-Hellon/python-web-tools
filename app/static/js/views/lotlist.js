@@ -13,7 +13,7 @@ import { api } from "../api.js";
 import { promptBox } from "../askbox.js";
 import { onLeave, pageSignal } from "../nav.js";
 import { toast, toastError } from "../toast.js";
-import { halfUpperAscii } from "../halfwidth.js";
+import { searchText } from "../halfwidth.js";
 
 const SUGGEST_DEBOUNCE_MS = 160;
 
@@ -129,7 +129,14 @@ export function render(view) {
   // **打ち足した文字が送られる前なら書き換えない。** 「A12」の返事が
   // 「3」を打った後に届くと、欄が「A12」に戻り、待っていた検索も
   // 戻った「A12」で送られて「3」が消えていた(現場の声: 文字が差し戻る)
-  if (!textPending && el.listText.value !== view.text) el.listText.value = view.text;
+  //
+  // **変換中(IME の下線が出ているあいだ)は書き換えない。** 書き換えると変換前の状態が
+  // 解除され、IME が持っていた文字がもう一度差し込まれて「hh」「hhh」と重なった(現場の声)。
+  // サーバは全角を半角にし前後の空白を取って返すので、**そろえた形で同じなら書き換えない**
+  // (「ｈ」と「h」、「H57 」と「H57」を食い違いとみなさない)
+  if (!textPending && !composing && searchText(el.listText.value) !== view.text) {
+    el.listText.value = view.text;
+  }
   el.pageSize.value = String(view.page_size);
 
   el.saveFilter.disabled = !view.can_save;
@@ -213,6 +220,8 @@ async function useSuggest(index) {
    ================================================================ */
 // 打った文字がまだ送られていない(間を置いている最中)か
 let textPending = false;
+// IME で変換中(下線が出ているあいだ)。そのあいだは欄を書き換えず、探しにも行かない
+let composing = false;
 // 送った順の番号。**追い越された返事は画面に出さない** ── 打つそばから
 // 検索するので、先に送った「A12」の返事が後の「A123」の返事より遅れて
 // 届くことがある。そのまま出すと一覧も入力欄も古いほうに戻る
@@ -263,6 +272,7 @@ export function start(options) {
   suggestItems = [];
   suggestAt = -1;
   textPending = false;
+  composing = false;
   render(options.view);
 
   // --- 行を開く ---
@@ -315,34 +325,32 @@ export function start(options) {
 
   // --- 一覧検索 ---
   let textTimer = null;
-  // 全角で入った英数字は半角の大文字に直す(IME で変換中のあいだは触らない ── 打ち終えてから)
-  const tidyText = () => {
-    const box = el.listText;
-    const fixed = halfUpperAscii(box.value);
-    if (fixed === box.value) return false;
-    const at = box.selectionStart;
-    box.value = fixed;
-    if (at !== null && box.setSelectionRange) box.setSelectionRange(at, at);
-    return true;
-  };
-  el.listText.addEventListener("compositionend", () => {
-    // 変換を確定したら直し、直した文字で探し直す
-    if (tidyText()) el.listText.dispatchEvent(new Event("input"));
-  });
-  el.listText.addEventListener("input", (e) => {
-    if (!e?.isComposing) tidyText();
+  // **欄の文字は書き換えない**(全角→半角はサーバが探すときに直す)。変換中は探しにも行かず、
+  // 確定してから探す ── 変換前の文字で探すと、返事が変換の途中に届いて欄を乱す
+  const searchSoon = () => {
     clearTimeout(textTimer);
     textPending = true;
     textTimer = setTimeout(() => {
       textPending = false;
       send("/api/lot/list/search", { text: el.listText.value });
     }, 220);
+  };
+  el.listText.addEventListener("compositionstart", () => { composing = true; });
+  el.listText.addEventListener("compositionend", () => {
+    composing = false;
+    searchSoon();                  // 確定した文字で探す(確定のあとに input が来ないことがある)
+  });
+  el.listText.addEventListener("input", (e) => {
+    if (e?.isComposing || composing) return;
+    searchSoon();
   });
 
   // **打っただけでは開かない**(1件に絞れても)。有るかどうかだけ見たいことがある。
   // 開くのは、1件のときに Enter を押したとき(行のダブルクリック / Enter と同じく、意図した操作)
   el.listText.addEventListener("keydown", async (e) => {
     if (e.key !== "Enter") return;
+    // 変換を確定する Enter は IME のもの。横取りすると確定できない
+    if (e.isComposing || composing || e.keyCode === 229) return;
     e.preventDefault();
     let view = lastView;
     if (textPending) {             // 打ち終えてすぐ Enter: いまの文字で絞ってから決める

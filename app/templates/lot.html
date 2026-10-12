@@ -63,7 +63,8 @@
         </label>
         {# inputmode="url": Windows の日本語 IME に「英数字を打つ欄」と伝え、半角英数で始めさせる
            (IME をオフにはできない。日本語で探すときは 半角/全角 キーで切り替えられる)。
-           全角で入った英数字は halfwidth.js が半角の大文字に直す #}
+           **欄の文字は書き換えない**(変換中に書き換えると IME の文字が重なる)。全角の英数字は
+           サーバが探すときに半角に直す(`lot_browse_session.set_text`)。大文字・小文字は区別しない #}
         <input class="input seek__input" id="listText" type="search"
                inputmode="url" autocapitalize="characters" spellcheck="false"
                autocomplete="off" autofocus

@@ -142,25 +142,46 @@ await tick();
 await box.handlers.keydown(enter);
 check("2件以上なら Enter でも開かない", opened, ["R6545E0"]);
 
-// 5) 全角で入った英数字は半角の大文字に直して探す(現場の声: IME が日本語のまま打つと見つからない)
+// 5) 全角で入った英数字は**欄を書き換えずに**そのまま送る(半角に直すのはサーバ)。
+//    サーバは「ｒ６５４５ｅ」を「r6545e」にして返す。同じ文字なので欄は書き換えない
 pending.splice(0);
 type("ｒ６５４５ｅ");
-check("全角の英数字は半角の大文字に直す", box.value, "R6545E");
+check("全角で打っても欄は書き換えない", box.value, "ｒ６５４５ｅ");
 await sleep(260);
-check("直した文字で探す", pending.map((p) => p.body.text), ["R6545E"]);
-pending.shift().resolve(view("R6545E", 1, ["R6545E0"]));
+check("打った文字のまま送る", pending.map((p) => p.body.text), ["ｒ６５４５ｅ"]);
+pending.shift().resolve(view("r6545e", 1, ["R6545E0"]));
 await tick();
+check("サーバが半角にして返しても欄はそのまま", box.value, "ｒ６５４５ｅ");
+type("H57 ");
+await sleep(260);
+pending.shift().resolve(view("H57", 3, []));
+await tick();
+check("末尾の空白を取って返されても欄はそのまま", box.value, "H57 ");
 
-// 6) IME で変換中のあいだは触らない。確定したら直して探し直す
-box.value = "ｒ６";
+// 6) **IME で変換中は欄を書き換えず、探しにも行かない**(現場の声: 「h」と打つと変換前の
+//    状態が解除され、次の h で「hh」、その次で「hhh」と重なる)。変換中に前の検索の返事が
+//    届いても欄は触らない。確定したら、確定した文字で探す
+pending.splice(0);
+type("Q");
+await sleep(260);                                   // 「Q」を送った(返事はまだ)
+box.handlers.compositionstart({ type: "compositionstart" });
+box.value = "Qｈ";
 box.handlers.input({ isComposing: true });
-check("変換中は直さない", box.value, "ｒ６");
-box.handlers.compositionend({ type: "compositionend" });
-check("確定したら直す", box.value, "R6");
-await sleep(260);
-check("確定した文字で探す", pending.map((p) => p.body.text), ["R6"]);
-pending.shift().resolve(view("R6", 3, []));
+pending.shift().resolve(view("", 553));             // 変換中に、欄と違う文字の返事が届く
 await tick();
+check("変換中は返事が来ても欄を書き換えない", box.value, "Qｈ");
+await sleep(260);
+check("変換中は探しに行かない", pending.length, 0);
+const composingEnter = { key: "Enter", isComposing: true, keyCode: 229, preventDefault() { throw new Error("横取り"); } };
+await box.handlers.keydown(composingEnter);
+check("確定の Enter は横取りしない", opened, ["R6545E0"]);
+box.handlers.compositionend({ type: "compositionend" });
+check("確定しても欄は書き換えない", box.value, "Qｈ");
+await sleep(260);
+check("確定した文字で探す", pending.map((p) => p.body.text), ["Qｈ"]);
+pending.shift().resolve(view("Qh", 3, []));
+await tick();
+check("確定後の返事でも欄はそのまま", box.value, "Qｈ");
 
 // 7) かな・漢字は変えない(用途名で探せるように)
 type("ｼﾞﾃﾝｼﾔ 自転車");

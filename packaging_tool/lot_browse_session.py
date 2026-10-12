@@ -81,7 +81,8 @@ class LotBrowseSession:
         return OpResult(True, "条件をすべて外しました")
 
     def set_text(self, text: str) -> OpResult:
-        # 全角の英数字・記号は半角に(画面の `halfwidth.js` と同じ。貼り付けた文字にも効かせる)。
+        # 全角の英数字・記号は半角に(**画面は欄を書き換えない**ので、直すのはここだけ。
+        # 画面の `halfwidth.searchText` はこれと同じ形にそろえて見比べるだけ)。
         # 照合は大文字・小文字を区別しないので、ここでは大文字にしない
         self.text = (text or "").translate(_HALF).strip()
         return OpResult(True, "")
