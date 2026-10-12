@@ -715,6 +715,8 @@ class PalletRow:
     paired: bool = False
     # 単位(台・枚・組)。蓋を選べるモードのとき、押せるボタン(パレット決定は台・蓋選択は枚)を画面が決める
     unit: str = ""
+    # 最初から選んでおく行(`_mark_suggested`)。**選んでおくだけで決めない**(決めるのは「パレット決定」)
+    suggested: bool = False
 
 
 @dataclass
@@ -1151,6 +1153,7 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
     rows = list_rows(session)
     sheet = getattr(session, "lid_row", None)
     view.rows = [_pallet_row(row, session.pallet_row, sheet) for row in rows]
+    _mark_suggested(session, view.rows)
     view.list_note = _list_note(session, len(rows))
     view.lid_note, view.lid_set = _lid_note(session)
     view.lid_enabled = presenter.lid_mode
@@ -1897,6 +1900,30 @@ def _lid_note(session: Any) -> tuple[str, bool]:
             "倉庫連携へ2行まとめて渡します。蓋をやめるとき(台だけを送るとき)は「蓋を外す」を押してください。"), True
 
 
+def _mark_suggested(session: Any, rows: list[PalletRow]) -> None:
+    """製品サイズで出した候補のうち、**面積(幅×丈)がいちばん小さい行**を選んでおく。
+
+    現場の声:「一覧でリストに載った後、一番小さいサイズをデフォルト選択しておく。
+    EXと上下共用以外は選んでおいてもよい」。VBA の「パレット検索」も候補のうち面積最小を採っていた。
+    同じ大きさの行が何行もあれば、一覧で上にある行。
+
+    選んでおかないとき:
+    - 製品サイズの幅・丈の両方で絞った一覧でないとき(全件・寸法の直接検索・片方だけ入力中)
+    - 蓋を選べるモード(EX・上下共用。パレットは台、蓋は枚を人が選ぶ)・1P0113(パレットを使わない)
+    - パレットをもう決めてあるとき(決めた行が選ばれている)
+    """
+    from .. import selection_session as ss
+    presenter = session.presenter
+    live_both = (session.list_mode == ss.LIST_PRODUCT_LIVE
+                 and session.live_product_width.strip() and session.live_product_length.strip())
+    if not rows or not (session.list_mode == ss.LIST_PRODUCT or live_both):
+        return
+    if presenter.lid_mode or presenter.mode_1p0113 or session.pallet_row is not None:
+        return
+    best = min(range(len(rows)), key=lambda i: (rows[i].width * rows[i].length, i))
+    rows[best].suggested = True
+
+
 def _pallet_row(row: Any, picked: Any = None, sheet: Any = None) -> PalletRow:
     is_ex = "EX" in (row.symbol or "").upper()
     return PalletRow(
@@ -1950,7 +1977,8 @@ def to_dict(view: SelectionViewModel) -> dict[str, Any]:
                    "visible": view.banner.visible},
         "rows": [{"values": r.values, "width": r.width, "length": r.length,
                   "symbol": r.symbol, "is_ex": r.is_ex, "note": r.note, "id": r.id,
-                  "picked": r.picked, "paired": r.paired, "unit": r.unit}
+                  "picked": r.picked, "paired": r.paired, "unit": r.unit,
+                  "suggested": r.suggested}
                  for r in view.rows],
         "list_mode": view.list_mode,
         "list_note": view.list_note,

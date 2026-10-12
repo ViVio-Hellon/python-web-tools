@@ -240,6 +240,11 @@ function render(next) {
   if (pickedPalletRow && next.rows.some((r) => r.paired && rowKey(r) === pickedPalletRow.key)) {
     pickedPalletRow = null;
   }
+  // 最初から選んでおいた行(`suggested`)は、一覧が変わるたびに選び直す。自分で押した行はそのまま
+  if (pickedPalletRow && pickedPalletRow.auto) {
+    pickedPalletRow = null;
+    el.rowNote.textContent = "";
+  }
   if (!pickedPalletRow) {
     const pickedItem = next.rows.find((r) => r.picked);
     if (pickedItem) {
@@ -249,6 +254,18 @@ function render(next) {
         symbol: pickedItem.symbol || "", id: String(pickedItem.id || ""),
         unit: pickedItem.unit || "", key: rowKey(pickedItem),
       };
+    }
+  }
+  if (!pickedPalletRow) {
+    // 製品サイズで出した候補のうち、面積がいちばん小さい行を選んでおく(決めるのは「パレット決定」)
+    const suggested = next.rows.find((r) => r.suggested);
+    if (suggested) {
+      pickedPalletRow = {
+        width: String(suggested.width), length: String(suggested.length),
+        symbol: suggested.symbol || "", id: String(suggested.id || ""),
+        unit: suggested.unit || "", key: rowKey(suggested), auto: true,
+      };
+      el.rowNote.textContent = suggested.note || "";
     }
   }
   applySelection();
