@@ -110,8 +110,9 @@
        title="{{ mode_note }}(押すと「この端末の権限」が開きます)">{{ mode_label }}モード<span class="gl">?</span></a>
     {% endif %}
     {# 説明書(写真入り。別の窓で開く)と画面の色。**どの画面からも届く**ように帯に置く #}
+    {# 印は本(📖)。「?」だと、設定の札(いまの状態に注意がある)と同じ見た目で、何か起きているように見えた(現場の声) #}
     <button class="btn btn--find" type="button" id="openManual"
-            title="操作説明書を別の窓で開きます"><span class="gl">?</span>説明書</button>
+            title="操作説明書を別の窓で開きます"><span class="gl" aria-hidden="true">📖</span>説明書</button>
     <button class="btn" type="button" id="themeToggle"
             aria-pressed="{{ 'true' if theme == 'dark' else 'false' }}"
             title="画面の色をライト / ダークで切り替えます(この端末に残ります)">

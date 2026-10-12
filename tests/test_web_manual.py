@@ -38,6 +38,13 @@ class ManualAndThemeTests(unittest.TestCase):
         self.assertIn('id="openManual"', html)
         self.assertIn('id="themeToggle"', html)
 
+    def test_説明書の印は本で_注意の札と同じ見た目にしない(self) -> None:
+        """「?」は設定の札(いまの状態に注意がある)と同じ見た目で、何か起きているように見えた(現場の声)。"""
+        import re
+        button = re.search(r'<button[^>]*id="openManual".*?</button>', self.page(), re.S).group(0)
+        self.assertIn("📖", button)
+        self.assertNotIn(">?<", button)
+
     def test_選んだ色は最初の描画から付いていて端末に残る(self) -> None:
         self.assertIn('<html lang="ja">', self.page())         # 選んでいなければ OS に合わせる
         res = self.client.post("/api/theme", json={"theme": "dark"}, headers=self.auth)
