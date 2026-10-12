@@ -236,6 +236,11 @@ class StepDisclosureTests(unittest.TestCase):
             '.step:not([data-state="current"]):not(.is-open) > .pad { display: none; }',
             self.html)
 
+    def test_開いておく段は畳まない(self) -> None:
+        """EX受注でパレットを選ばずに送れるときの「出す」(VER4.8.32)。"""
+        self.assertIn('.step[data-open="true"]:not([data-state="current"]) > .pad { display: flex; }',
+                      self.html)
+
     def test_畳んだ段も見出しを押せば開く(self) -> None:
         """直したくなったときに辿り着けなくならない。"""
         self.assertIn('.step:not([data-state="current"]) > header { cursor: pointer; }',

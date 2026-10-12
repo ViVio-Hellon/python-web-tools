@@ -518,7 +518,7 @@
 
   <!-- 7. 出す (VBA btnPrint_Click / btnCutRequest_Click / btnSendToWarehouse_Click) -->
   <section class="card step" data-step="outputs" id="outputCard"
-           data-state="{{ step.outputs.state }}">
+           data-state="{{ step.outputs.state }}"{% if step.outputs.open %} data-open="true"{% endif %}>
     <header>
       <span class="stepno">{{ step.outputs.number }}</span>
       <h3>出す</h3>
@@ -772,11 +772,15 @@
      辿り着けなくならない。 */
   .step:not([data-state="current"]):not(.is-open) > .pad { display: none; }
   .step:not([data-state="current"]):not(.is-open) > header { border-bottom: 0; }
+  /* いまの段でなくても開いておく段(EX受注でパレットを選ばずに送れるときの「出す」。
+     `presenters/selection._apply_steps`)。畳んだままだと送れることが分からない */
+  .step[data-open="true"]:not([data-state="current"]) > .pad { display: flex; }
   .step:not([data-state="current"]) > header { cursor: pointer; }
   .step:not([data-state="current"]) > header::after {
     content: "▾"; font-size: var(--fs-2xs); color: var(--muted); flex: 0 0 auto;
   }
-  .step:not([data-state="current"]).is-open > header::after { content: "▴"; }
+  .step:not([data-state="current"]).is-open > header::after,
+  .step[data-open="true"]:not([data-state="current"]) > header::after { content: "▴"; }
   /* 開き直せることが見て分かるように、押せる範囲を広げる */
   .step:not([data-state="current"]) > header:hover { background: var(--raised); }
 

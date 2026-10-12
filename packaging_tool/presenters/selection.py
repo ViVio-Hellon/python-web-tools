@@ -961,11 +961,13 @@ class Step:
     # そのときは使わない段(1P0113 のパレット、共用モードのアングル)。
     # 隠すのではなく、そもそも段として数えない
     hidden: bool = False
+    # いまの段でなくても開いておく(EXでパレットを選ばずに送れるときの「出す」)
+    open: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {"key": self.key, "number": self.number, "title": self.title,
                 "summary": self.summary, "state": self.state,
-                "hidden": self.hidden}
+                "hidden": self.hidden, "open": self.open}
 
 
 @dataclass
@@ -983,6 +985,8 @@ class SelectionViewModel:
     rows: list[PalletRow] = field(default_factory=list)
     list_mode: str = ""
     list_note: str = ""
+    # EX受注で、パレットを選んでいない(倉庫送信は品名 EX の合図だけ)。「出す」を開いて案内する
+    ex_signal_only: bool = False
     # EXで台と枚を一緒に発注するときの案内(`_ex_pair_note`)。空なら出さない
     ex_pair_note: str = ""
     ex_pair_set: bool = False
@@ -1135,6 +1139,9 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
     view.p1 = build_1p0113(session)
     view.admin = build_admin(session)
     view.outputs = build_outputs(session)
+    from . import outputs as out
+    view.ex_signal_only = (presenter.is_ex_order and not presenter.mode_1p0113
+                           and not out.ex_pallet_chosen(session))
     _apply_steps(view)
     return view
 
@@ -1182,7 +1189,10 @@ def _apply_steps(view: SelectionViewModel) -> None:
              hidden=not view.angles.show),
         Step(key="outputs", number=5, title="出す",
              summary="帳票と倉庫送信",
-             state=STEP_TODO),
+             state=STEP_TODO,
+             # EXでパレットを選んでいなければ、パレットを決める前でも倉庫送信できる。
+             # 畳んだままだと送れることが分からない(現場の声)ので開いておく
+             open=view.ex_signal_only and view.outputs.can_send),
     ]
 
     # いま押すべき段 = 終わっていない最初の段。全部終わっていれば「出す」
@@ -1214,6 +1224,12 @@ def _size_summary(view: SelectionViewModel) -> str:
     return " / ".join(parts) if parts else view.product_status
 
 
+# EX受注でパレットを選んでいないときの次の一手(`_next_action`)
+EX_SIGNAL_HINT = ("EX受注です。パレットを選ばずに、下の「出す」の「倉庫送信」で送れます"
+                  "(品名 EX の合図だけを送ります)。パレットの中身を送るときは、"
+                  "一覧から選んで「パレット決定」を押してから送ります。")
+
+
 def _next_action(view: SelectionViewModel,
                  current: Optional[Step]) -> tuple[str, str]:
     """次の一手と、その一言。押せないなら押せない理由を返す。"""
@@ -1227,6 +1243,8 @@ def _next_action(view: SelectionViewModel,
             return "decide", ("一覧で選んだパレットで確定するので、"
                               "「パレット決定」を押します。"
                               "別のものにしたいときは一覧の別の行を押します。")
+        if view.ex_signal_only and view.outputs.can_send:
+            return "sendWarehouse", EX_SIGNAL_HINT
         if view.product_width and view.product_length:
             return "palletRows", "一覧からパレットを選んでください。"
         return "prodWidth", "製品の幅・丈を入れてください(ロットを選ぶと入ります)。"

@@ -311,6 +311,9 @@ function renderSteps(next) {
     for (const card of document.querySelectorAll(
         `[data-step="${item.key}"]`)) {
       card.dataset.state = item.state;
+      // いまの段でなくても開いておく段(EXでパレットを選ばずに送れるときの「出す」)
+      if (item.open) card.dataset.open = "true";
+      else delete card.dataset.open;
       const no = card.querySelector(".stepno");
       if (no) no.textContent = item.number;
     }
