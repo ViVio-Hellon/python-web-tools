@@ -9,7 +9,8 @@
 2. 「蓋選択」は枚の行だけ。パレットの寸法・製品サイズ・ボードは変えない(倉庫連携にだけ効く)
 3. パレットと蓋があれば倉庫連携へ2行(1行目 台・2行目 枚)。枚の発注数は決めつけずに空。2行は1回で登録
 4. 「蓋を外す」で1行に戻る。パレットを選び直しても蓋はそのまま。ロットを開き直す・やり直すで外れる
-5. EXでなければ蓋選択は使えない(今までどおり)
+5. 台だけ・枚(蓋)だけでも送れる(VER4.8.35)。枚だけは蓋の1行(EXでも EX の合図にしない)
+6. EXでも上下共用でもなければ蓋選択は使えない(今までどおり)
 """
 from __future__ import annotations
 
@@ -133,11 +134,50 @@ class ExLidTests(SelectionWebTestCase):
         self.assertEqual(rows[0]["lot_no"], rows[1]["lot_no"])
         self.assertIn(outputs.LID_NOTICE, rows[0]["notice"])
 
-    def test_パレットを決めずに送ると蓋があってもEXの合図だけ(self) -> None:
-        self.lid("M1")
+    # --- 台だけ・枚だけ(VER4.8.35) ---------------------------------------
+    # 現場の声:「EXも上下共用モードも台だけの発注も可能にしてくださいね。枚だけでも当然できるように」
+    def test_台だけなら1行(self) -> None:
+        self.decide("D1")
         self.post("/api/selection/send")
         rows = self.drafts()
-        self.assertEqual([(r["hinmei"], r.get("is_ex_order")) for r in rows], [("EX", True)])
+        self.assertEqual([(r["hatchu_code"], r["tani"], r["hatchu_suu"]) for r in rows], [("D1", "台", "1")])
+        self.assertNotIn("is_ex_order", rows[0])
+
+    def test_枚だけなら蓋の1行(self) -> None:
+        state = self.lid("M1")
+        self.assertTrue(state["outputs"]["can_send"], "パレットを決めなくても送れる")
+        self.assertEqual(state["primary_action"], "sendWarehouse")
+        self.assertIn("蓋(枚)だけ", state["next_hint"])
+        self.assertTrue(next(s for s in state["steps"] if s["key"] == "outputs")["open"])
+        self.post("/api/selection/send")
+        rows = self.drafts()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual((row["hatchu_code"], row["tani"], row["hatchu_suu"]), ("M1", "枚", ""))
+        self.assertEqual(row["hinmei"], lot_service.build_hinmei("タイト", self.sym1, 1100, 2000))
+        self.assertEqual((row["lot_no"], row["nounyusaki"]), (LOT, "A社"))
+        self.assertNotIn("is_ex_order", row, "EXでも EX の合図ではなく蓋の1行")
+        self.assertNotIn("pallet_width", row, "パレットの在庫・梱包数の入れ直しの対象にしない")
+        self.assertEqual(row["notice"], outputs.LID_ONLY_NOTICE)
+
+    def test_枚だけを登録できる(self) -> None:
+        self.lid("M1")
+        self.post("/api/selection/send")
+        body = {k: v for k, v in self.drafts()[0].items() if k != "notice"}
+        res = self.client.post("/api/warehouse/send", json={**body, "hatchu_suu": "", "from_draft": True},
+                               headers=self.auth())
+        self.assertEqual(res.status_code, 400, "蓋の発注数は必須")
+        res = self.client.post("/api/warehouse/send", json={**body, "hatchu_suu": "3", "from_draft": True},
+                               headers=self.auth())
+        self.assertEqual(res.status_code, 200, res.get_json())
+        got = self.conn.execute("SELECT 発注コード, 単位, 発注数, 納入先 FROM 資材パレット注文管理").fetchall()
+        self.assertEqual([tuple(r) for r in got], [("M1", "枚", 3, "A社")])
+
+    def test_蓋だけのあとでパレットを決めると2行(self) -> None:
+        self.lid("M1")
+        self.decide("D1")
+        self.post("/api/selection/send")
+        self.assertEqual([r["hatchu_code"] for r in self.drafts()], ["D1", "M1"])
 
     def test_2行を1回で登録する(self) -> None:
         self.decide("D1")
@@ -185,11 +225,17 @@ class SharedLidTests(ExLidTests):
         self.session().presenter.apply_hosozai("ザラ板")
         self.assertTrue(self.session().presenter.is_shared_board_mode)
 
-    # 上下共用はEXではないので、パレットなしで送る形はEXと違う(VER4.8.35 で扱う)
-    test_パレットを決めずに送ると蓋があってもEXの合図だけ = None
+    def test_何も選んでいなければ送れない(self) -> None:
+        """上下共用はEXと違い、パレットも蓋も無ければ送れない(今までどおり)。"""
+        state = self.get()
+        self.assertFalse(state["outputs"]["can_send"])
 
     def test_案内は上下共用と書く(self) -> None:
         self.assertTrue(self.get()["lid_note"].startswith("上下共用:"))
+
+    def test_枚だけなら案内はEXの合図と言わない(self) -> None:
+        state = self.lid("M1")
+        self.assertNotIn("品名 EX", state["next_hint"])
 
     def test_自動のパレット検索も台だけ(self) -> None:
         from packaging_tool import pallet_auto_select

@@ -1004,6 +1004,8 @@ class SelectionViewModel:
     list_note: str = ""
     # EX受注で、パレットを選んでいない(倉庫送信は品名 EX の合図だけ)。「出す」を開いて案内する
     ex_signal_only: bool = False
+    # 蓋(枚)だけを選んでいる(パレットなし。EX・上下共用)。倉庫送信は蓋の1行。「出す」を開いて案内する
+    lid_only: bool = False
     # 蓋(枚)の案内(EX・上下共用)(`_lid_note`)。空なら出さない
     lid_note: str = ""
     lid_set: bool = False
@@ -1160,8 +1162,9 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
     view.admin = build_admin(session)
     view.outputs = build_outputs(session)
     from . import outputs as out
+    view.lid_only = out.lid_only(session)
     view.ex_signal_only = (presenter.is_ex_order and not presenter.mode_1p0113
-                           and not out.ex_pallet_chosen(session))
+                           and not out.ex_pallet_chosen(session) and not view.lid_only)
     _apply_steps(view)
     return view
 
@@ -1212,7 +1215,7 @@ def _apply_steps(view: SelectionViewModel) -> None:
              state=STEP_TODO,
              # EXでパレットを選んでいなければ、パレットを決める前でも倉庫送信できる。
              # 畳んだままだと送れることが分からない(現場の声)ので開いておく
-             open=view.ex_signal_only and view.outputs.can_send),
+             open=(view.ex_signal_only or view.lid_only) and view.outputs.can_send),
     ]
 
     # いま押すべき段 = 終わっていない最初の段。全部終わっていれば「出す」
@@ -1248,6 +1251,9 @@ def _size_summary(view: SelectionViewModel) -> str:
 EX_SIGNAL_HINT = ("EX受注です。パレットを選ばずに、下の「出す」の「倉庫送信」で送れます"
                   "(品名 EX の合図だけを送ります)。パレットの中身を送るときは、"
                   "一覧から選んで「パレット決定」を押してから送ります。")
+# 蓋(枚)だけを選んでいるとき(パレットなし)の次の一手
+LID_ONLY_HINT = ("蓋(枚)だけを選んでいます。このまま下の「出す」の「倉庫送信」で、蓋だけの1行を送れます。"
+                 "パレットも送るときは、台の行を選んで「パレット決定」を押してから送ります。")
 
 
 def _next_action(view: SelectionViewModel,
@@ -1265,6 +1271,8 @@ def _next_action(view: SelectionViewModel,
                               "別のものにしたいときは一覧の別の行を押します。")
         if view.ex_signal_only and view.outputs.can_send:
             return "sendWarehouse", EX_SIGNAL_HINT
+        if view.lid_only and view.outputs.can_send:
+            return "sendWarehouse", LID_ONLY_HINT
         if view.product_width and view.product_length:
             return "palletRows", "一覧からパレットを選んでください。"
         return "prodWidth", "製品の幅・丈を入れてください(ロットを選ぶと入ります)。"
@@ -1884,9 +1892,9 @@ def _lid_note(session: Any) -> tuple[str, bool]:
     lid = f"蓋 {sheet.width}×{sheet.length}(コード {sheet.code or '---'})"
     if row is None or (row.unit or "").strip() != "台":
         return (f"{mode}: {lid}を選んであります。パレット(台)を「パレット決定」で決めると、"
-                "倉庫連携へ2行まとめて渡します(パレットを決めずに送ると、品名 EX の合図だけです)。"), True
+                "倉庫連携へ2行まとめて渡します(パレットを決めずに送ると、蓋だけの1行です)。"), True
     return (f"{mode}: パレット {row.width}×{row.length}(コード {row.code or '---'})と、{lid}を"
-            "倉庫連携へ2行まとめて渡します。蓋をやめるときは「蓋を外す」を押してください。"), True
+            "倉庫連携へ2行まとめて渡します。蓋をやめるとき(台だけを送るとき)は「蓋を外す」を押してください。"), True
 
 
 def _pallet_row(row: Any, picked: Any = None, sheet: Any = None) -> PalletRow:

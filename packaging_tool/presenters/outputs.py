@@ -209,6 +209,10 @@ def send_refusal(session: Any) -> Optional[Refusal]:
     if session.presenter.is_ex_order:
         return None
 
+    # **蓋(枚)だけでも送れる**(EX・上下共用。`lid_only`)。パレットは要らない
+    if lid_only(session):
+        return None
+
     if session.presenter.mode_1p0113:
         m = session.presenter.materials_1p0113
         if not (m.kakuzai.is_ok and m.matsuita.is_ok):
@@ -257,6 +261,9 @@ def build_orders(session: Any) -> list[dict[str, Any]]:
     """
     if session.presenter.lot_result is None:
         return [_order_no_lot(session)]
+    # 蓋(枚)だけ(パレットを決めていない)。EXでも EX の合図ではなく、蓋の1行を送る
+    if lid_only(session):
+        return [_order_lid_only(session)]
     if session.presenter.is_ex_order:
         # **パレットを選んだなら通常どおり送る**(現場の声:「EXモードでリストのパレットを
         # 何を選んでも品名 EX になる。パレット選択なしで倉庫連携へ移ったときだけ品名 EX、
@@ -327,8 +334,7 @@ EX_WITH_PALLET_NOTICE = ("EXオーダーですが、パレットを選んだの�
 
 def ex_pallet_chosen(session: Any) -> bool:
     """EXモードで、パレットを一覧から選んでいるか(発注コードのある行)。1P0113 はパレットを使わない。"""
-    return (not session.presenter.mode_1p0113 and session.palette.is_set
-            and session.pallet_row is not None and bool((session.pallet_row.code or "").strip()))
+    return not session.presenter.mode_1p0113 and _pallet_chosen(session)
 
 
 def _build_rows(session: Any) -> list[dict[str, Any]]:
@@ -355,7 +361,7 @@ def lid_row(session: Any) -> Any:
     """「蓋選択」(EX・上下共用)で選んだ蓋(枚の行。`SelectionSession.pick_lid`)。無ければ None。
 
     パレット(台)を一覧から選んでいて(発注コードのある行)、蓋にも発注コードがあるときだけ。
-    EXでパレットを選んでいなければ、蓋を選んでいても EX の合図(品名 EX)の1行だけを送る。
+    パレットを選んでいなければ、蓋だけの1行を送る(`lid_only`)。
     """
     sheet = getattr(session, "lid_row", None)
     row = session.pallet_row
@@ -364,6 +370,48 @@ def lid_row(session: Any) -> Any:
             or row is None or (row.unit or "").strip() != "台" or not (row.code or "").strip()):
         return None
     return sheet
+
+
+# 蓋(枚)だけを送るときに下書きへ添える一言
+LID_ONLY_NOTICE = ("蓋(枚)だけを送ります(パレットは選んでいません)。"
+                   "蓋の発注数は入れていないので入れてください。"
+                   "パレットも送るときは、資材選択で台の行を「パレット決定」してから倉庫送信してください。")
+
+
+def lid_only(session: Any) -> bool:
+    """蓋(枚)だけを送るか。蓋を選べるモード(EX・上下共用)で、蓋を選んでいて、パレットを一覧から選んでいない。
+
+    現場の声:「EXも上下共用モードも台だけの発注も可能にしてくださいね。枚だけでも当然できるように」。
+    """
+    sheet = getattr(session, "lid_row", None)
+    return (session.presenter.lot_result is not None and session.presenter.lid_mode
+            and sheet is not None and bool((sheet.code or "").strip())
+            and not _pallet_chosen(session))
+
+
+def _pallet_chosen(session: Any) -> bool:
+    """パレットを一覧から選んでいるか(発注コードのある行)。"""
+    return (session.palette.is_set and session.pallet_row is not None
+            and bool((session.pallet_row.code or "").strip()))
+
+
+def _order_lid_only(session: Any) -> dict[str, Any]:
+    """蓋(枚)だけの1行。ロット・納入先・オーダーの欄はパレットのときと同じ(`_common`)。
+
+    **発注数は入れない**(パレットの梱包数と同じとは限らない)。パレットの寸法(`pallet_width`)は
+    持たせない ── 持たせると、簡易在庫のパレットの在庫を「在庫分を引きますか?」と聞いたり、
+    オーダーの梱包数で発注数を入れ直したりしてしまう。
+    """
+    sheet = session.lid_row
+    return {
+        "lot_no": session.presenter.lot_result.lot.lot_no,
+        "hinmei": lot_service.build_hinmei(sheet.industry, sheet.symbol, sheet.width, sheet.length),
+        "hatchu_code": sheet.code,
+        "tani": sheet.unit,
+        "hatchu_suu": "",
+        **_common(session),
+        "notice": LID_ONLY_NOTICE,
+    }
 
 
 def _order_sheet(order: dict[str, Any], sheet: Any) -> dict[str, Any]:
