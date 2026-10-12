@@ -653,7 +653,8 @@ class ModeFromLotTests(SelectionWebTestCase):
         移ったときだけ品名 EX、パレットを選んだ場合は通常どおりデータを反映させる」。"""
         from packaging_tool.presenters import outputs
 
-        insert_pallet(self.conn, width=1100, length=2000, code="P9", unit="枚", symbol="EX2方向")
+        # EXのパレットは台の行(VER4.8.33〜。枚は「蓋選択」)
+        insert_pallet(self.conn, width=1100, length=2000, code="P9", unit="台", symbol="EX2方向")
         self.search(EX_輸出区分="EX")
         self.post("/api/selection/pallet/pick", {"width": 1100, "length": 2000, "symbol": "EX2方向"})
         rows = outputs.build_orders(self.session())
@@ -661,7 +662,7 @@ class ModeFromLotTests(SelectionWebTestCase):
         row = rows[0]
         self.assertNotEqual(row["hinmei"], outputs.EX_HINMEI)
         self.assertIn("1100x2000", row["hinmei"])
-        self.assertEqual((row["hatchu_code"], row["tani"]), ("P9", "枚"))
+        self.assertEqual((row["hatchu_code"], row["tani"]), ("P9", "台"))
         self.assertNotIn("is_ex_order", row)
         self.assertIn("パレットを選んだので", row["notice"])
 

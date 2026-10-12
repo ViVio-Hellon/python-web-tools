@@ -127,7 +127,14 @@ function why(node, text) {
  */
 function refreshDecide() {
   if (!el.decide) return;
-  el.decide.disabled = !pickedPalletRow;
+  // EX受注のときは「パレット決定」は台の行、「蓋選択」は枚の行で押せる(サーバも同じ規則で断る)
+  const ex = Boolean(state && state.ex_lid_enabled);
+  const unit = pickedPalletRow ? (pickedPalletRow.unit || "") : "";
+  el.decide.disabled = !pickedPalletRow || (ex && unit !== "台");
+  if (el.pickLid) {
+    el.pickLid.hidden = !ex;
+    el.pickLid.disabled = !pickedPalletRow || unit !== "枚";
+  }
 }
 
 /** 一覧の行の見た目を、いま選んでいる行(`pickedPalletRow`)に合わせ直す。
@@ -193,6 +200,7 @@ function row(item) {
   // あるので、決めるときはこの番号で伝える(寸法だけだと別の行のコードで送っていた)
   tr.dataset.id = item.id || "";
   tr.dataset.key = rowKey(item);
+  tr.dataset.unit = item.unit || "";
   // マウスを乗せたときだけ、そのパレットの単位・コードを見せる
   // (VBA `DynamicTip` に相当)。押さなくても分かるようにする
   tr.title = item.note;
@@ -201,7 +209,7 @@ function row(item) {
   // ここでの `on` はまだ最終確定のサーバ側 `picked` の初期反映で、
   // 選び直した分は `applySelection()` が上書きする
   if (item.picked) tr.classList.add("on");
-  // EXで台と一緒に発注する「枚」の行
+  // EXの「蓋選択」で選んだ蓋(枚)の行
   if (item.paired) tr.classList.add("pair");
 
   item.values.forEach((value, index) => {
@@ -228,7 +236,7 @@ function render(next) {
   // どの行が最終確定しているかはサーバが `picked` で返す。まだ
   // クリックで選んでいる途中(`pickedPalletRow`)なら、そちらを優先する
   el.palletRows.replaceChildren(...next.rows.map(row));
-  // EXで「枚」の行を決めたら、それは台と一緒に発注する枚(`ex_pair_note`)。選んでいる行は台のまま
+  // EXで「蓋選択」を押したら、それは蓋(`ex_pair_note`)。選んでいる行はパレット(台)のまま
   if (pickedPalletRow && next.rows.some((r) => r.paired && rowKey(r) === pickedPalletRow.key)) {
     pickedPalletRow = null;
   }
@@ -239,7 +247,7 @@ function render(next) {
       pickedPalletRow = {
         width: String(pickedItem.width), length: String(pickedItem.length),
         symbol: pickedItem.symbol || "", id: String(pickedItem.id || ""),
-        key: rowKey(pickedItem),
+        unit: pickedItem.unit || "", key: rowKey(pickedItem),
       };
     }
   }
@@ -253,6 +261,7 @@ function render(next) {
     el.exPair.classList.toggle("status--ok", Boolean(next.ex_pair_set));
     el.exPair.classList.toggle("status--ng", !next.ex_pair_set);
   }
+  if (el.clearLid) el.clearLid.hidden = !next.ex_pair_set;
 
   // 入力欄は**サーバが変えたときだけ**書き換える。
   // どの操作でも画面ぜんぶが返ってくる設計なので、無条件に代入すると
@@ -716,6 +725,7 @@ export function start(initial) {
     }
   });
   for (const id of ["lotCaption", "banner", "listNote", "palletRows", "rowNote", "exPair",
+                    "pickLid", "clearLid",
                     "palWidth", "palLength", "prodWidth", "prodLength",
                     "sizeStatus", "decideWhy", "productFrom", "exOnlyWhy",
                     "showOnStock",
@@ -797,6 +807,7 @@ export function start(initial) {
     pickedPalletRow = {
       width: tr.dataset.width, length: tr.dataset.length,
       symbol: tr.dataset.symbol || "", key: tr.dataset.key, id: tr.dataset.id || "",
+      unit: tr.dataset.unit || "",
     };
     el.palWidth.value = tr.dataset.width;
     el.palLength.value = tr.dataset.length;
@@ -830,6 +841,18 @@ export function start(initial) {
       product_length: el.prodLength.value,
     });
   });
+
+  // EXの蓋(単位が枚の行)。倉庫連携にだけ効く
+  if (el.pickLid) {
+    el.pickLid.addEventListener("click", () => {
+      if (!pickedPalletRow) return;
+      send("/api/selection/lid/pick", {
+        width: pickedPalletRow.width, length: pickedPalletRow.length,
+        symbol: pickedPalletRow.symbol, id: pickedPalletRow.id,
+      });
+    });
+  }
+  if (el.clearLid) el.clearLid.addEventListener("click", () => send("/api/selection/lid/clear"));
 
   el.clearSizes.addEventListener("click", () => {
     pickedPalletRow = null;

@@ -235,6 +235,15 @@
                 title="一覧でパレットを選ぶと押せます"
                 {% if not view.can_decide %}disabled{% endif %}>
           <span class="gl">✓</span>パレット決定</button>
+        {# EX受注のときだけ。**蓋(単位が枚の行)を選ぶ。** 倉庫連携にだけ効き、ボード選定には関わらない。
+           EXのとき「パレット決定」は台の行、「蓋選択」は枚の行で押せる(`presenters/selection._ex_pair_note`) #}
+        <button class="btn btn--select" type="button" id="pickLid"
+                title="一覧で単位が枚の行を選ぶと押せます" disabled
+                {% if not view.ex_lid_enabled %}hidden{% endif %}>
+          <span class="gl">✓</span>蓋選択</button>
+        <button class="btn" type="button" id="clearLid"
+                {% if not view.ex_pair_set %}hidden{% endif %}>
+          <span class="gl">×</span>蓋を外す</button>
         <button class="btn btn--danger" type="button" id="clearSizes"
                 title="ロットの選択ごと外して、何も選んでいない状態に戻します">
           <span class="gl">×</span>やり直す</button>

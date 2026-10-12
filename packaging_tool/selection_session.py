@@ -112,8 +112,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
     # **発注コードと単位はここにしか無い** ── 幅と丈だけでは決まらず、
     # 同じ寸法でも記号違いで別のコードになる。倉庫送信と帳票が見る
     pallet_row: Optional[svc.PalletSizeRow] = None
-    # EXのとき、台(`pallet_row`)と一緒に発注する「枚」の行。1P0113 の角材と松板のように
-    # 2行まとめて倉庫へ送る(現場の声:「台と枚を同時に発注できるようにして下さい」)
+    # EXの「蓋選択」で選んだ蓋(単位が枚の行)。**倉庫連携にしか効かない**(ボード選定は台で決まる)。
+    # パレット(台)と蓋の両方があれば、1P0113 の角材と松板のように2行まとめて倉庫へ送る
     ex_sheet_row: Optional[svc.PalletSizeRow] = None
 
     # --- ボード (VBA `cboBoardType` / `lstSelectedBoards*`) ---
@@ -373,47 +373,57 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self.pallet_row = row
         return BoardOpResult(True, "")
 
-    # --- EX: 台と枚を一緒に発注する ------------------------------------
-    def pair_ex_sheet(self, width: int, length: int, symbol: str,
-                      row_id: Optional[int] = None) -> Optional[BoardOpResult]:
-        """EXで台を決めてあるときに「枚」の行を決めた → 台と一緒に発注する枚にする。
+    # --- EX: パレット(台)と蓋(枚) ------------------------------------
+    def ex_pallet_refusal(self, width: int, length: int, symbol: str,
+                          row_id: Optional[int] = None) -> Optional[BoardOpResult]:
+        """EXのとき「パレット決定」で受け付けるのは**単位が台の行だけ**。枚の行は「蓋選択」で選ぶ。
 
-        **台(パレット)は変えない。** ボードを載せる寸法は台のもの。
-        同じ枚の行をもう一度決めると外す。当てはまらなければ None(ふつうに選ぶ)。
+        現場の声:「EXモードの時はパレット選択と蓋選択が押せるようにし、パレット選択で台を受け付ける、
+        蓋選択で枚を受け付ける」。寸法を変える前(`apply_pallet` の前)に確かめる。
         """
-        if not (self.presenter.is_ex_order and _is_unit(self.pallet_row, svc.UNIT_DAI)):
+        if not self.presenter.is_ex_order or self.presenter.mode_1p0113:
             return None
         row = svc.find_pallet_row(self.presenter.conn, width, length, symbol,
                                   row_id=row_id, last_hosozai=self.presenter.last_hosozai,
                                   is_ex_order=True)
-        if not _is_unit(row, svc.UNIT_MAI):
+        if row is None or _is_unit(row, svc.UNIT_DAI):
             return None
-        if self.ex_sheet_row is not None and self.ex_sheet_row.id == row.id:
-            self.ex_sheet_row = None
-            self.presenter.user_log.log(f"[EX] 一緒に発注する枚を外しました: {row.width} x {row.length}")
-            return BoardOpResult(True, "台と一緒に発注する「枚」を外しました(台だけを送ります)。")
+        hint = "「蓋選択」で選んでください。" if _is_unit(row, svc.UNIT_MAI) else "台の行を選んでください。"
+        return BoardOpResult(
+            False, f"EXのときの「パレット決定」は単位が台の行だけです(選んだ行は {row.unit or '---'})。{hint}",
+            REFUSE_NOT_LISTED)
+
+    def pick_ex_lid(self, width: int, length: int, symbol: str,
+                    row_id: Optional[int] = None) -> BoardOpResult:
+        """EXの「蓋選択」。**単位が枚の行だけ**を受け付ける。
+
+        蓋は**倉庫連携にしか効かない**(パレットの寸法・製品サイズ・ボード選定は変えない)。
+        パレット(台)と蓋の両方が決まっていれば、倉庫連携へ2行まとめて渡す(`outputs.ex_sheet_row`)。
+        """
+        if not self.presenter.is_ex_order or self.presenter.mode_1p0113:
+            return BoardOpResult(False, "蓋選択はEX受注のときだけ使えます。", REFUSE_NOT_LISTED)
+        row = svc.find_pallet_row(self.presenter.conn, width, length, symbol,
+                                  row_id=row_id, last_hosozai=self.presenter.last_hosozai,
+                                  is_ex_order=True)
+        if row is None:
+            return BoardOpResult(False, f"{width}×{length} {symbol} は一覧にありません。",
+                                 REFUSE_NOT_LISTED)
+        if not _is_unit(row, svc.UNIT_MAI):
+            return BoardOpResult(
+                False, f"「蓋選択」は単位が枚の行だけです(選んだ行は {row.unit or '---'})。"
+                       "台の行は「パレット決定」で選んでください。", REFUSE_NOT_LISTED)
         self.ex_sheet_row = row
         self.presenter.user_log.log(
-            f"[EX] 台と一緒に発注する枚: {row.width} x {row.length} {row.symbol} コード {row.code}",
-            emphasis=True)
-        return BoardOpResult(True, f"台と一緒に「枚」{row.width}×{row.length}(コード {row.code or '---'})"
-                                   "も発注します。倉庫連携へ2行まとめて渡します。")
+            f"[EX] 蓋: {row.width} x {row.length} {row.symbol} コード {row.code}", emphasis=True)
+        return BoardOpResult(True, f"蓋 {row.width}×{row.length}(コード {row.code or '---'})にしました。"
+                                   "倉庫連携へパレット(台)と2行まとめて渡します。")
 
-    def keep_ex_sheet(self, before_row: Optional[svc.PalletSizeRow],
-                      before_sheet: Optional[svc.PalletSizeRow]) -> None:
-        """パレットを決め直したあと、一緒に発注する枚を決め直す。
-
-        台を選び直しても、決めてあった枚はそのまま(同じ単位の行だけを入れ替える)。
-        先に枚を決めてから台を決めたら、その枚を一緒に発注する枚にする。
-        枚だけを決めているとき・EXでないときは持たない。
-        """
-        if not (self.presenter.is_ex_order and _is_unit(self.pallet_row, svc.UNIT_DAI)):
-            self.ex_sheet_row = None
-            return
-        if _is_unit(before_row, svc.UNIT_MAI):
-            self.ex_sheet_row = before_row
-        else:
-            self.ex_sheet_row = before_sheet
+    def drop_ex_lid(self) -> BoardOpResult:
+        """「蓋を外す」。倉庫連携へはパレット(台)の1行だけを渡す。"""
+        if self.ex_sheet_row is not None:
+            self.presenter.user_log.log("[EX] 蓋を外しました")
+        self.ex_sheet_row = None
+        return BoardOpResult(True, "蓋を外しました(倉庫連携へはパレットの1行だけを渡します)。")
 
     def decide_stack_for_row(self, width: int, length: int, symbol: str,
                              product_width: int, product_length: int) -> bool:
@@ -1054,6 +1064,9 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         # (VBA は `chkExOnly` を表示して自動でONにしていた。
         #  tkinter版 `_render_ex_order` も同じ)
         self.ex_only = self.presenter.is_ex_order
+        # 蓋(枚)はEXのときだけのもの。選んだオーダーがEXでなくなったら持たない
+        if not self.presenter.is_ex_order:
+            self.ex_sheet_row = None
         # 1P0113 の乗数は総梱包数で入れ直す(VBA `Load1P0113Materials`)
         self._reset_qty(outcome["mode_change"])
         return outcome

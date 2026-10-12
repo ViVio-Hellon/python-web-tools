@@ -49,10 +49,15 @@ class ExUnitTests(unittest.TestCase):
         rows = pallet_list.list_pallets_for_product(conn, product_width=1050, product_length=1950,
                                                     show_all=True, is_ex_order=True)
         self.assertIn("枚", {r.unit for r in rows})
-        row = conn.execute("SELECT * FROM PalletMaster WHERE 単位 = '枚'").fetchone()
-        self.assertTrue(pallet_auto_select._listable(row, ex_only_mode=False, show_all=True,
+        # 一覧には枚も出すが、**自動で決めるのはパレット(台)だけ**(VER4.8.33〜。枚は「蓋選択」で人が選ぶ)
+        sheet = conn.execute("SELECT * FROM PalletMaster WHERE 単位 = '枚'").fetchone()
+        dai = conn.execute("SELECT * FROM PalletMaster WHERE 単位 = '台'").fetchone()
+        for ex_only in (False, True):
+            self.assertFalse(pallet_auto_select._listable(sheet, ex_only_mode=ex_only, show_all=True,
+                                                          last_hosozai="", is_ex_order=True))
+        self.assertTrue(pallet_auto_select._listable(dai, ex_only_mode=False, show_all=True,
                                                      last_hosozai="", is_ex_order=True))
-        self.assertFalse(pallet_auto_select._listable(row, ex_only_mode=False, show_all=True,
+        self.assertFalse(pallet_auto_select._listable(sheet, ex_only_mode=False, show_all=True,
                                                       last_hosozai=""))
 
     def test_押した行を引くときも枚を落とさない(self) -> None:

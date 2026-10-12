@@ -346,15 +346,16 @@ def _build_rows(session: Any) -> list[dict[str, Any]]:
     return [order, _order_sheet(order, sheet)]
 
 
-# EXで台と枚を一緒に送るときに下書きへ添える一言
-EX_SHEET_NOTICE = ("台と枚を2行まとめて送ります(1行目が台、2行目が枚)。"
-                   "枚の発注数は入れていないので、2行目に移って入れてください。")
+# EXでパレット(台)と蓋(枚)を一緒に送るときに下書きへ添える一言
+EX_SHEET_NOTICE = ("パレット(台)と蓋(枚)を2行まとめて送ります(1行目が台、2行目が枚)。"
+                   "蓋の発注数は入れていないので、「次へ」で2行目に移って入れてください。")
 
 
 def ex_sheet_row(session: Any) -> Any:
-    """EXで台と一緒に発注する「枚」の行(`SelectionSession.pair_ex_sheet`)。無ければ None。
+    """EXの「蓋選択」で選んだ蓋(枚の行。`SelectionSession.pick_ex_lid`)。無ければ None。
 
-    台を一覧から選んでいて(発注コードのある行)、枚にも発注コードがあるときだけ。
+    パレット(台)を一覧から選んでいて(発注コードのある行)、蓋にも発注コードがあるときだけ。
+    パレットを選んでいなければ、蓋を選んでいても EX の合図(品名 EX)の1行だけを送る。
     """
     sheet = getattr(session, "ex_sheet_row", None)
     row = session.pallet_row
@@ -366,9 +367,9 @@ def ex_sheet_row(session: Any) -> Any:
 
 
 def _order_sheet(order: dict[str, Any], sheet: Any) -> dict[str, Any]:
-    """台と一緒に送る「枚」の行。ロット・納入先・オーダーの欄は台の行と同じ。
+    """パレット(台)と一緒に送る蓋(枚)の行。ロット・納入先・オーダーの欄は台の行と同じ。
 
-    品名・発注コード・単位は枚の行から。**発注数は入れない** ── 台の数(梱包数)と
+    品名・発注コード・単位は蓋の行から。**発注数は入れない** ── 台の数(梱包数)と
     同じとは限らないので、決めつけずに倉庫連携で入れてもらう。
     """
     return {

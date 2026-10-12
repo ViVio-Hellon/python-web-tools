@@ -696,8 +696,10 @@ class PalletRow:
     # ここに出さないと画面が「どれを選んだか」を独自に覚えることになり、
     # 外されたことも、自動選定で選ばれたことも画面に伝わらない
     picked: bool = False
-    # EXで台と一緒に発注する「枚」の行(`SelectionSession.ex_sheet_row`)
+    # EXの「蓋選択」で選んだ蓋(枚)の行(`SelectionSession.ex_sheet_row`)
     paired: bool = False
+    # 単位(台・枚・組)。EXのとき、押せるボタン(パレット決定は台・蓋選択は枚)を画面が決める
+    unit: str = ""
 
 
 @dataclass
@@ -987,9 +989,11 @@ class SelectionViewModel:
     list_note: str = ""
     # EX受注で、パレットを選んでいない(倉庫送信は品名 EX の合図だけ)。「出す」を開いて案内する
     ex_signal_only: bool = False
-    # EXで台と枚を一緒に発注するときの案内(`_ex_pair_note`)。空なら出さない
+    # EXの蓋(枚)の案内(`_ex_pair_note`)。空なら出さない
     ex_pair_note: str = ""
     ex_pair_set: bool = False
+    # 「蓋選択」「蓋を外す」を出すか(EX受注で 1P0113 でないとき)
+    ex_lid_enabled: bool = False
 
     # 入力欄の値(サーバが決める。画面は言われたものを入れる)
     pallet_width: str = ""
@@ -1132,6 +1136,7 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
     view.rows = [_pallet_row(row, session.pallet_row, sheet) for row in rows]
     view.list_note = _list_note(session, len(rows))
     view.ex_pair_note, view.ex_pair_set = _ex_pair_note(session)
+    view.ex_lid_enabled = presenter.is_ex_order and not presenter.mode_1p0113
 
     view.boards = build_boards(session)
     view.angles = build_angles(session)
@@ -1849,18 +1854,23 @@ def _match_note(row: Any) -> str:
 
 
 def _ex_pair_note(session: Any) -> tuple[str, bool]:
-    """EXで台と枚を一緒に発注するときの案内。(文, 枚を決めてあるか)。EXで台を決めていなければ空。"""
-    row = session.pallet_row
-    if (not session.presenter.is_ex_order or session.presenter.mode_1p0113
-            or row is None or (row.unit or "").strip() != "台"):
+    """EXの蓋(枚)の案内。(文, 蓋を選んであるか)。EXでなければ空。
+
+    パレット(台)は「パレット決定」、蓋(枚)は「蓋選択」。蓋は倉庫連携にだけ効く。
+    """
+    if not session.presenter.is_ex_order or session.presenter.mode_1p0113:
         return "", False
+    row = session.pallet_row
     sheet = getattr(session, "ex_sheet_row", None)
     if sheet is None:
-        return ("EX: 台と一緒に「枚」も発注するときは、一覧で単位が枚の行を選んで"
-                "「パレット決定」を押してください(台はそのまま。2行まとめて倉庫へ送ります)。"), False
-    return (f"EX: 台 {row.width}×{row.length}(コード {row.code or '---'})と、"
-            f"枚 {sheet.width}×{sheet.length}(コード {sheet.code or '---'})を一緒に発注します。"
-            "枚を外すときは、同じ枚の行をもう一度選んで「パレット決定」を押してください。"), True
+        return ("EX: パレットは単位が台の行を「パレット決定」で、蓋も発注するときは単位が枚の行を"
+                "「蓋選択」で選んでください(蓋は倉庫連携にだけ効きます。ボード選定には関わりません)。"), False
+    lid = f"蓋 {sheet.width}×{sheet.length}(コード {sheet.code or '---'})"
+    if row is None or (row.unit or "").strip() != "台":
+        return (f"EX: {lid}を選んであります。パレット(台)を「パレット決定」で決めると、"
+                "倉庫連携へ2行まとめて渡します(パレットを決めずに送ると、品名 EX の合図だけです)。"), True
+    return (f"EX: パレット {row.width}×{row.length}(コード {row.code or '---'})と、{lid}を"
+            "倉庫連携へ2行まとめて渡します。蓋をやめるときは「蓋を外す」を押してください。"), True
 
 
 def _pallet_row(row: Any, picked: Any = None, sheet: Any = None) -> PalletRow:
@@ -1873,6 +1883,7 @@ def _pallet_row(row: Any, picked: Any = None, sheet: Any = None) -> PalletRow:
               + _match_note(row)),
         picked=(picked is not None and picked.id == row.id),
         paired=(sheet is not None and sheet.id == row.id),
+        unit=(row.unit or "").strip(),
     )
 
 
@@ -1915,12 +1926,13 @@ def to_dict(view: SelectionViewModel) -> dict[str, Any]:
                    "visible": view.banner.visible},
         "rows": [{"values": r.values, "width": r.width, "length": r.length,
                   "symbol": r.symbol, "is_ex": r.is_ex, "note": r.note, "id": r.id,
-                  "picked": r.picked, "paired": r.paired}
+                  "picked": r.picked, "paired": r.paired, "unit": r.unit}
                  for r in view.rows],
         "list_mode": view.list_mode,
         "list_note": view.list_note,
         "ex_pair_note": view.ex_pair_note,
         "ex_pair_set": view.ex_pair_set,
+        "ex_lid_enabled": view.ex_lid_enabled,
         "pallet_width": view.pallet_width,
         "pallet_length": view.pallet_length,
         "product_width": view.product_width,
