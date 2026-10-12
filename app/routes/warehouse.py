@@ -226,7 +226,7 @@ def _apply_orders(drafts: list[dict]) -> None:
 def _lot_wide(drafts: list[dict]) -> bool:
     """ロット全体の数で送る2行(1P0113 の角材・松板)か。
 
-    EXの台と枚(`outputs.ex_sheet_row`)も2行だが、どちらもパレット一覧の行(寸法を持つ)で、
+    パレット(台)と蓋(枚)(`outputs.lid_row`。EX・上下共用)も2行だが、どちらもパレット一覧の行(寸法を持つ)で、
     オーダーの選び方は1行のときと同じ(含めるオーダーは画面のチェック)。
     """
     return len(drafts) > 1 and not all(d.get("pallet_width") for d in drafts)

@@ -19,7 +19,8 @@ from typing import Optional
 from . import config, db
 from . import special_packaging as spk
 from .logging_utils import get_logger
-from .pallet_common import (MAX_NEAR_MISS_LOGS, UNIT_DAI, AutoSelectPalletResult,
+from .pallet_common import (MAX_NEAR_MISS_LOGS, UNIT_DAI, UNIT_MAI, AutoSelectPalletResult,
+                            allowed_units,
                             PalletSizeRow, _build_pass_defs, _category_ok,
                             _fit_range_inverted, _fit_range_ok, _is_numeric,
                             _keta_ok, _pass_tag, _physically_fits,
@@ -41,9 +42,10 @@ def _listable(row: sqlite3.Row, *, ex_only_mode: bool, show_all: bool,
     一覧と同じ規則(EX と `unit_allowed`)で候補を絞る。
     """
     is_ex = "EX" in (row["記号"] or "").strip().upper()
-    # EX受注のパレットは**台の行だけ**(枚は「蓋選択」で人が選ぶ。組は使わない)。
-    # 一覧には台と枚の両方を出すが、自動で決めるのはパレット(台)だけ
-    if is_ex_order and (row["単位"] or "").strip() != UNIT_DAI:
+    # EX受注・上下共用(一覧に台と枚の両方を出すとき)のパレットは**台の行だけ**
+    # (枚は「蓋選択」で人が選ぶ。組は使わない)。自動で決めるのはパレット(台)だけ
+    if ((is_ex_order or UNIT_MAI in allowed_units(last_hosozai))
+            and (row["単位"] or "").strip() != UNIT_DAI):
         return False
     if ex_only_mode:
         return is_ex

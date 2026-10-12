@@ -336,9 +336,9 @@ def _build_rows(session: Any) -> list[dict[str, Any]]:
         return _orders_1p0113(session)
     order = _order_normal(session)
     notice = draft_notice(session, order)
-    sheet = ex_sheet_row(session)
+    sheet = lid_row(session)
     if sheet is not None:
-        notice = " ".join(filter(None, [EX_SHEET_NOTICE, notice]))
+        notice = " ".join(filter(None, [LID_NOTICE, notice]))
     if notice:
         order["notice"] = notice
     if sheet is None:
@@ -346,20 +346,20 @@ def _build_rows(session: Any) -> list[dict[str, Any]]:
     return [order, _order_sheet(order, sheet)]
 
 
-# EXでパレット(台)と蓋(枚)を一緒に送るときに下書きへ添える一言
-EX_SHEET_NOTICE = ("パレット(台)と蓋(枚)を2行まとめて送ります(1行目が台、2行目が枚)。"
+# パレット(台)と蓋(枚)を一緒に送るときに下書きへ添える一言(EX・上下共用)
+LID_NOTICE = ("パレット(台)と蓋(枚)を2行まとめて送ります(1行目が台、2行目が枚)。"
                    "蓋の発注数は入れていないので、「次へ」で2行目に移って入れてください。")
 
 
-def ex_sheet_row(session: Any) -> Any:
-    """EXの「蓋選択」で選んだ蓋(枚の行。`SelectionSession.pick_ex_lid`)。無ければ None。
+def lid_row(session: Any) -> Any:
+    """「蓋選択」(EX・上下共用)で選んだ蓋(枚の行。`SelectionSession.pick_lid`)。無ければ None。
 
     パレット(台)を一覧から選んでいて(発注コードのある行)、蓋にも発注コードがあるときだけ。
-    パレットを選んでいなければ、蓋を選んでいても EX の合図(品名 EX)の1行だけを送る。
+    EXでパレットを選んでいなければ、蓋を選んでいても EX の合図(品名 EX)の1行だけを送る。
     """
-    sheet = getattr(session, "ex_sheet_row", None)
+    sheet = getattr(session, "lid_row", None)
     row = session.pallet_row
-    if (not session.presenter.is_ex_order or session.presenter.mode_1p0113
+    if (not session.presenter.lid_mode
             or sheet is None or not (sheet.code or "").strip()
             or row is None or (row.unit or "").strip() != "台" or not (row.code or "").strip()):
         return None

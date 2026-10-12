@@ -120,8 +120,8 @@ def pick_pallet():
     if width is None or length is None:
         return jsonify(_error("bad_size", "一覧から行を選んでください。")), 400
 
-    # **EXのときパレット決定で受け付けるのは台だけ**(枚は「蓋選択」)。寸法を変える前に断る
-    refused = session.ex_pallet_refusal(width, length, str(body.get("symbol", "")),
+    # **EX・上下共用のときパレット決定で受け付けるのは台だけ**(枚は「蓋選択」)。寸法を変える前に断る
+    refused = session.lid_pallet_refusal(width, length, str(body.get("symbol", "")),
                                         row_id=_parse_int(body.get("id")))
     if refused is not None:
         return _apply(session, refused)
@@ -150,7 +150,7 @@ def pick_pallet():
 
 @bp.post("/api/selection/lid/pick")
 def pick_lid():
-    """EXの「蓋選択」。一覧の**単位が枚の行**を蓋にする(`SelectionSession.pick_ex_lid`)。
+    """「蓋選択」(EX・上下共用)。一覧の**単位が枚の行**を蓋にする(`SelectionSession.pick_lid`)。
 
     蓋は倉庫連携にしか効かない。パレット(台)が決まっていれば、倉庫連携の下書きを2行に作り直す。
     """
@@ -159,7 +159,7 @@ def pick_lid():
     width, length = _parse_int(body.get("width")), _parse_int(body.get("length"))
     if width is None or length is None:
         return jsonify(_error("bad_size", "一覧から蓋(単位が枚の行)を選んでください。")), 400
-    picked = session.pick_ex_lid(width, length, str(body.get("symbol", "")),
+    picked = session.pick_lid(width, length, str(body.get("symbol", "")),
                                  row_id=_parse_int(body.get("id")))
     if not picked.ok:
         return _apply(session, picked)
@@ -169,9 +169,9 @@ def pick_lid():
 
 @bp.post("/api/selection/lid/clear")
 def clear_lid():
-    """EXの「蓋を外す」。倉庫連携の下書きはパレットの1行に戻す。"""
+    """「蓋を外す」(EX・上下共用)。倉庫連携の下書きはパレットの1行に戻す。"""
     session = _session()
-    dropped = session.drop_ex_lid()
+    dropped = session.drop_lid()
     _prepare_warehouse_draft(session)
     return _state(session, message=dropped.message)
 

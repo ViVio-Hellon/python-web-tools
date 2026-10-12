@@ -235,14 +235,14 @@
                 title="一覧でパレットを選ぶと押せます"
                 {% if not view.can_decide %}disabled{% endif %}>
           <span class="gl">✓</span>パレット決定</button>
-        {# EX受注のときだけ。**蓋(単位が枚の行)を選ぶ。** 倉庫連携にだけ効き、ボード選定には関わらない。
-           EXのとき「パレット決定」は台の行、「蓋選択」は枚の行で押せる(`presenters/selection._ex_pair_note`) #}
+        {# EX受注・上下共用モードのときだけ。**蓋(単位が枚の行)を選ぶ。** 倉庫連携にだけ効き、ボード選定には関わらない。
+           このとき「パレット決定」は台の行、「蓋選択」は枚の行で押せる(`presenters/selection._lid_note`) #}
         <button class="btn btn--select" type="button" id="pickLid"
                 title="一覧で単位が枚の行を選ぶと押せます" disabled
-                {% if not view.ex_lid_enabled %}hidden{% endif %}>
+                {% if not view.lid_enabled %}hidden{% endif %}>
           <span class="gl">✓</span>蓋選択</button>
         <button class="btn" type="button" id="clearLid"
-                {% if not view.ex_pair_set %}hidden{% endif %}>
+                {% if not view.lid_set %}hidden{% endif %}>
           <span class="gl">×</span>蓋を外す</button>
         <button class="btn btn--danger" type="button" id="clearSizes"
                 title="ロットの選択ごと外して、何も選んでいない状態に戻します">
@@ -281,9 +281,9 @@
          倉庫送信で入力する値そのものなので、小さい説明文字(.why)より
          はっきり読めるようにする(現場の声) #}
       <p class="rownote" id="rowNote"></p>
-      {# EXで台と枚を一緒に発注するとき。**言葉はサーバが決める**(`presenters/selection._ex_pair_note`) #}
-      <p class="status {{ 'status--ok' if view.ex_pair_set else 'status--ng' }}" id="exPair"
-         {% if not view.ex_pair_note %}hidden{% endif %}>{{ view.ex_pair_note }}</p>
+      {# パレット(台)と蓋(枚)の案内(EX・上下共用)。**言葉はサーバが決める**(`presenters/selection._lid_note`) #}
+      <p class="status {{ 'status--ok' if view.lid_set else 'status--ng' }}" id="exPair"
+         {% if not view.lid_note %}hidden{% endif %}>{{ view.lid_note }}</p>
 
       {# 一覧に無い寸法を使うときの逃げ道。**普段は使わない**ので畳んでおく
          (§1.3 段階的開示)。押せば開く #}

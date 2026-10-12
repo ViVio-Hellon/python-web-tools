@@ -375,7 +375,10 @@ class AutoSelectPalletTests(BoardSelectionTestCase):
 
     def test_自動検索は一覧に出ない単位を選ばない(self):
         """VBA で直した不具合: 候補選びが単位を見ておらず、一覧に出ない
-        パレットを決めていた。上下共用でなければ「台」だけ、上下共用なら「台・枚」。"""
+        パレットを決めていた。上下共用でなければ「台」だけ。
+
+        上下共用のときは、VBA は「台・枚」から選んでいた。VER4.8.34 からは**台だけ**
+        (現場の声:「上下共用モードの時も蓋が有ることが前提」── 枚は蓋で、「蓋選択」で人が選ぶ)。"""
         insert_pallet(self.conn, width=1100, length=2100, w_min=900, w_max=1100,
                       l_min=1900, l_max=2100, industry="一般", unit="枚", code="MAI")
         insert_pallet(self.conn, width=1200, length=2200, w_min=900, w_max=1200,
@@ -387,7 +390,7 @@ class AutoSelectPalletTests(BoardSelectionTestCase):
         self.assertEqual((got.width, got.length), (1200, 2200))      # 台だけ
         got = svc.auto_select_pallet(self.conn, product_width_text="1000",
                                      product_length_text="2000", last_hosozai="上蓋")
-        self.assertEqual((got.width, got.length), (1100, 2100))      # 台・枚(組は選ばない)
+        self.assertEqual((got.width, got.length), (1200, 2200))      # 台だけ(枚は蓋。組も選ばない)
         got = svc.auto_select_pallet(self.conn, product_width_text="1000",
                                      product_length_text="2000", show_all=True)
         # 「EXまで表示」でも単位の条件は残る(以前は単位を問わず 1050×2050 の組を選んでいた)

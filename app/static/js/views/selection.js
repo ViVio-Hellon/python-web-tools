@@ -127,8 +127,8 @@ function why(node, text) {
  */
 function refreshDecide() {
   if (!el.decide) return;
-  // EX受注のときは「パレット決定」は台の行、「蓋選択」は枚の行で押せる(サーバも同じ規則で断る)
-  const ex = Boolean(state && state.ex_lid_enabled);
+  // EX受注・上下共用のときは「パレット決定」は台の行、「蓋選択」は枚の行で押せる(サーバも同じ規則で断る)
+  const ex = Boolean(state && state.lid_enabled);
   const unit = pickedPalletRow ? (pickedPalletRow.unit || "") : "";
   el.decide.disabled = !pickedPalletRow || (ex && unit !== "台");
   if (el.pickLid) {
@@ -209,7 +209,7 @@ function row(item) {
   // ここでの `on` はまだ最終確定のサーバ側 `picked` の初期反映で、
   // 選び直した分は `applySelection()` が上書きする
   if (item.picked) tr.classList.add("on");
-  // EXの「蓋選択」で選んだ蓋(枚)の行
+  // 「蓋選択」で選んだ蓋(枚)の行
   if (item.paired) tr.classList.add("pair");
 
   item.values.forEach((value, index) => {
@@ -236,7 +236,7 @@ function render(next) {
   // どの行が最終確定しているかはサーバが `picked` で返す。まだ
   // クリックで選んでいる途中(`pickedPalletRow`)なら、そちらを優先する
   el.palletRows.replaceChildren(...next.rows.map(row));
-  // EXで「蓋選択」を押したら、それは蓋(`ex_pair_note`)。選んでいる行はパレット(台)のまま
+  // 「蓋選択」を押したら、それは蓋(`lid_note`)。選んでいる行はパレット(台)のまま
   if (pickedPalletRow && next.rows.some((r) => r.paired && rowKey(r) === pickedPalletRow.key)) {
     pickedPalletRow = null;
   }
@@ -256,12 +256,12 @@ function render(next) {
   if (pickedRow) pickedRow.scrollIntoView({ block: "nearest" });
   el.listNote.textContent = next.list_note;
   if (el.exPair) {
-    el.exPair.hidden = !next.ex_pair_note;
-    el.exPair.textContent = next.ex_pair_note || "";
-    el.exPair.classList.toggle("status--ok", Boolean(next.ex_pair_set));
-    el.exPair.classList.toggle("status--ng", !next.ex_pair_set);
+    el.exPair.hidden = !next.lid_note;
+    el.exPair.textContent = next.lid_note || "";
+    el.exPair.classList.toggle("status--ok", Boolean(next.lid_set));
+    el.exPair.classList.toggle("status--ng", !next.lid_set);
   }
-  if (el.clearLid) el.clearLid.hidden = !next.ex_pair_set;
+  if (el.clearLid) el.clearLid.hidden = !next.lid_set;
 
   // 入力欄は**サーバが変えたときだけ**書き換える。
   // どの操作でも画面ぜんぶが返ってくる設計なので、無条件に代入すると
@@ -842,7 +842,7 @@ export function start(initial) {
     });
   });
 
-  // EXの蓋(単位が枚の行)。倉庫連携にだけ効く
+  // 蓋(単位が枚の行。EX・上下共用)。倉庫連携にだけ効く
   if (el.pickLid) {
     el.pickLid.addEventListener("click", () => {
       if (!pickedPalletRow) return;

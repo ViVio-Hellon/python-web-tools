@@ -1,4 +1,4 @@
-"""EXのとき、パレット(台)は「パレット決定」、蓋(枚)は「蓋選択」で選び、倉庫連携へ2行まとめて渡す試験
+"""EX・上下共用のとき、パレット(台)は「パレット決定」、蓋(枚)は「蓋選択」で選び、倉庫連携へ2行まとめて渡す試験
 
 現場の声:「EXモードの時はパレット選択と蓋選択が押せるようにし、パレット選択で台を受け付ける、
 蓋選択で枚を受け付ける。枚の選択は倉庫連携にしか影響を及ぼさない(ボード選定には関係ない)。
@@ -18,7 +18,7 @@ import json
 import re
 import unittest
 
-from packaging_tool import work_context
+from packaging_tool import lot_service, work_context
 from packaging_tool.presenters import outputs
 from tests.test_web_selection import SelectionWebTestCase, insert_pallet
 
@@ -27,6 +27,8 @@ LOT = "1234567"
 
 class ExLidTests(SelectionWebTestCase):
     ex = "EX"
+    # 記号。EX受注の一覧(EXオンリー)には記号に EX を含む行が出る
+    sym1, sym2 = "EXﾀｲﾄ", "EX2方向"
 
     def setUp(self) -> None:
         super().setUp()
@@ -39,17 +41,21 @@ class ExLidTests(SelectionWebTestCase):
             module.get_db = lambda: self.conn
             self.addCleanup(lambda m=module, o=original: setattr(m, "get_db", o))
         insert_pallet(self.conn, width=1100, length=2000, code="D1", unit="台", industry="タイト",
-                      symbol="EXﾀｲﾄ")
+                      symbol=self.sym1)
         insert_pallet(self.conn, width=1200, length=2400, code="D2", unit="台", industry="タイト",
-                      symbol="EXﾀｲﾄ")
+                      symbol=self.sym1)
         insert_pallet(self.conn, width=1100, length=2000, code="M1", unit="枚", industry="タイト",
-                      symbol="EXﾀｲﾄ")
+                      symbol=self.sym1)
         insert_pallet(self.conn, width=1200, length=2400, code="M2", unit="枚", industry="タイト",
-                      symbol="EX2方向")
+                      symbol=self.sym2)
         insert_lot(self.conn)
         insert_hiki(self.conn, order_no="A100", qty=22.0, no="00000001")
         insert_odr(self.conn, order_no="A100", 納入先名称="A社", EX_輸出区分=self.ex)
         self.client.get(f"/api/lot/{LOT}", headers=self.auth())
+        self.enter_mode()
+
+    def enter_mode(self) -> None:
+        """モードに入る。EXはロットを開いた時点で入っている。"""
 
     def row_of(self, code: str) -> dict:
         r = self.conn.execute("SELECT 管理番号, 幅, 丈, 記号 FROM PalletMaster WHERE コード = ?",
@@ -69,8 +75,8 @@ class ExLidTests(SelectionWebTestCase):
     def test_一覧には台と枚の両方が出て単位が分かる(self) -> None:
         state = self.get()
         self.assertEqual(sorted(r["unit"] for r in state["rows"]), ["台", "台", "枚", "枚"])
-        self.assertTrue(state["ex_lid_enabled"])
-        self.assertIn("「蓋選択」", state["ex_pair_note"])
+        self.assertTrue(state["lid_enabled"])
+        self.assertIn("「蓋選択」", state["lid_note"])
 
     def test_パレット決定は台だけ_枚なら寸法を変えずに断る(self) -> None:
         self.decide("D1")
@@ -79,12 +85,12 @@ class ExLidTests(SelectionWebTestCase):
         session = self.session()
         self.assertEqual(session.pallet_row.code, "D1")
         self.assertEqual((session.palette.width, session.palette.length), (1100, 2000))
-        self.assertIsNone(session.ex_sheet_row)
+        self.assertIsNone(session.lid_row)
 
     def test_蓋選択は枚だけ(self) -> None:
         state = self.lid("D2", expect=400)
         self.assertIn("パレット決定", state["error"]["message"])
-        self.assertIsNone(self.session().ex_sheet_row)
+        self.assertIsNone(self.session().lid_row)
 
     def test_蓋は倉庫連携にだけ効く(self) -> None:
         self.decide("D1")
@@ -92,27 +98,27 @@ class ExLidTests(SelectionWebTestCase):
         state = self.lid("M2")                                   # 寸法の違う蓋でも
         session = self.session()
         self.assertEqual((session.palette.width, session.palette.length, session.product), before)
-        self.assertEqual((session.pallet_row.code, session.ex_sheet_row.code), ("D1", "M2"))
-        self.assertTrue(state["ex_pair_set"])
-        self.assertIn("コード M2", state["ex_pair_note"])
+        self.assertEqual((session.pallet_row.code, session.lid_row.code), ("D1", "M2"))
+        self.assertTrue(state["lid_set"])
+        self.assertIn("コード M2", state["lid_note"])
         marks = {r["id"]: (r["picked"], r["paired"]) for r in state["rows"]}
         self.assertEqual(marks[self.row_of("D1")["id"]], (True, False))
         self.assertEqual(marks[self.row_of("M2")["id"]], (False, True))
 
     def test_先に蓋を選んでもよい_パレットを選び直しても蓋はそのまま(self) -> None:
         state = self.lid("M1")
-        self.assertIn("パレット(台)を「パレット決定」で決めると", state["ex_pair_note"])
+        self.assertIn("パレット(台)を「パレット決定」で決めると", state["lid_note"])
         self.decide("D1")
         self.decide("D2")
-        self.assertEqual((self.session().pallet_row.code, self.session().ex_sheet_row.code), ("D2", "M1"))
+        self.assertEqual((self.session().pallet_row.code, self.session().lid_row.code), ("D2", "M1"))
 
     def test_蓋を外す(self) -> None:
         self.decide("D1")
         self.lid("M1")
         self.assertEqual(len(self.drafts()), 2)
         state = self.post("/api/selection/lid/clear")
-        self.assertIsNone(self.session().ex_sheet_row)
-        self.assertFalse(state["ex_pair_set"])
+        self.assertIsNone(self.session().lid_row)
+        self.assertFalse(state["lid_set"])
         self.assertEqual(len(self.drafts()), 1, "下書きもパレットの1行に戻る")
 
     # --- 倉庫連携へ -----------------------------------------------------------
@@ -122,10 +128,10 @@ class ExLidTests(SelectionWebTestCase):
         self.post("/api/selection/send")
         rows = self.drafts()
         self.assertEqual([(r["hatchu_code"], r["tani"]) for r in rows], [("D1", "台"), ("M1", "枚")])
-        self.assertEqual(rows[1]["hinmei"], "タイト　EXﾀｲﾄ　1100x2000")
+        self.assertEqual(rows[1]["hinmei"], lot_service.build_hinmei("タイト", self.sym1, 1100, 2000))
         self.assertEqual(rows[1]["hatchu_suu"], "", "蓋の数は決めつけない")
         self.assertEqual(rows[0]["lot_no"], rows[1]["lot_no"])
-        self.assertIn(outputs.EX_SHEET_NOTICE, rows[0]["notice"])
+        self.assertIn(outputs.LID_NOTICE, rows[0]["notice"])
 
     def test_パレットを決めずに送ると蓋があってもEXの合図だけ(self) -> None:
         self.lid("M1")
@@ -159,19 +165,46 @@ class ExLidTests(SelectionWebTestCase):
         self.decide("D1")
         self.lid("M1")
         self.session().clear_for_new_lot()
-        self.assertIsNone(self.session().ex_sheet_row)
+        self.assertIsNone(self.session().lid_row)
 
     def test_やり直すで蓋は外れる(self) -> None:
         self.decide("D1")
         self.lid("M1")
         self.post("/api/selection/clear")
-        self.assertIsNone(self.session().ex_sheet_row)
+        self.assertIsNone(self.session().lid_row)
+
+
+class SharedLidTests(ExLidTests):
+    """上下共用モード(保護材がアングル以外)でも同じ(現場の声:「上下共用モードの時も蓋が有ることが前提」)。"""
+
+    ex = ""
+    sym1, sym2 = "", ""
+
+    def enter_mode(self) -> None:
+        # 保護材がザラ板に決まった = 上下共用(ロットの保護材マスタを用意する代わりに、決まった結果だけを入れる)
+        self.session().presenter.apply_hosozai("ザラ板")
+        self.assertTrue(self.session().presenter.is_shared_board_mode)
+
+    # 上下共用はEXではないので、パレットなしで送る形はEXと違う(VER4.8.35 で扱う)
+    test_パレットを決めずに送ると蓋があってもEXの合図だけ = None
+
+    def test_案内は上下共用と書く(self) -> None:
+        self.assertTrue(self.get()["lid_note"].startswith("上下共用:"))
+
+    def test_自動のパレット検索も台だけ(self) -> None:
+        from packaging_tool import pallet_auto_select
+        sheet = self.conn.execute("SELECT * FROM PalletMaster WHERE コード = 'M1'").fetchone()
+        dai = self.conn.execute("SELECT * FROM PalletMaster WHERE コード = 'D1'").fetchone()
+        kw = dict(ex_only_mode=False, show_all=False, last_hosozai="ザラ板")
+        self.assertFalse(pallet_auto_select._listable(sheet, **kw))
+        self.assertTrue(pallet_auto_select._listable(dai, **kw))
 
 
 class NotExTests(ExLidTests):
-    """EXでなければ蓋選択は使えない。パレット決定は今までどおり(単位で断らない)。"""
+    """EXでも上下共用でもなければ蓋選択は使えない。パレット決定は今までどおり(単位で断らない)。"""
 
     ex = ""
+    sym1, sym2 = "", ""
 
     for _name in [n for n in dir(ExLidTests) if n.startswith("test_")]:
         locals()[_name] = None
@@ -179,10 +212,10 @@ class NotExTests(ExLidTests):
 
     def test_EXでなければ蓋選択は使えない(self) -> None:
         state = self.get()
-        self.assertFalse(state["ex_lid_enabled"])
-        self.assertEqual(state["ex_pair_note"], "")
+        self.assertFalse(state["lid_enabled"])
+        self.assertEqual(state["lid_note"], "")
         self.lid("M1", expect=400)
-        self.assertIsNone(self.session().ex_sheet_row)
+        self.assertIsNone(self.session().lid_row)
         page = self.client.get("/selection", headers=self.auth()).get_data(as_text=True)
         self.assertRegex(page, r'id="pickLid"[^>]*hidden')
 
