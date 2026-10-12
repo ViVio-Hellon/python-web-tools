@@ -290,6 +290,24 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self.invalidate_placement()
         self._sync_ribbon()
 
+    def forget_pallet(self, reason: str) -> None:
+        """決めたパレット・蓋を外す(製品サイズの**入力中の値と一覧の絞り込みは残す**)。
+
+        ロット検索でオーダーを選び直したとき(`app/routes/lot._apply_picked_order`)。
+        同じロットでもオーダーごとに資材が違うことがあるので、前のオーダーで決めたパレットのまま
+        次のオーダーを発注させない(現場の声:「オーダー選びなおしたらパレットを一律外すほうが現状に合う」)。
+        製品サイズの確定はパレットに載ることを確かめたものなので、パレットと一緒に外す。
+        """
+        if self.palette.is_set or self.pallet_row is not None or self.lid_row is not None:
+            self.presenter.user_log.log(f"[パレット] {reason}ので、決めたパレット・蓋を外しました")
+        self.palette = svc.Palette()
+        self.product = svc.ProductSize()
+        self.forget_product_stack()
+        self.pallet_row = None
+        self.lid_row = None
+        self.invalidate_placement()
+        self._sync_ribbon()
+
     def clear_special_modes(self) -> list[str]:
         """「やり直す」で、ロットから立った**特殊モード**を外す。外したモードの名前を返す。
 

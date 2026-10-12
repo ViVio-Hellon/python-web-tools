@@ -124,6 +124,34 @@ class OrderPickTests(SelectionWebTestCase):
         self.assertEqual([h["order_no"] for h in body["hiki"] if h["selected"]], ["M200"])
         self.assertEqual(delivery_shown(body), "M社")
 
+    # --- オーダーを選び直したらパレットを外す(VER4.8.37) ---------------------
+    def test_別のオーダーに選び直したらパレットと下書きを外す(self) -> None:
+        """同じロットでもオーダーごとに資材が違う。前のオーダーのパレットのまま送らせない。"""
+        self.open_lot()
+        self.pick_pallet()                              # A100(受注情報に出ている)で決めて下書きまで
+        self.assertTrue(self.session().palette.is_set)
+        self.assertTrue(work_context.get_context().peek_pending_orders())
+        self.click("00000002")                          # M200 に選び直す
+        session = self.session()
+        self.assertFalse(session.palette.is_set)
+        self.assertIsNone(session.pallet_row)
+        self.assertEqual(work_context.get_context().peek_pending_orders(), [], "下書きも外す")
+        state = self.get()
+        self.assertTrue(state["rows"], "一覧はそのまま候補が出る")
+
+    def test_同じオーダーを押し直しただけなら外さない(self) -> None:
+        self.open_lot()
+        self.pick_pallet()
+        self.click("00000003")                          # A100(いま出ているもの)
+        self.assertTrue(self.session().palette.is_set)
+        self.assertTrue(work_context.get_context().peek_pending_orders())
+
+    def test_見るだけの窓で押してもパレットは外さない(self) -> None:
+        self.open_lot()
+        self.pick_pallet()
+        self.click("00000002", pick=False)
+        self.assertTrue(self.session().palette.is_set)
+
     def test_別のロットに移ると選んだオーダーは外れる(self) -> None:
         self.open_lot()
         self.click("00000002")
@@ -232,6 +260,23 @@ class PickedOrderModeTests(OrderPickTests):
         self.assertTrue(result.odr.is_ex)
         self.assertEqual(lot_service.calc_total_packages(result), 3)
         self.assertEqual(len(lot_service.hiki_delivery_names(result)), 3)
+
+    def test_EXのオーダーで決めた台と蓋は普通のオーダーに選び直すと外れる(self) -> None:
+        """一連の点検で見つかった不具合: EXの台が、普通のオーダーの発注として残っていた。"""
+        insert_pallet(self.conn, width=1100, length=2000, code="EXD", unit="台", symbol="EXﾀｲﾄ")
+        insert_pallet(self.conn, width=1100, length=2000, code="EXM", unit="枚", symbol="EXﾀｲﾄ")
+        self.open_lot()
+        self.click("00000002")                          # M200(EX)
+        rows = {r["note"].split("コード: ")[1].split()[0]: r for r in self.get()["rows"]}
+        for code, path in (("EXD", "/api/selection/pallet/pick"), ("EXM", "/api/selection/lid/pick")):
+            r = rows[code]
+            self.post(path, {"width": r["width"], "length": r["length"], "symbol": r["symbol"], "id": r["id"]})
+        self.assertIsNotNone(self.session().lid_row)
+        self.click("00000003")                          # A100(普通)
+        session = self.session()
+        self.assertIsNone(session.pallet_row)
+        self.assertIsNone(session.lid_row)
+        self.post("/api/selection/send", expect=422)    # パレットを決め直すまで送れない
 
     def test_このロットに無いオーダーは使わない(self) -> None:
         result = lot_service.search_lot(self.conn, LOT, order_pick="X999")

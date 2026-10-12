@@ -319,16 +319,27 @@ def _apply_picked_order(conn, lot_no: str, order_no: str) -> None:
     VBA `Page1_OnLstHikiClick` は引当行のクリックでモードを決め直していた。以前の Python 版は
     受注情報の表示だけを差し替えていたので、1ロットに複数オーダーがあって特殊オーダーを
     選んでも、資材選択は先頭のオーダー(受注番号のいちばん小さいもの)のモードのまま開いた。
-    同じロットなので、決めたパレットや製品サイズは消さない(`apply_lot` は別のロットのときだけ捨てる)。
+
+    **別のオーダーに選び直したら、決めたパレット・蓋・倉庫連携の下書きを外す**(VER4.8.37)。
+    同じロットでもオーダーごとに資材が違うことがあり、前のオーダーで決めたパレットのまま次のオーダーを
+    発注してしまう(EXの台が普通のオーダーで送られる、など)。製品サイズの入力値は残す。
+    同じオーダーを押し直しただけなら外さない。
     """
     result = lot_service.search_lot(conn, lot_no, _box_pick(lot_no, remember=False),
                                     order_pick=order_no)
     if not result.found:
         return
     context = work_context.get_context()
+    session = selection_session.get_session(conn)
+    before = session.presenter.lot_result
+    changed = (before is not None and before.lot.lot_no == lot_no
+               and before.odr.order_no != result.odr.order_no)
     context.apply_lot(result)
-    selection_session.get_session(conn).apply_lot(
+    session.apply_lot(
         result, product_width=context.product_width, product_length=context.product_length)
+    if changed:
+        session.forget_pallet(f"オーダーを {before.odr.order_no} から {result.odr.order_no} に選び直した")
+        context.drop_pending_orders()
 
 
 @bp.get("/api/lot/<lot_no>/hiki/<hiki_no>")
