@@ -1945,6 +1945,57 @@ class TableRefreshTests(TableBringTests):
         self.assertFalse(done["active"])
         self.assertEqual(done["pct"], 100)
 
+    def test_入れ替えたら読み直してAccessと照らし合わせる(self) -> None:
+        """現場の声:「照らし合わせしてください」。在庫の行は外して、Access の行と数で比べる。"""
+        self.session.admin = True
+        body = self.refresh(["PalletMaster"])
+        self.assertTrue(body["ok"], body)
+        self.assertIn("書いたあと読み直して Access と照らし合わせました: PalletMaster(3行 すべて同じ)",
+                      body["message"])
+
+    def test_確定する前に合わなければ書く前に戻す(self) -> None:
+        from unittest import mock
+        from packaging_tool import source_db
+        real = source_db.SourceTransaction.insert
+        dropped = []
+
+        def lossy(tx, table, values):
+            if table == "PalletMaster" and values.get("備考") == "足された型録" and not dropped:
+                dropped.append(values)
+                return None                              # 1行だけ書き損ねる
+            return real(tx, table, values)
+        self.session.admin = True
+        before = self.master_rows("SELECT * FROM PalletMaster ORDER BY rowid")
+        with mock.patch.object(source_db.SourceTransaction, "insert", lossy):
+            body = self.refresh(["PalletMaster"], expect=422)
+        self.assertFalse(body["ok"])
+        self.assertIn("Access と合わないので書く前に戻しました", body["message"])
+        self.assertIn("Access にあるのに書いた表に無い行 1行", body["message"])
+        self.assertEqual(self.master_rows("SELECT * FROM PalletMaster ORDER BY rowid"), before)
+
+    def test_確定したあと読み直して合わなければ知らせる(self) -> None:
+        """ほかの端末が同時に書いて混ざったとき。黙って「しました」と言わない。"""
+        import sqlite3
+        from unittest import mock
+        from packaging_tool import source_db, table_bring
+        real = source_db.read_table
+        master = Path(self.master)
+
+        def meddled(path, table):
+            if Path(path).resolve() == master.resolve() and table == "PalletMaster":
+                conn = sqlite3.connect(master)               # ほかの端末が古い行を書いた
+                conn.execute("INSERT INTO PalletMaster VALUES (9, 640, 3250, '', '', '古い型録')")
+                conn.commit()
+                conn.close()
+            return real(path, table)
+        self.session.admin = True
+        with mock.patch.object(table_bring.source_db, "read_table", side_effect=meddled):
+            body = self.refresh(["PalletMaster"], expect=422)
+        self.assertFalse(body["ok"])
+        self.assertIn("書いたあと読み直すと Access と合いません", body["message"])
+        self.assertIn("Access に無いのに書いた表にある行 1行", body["message"])
+        self.assertIn("ほかの端末が同時に書いた可能性", body["message"])
+
     def test_中を見るが同時に2回来ても1つずつ走る(self) -> None:
         """場所を打ってから「中を見る」を押すと2回走り、あとの変換が先の変換のファイルを消していた。"""
         import threading

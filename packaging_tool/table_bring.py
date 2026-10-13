@@ -105,12 +105,17 @@ def progress_snapshot() -> dict[str, Any]:
     return got
 
 
-def _stage(text: str, pct: int) -> None:
-    """段が進んだ。**段は処理が自分で名乗る**(`jobs.Step` と同じ考え)。"""
+def _stage(text: str, pct: Optional[int]) -> None:
+    """段が進んだ。**段は処理が自分で名乗る**(`jobs.Step` と同じ考え)。
+
+    `pct` が None なら棒の長さはそのまま(表ごとの中の段)。
+    """
     with _progress_lock:
         if not _progress.get("active"):
             return
-        _progress.update(stage=text, pct=max(0, min(99, int(pct))), _stage_at=time.monotonic())
+        if pct is not None:
+            _progress.update(pct=max(0, min(99, int(pct))))
+        _progress.update(stage=text, _stage_at=time.monotonic())
         _progress.setdefault("steps", []).append(text)
     log.info("表を持ってくる: %s", text)
 
@@ -1019,6 +1024,7 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     appended: list[tuple[str, int, int]] = []
     failed: list[str] = []
     notes: list[str] = []
+    expected: dict[str, _Expect] = {}
     with source_db.connect(dest) as dst:
         for i, table in enumerate(wanted):
             doing = {ACTION_APPEND: "に無い行を足しています", ACTION_REBUILD: "を作り直しています"}.get(
@@ -1042,10 +1048,11 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
             try:
                 if rebuild:
                     before, after, note, old = _rebuild_one(
-                        dst, src, table, stamp, keep_columns=found_by[table].tool_columns)
+                        dst, src, table, stamp, keep_columns=found_by[table].tool_columns,
+                        expected=expected)
                     kept_old.append((table, old))
                 else:
-                    before, after, note = _refresh_one(dst, src, table)
+                    before, after, note = _refresh_one(dst, src, table, expected)
                 done.append((table, before, after))
                 if found_by[table].emptied:
                     gone = "・".join(c for c, _n in found_by[table].emptied)
@@ -1060,6 +1067,28 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
                 import_diag.write(f"  ✕ {'作り直せ' if rebuild else '入れ替えられ'}"
                                   f"ませんでした: {table} ── {exc}")
                 log.warning("表を Access の最新にできませんでした: %s: %s", table, exc)
+
+    # 確定したあと、開き直して読み、もう一度 Access と照らし合わせる。確定前に
+    # 合っていても、共有フォルダでほかの端末が同時に書くと混ざることがある
+    unmatched: list[str] = []
+    checked: list[tuple[str, int]] = []
+    for table, _b, _a in done:
+        expect = expected.get(table)
+        if expect is None:
+            continue
+        _stage(f"{table} を読み直して Access と照らし合わせています", 76)
+        try:
+            why = _compare(expect, source_db.read_table(dest, table))
+        except source_db.SourceError as exc:
+            why = f"読み直せませんでした: {exc}"
+        if why:
+            unmatched.append(f"{table}({why})")
+            import_diag.write(f"  ✕ 読み直すと Access と合わない: {table} ── {why}")
+            log.warning("表を Access の最新にしたあと、読み直すと合わない: %s: %s", table, why)
+        else:
+            checked.append((table, len(expect.rows)))
+            import_diag.write(f"  ○ 読み直して Access と照らし合わせた: {table}"
+                              f" {len(expect.rows):,}行 すべて同じ")
 
     cleaned: Optional["dedupe.FixResult"] = None
     guard_notes: list[str] = []
@@ -1104,11 +1133,20 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
                     + " という名前で残しています(要らなければ消してください)。")
     if notes:
         message += " " + "。".join(notes) + "。"
+    if checked:
+        message += (" 書いたあと読み直して Access と照らし合わせました: "
+                    + "、".join(f"{t}({n:,}行 すべて同じ)" for t, n in checked) + "。")
+    if unmatched:
+        message += (" ✕ 書いたあと読み直すと Access と合いません: " + "、".join(unmatched)
+                    + "。ほかの端末が同時に書いた可能性があります。"
+                    "もう一度「Access の最新にする」を押してください"
+                    f"(書く前の控え: {backup})。")
     if follow:
         message += " " + " / ".join(follow)
     if failed:
         message += " ただし次はできませんでした: " + "、".join(failed)
-    return BringResult(not failed, message, "" if not failed else REFUSE_WRITE_FAILED,
+    bad = bool(failed or unmatched)
+    return BringResult(not bad, message, "" if not bad else REFUSE_WRITE_FAILED,
                        backup=str(backup), refreshed=done, kept_old=kept_old,
                        appended=appended,
                        deduped=dict(cleaned.removed) if cleaned is not None else {})
@@ -1265,6 +1303,13 @@ def _append_one(dst: "source_db.SourceConnection", src: Path, table: str) -> tup
                 top += 1
                 values["管理番号"] = top          # 送るときと同じ MAX+1(VBAと同じ)
             tx.insert(table, values)
+        # 照らし合わせ: 足したあとは Access の行がぜんぶ梱包資材マスタにあるはず
+        _stage(f"{table} の書いた中身を Access と照らし合わせています", None)
+        left, _same = _missing_rows(src_rows, tx.query(f"SELECT * FROM {q}"), keys)
+        if left:
+            raise source_db.SourceError(
+                f"足したあとも Access の行が {len(left):,}行 見つからないので書く前に戻しました"
+                f"(例: {_row_text(list(keys), _row_key(left[0], keys))})")
     return len(missing), same
 
 
@@ -1290,11 +1335,74 @@ def _stock_key(row: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(row.get(k) or "").strip() for k in KEYS_PALLET_STOCK)
 
 
+# 書いた中身を Access と照らし合わせる
+# ------------------------------------------------------------------
+@dataclass
+class _Expect:
+    """書いたあとの表にあるはずの Access の行。"""
+    table: str
+    columns: list[str]
+    rows: list[dict[str, Any]]
+    kept: set = field(default_factory=set)   # 残した在庫の行(照らし合わせから外す)
+
+
+def _check_value(value: Any) -> str:
+    """照らし合わせの値。数は 140 と 140.0 をそろえる。ほかは書いた値のまま。"""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return str(int(number)) if number.is_integer() else repr(number)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
+    return str(value)
+
+
+def _check_rows(rows: list[dict[str, Any]], columns: list[str]):
+    from collections import Counter
+    return Counter(tuple(_check_value(r.get(c)) for c in columns) for r in rows)
+
+
+def _row_text(columns: list[str], values: tuple[str, ...]) -> str:
+    """合わない行を画面に出す形。管理番号・記号などの先頭の列を数個。"""
+    picked = [(c, v) for c, v in zip(columns, values)][:6]
+    return " ".join(f"{c}={v or '(空)'}" for c, v in picked)
+
+
+def _compare(expect: _Expect, actual: list[dict[str, Any]]) -> str:
+    """Access の行と 書いた表の行を数で突き合わせる。同じなら空、違えば理由。
+
+    在庫の行(PalletMaster の位置のある行で、書く前からあったもの)は外して比べる。
+    """
+    if expect.kept:
+        actual = [r for r in actual if _stock_key(r) not in expect.kept]
+    want = _check_rows(expect.rows, expect.columns)
+    got = _check_rows(actual, expect.columns)
+    if want == got:
+        return ""
+    lacking = want - got
+    extra = got - want
+    parts = [f"Access {sum(want.values()):,}行 / 書いた表 {sum(got.values()):,}行"]
+    if lacking:
+        parts.append(f"Access にあるのに書いた表に無い行 {sum(lacking.values()):,}行"
+                     f"(例: {_row_text(expect.columns, next(iter(lacking)))})")
+    if extra:
+        parts.append(f"Access に無いのに書いた表にある行 {sum(extra.values()):,}行"
+                     f"(例: {_row_text(expect.columns, next(iter(extra)))})")
+    return "、".join(parts)
+
+
 def _refresh_one(dst: "source_db.SourceConnection", src: Path,
-                 table: str) -> tuple[int, int, str]:
+                 table: str, expected: Optional[dict[str, _Expect]] = None,
+                 ) -> tuple[int, int, str]:
     """1つの表を入れ替える。(前の行数, 後の行数, 添える一言)。
 
     Access にだけある列は、先に梱包資材マスタの表へ足す(型は Access の定義のまま)。
+    **確定する前に、書いた中身を Access と照らし合わせる。** 合わなければ
+    `SourceError` で書く前に戻す(`expected` には書いたあとに読み直して
+    照らし合わせるための Access の行を入れる)。
     """
     q = source_db.quote_identifier
     have = source_db.columns(dst.path, table)
@@ -1312,6 +1420,7 @@ def _refresh_one(dst: "source_db.SourceConnection", src: Path,
         if added:
             notes.append(f"列 {'・'.join(added)} を足しました")
         have = have + added
+        kept: set = set()
         if table == "PalletMaster" and all(k in have for k in KEYS_PALLET_STOCK):
             # 在庫の行(位置のある行)は残す。Access の行で同じ棚のものは
             # 入れない(ツールの在庫のほうが新しい)
@@ -1335,11 +1444,24 @@ def _refresh_one(dst: "source_db.SourceConnection", src: Path,
             for i, r in enumerate(dup, start=1):
                 tx.execute(f"UPDATE {q(table)} SET 管理番号 = ? WHERE rowid = ?", (top + i, r["r"]))
         after = int(tx.query(f"SELECT COUNT(*) AS n FROM {q(table)}")[0]["n"])
+        expect = _Expect(table, columns, rows, kept)
+        _verify_in(tx, expect)
+    if expected is not None:
+        expected[table] = expect
     return before, after, "、".join(notes)
+
+
+def _verify_in(tx: "source_db.SourceTransaction", expect: _Expect) -> None:
+    """確定する前に照らし合わせる。合わなければ書く前に戻す。"""
+    _stage(f"{expect.table} の書いた中身を Access と照らし合わせています", None)
+    why = _compare(expect, tx.query(f"SELECT * FROM {source_db.quote_identifier(expect.table)}"))
+    if why:
+        raise source_db.SourceError(f"書いた中身が Access と合わないので書く前に戻しました({why})")
 
 
 def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
                  stamp: str, *, keep_columns: Optional[list[str]] = None,
+                 expected: Optional[dict[str, _Expect]] = None,
                  ) -> tuple[int, int, str, str]:
     """1つの表を Access の定義で作り直す。(前の行数, 後の行数, 添える一言, 残した名前)。
 
@@ -1385,6 +1507,7 @@ def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
         columns_after = columns + list(keep_columns or [])
 
         stock: list[dict[str, Any]] = []
+        kept: set = set()
         if (table == "PalletMaster" and all(k in old_columns for k in KEYS_PALLET_STOCK)
                 and all(k in columns for k in KEYS_PALLET_STOCK)):
             # 在庫の行(位置のある行)は、作り直した表へも持っていく。
@@ -1423,6 +1546,10 @@ def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
         if gone:
             notes.append(f"Access に無い索引 {'・'.join(gone)} は付けていません")
         after = int(tx.query(f"SELECT COUNT(*) AS n FROM {q(table)}")[0]["n"])
+        expect = _Expect(table, columns, rows, kept)
+        _verify_in(tx, expect)
+    if expected is not None:
+        expected[table] = expect
     return before, after, "、".join(notes), old
 
 
