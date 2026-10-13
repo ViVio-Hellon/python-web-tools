@@ -279,6 +279,9 @@ function render(next) {
     el.exPair.classList.toggle("status--ng", !next.lid_set);
   }
   if (el.clearLid) el.clearLid.hidden = !next.lid_set;
+  // 「パレット決定」「蓋選択」の ✓ は、決まっているときだけ
+  if (el.decideMark) el.decideMark.hidden = !next.pallet_set;
+  if (el.lidMark) el.lidMark.hidden = !next.lid_set;
 
   // 入力欄は**サーバが変えたときだけ**書き換える。
   // どの操作でも画面ぜんぶが返ってくる設計なので、無条件に代入すると
@@ -742,7 +745,7 @@ export function start(initial) {
     }
   });
   for (const id of ["lotCaption", "banner", "listNote", "palletRows", "rowNote", "exPair",
-                    "pickLid", "clearLid",
+                    "pickLid", "clearLid", "decideMark", "lidMark",
                     "palWidth", "palLength", "prodWidth", "prodLength",
                     "sizeStatus", "decideWhy", "productFrom", "exOnlyWhy",
                     "showOnStock",

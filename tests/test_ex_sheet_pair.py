@@ -113,6 +113,24 @@ class ExLidTests(SelectionWebTestCase):
         self.decide("D2")
         self.assertEqual((self.session().pallet_row.code, self.session().lid_row.code), ("D2", "M1"))
 
+    def test_ボタンのチェック印は決まっているときだけ(self) -> None:
+        """現場の声:「チェックが入りっぱなしだから現在値がわからない。普通選んだらチェックじゃないの?」"""
+        import re as re_mod
+
+        def marks() -> dict:
+            page = self.client.get("/selection", headers=self.auth()).get_data(as_text=True)
+            return {name: not re_mod.search(rf'id="{name}"[^>]*hidden', page) for name in ("decideMark", "lidMark")}
+
+        self.assertEqual(marks(), {"decideMark": False, "lidMark": False})
+        state = self.decide("D1")
+        self.assertTrue(state["pallet_set"])
+        self.assertEqual(marks(), {"decideMark": True, "lidMark": False})
+        state = self.lid("M1")
+        self.assertTrue(state["lid_set"])
+        self.assertEqual(marks(), {"decideMark": True, "lidMark": True})
+        self.post("/api/selection/lid/clear")
+        self.assertEqual(marks(), {"decideMark": True, "lidMark": False})
+
     def test_蓋を外す(self) -> None:
         self.decide("D1")
         self.lid("M1")
