@@ -44,8 +44,8 @@
          1P0113 は角材と松板の2行になるので、1件ずつ確認して送る #}
       {% if drafts %}
       <div class="status status--ng" id="drafts" data-orders="{{ drafts | tojson | forceescape }}">
-        <span>資材選択から <b>{{ drafts | length }} 件</b> 届いています。
-          内容を確かめてから「倉庫へ送信」を押してください。
+        {# 「資材選択から N 件 届いています。」は右の一覧の上(`draftsArrived`)。ここは何をするかだけ(現場の声) #}
+        <span>内容を確かめてから「倉庫へ送信」を押してください。
           {% if drafts | length > 1 %}<b>{{ drafts | length }} 件はまとめて送ります</b>
           (どれか1件でも送れないときは、1件も送りません)。{% endif %}</span>
         <span class="draftnav" style="margin-left:auto">
@@ -145,6 +145,11 @@
      重なった。見出しは常に見えていて、**まだ見ていないものがあれば光る**(`warehouse.js`) #}
   {# 共有フォルダが見えない間は、一覧が古いままだと**消えない**一言で言う(`showReach`) #}
   <p class="status status--warn" id="reach" role="status" hidden></p>
+  {# 資材選択から届いた下書きの件数。**送った発注の一覧の上に出す**(現場の声:「同じ個所に出すべきではない。
+     画面右側でいいのでは(履歴リスト上)」)。送る・「入力を消す」で消える(`warehouse.js` の `showDraft`) #}
+  {% if drafts %}
+  <p class="status status--ng" id="draftsArrived" role="status">資材選択から <b id="draftsCount">{{ drafts | length }} 件</b> 届いています。</p>
+  {% endif %}
   <div class="tabs" data-tabs="warehouse-list" id="listTabs">
     <div class="tabs__bar" role="tablist" aria-label="一覧の面">
       <button class="tab" type="button" role="tab" data-key="orders" data-default="1"

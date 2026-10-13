@@ -1043,6 +1043,11 @@ function ordersChanged() {
 function showDraft() {
   showStock();
   showOrders();
+  // 右の一覧の上の「資材選択から N 件 届いています。」も合わせる(送る・入力を消すで消える)
+  if (el.draftsArrived) {
+    el.draftsArrived.hidden = !drafts.length;
+    if (el.draftsCount) el.draftsCount.textContent = `${drafts.length} 件`;
+  }
   const box = el.drafts;
   if (!box) return;
   box.hidden = !drafts.length;
@@ -1088,6 +1093,7 @@ export function start(state, material, lotPeekWhy) {
                     "sendComment",
                     "send", "clearForm", "sendStatus", "cancelled", "exNote",
                     "drafts", "draftPrev", "draftNext", "draftPos", "draftNote",
+                    "draftsArrived", "draftsCount",
                     "draftNotice", "cutRows", "cutEmpty", "cutUnread",
                     "stockOffer", "stockAsk", "stockChange", "stockUse", "stockSkip", "stockUndo",
                     "listTabs", "ordersTabBadge", "cutsTabBadge"]) {

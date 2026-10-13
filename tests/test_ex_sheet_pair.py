@@ -219,6 +219,23 @@ class ExLidTests(SelectionWebTestCase):
             "SELECT 発注コード, 単位, 発注数, 納入先, 受注番号 FROM 資材パレット注文管理 ORDER BY 管理番号").fetchall()
         self.assertEqual([tuple(r) for r in got], [("D1", "台", 1, "A社", "A100"), ("M1", "枚", 6, "A社", "A100")])
 
+    def test_届いた件数は右の一覧の上_左は確かめる案内だけ(self) -> None:
+        """現場の声:「資材選択から 2 件 届いています。と、内容を確かめてから…は同じ個所に出すべきではない。
+        資材選択から 2 件 届いています。は画面右側(履歴リスト上)でいいのでは」。"""
+        self.decide("D1")
+        self.lid("M1")
+        self.post("/api/selection/send")
+        page = self.client.get("/warehouse", headers=self.auth()).get_data(as_text=True)
+        right = page.index('id="resultCol"')
+        arrived = page.index('id="draftsArrived"')
+        self.assertGreater(arrived, right, "右の列に出す")
+        self.assertLess(arrived, page.index('id="rows"'), "送った発注の一覧より上")
+        self.assertIn("2 件</b> 届いています。", page[arrived:arrived + 200])
+        box = page[page.index('id="drafts"'):page.index('id="draftNext"')]
+        self.assertNotIn("届いています", box)
+        self.assertIn("内容を確かめてから「倉庫へ送信」を押してください。", box)
+        self.assertIn("2 件はまとめて送ります", box)
+
     def test_ロットを開き直すと蓋は外れる(self) -> None:
         self.decide("D1")
         self.lid("M1")
