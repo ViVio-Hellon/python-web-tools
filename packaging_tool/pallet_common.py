@@ -420,7 +420,12 @@ def _physically_fits(row: sqlite3.Row, search_w: int, search_l: int) -> bool:
 
 
 def _thickness_5x10_ok(symbol: str, manufactured_thickness: Optional[float]) -> tuple[bool, bool]:
-    """5×10業界専用の板厚フィルタ。戻り値は (合格か, 板厚不明で警告フラグを立てるか)。"""
+    """5×10業界専用の板厚フィルタ。戻り値は (合格か, 板厚不明で警告フラグを立てるか)。
+
+    強度UP かどうかは**もとの記号**で見る(「強度UP ﾊﾟﾚｯﾄ台 薄板用5x10」も強度UP)。
+    """
+    from .pallet_symbol import base_symbol
+    symbol = base_symbol(symbol)
     if manufactured_thickness is None:
         return True, True
     if manufactured_thickness <= 13.0:

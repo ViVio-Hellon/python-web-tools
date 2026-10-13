@@ -73,8 +73,15 @@ HIKI_ALL = "zen"        # 全量
 
 
 def filter_pallet_symbol(symbol: str) -> str:
-    """VBA `FilterPalSym` の移植。表に出さない記号を空文字にする。"""
-    return "" if symbol in HIDDEN_PALLET_SYMBOLS else symbol
+    """VBA `FilterPalSym` の移植。表に出さない記号を空文字にする。
+
+    **もとの記号(`pallet_symbol.base_symbol`)で見て、もとの記号を返す。** 記号に
+    「ﾊﾟﾚｯﾄ台 補足」が付く書き方になっても、品名・帳票は前と同じ「業界　記号　幅x丈」
+    のままにする(「A8 ﾊﾟﾚｯﾄ台 標準5x10(新5x10)」も A8 として出さない)。
+    """
+    from .pallet_symbol import base_symbol
+    base = base_symbol(symbol)
+    return "" if base in HIDDEN_PALLET_SYMBOLS else base
 
 
 def format_thickness(value: float) -> str:

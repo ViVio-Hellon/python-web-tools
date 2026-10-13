@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from . import config, db, pallet_threshold
+from .pallet_symbol import base_symbol
 from .logging_utils import get_logger
 
 log = get_logger("pallet_service")
@@ -383,6 +384,8 @@ def loose_key_rows(conn: sqlite3.Connection) -> list[LooseMatch]:
     for row in rows:
         for column in ("業界", "記号"):
             raw = str(row[column] or "")
+            if column == "記号":
+                raw = base_symbol(raw)            # 「C1 ﾊﾟﾚｯﾄ台」は C1 として引く
             key = normalize_key(raw)
             if not key or raw.strip() == key:
                 continue
@@ -443,7 +446,10 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
         for row in rows:
             dake = row["丈"] or 0
             haba = row["幅"] or 0
-            sym2 = normalize_key(row["記号"] or "")
+            # 記号は**もとの記号**で引く。「C1 ﾊﾟﾚｯﾄ台」「強度UP ﾊﾟﾚｯﾄ台 薄板用5x10」の
+            # ままだと固定表の C1・強度UP に当たらず、計算の帯に落ちる(`pallet_symbol`)
+            sym_raw = base_symbol(row["記号"])
+            sym2 = normalize_key(sym_raw)
             gyk = normalize_key(row["業界"] or "")
             c_key = f"{gyk}|{sym2}"
 
@@ -492,7 +498,7 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
                 updates.update({"巾適合min": w_min, "巾適合max": w_max,
                                 "丈適合min": l_min, "丈適合max": l_max})
                 note_loose("業界", row["業界"], gyk)
-                note_loose("記号", row["記号"], sym2)
+                note_loose("記号", sym_raw, sym2)
                 got.fixed += 1
                 from_table = True
             elif sym2 in table.w_min:
@@ -506,7 +512,7 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
                     updates["桁数"] = table.keta[sym2]
                 if sym2 in table.ashi:
                     updates["脚数"] = table.ashi[sym2]
-                note_loose("記号", row["記号"], sym2)
+                note_loose("記号", sym_raw, sym2)
                 got.fixed += 1
                 from_table = True
             elif gyk and gyk in table.w_min:
