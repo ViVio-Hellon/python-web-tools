@@ -385,6 +385,12 @@ def table_bring_upload():
     return jsonify({"path": str(saved)})
 
 
+# 管理者認証が無くて断った印。**ほかの断り(権限が無い)と見分ける** ── こちらはその場で
+# 認証すれば通るので、画面がパスワード欄を出す(現場の声:「パスワード求められてそれに
+# 気が付かなかっただけかも。認証できていなかったら、そこで認証できるようにして」)
+NEED_AUTH = "need_auth"
+
+
 @bp.post("/api/settings/table-bring")
 def table_bring_run():
     """選んだ表を梱包資材マスタへ足す。`{"path":…, "tables":[…]}`
@@ -397,8 +403,9 @@ def table_bring_run():
     # **パスワードは必ず。** `can_edit` はアクセス権限がまだ空のとき誰でも
     # 通す(最初の1行を入れるための逃げ道)が、表を足すのはその用途ではない
     if not selection_session.get_session(conn).admin:
-        return jsonify(_error("not_allowed", "管理者認証が必要です。"
-                              "「パスワード」の面で認証してください。")), 403
+        # 画面はこの印(`need_auth`)を見て、ダイアログの中にパスワード欄を出す
+        return jsonify(_error(NEED_AUTH, "管理者認証が必要です。"
+                              "この画面のパスワード欄で認証すると、そのまま続けます。")), 403
     allowed, why = master_admin.can_edit(conn, "")
     if not allowed:
         return jsonify(_error("not_allowed", why)), 403
@@ -453,8 +460,9 @@ def table_refresh_run():
     from packaging_tool import master_admin, selection_session, table_bring
     conn = get_db()
     if not selection_session.get_session(conn).admin:
-        return jsonify(_error("not_allowed", "管理者認証が必要です。"
-                              "「パスワード」の面で認証してください。")), 403
+        # 画面はこの印(`need_auth`)を見て、ダイアログの中にパスワード欄を出す
+        return jsonify(_error(NEED_AUTH, "管理者認証が必要です。"
+                              "この画面のパスワード欄で認証すると、そのまま続けます。")), 403
     allowed, why = master_admin.can_edit(conn, "")
     if not allowed:
         return jsonify(_error("not_allowed", why)), 403

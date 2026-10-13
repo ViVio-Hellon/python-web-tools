@@ -1026,8 +1026,13 @@ async function runRefresh() {
     + "ほかの端末にも次の取り込みで届きます。よろしいですか？",
     swap.length || rebuild.length
       ? { ok: "入れ替える", danger: true } : { ok: "足す" }))) return;
+  await sendRefresh(tables);
+}
+
+/** 入れ替えを送る(確かめは済んでいる)。未認証で断られたら、認証のあとにこれだけをやり直す。 */
+async function sendRefresh(tables) {
   try {
-    // 足した列の値が空になることは、上の確認で伝えた(`empty_ok`)
+    // 足した列の値が空になることは、確認で伝えた(`empty_ok`)
     const result = await api.post("/api/settings/table-refresh",
                                   { path: bring.path.value.trim(), tables, empty_ok: true });
     renderBring(result.plan);
@@ -1038,8 +1043,50 @@ async function runRefresh() {
     bring.note.className = "status status--ok";
     bring.note.textContent = `${result.message}(控え: ${result.backup})`;
   } catch (err) {
+    if (askAuth(err, () => sendRefresh(tables))) return;
     if (err.body && err.body.plan) renderBring(err.body.plan);
     toastError(err);
+  }
+}
+
+/* 管理者認証が無くて断られたら、ダイアログの中にパスワード欄を出す。
+   通ったら、押した操作(`retry`)をそのまま続ける。断りが消えるお知らせにしか出ないと、
+   気づかないまま「書けていない」が起きる(現場の声) */
+let bringRetry = null;
+
+function askAuth(err, retry) {
+  if (!err || err.code !== "need_auth" || !bring.auth) return false;
+  bringRetry = retry;
+  showBringAuth(true, "管理者認証が必要です。パスワードを入れて「認証する」を押すと、そのまま続けます。");
+  return true;
+}
+
+function showBringAuth(on, text = "") {
+  if (!bring.auth) return;
+  bring.auth.hidden = !on;
+  if (text) bring.authWhy.textContent = text;
+  if (on) bring.authPass.focus();
+}
+
+async function bringAuthenticate() {
+  try {
+    const res = await api.post("/api/settings/admin-auth", { password: bring.authPass.value });
+    bring.authPass.value = "";
+    authsync.announce(res.auth);
+    showAuthState(Boolean(res.admin && res.admin.authenticated));
+    if (!(res.admin && res.admin.authenticated)) {
+      showBringAuth(true, "パスワードが違います。");
+      return;
+    }
+    showBringAuth(false);
+    toast("認証しました", "ok");
+    const retry = bringRetry;
+    bringRetry = null;
+    if (retry) await retry();
+  } catch (err) {
+    bring.authPass.value = "";
+    if (err.code === "denied") showBringAuth(true, "パスワードが違います。");
+    else toastError(err);
   }
 }
 
@@ -1056,6 +1103,10 @@ async function lookBring() {
 async function runBring() {
   const tables = chosenTables();
   if (!tables.length) return;
+  await sendBring(tables);
+}
+
+async function sendBring(tables) {
   try {
     const result = await api.post("/api/settings/table-bring",
                                   { path: bring.path.value.trim(), tables });
@@ -1067,6 +1118,7 @@ async function runBring() {
     bring.note.className = "status status--ok";
     bring.note.textContent = `${result.message}(控え: ${result.backup})`;
   } catch (err) {
+    if (askAuth(err, () => sendBring(tables))) return;
     if (err.body && err.body.plan) renderBring(err.body.plan);
     toastError(err);
   }
@@ -1080,11 +1132,29 @@ function startBring() {
                            ["converted", "bringConverted"], ["drop", "bringDrop"],
                            ["dest", "bringDest"],
                            ["refresh", "bringRefresh"],
-                           ["openDrop", "bringOpenDrop"]]) {
+                           ["openDrop", "bringOpenDrop"],
+                           ["auth", "bringAuth"], ["authWhy", "bringAuthWhy"],
+                           ["authPass", "bringAuthPass"], ["authGo", "bringAuthGo"]]) {
     bring[key] = document.getElementById(id);
   }
   if (!bring.dialog) return;
-  bring.open.addEventListener("click", () => bring.dialog.showModal());
+  bring.open.addEventListener("click", () => {
+    bring.dialog.showModal();
+    // **開いた時点で未認証なら、先にパスワード欄を出しておく**(押してから断られるより先に言う)
+    if (el.masterAuthState && el.masterAuthState.textContent.trim() !== "認証済み") {
+      showBringAuth(true, "管理者認証が必要です。先にパスワードを入れて「認証する」を押しておけます。");
+    } else {
+      showBringAuth(false);
+    }
+  });
+  // ほかの所(パスワードの面・別の画面)で認証したら、ダイアログの欄もしまう
+  authsync.onChange((auth) => { if (auth && auth.admin) showBringAuth(false); });
+  if (bring.authGo) {
+    bring.authGo.addEventListener("click", bringAuthenticate);
+    bring.authPass.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); bringAuthenticate(); }
+    });
+  }
   // **落とすだけで読む。** ダイアログの中の枠にも、設定画面の段にも落とせる
   // (段に落としたらダイアログを開いてから読む)
   acceptDrop(bring.drop);

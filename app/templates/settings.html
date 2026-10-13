@@ -1079,12 +1079,22 @@
       <tbody id="bringRows"></tbody>
     </table>
   </div>
+  {# 管理者認証が無いとき。**この場で認証して、押した操作をそのまま続ける**
+     (以前は断りが消えるお知らせにしか出ず、気づかないまま書けていなかった。現場の声) #}
+  <div class="status status--ng bringauth" id="bringAuth" hidden>
+    <p id="bringAuthWhy">管理者認証が必要です。パスワードを入れて「認証する」を押してください。</p>
+    <span class="pathrow">
+      <input class="input" id="bringAuthPass" type="password" autocomplete="off"
+             aria-label="管理者パスワード">
+      <button class="btn btn--commit" type="button" id="bringAuthGo">認証する</button>
+    </span>
+  </div>
   <div class="btn-row" style="margin-top:8px">
     <button class="btn btn--commit" type="button" id="bringRun" disabled>選んだ表を持ってくる</button>
     <button class="btn btn--danger" type="button" id="bringRefresh" disabled>選んだ表を入れ替える・作り直す</button>
   </div>
   <p class="why">
-    管理者認証(「パスワード」の面)が要ります。書く前に、梱包資材マスタの控えを
+    管理者認証が要ります(未認証なら上にパスワード欄が出ます)。書く前に、梱包資材マスタの控えを
     この端末の <code>backup</code> フォルダへ取ります。
   </p>
 </dialog>

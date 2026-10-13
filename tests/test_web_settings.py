@@ -1743,6 +1743,8 @@ class TableBringTests(DataWebTestCase):
         self.session.admin = False
         body = self.bring(["新しい表"], expect=403)
         self.assertIn("管理者認証", body["error"]["message"])
+        # 画面はこの印でダイアログの中にパスワード欄を出す(VER4.8.40)
+        self.assertEqual(body["error"]["code"], "need_auth")
         self.assertEqual(self.master_rows(
             "SELECT name FROM sqlite_master WHERE name = '新しい表'"), [])
 
@@ -1913,8 +1915,21 @@ class TableRefreshTests(TableBringTests):
         self.assertIn("文字化け", board["refresh_why"])
 
     def test_管理者認証が要る(self) -> None:
-        self.refresh(["BoardMaster"], expect=403)
+        body = self.refresh(["BoardMaster"], expect=403)
+        self.assertEqual(body["error"]["code"], "need_auth")
         self.assertEqual(self.master_rows("SELECT ボード幅 FROM BoardMaster"), [(1100,)])
+
+    def test_その場で認証すれば入れ替えられる(self) -> None:
+        """現場の声:「パスワード求められてそれに気が付かなかっただけかも。そこで認証できるように」。"""
+        from unittest import mock
+        from packaging_tool import admin_password
+        self.refresh(["BoardMaster"], expect=403)
+        with mock.patch.object(admin_password, "verify", return_value=True):
+            res = self.client.post("/api/settings/admin-auth", headers=self.auth(), json={"password": "x"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertTrue(res.get_json()["admin"]["authenticated"])
+        self.refresh(["BoardMaster"])                     # 同じ操作をそのまま送り直すと通る
+        self.assertNotEqual(self.master_rows("SELECT ボード幅 FROM BoardMaster"), [(1100,)])
 
     # -- マスタ管理で足した列(`master_schema.add_column`) --------------------
     def add_column(self, table, name, kind="text", initial=""):
