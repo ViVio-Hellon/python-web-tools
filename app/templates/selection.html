@@ -204,7 +204,7 @@
        3回(行を選ぶ→適用→セット)必要だった。
        1枚にまとめると、必要なものが同時に見えて1回で決まる。 -->
   <section class="card step" data-step="size" id="sizeCard"
-           data-state="{{ step.size.state }}"
+           data-state="{{ step.size.state }}"{% if step.size.open %} data-open="true"{% endif %}
            {% if view.p1.on %}hidden{% endif %}>
     <header>
       <span class="stepno">{{ step.size.number }}</span>
@@ -782,7 +782,8 @@
      辿り着けなくならない。 */
   .step:not([data-state="current"]):not(.is-open) > .pad { display: none; }
   .step:not([data-state="current"]):not(.is-open) > header { border-bottom: 0; }
-  /* いまの段でなくても開いておく段(EX受注でパレットを選ばずに送れるときの「出す」。
+  /* いまの段でなくても開いておく段(EX受注でパレットを選ばずに送れるときの「出す」、
+     EX・上下共用で台と蓋の2つが決まるまでの「パレットを決める」。
      `presenters/selection._apply_steps`)。畳んだままだと送れることが分からない */
   .step[data-open="true"]:not([data-state="current"]) > .pad { display: flex; }
   .step:not([data-state="current"]) > header { cursor: pointer; }

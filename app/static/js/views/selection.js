@@ -340,7 +340,8 @@ function renderSteps(next) {
     for (const card of document.querySelectorAll(
         `[data-step="${item.key}"]`)) {
       card.dataset.state = item.state;
-      // いまの段でなくても開いておく段(EXでパレットを選ばずに送れるときの「出す」)
+      // いまの段でなくても開いておく段(EXでパレットを選ばずに送れるときの「出す」、
+      // EX・上下共用で台と蓋の2つが決まるまでの「パレットを決める」)
       if (item.open) card.dataset.open = "true";
       else delete card.dataset.open;
       const no = card.querySelector(".stepno");

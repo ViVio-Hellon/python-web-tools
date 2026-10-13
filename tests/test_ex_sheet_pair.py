@@ -131,6 +131,29 @@ class ExLidTests(SelectionWebTestCase):
         self.post("/api/selection/lid/clear")
         self.assertEqual(marks(), {"decideMark": True, "lidMark": False})
 
+    def test_台と蓋の2つが決まるまでパレットを決めるの段は畳まない(self) -> None:
+        """現場の声:「パレット決定で畳まれてしまうので、蓋選択をしていない場合は抜ける可能性がある。
+        EXと上下共用は2つ決定するまで畳まないように」。片方だけのときは開いたまま人が先へ進む。"""
+        def size(state: dict) -> dict:
+            return next(s for s in state["steps"] if s["key"] == "size")
+
+        state = self.decide("D1")
+        self.assertTrue(size(state)["open"], size(state))
+        self.assertIn("蓋 未選択", size(state)["summary"])
+        page = self.client.get("/selection", headers=self.auth()).get_data(as_text=True)
+        self.assertRegex(page, r'id="sizeCard"\s+data-state="[a-z]+" data-open="true"')
+        state = self.lid("M1")
+        self.assertFalse(size(state)["open"], size(state))       # 2つ決まったら畳む
+        self.assertIn("蓋 1100×2000", size(state)["summary"])
+        state = self.post("/api/selection/lid/clear")
+        self.assertTrue(size(state)["open"])                     # 蓋を外したらまた開く
+
+    def test_蓋だけ選んでも段は開いたまま(self) -> None:
+        state = self.lid("M1")
+        size = next(s for s in state["steps"] if s["key"] == "size")
+        self.assertNotEqual(size["state"], "done")
+        self.assertTrue(size["open"])
+
     def test_蓋を外す(self) -> None:
         self.decide("D1")
         self.lid("M1")
@@ -299,6 +322,12 @@ class NotExTests(ExLidTests):
         self.assertIsNone(self.session().lid_row)
         page = self.client.get("/selection", headers=self.auth()).get_data(as_text=True)
         self.assertRegex(page, r'id="pickLid"[^>]*hidden')
+
+    def test_EXでなければパレット決定で段を畳む(self) -> None:
+        state = self.decide("D1")
+        size = next(s for s in state["steps"] if s["key"] == "size")
+        self.assertFalse(size["open"])
+        self.assertNotIn("蓋", size["summary"])
 
     def test_EXでなければパレット決定は単位で断らない(self) -> None:
         self.decide("M1")                       # 番号で引けば単位は問わない(今までどおり)

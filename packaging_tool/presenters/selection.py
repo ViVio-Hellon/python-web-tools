@@ -1011,6 +1011,8 @@ class SelectionViewModel:
     # 蓋(枚)の案内(EX・上下共用)(`_lid_note`)。空なら出さない
     lid_note: str = ""
     lid_set: bool = False
+    # 畳んだ段の要約に載せる蓋(「1100×2000」)。蓋を選んでいなければ空
+    lid_label: str = ""
     # 「蓋選択」「蓋を外す」を出すか(EX受注・上下共用で 1P0113 でないとき。`lid_mode`)
     lid_enabled: bool = False
 
@@ -1156,6 +1158,9 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
     _mark_suggested(session, view.rows)
     view.list_note = _list_note(session, len(rows))
     view.lid_note, view.lid_set = _lid_note(session)
+    sheet_row = getattr(session, "lid_row", None)
+    if view.lid_set and sheet_row is not None:
+        view.lid_label = f"{sheet_row.width}×{sheet_row.length}"
     view.lid_enabled = presenter.lid_mode
 
     view.boards = build_boards(session)
@@ -1196,13 +1201,19 @@ def _apply_steps(view: SelectionViewModel) -> None:
     # しかも段を分けると、いまの段だけが開く仕組み(§1.3)のせいで
     # **候補の一覧が必要なときに畳まれている**という噛み合わなさが出る。
     size_done = view.product_set and pallet_done
+    # EX・上下共用は パレット(台)と蓋(枚)の**2つ**を選ぶ。パレット決定で段が畳まれると、
+    # 蓋選択をしないまま先へ進んでしまう(現場の声)。2つ決まるまで開いておく。
+    # 片方だけ発注するときは、開いたまま 人が「出す」へ進む
+    lid_pending = (view.lid_enabled and not view.mode_1p0113
+                   and not (view.pallet_set and view.lid_set))
     steps = [
         Step(key="size",
              number=1,
              title="裸梱包(1P0113)" if view.mode_1p0113 else "パレットを決める",
              summary=(view.p1.tip if view.mode_1p0113
                       else _size_summary(view)),
-             state=STEP_DONE if (view.mode_1p0113 or size_done) else STEP_TODO),
+             state=STEP_DONE if (view.mode_1p0113 or size_done) else STEP_TODO,
+             open=lid_pending),
         Step(key="boards", number=3, title="ボード",
              summary=(view.boards.summary if boards_done
                       else view.boards.candidate_note),
@@ -1247,6 +1258,8 @@ def _size_summary(view: SelectionViewModel) -> str:
         parts.append(f"製品 {view.product_status.split(':', 1)[-1].strip()}")
     if view.pallet_set:
         parts.append(f"パレット {view.pallet_status.split(':', 1)[-1].strip()}")
+    if view.lid_enabled and not view.mode_1p0113 and (parts or view.lid_label):
+        parts.append(f"蓋 {view.lid_label}" if view.lid_label else "蓋 未選択")
     return " / ".join(parts) if parts else view.product_status
 
 
