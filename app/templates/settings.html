@@ -1070,6 +1070,12 @@
       <button class="btn" type="button" id="bringLook">中を見る</button>
     </span>
   </div>
+  {# 中を見る・持ってくる・入れ替える のあいだの進み具合。**段と経過秒を出す**(現場の声:
+     「取り込み中プログレス表示もお願いします」)。Access の変換は大きいファイルで1分ほどかかる #}
+  <div class="bringprogress" id="bringProgress" role="status" aria-live="polite" hidden>
+    <div class="bar"><div class="bar__fill" id="bringProgressBar"></div></div>
+    <p class="why" id="bringProgressText"></p>
+  </div>
   <p class="why" id="bringDest" hidden></p>
   <p class="why" id="bringConverted" hidden></p>
   <p class="status" id="bringNote" hidden></p>

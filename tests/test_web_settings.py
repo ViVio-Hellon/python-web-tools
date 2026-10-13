@@ -1919,6 +1919,53 @@ class TableRefreshTests(TableBringTests):
         self.assertEqual(body["error"]["code"], "need_auth")
         self.assertEqual(self.master_rows("SELECT ボード幅 FROM BoardMaster"), [(1100,)])
 
+    def test_入れ替えのあいだ進み具合が読める(self) -> None:
+        """現場の声:「取り込み中プログレス表示もお願いします」。段は処理が名乗る。"""
+        from unittest import mock
+        from packaging_tool import table_bring
+        seen = []
+        real = table_bring._stage
+
+        def spy(text, pct):
+            real(text, pct)
+            seen.append(self.client.get("/api/settings/table-bring/progress",
+                                        headers=self.auth()).get_json())
+        self.session.admin = True
+        with mock.patch.object(table_bring, "_stage", side_effect=spy):
+            self.refresh(["BoardMaster"])
+        self.assertTrue(seen)
+        self.assertTrue(all(p["active"] and p["label"] == "Access の最新に入れ替える" for p in seen))
+        stages = [p["stage"] for p in seen]
+        self.assertIn("書く前の控えを取っています", stages)
+        self.assertTrue(any(s.startswith("BoardMaster を入れ替えています(1/1)") for s in stages), stages)
+        self.assertTrue(any(s.startswith("この端末へ取り込み直しています: BoardMaster") for s in stages), stages)
+        pcts = [p["pct"] for p in seen]
+        self.assertEqual(pcts, sorted(pcts), "進み具合は戻らない")
+        done = self.client.get("/api/settings/table-bring/progress", headers=self.auth()).get_json()
+        self.assertFalse(done["active"])
+        self.assertEqual(done["pct"], 100)
+
+    def test_中を見るが同時に2回来ても1つずつ走る(self) -> None:
+        """場所を打ってから「中を見る」を押すと2回走り、あとの変換が先の変換のファイルを消していた。"""
+        import threading
+        import time
+        from packaging_tool import table_bring
+        running, overlap = [0], []
+
+        @table_bring._tracked("試し")
+        def work():
+            running[0] += 1
+            overlap.append(running[0])
+            time.sleep(0.05)
+            running[0] -= 1
+
+        threads = [threading.Thread(target=work) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(overlap, [1, 1, 1])
+
     def test_その場で認証すれば入れ替えられる(self) -> None:
         """現場の声:「パスワード求められてそれに気が付かなかっただけかも。そこで認証できるように」。"""
         from unittest import mock

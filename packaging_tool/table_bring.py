@@ -37,8 +37,12 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any, Optional
 
@@ -76,6 +80,80 @@ APPEND_SKIP = ("管理番号", "送信ID")
 from .master_common import BROUGHT_REGISTRY as REGISTRY  # noqa: E402
 # 記録の表(足した表・足した列)。持ってくる表にも入れ替える表にもしない
 from .master_common import ADDED_REGISTRY, REGISTRIES  # noqa: E402
+
+
+# ------------------------------------------------------------------
+# 進み具合(画面が 0.5 秒ごとに見に来る。`progress_snapshot`)
+# ------------------------------------------------------------------
+# 現場の声:「取り込み中プログレス表示もお願いします」。Access の変換は大きいファイルで
+# 1分ほどかかり、そのあいだ画面が黙っていると、止まったのか進んでいるのか分からない。
+# 処理は1つずつしか走らない(ダイアログは1つ)ので、プロセスに1つ持つ
+_progress_lock = threading.Lock()
+_progress: dict[str, Any] = {"active": False}
+
+
+def progress_snapshot() -> dict[str, Any]:
+    """いまの進み具合。`active` が偽なら走っていない(`stage` は最後の段)。"""
+    with _progress_lock:
+        got = dict(_progress)
+        got["steps"] = list(got.get("steps", []))
+    started, stage_at = got.pop("_started", None), got.pop("_stage_at", None)
+    if got.get("active") and started is not None:
+        now = time.monotonic()
+        got["elapsed"] = round(now - started, 1)
+        got["stage_elapsed"] = round(now - (stage_at or started), 1)
+    return got
+
+
+def _stage(text: str, pct: int) -> None:
+    """段が進んだ。**段は処理が自分で名乗る**(`jobs.Step` と同じ考え)。"""
+    with _progress_lock:
+        if not _progress.get("active"):
+            return
+        _progress.update(stage=text, pct=max(0, min(99, int(pct))), _stage_at=time.monotonic())
+        _progress.setdefault("steps", []).append(text)
+    log.info("表を持ってくる: %s", text)
+
+
+@contextmanager
+def _tracking(label: str):
+    now = time.monotonic()
+    with _progress_lock:
+        _progress.clear()
+        _progress.update(active=True, label=label, stage="準備しています", pct=0,
+                         steps=[], _started=now, _stage_at=now)
+    try:
+        yield
+    finally:
+        with _progress_lock:
+            _progress.update(active=False, pct=100)
+
+
+# **中を見る・持ってくる・入れ替える は1つずつ。** 同時に2つ走ると、あとから終わった変換が
+# 先の変換のファイルを消し(`_convert` の使い回しの入れ替え)、先のほうが読めなくなっていた
+# (場所を打ってから「中を見る」を押すと、欄の変更と押したので2回走る)。あとのほうは待ってから、
+# 済んだ変換を使い回すので速い。進み具合もプロセスに1つなので、混ざらない
+_op_lock = threading.Lock()
+
+
+def plan_after(source_path: str) -> "Plan":
+    """持ってくる・入れ替えの**あと**に、画面の一覧を描き直すための中身。
+
+    `plan` と同じだが、進み具合を「Access の中を見る」に塗り替えない(入れ替えたあとの
+    画面に、別の操作の名前が一瞬出ていた)。1つずつ走らせる約束は守る。
+    """
+    with _op_lock:
+        return plan.__wrapped__(source_path)
+
+
+def _tracked(label: str):
+    def wrap(func):
+        @wraps(func)
+        def inner(*args, **kwargs):
+            with _op_lock, _tracking(label):
+                return func(*args, **kwargs)
+        return inner
+    return wrap
 
 # Access のファイル。これを選んだら変換ツールで sqlite3 にしてから読む
 ACCESS_SUFFIXES = (".accdb", ".mdb")
@@ -290,6 +368,7 @@ def _convert(src: Path) -> tuple[Path, str]:
     if cached and cached[0] == stamp and cached[1].is_file():
         return cached[1], cached[2]
 
+    _stage(f"Access({src.name})を sqlite3 に変換しています。大きいファイルは1分ほどかかります", 10)
     folder = converter_dir()
     if folder is None:
         raise ConvertError(
@@ -505,6 +584,7 @@ def _same(a: Path, b: Path) -> bool:
         return str(a) == str(b)
 
 
+@_tracked("Access の中を見る")
 def plan(source_path: str) -> Plan:
     """持ってくるファイルの中を見る。**書かない。**"""
     out = Plan(source=str(source_path or "").strip())
@@ -613,6 +693,7 @@ def _backup(dest: Path, why: str = "表を持ってくる前") -> Path:
     return target
 
 
+@_tracked("表を持ってくる")
 def bring(source_path: str, tables: list[str]) -> BringResult:
     """選んだ表を梱包資材マスタへ作り、中身を写す。**無い表だけ。**"""
     src = Path(str(source_path or "").strip())
@@ -638,6 +719,7 @@ def bring(source_path: str, tables: list[str]) -> BringResult:
     if internal:
         return BringResult(False, f"Access の内部の表は持ってきません: {', '.join(internal)}",
                            REFUSE_NOTHING)
+    _stage("表を見比べています", 30)
     available = set(source_db.list_tables(src))
     missing = [t for t in wanted if t not in available]
     if missing:
@@ -651,6 +733,7 @@ def bring(source_path: str, tables: list[str]) -> BringResult:
         return BringResult(False, f"梱包資材マスタにもうある表は持ってきません: "
                                   f"{', '.join(already)}", REFUSE_EXISTS)
 
+    _stage("書く前の控えを取っています", 40)
     try:
         backup = _backup(dest)
     except OSError as exc:
@@ -665,7 +748,8 @@ def bring(source_path: str, tables: list[str]) -> BringResult:
     brought: list[tuple[str, int]] = []
     failed: list[str] = []
     with source_db.connect(dest) as dst:
-        for table in wanted:
+        for i, table in enumerate(wanted):
+            _stage(f"{table} を持ってきています({i + 1}/{len(wanted)})", 50 + 45 * i // len(wanted))
             try:
                 create, indexes = _create_sql(src, table)
                 rows = source_db.read_table(src, table)
@@ -825,6 +909,7 @@ def refresh_why(table: str, found: "Candidate") -> str:
     return ""
 
 
+@_tracked("Access の最新に入れ替える")
 def refresh(conn: Optional[sqlite3.Connection], source_path: str,
             tables: list[str], *, empty_ok: bool = False) -> BringResult:
     """もうある表を Access(変換したもの)の最新にする。表ごとに2通り。
@@ -870,6 +955,7 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     except ConvertError as exc:
         return BringResult(False, str(exc), REFUSE_CONVERT)
 
+    _stage("表を見比べています", 20)
     available = _by_fold(source_db.list_tables(src))
     existing = _by_fold(source_db.list_tables(dest))
     refusals = []
@@ -916,6 +1002,7 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
                            "よければ確かめてからもう一度押してください。何も変えていません。",
                            REFUSE_NEED_CONFIRM)
 
+    _stage("書く前の控えを取っています", 30)
     try:
         only_append = all(actions[t] == ACTION_APPEND for t in wanted)
         backup = _backup(dest, "無い行を足す前" if only_append else "中身を入れ替える前")
@@ -933,7 +1020,10 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     failed: list[str] = []
     notes: list[str] = []
     with source_db.connect(dest) as dst:
-        for table in wanted:
+        for i, table in enumerate(wanted):
+            doing = {ACTION_APPEND: "に無い行を足しています", ACTION_REBUILD: "を作り直しています"}.get(
+                actions[table], "を入れ替えています")
+            _stage(f"{table} {doing}({i + 1}/{len(wanted)})", 35 + 40 * i // len(wanted))
             if actions[table] == ACTION_APPEND:
                 try:
                     added, same = _append_one(dst, src, table)
@@ -974,14 +1064,19 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
     cleaned: Optional["dedupe.FixResult"] = None
     guard_notes: list[str] = []
     if appended:
+        _stage("共有の重複を確かめています", 78)
         cleaned, guard_notes = _clean_after_append(dest)
 
     follow = []
     if conn is not None:
         from .master_common import _follow
         removed = list(cleaned.removed) if cleaned is not None else []
-        for table in dict.fromkeys([t for t, _b, _a in done]
-                                   + [t for t, n, _s in appended if n] + removed):
+        again = list(dict.fromkeys([t for t, _b, _a in done]
+                                   + [t for t, n, _s in appended if n] + removed))
+        for i, table in enumerate(again):
+            _stage(f"この端末へ取り込み直しています: {table}({i + 1}/{len(again)})"
+                   + ("。パレットは適合範囲も計算し直します" if table == "PalletMaster" else ""),
+                   82 + 16 * i // max(1, len(again)))
             said = _follow(conn, dest, table).lstrip("。")
             if said:
                 follow.append(f"{table}: {said}")

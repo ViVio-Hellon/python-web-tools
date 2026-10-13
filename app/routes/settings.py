@@ -358,6 +358,16 @@ def table_bring_plan():
         table_bring.plan(request.args.get("path", ""))))
 
 
+@bp.get("/api/settings/table-bring/progress")
+def table_bring_progress():
+    """「表を持ってくる」の進み具合(中を見る・持ってくる・入れ替える)。**読むだけ**。
+
+    画面は操作のあいだ 0.5 秒ごとにここを見て、段と経過秒を出す(`table_bring.progress_snapshot`)。
+    """
+    from packaging_tool import table_bring
+    return jsonify(table_bring.progress_snapshot())
+
+
 @bp.post("/api/settings/table-bring/upload")
 def table_bring_upload():
     """ドラッグ&ドロップされたファイルを受け取る。返すのは置いた場所。
@@ -417,7 +427,7 @@ def table_bring_run():
     payload = {"ok": result.ok, "message": result.message,
                "brought": [{"name": n, "rows": r} for n, r in result.brought],
                "backup": result.backup,
-               "plan": table_bring.plan_dict(table_bring.plan(str(body.get("path", ""))))}
+               "plan": table_bring.plan_dict(table_bring.plan_after(str(body.get("path", ""))))}
     if result.ok:
         return jsonify(payload)
     payload["error"] = {"code": result.reason, "message": result.message}
@@ -481,7 +491,7 @@ def table_refresh_run():
                             for n, r, m in result.appended],
                "deduped": result.deduped,
                "backup": result.backup,
-               "plan": table_bring.plan_dict(table_bring.plan(str(body.get("path", ""))))}
+               "plan": table_bring.plan_dict(table_bring.plan_after(str(body.get("path", ""))))}
     if result.ok:
         return jsonify(payload)
     payload["error"] = {"code": result.reason, "message": result.message}

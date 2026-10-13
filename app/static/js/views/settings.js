@@ -1033,8 +1033,8 @@ async function runRefresh() {
 async function sendRefresh(tables) {
   try {
     // 足した列の値が空になることは、確認で伝えた(`empty_ok`)
-    const result = await api.post("/api/settings/table-refresh",
-                                  { path: bring.path.value.trim(), tables, empty_ok: true });
+    const result = await withBringProgress(() => api.post("/api/settings/table-refresh",
+      { path: bring.path.value.trim(), tables, empty_ok: true }));
     renderBring(result.plan);
     toast(result.message, "ok");
     if (result.refreshed && result.refreshed.length) master.show(result.refreshed[0].name);
@@ -1046,6 +1046,39 @@ async function sendRefresh(tables) {
     if (askAuth(err, () => sendRefresh(tables))) return;
     if (err.body && err.body.plan) renderBring(err.body.plan);
     toastError(err);
+  }
+}
+
+/* 中を見る・持ってくる・入れ替える のあいだ、0.5 秒ごとに進み具合を見に行って出す
+   (`/api/settings/table-bring/progress`)。終わったら(成功でも失敗でも)しまう */
+let bringProgressTimer = 0;
+
+async function withBringProgress(work) {
+  if (!bring.progress) return work();
+  bring.progress.hidden = false;
+  bring.progressBar.style.width = "0%";
+  bring.progressText.textContent = "始めています…";
+  // `api.get` を使わない: あちらは送るたびに「押したボタン」を待機の姿にし、返ると元に戻す。
+  // 0.5 秒ごとに見に行くと、まだ走っている操作のボタンの待機の姿(二度押しの止め)を外してしまう
+  const tick = async () => {
+    try {
+      const res = await fetch("/api/settings/table-bring/progress",
+        { cache: "no-store", headers: { "X-Tool-Token": window.APP.token } });
+      if (!res.ok) return;
+      const p = await res.json();
+      if (!p.active) return;
+      bring.progressBar.style.width = `${p.pct}%`;
+      bring.progressText.textContent = `${p.label}: ${p.stage}(${Math.round(p.elapsed || 0)}秒)`;
+    } catch (_) { /* 見に行けなかったら次の回に */ }
+  };
+  window.clearInterval(bringProgressTimer);
+  bringProgressTimer = window.setInterval(tick, 500);
+  tick();
+  try {
+    return await work();
+  } finally {
+    window.clearInterval(bringProgressTimer);
+    bring.progress.hidden = true;
   }
 }
 
@@ -1090,13 +1123,22 @@ async function bringAuthenticate() {
   }
 }
 
+// いま中を見ている場所。**同じ場所をもう一度見に行かない** ── 場所を打ってから「中を見る」を
+// 押すと、欄の変更と押したのとで2回走り、あとのほうが次の操作(入れ替え)を待たせていた
+let bringLooking = "";
+
 async function lookBring() {
   const path = bring.path.value.trim();
   if (!path) { renderBring({ ok: false, message: "変換したファイルを選んでください。" }); return; }
+  if (bringLooking === path) return;
+  bringLooking = path;
   try {
-    renderBring(await api.get(`/api/settings/table-bring/plan?path=${encodeURIComponent(path)}`));
+    renderBring(await withBringProgress(
+      () => api.get(`/api/settings/table-bring/plan?path=${encodeURIComponent(path)}`)));
   } catch (err) {
     toastError(err);
+  } finally {
+    bringLooking = "";
   }
 }
 
@@ -1108,8 +1150,8 @@ async function runBring() {
 
 async function sendBring(tables) {
   try {
-    const result = await api.post("/api/settings/table-bring",
-                                  { path: bring.path.value.trim(), tables });
+    const result = await withBringProgress(() => api.post("/api/settings/table-bring",
+      { path: bring.path.value.trim(), tables }));
     renderBring(result.plan);
     toast(result.message, "ok");
     // **足した表を、そのままマスタ管理で開いておく**(開き直さなくても出る)
@@ -1134,6 +1176,8 @@ function startBring() {
                            ["refresh", "bringRefresh"],
                            ["openDrop", "bringOpenDrop"],
                            ["auth", "bringAuth"], ["authWhy", "bringAuthWhy"],
+                           ["progress", "bringProgress"], ["progressBar", "bringProgressBar"],
+                           ["progressText", "bringProgressText"],
                            ["authPass", "bringAuthPass"], ["authGo", "bringAuthGo"]]) {
     bring[key] = document.getElementById(id);
   }
