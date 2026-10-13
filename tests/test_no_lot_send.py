@@ -55,6 +55,22 @@ class NoLotSendTests(SelectionWebTestCase):
         self.assertTrue(draft["no_lot"])
         self.assertEqual(draft["notice"], outputs.NO_LOT_NOTICE)
 
+    def test_パレットを決めるの見出しにも倉庫送信がある(self) -> None:
+        """現場の声:「4 出す を拡げるまで行くのは分かりにくい。在庫を見るが見えているように、ここに倉庫送信も」。"""
+        def head_hidden() -> bool:
+            page = self.client.get("/selection", headers=self.auth()).get_data(as_text=True)
+            tag = re.search(r'<button[^>]*id="sendWarehouseHead"[^>]*>', page)
+            self.assertIsNotNone(tag)
+            header = page[:tag.start()].rsplit('id="sizeCard"', 1)[-1]
+            self.assertNotIn("</header>", header)            # 畳んでも見える見出しの中
+            return "hidden" in tag.group(0)
+
+        self.assertTrue(head_hidden())                       # 送れないときは出さない
+        self.pick_pallet()
+        self.assertFalse(head_hidden())
+        state = self.post("/api/selection/send")             # 押す先は「出す」の倉庫送信と同じ
+        self.assertEqual(state.get("next_url"), "/warehouse")
+
     def test_打ち込んだLotNoで送れる(self) -> None:
         self.pick_pallet()
         self.post("/api/selection/send")

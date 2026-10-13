@@ -445,6 +445,8 @@ function renderOutputs(outputs) {
     if (report.why) reasons.push(`${report.label}: ${report.why}`);
   }
   el.sendWarehouse.disabled = !outputs.can_send;
+  // 見出しの「倉庫送信」(畳んでも見える)。送れるときだけ出す
+  el.sendWarehouseHead.hidden = !outputs.can_send;
   if (outputs.send_why) reasons.push(`倉庫送信: ${outputs.send_why}`);
 
   // 「使用する」。押したあとは**押せないまま札を替える** ── 消すと
@@ -778,7 +780,7 @@ export function start(initial) {
                     // 1P0113 / 出す / 管理者
                     "sizeCard", "p1Card", "p1Materials", "p1Tip", "p1Qty",
                     "p1Why", "force1p",
-                    "sendWarehouse", "outputWhy", "useBoards", "useWhy", "useLabel",
+                    "sendWarehouse", "sendWarehouseHead", "outputWhy", "useBoards", "useWhy", "useLabel",
                     "adminState", "authWhere", "savePattern",
                     "saveWhy", "patternsNote", "patternRows", "usageRows",
                     // 作業の段と、結果の面
@@ -793,7 +795,7 @@ export function start(initial) {
   // 辿り着けなくならないようにする(開閉は見た目だけなので画面が持つ)。
   // `document` に付けるので、この画面のあいだだけ有効にする(`nav.js`)
   document.addEventListener("click", (event) => {
-    // 見出しの中のボタン(「在庫を見る」)は、押しても畳みを動かさない。
+    // 見出しの中のボタン(「在庫を見る」「倉庫送信」)は、押しても畳みを動かさない。
     // **押した意図はそのボタンのもの**で、段の開け閉めではない
     if (event.target.closest("button.btn")) return;
     const header = event.target.closest(
@@ -1008,11 +1010,14 @@ export function start(initial) {
   }
   el.useBoards.addEventListener("click", () =>
     send("/api/selection/boards/use"));
-  el.sendWarehouse.addEventListener("click", async () => {
+  const sendToWarehouse = async () => {
     const next = await send("/api/selection/send");
     // 送るのは倉庫連携の画面。組み立てただけでは登録されていない。
     // 差し替えで移るので、出したばかりのトーストが消えない
     if (next && next.next_url) nav.go(next.next_url);
-  });
+  };
+  el.sendWarehouse.addEventListener("click", sendToWarehouse);
+  // 見出しの「倉庫送信」も同じ送り方(押した先を2つに分けない)
+  el.sendWarehouseHead.addEventListener("click", sendToWarehouse);
 
 }

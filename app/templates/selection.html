@@ -218,6 +218,13 @@
               title="このパレットの寸法で簡易在庫を引きます"
               {% if not view.pallet_set %}hidden{% endif %}>
         在庫を見る<span class="gl">▸</span></button>
+      {# 「出す」の「倉庫送信」と同じ。**畳んでも見える見出しにも置く**(現場の声:「4 出す を拡げるまで
+         行くのは分かりにくい」。ロット情報なし・EXの合図・蓋だけ・片方だけの発注など、ここで決めてすぐ送る)。
+         送れないときは出さない(押せない理由は「出す」の段に出る) #}
+      <button class="btn btn--commit btn--inhead" type="button" id="sendWarehouseHead"
+              title="「出す」の「倉庫送信」と同じです。倉庫連携の画面へ渡します"
+              {% if not view.outputs.can_send %}hidden{% endif %}>
+        倉庫送信<span class="gl">▸</span></button>
     </header>
     <div class="pad">
       {# 製品サイズ。**人が決めるものではなく、決まっているものを確かめる** #}
@@ -717,9 +724,12 @@
   .stepsum {
     margin-left: auto; text-align: right; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; max-width: 60%;
+    /* 見出しのボタン(「在庫を見る」「倉庫送信」)と畳みの印を同じ行に残す。
+       入りきらないときは要約のほうを縮めて … にする(見出しの折り返しは最後の手段) */
+    flex: 1 1 0; min-width: 0;
   }
   .step > header h3 { white-space: nowrap; }
-  /* 見出しに置く操作(「在庫を見る」)。**畳んでも残る**位置なので、
+  /* 見出しに置く操作(「在庫を見る」「倉庫送信」)。**畳んでも残る**位置なので、
      決まった値のすぐ隣に居続ける。段の高さを増やさないよう小さくする
      ── 見出しは1行に収まっていないと、段の並びが読めなくなる */
   .btn--inhead {
