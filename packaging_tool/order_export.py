@@ -23,6 +23,13 @@
 【丸めない】
 発注数・幅・丈は持っている値のまま出します(2502.5 は 2502.5)。
 
+【Excel で開いても頭の0を消さない】(現場の声:「発注コードは文字列扱い? 頭に0が付いてると数値扱いで消えるよね」
+「Excel で開くと思います」)
+発注コードの 058901 は、CSV をダブルクリックで Excel に開くと数とみなされて 58901 と出て、
+保存し直すとファイルからも0が消える。**コード・番号の列は `="058901"` の形で書く**(`EXCEL_TEXT_COLUMNS`)。
+Excel は式として読み、文字の 058901 をそのまま出す。数の列(発注数・厚・幅・丈)は数のまま
+(足し算できるように)。
+
 【期間】
 登録日時の**日付**で、開始日〜終了日(両端を含む)。登録日時は書き方が揃っていない
 ことがある(`2026/09/24 14:23:54` と `2026-09-24 14:23:54`)ので、取り込みと同じ読み方
@@ -66,6 +73,11 @@ ROW_COLUMNS: tuple[str, ...] = (
     "送信端末", "発注キー", "受注番号", "ロットの受注",
 )
 
+# Excel で開いたとき**文字のまま**見せる列(コード・番号。頭の0・長い数字・英字まじりを崩さない)
+EXCEL_TEXT_COLUMNS: tuple[str, ...] = (
+    "LotNo", "発注コード", "材質", "調質", "用途コード", "発注キー", "受注番号", "ロットの受注",
+)
+
 SUMMARY_COLUMNS: tuple[str, ...] = (
     "サイズ", "パレット幅", "パレット丈", "発注コード", "単位", "発注数の合計", "件数", "品名(例)",
 )
@@ -96,6 +108,17 @@ def _day(value: Any) -> Optional[date]:
 def _cell(value: Any) -> str:
     """CSVの1セル。**値はそのまま**(None は空)。"""
     return "" if value is None else str(value)
+
+
+def excel_text(value: Any) -> str:
+    """Excel が文字のまま出すセル(`="058901"`)。空は空のまま。
+
+    Excel の式の中の文字は `"` で囲み、中の `"` は2つ重ねる。
+    """
+    text = _cell(value)
+    if not text:
+        return ""
+    return '="' + text.replace('"', '""') + '"'
 
 
 @dataclass
@@ -209,7 +232,10 @@ def export(conn: sqlite3.Connection, kind: str, start: date, end: date,
 
     if kind == KIND_SUMMARY:
         summary = summarize(picked.rows)
-        lines = [list(SUMMARY_COLUMNS), *summary.lines]
+        code = SUMMARY_COLUMNS.index("発注コード")
+        lines = [list(SUMMARY_COLUMNS),
+                 *[[excel_text(v) if i == code else v for i, v in enumerate(line)]
+                   for line in summary.lines]]
         notes = [f"{period} の倉庫が確認した発注 {summary.counted}件を、{len(summary.lines)}行にまとめました"]
         if summary.unconfirmed:
             notes.append(f"倉庫がまだ確認していない {summary.unconfirmed}件は数えていません")
@@ -219,7 +245,8 @@ def export(conn: sqlite3.Connection, kind: str, start: date, end: date,
             notes.append(f"発注数が 0 か空(EX など)の {summary.no_qty}件は数えていません")
     else:
         lines = [list(ROW_COLUMNS),
-                 *[[_cell(row[c]) for c in ROW_COLUMNS] for row in picked.rows]]
+                 *[[excel_text(row[c]) if c in EXCEL_TEXT_COLUMNS else _cell(row[c])
+                    for c in ROW_COLUMNS] for row in picked.rows]]
         notes = [f"{period} の発注 {len(picked.rows)}件を出しました(取り消したものも含みます)"]
     if picked.unreadable:
         notes.append(f"登録日時が読めない {picked.unreadable}件は入っていません")

@@ -92,9 +92,10 @@ class ExportTests(unittest.TestCase):
         got, rows = self.export(order_export.KIND_SUMMARY)
         self.assertEqual(rows[0], list(order_export.SUMMARY_COLUMNS))
         self.assertEqual(rows[1:], [
-            ["1400x3150", "1400", "3150", "059551", "台", "13", "2", "タイト　　1400x3150"],
-            ["1550x3100", "1550", "3100", "052212", "台", "4", "1", "タイト　SP-18　1550x3100"],
-            ["角材 丈:1001-1999", "", "", "K-01", "本", "6", "1", "角材 丈:1001-1999"],
+            # 発注コードは Excel で開いても頭の0が消えない形(`="059551"`)
+            ["1400x3150", "1400", "3150", '="059551"', "台", "13", "2", "タイト　　1400x3150"],
+            ["1550x3100", "1550", "3100", '="052212"', "台", "4", "1", "タイト　SP-18　1550x3100"],
+            ["角材 丈:1001-1999", "", "", '="K-01"', "本", "6", "1", "角材 丈:1001-1999"],
         ])
         self.assertIn("取り消した 1件は数えていません", got.message)
         self.assertIn("倉庫がまだ確認していない 1件は数えていません", got.message)
@@ -111,6 +112,28 @@ class ExportTests(unittest.TestCase):
         cancelled = [dict(zip(rows[0], r)) for r in rows[1:] if r[rows[0].index("取り消し済")] == "1"]
         self.assertEqual(len(cancelled), 1)
         self.assertNotIn("管理番号", rows[0], "端末ごとに振り直す番号は出さない")
+
+    def test_Excelで開いても頭の0が消えない(self) -> None:
+        """現場の声:「頭に0が付いてると数値扱いすると0消えるよね」「Excel で開くと思います」。"""
+        self.conn.execute("UPDATE 資材パレット注文管理 SET 用途コード = '0921', 受注番号 = '04093290'")
+        self.conn.commit()
+        got = order_export.export(self.conn, order_export.KIND_ROWS,
+                                  date(2026, 10, 1), date(2026, 10, 1), self.dir)
+        text = got.path.read_text(encoding="utf-8-sig")
+        self.assertIn('"=""059551"""', text)                 # ファイルの中の書き方(CSV の決まりで " を重ねる)
+        first = dict(zip(*read(got.path)[:2]))
+        self.assertEqual((first["発注コード"], first["LotNo"], first["用途コード"], first["受注番号"]),
+                         ('="059551"', '="L1"', '="0921"', '="04093290"'))
+        # 数の列は数のまま(Excel で足し算できる)
+        self.assertEqual((first["発注数"], first["幅"], first["丈"], first["厚"]),
+                         ("3", "1385", "2770.5", "3.0"))
+        # 空の欄は空のまま(「=""」にしない)
+        self.assertEqual(first["材質"], "")
+
+    def test_文字の中のダブルクォートも崩さない(self) -> None:
+        self.assertEqual(order_export.excel_text('A"1'), '="A""1"')
+        self.assertEqual(order_export.excel_text(None), "")
+        self.assertEqual(order_export.excel_text(""), "")
 
     def test_小数の発注数も丸めずに足す(self) -> None:
         self.conn.execute("DELETE FROM 資材パレット注文管理")
