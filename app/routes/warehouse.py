@@ -702,6 +702,17 @@ def confirm():
     return _action(svc.confirm_order, "確認")
 
 
+@material_only.post("/api/warehouse/unconfirm")
+def unconfirm():
+    """確認を外す(未確認に戻す)。**資材モードだけ**(確認と同じ。どの資材端末からでも)。
+
+    現場の「取り消し」とは別の操作(`warehouse_service.unconfirm_order`)。
+    外すと、送った端末はまた取り消せるようになる。現場が気づけるよう
+    その発注にコメントを自動で残す。
+    """
+    return _action(svc.unconfirm_order, "確認を外す")
+
+
 def _action(func, label: str):
     body = request.get_json(silent=True) or {}
     try:

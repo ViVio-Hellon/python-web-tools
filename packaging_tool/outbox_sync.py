@@ -67,6 +67,12 @@ DEFAULT_OP_ID_COLUMN = "送信ID"
 ORIGIN_LOCAL = "手元"
 ORIGIN_IMPORTED = "取込"
 
+# 「印を外した」ことを覚えておく `mark_pending` の値の頭。続きは外した印の日時
+# (例「外す:2026-10-13 10:55:31」)。印は付けるだけのものとして空を送らない
+# (`push_marks`)ので、**外したことは別にはっきり覚えておかないと共有へ届かず**、
+# 次の取り込みで外したはずの印が戻ってくる
+UNMARK_PREFIX = "外す:"
+
 
 @dataclass(frozen=True)
 class WriteBackSpec:
@@ -112,6 +118,10 @@ class WriteBackSpec:
                      送信IDは送るたびに振る番号なので、不具合や古い版で送り直されると
                      別物に見えて通ってしまう。この番号は行を作ったときに決まるので、
                      **誰がいつ何度送っても、送り先には1行しか入らない**(空欄の行は対象外)
+    unmark         : 外せる印 (印の列, その日時の列)。外すときは
+                     `mark_unset_pending` で外した印の日時を覚え、送り先では
+                     **その日時の印が付いているときだけ**空に戻す(ほかの端末が
+                     あとから付け直した印は消さない)
     origin_column  : 行の出どころの手元の列(`ORIGIN_LOCAL` / `ORIGIN_IMPORTED`)。
                      指定すると、**取り込んだ行は送る候補にしない**。
                      「送ったと記録していない行を送る」だけだと、記録が欠けたとき
@@ -136,6 +146,8 @@ class WriteBackSpec:
     optional_columns: tuple[str, ...] = ()
     identity_columns: tuple[str, ...] = ()
     origin_column: str = ""
+    # 外せる印 (印の列, その日時の列)。倉庫の「確認を外す」。`mark_unset_pending`
+    unmark: tuple[str, ...] = ()
 
     @property
     def marks_enabled(self) -> bool:
@@ -335,9 +347,24 @@ def mark_pending(conn: sqlite3.Connection, spec: WriteBackSpec,
     """
     if not spec.marks_enabled:
         return
+    # 外した印をまだ送っていなければ、その覚えは残す(送るときに外してから付ける)
     conn.execute(
-        f"UPDATE [{spec.sqlite_table}] SET [{spec.mark_pending}] = '1'"
-        f" WHERE [{spec.key_column}] = ?", (row_id,))
+        f"UPDATE [{spec.sqlite_table}] SET [{spec.mark_pending}] = CASE"
+        f" WHEN [{spec.mark_pending}] LIKE ? THEN [{spec.mark_pending}] ELSE '1' END"
+        f" WHERE [{spec.key_column}] = ?", (UNMARK_PREFIX + "%", row_id))
+
+
+def mark_unset_pending(conn: sqlite3.Connection, spec: WriteBackSpec,
+                       row_id: int, stamp: str) -> None:
+    """この行の印(`spec.unmark`)を外した、と覚える。`stamp` は外した印の日時。
+
+    送るのは `push_marks`。送り先では、印がこの日時のときだけ空に戻す。
+    """
+    if not (spec.marks_enabled and spec.unmark):
+        return
+    conn.execute(
+        f"UPDATE [{spec.sqlite_table}] SET [{spec.mark_pending}] = ?"
+        f" WHERE [{spec.key_column}] = ?", (UNMARK_PREFIX + (stamp or ""), row_id))
 
 
 def _clear_mark_pending(conn: sqlite3.Connection, spec: WriteBackSpec,
@@ -407,6 +434,23 @@ def push_marks(conn: sqlite3.Connection,
     pushed, errors = 0, []
     for row in rows:
         row_id = int(row[spec.key_column])
+        pending = str(row[spec.mark_pending] or "")
+        if spec.unmark and pending.startswith(UNMARK_PREFIX):
+            # **先に外す。** 外したあとに付け直した印(確認し直し・取り消し)は、
+            # 続けて下で送る。外すのに失敗したら、付け直しも送らない(順番が崩れる)
+            try:
+                with source.transaction() as tx:
+                    outcome = _put_unmark(tx, spec, _mark_target(conn, spec, row), row,
+                                          pending[len(UNMARK_PREFIX):])
+            except source_db.SourceError as exc:
+                log.warning("%s の印を外せませんでした: %s", spec.access_table, exc)
+                errors.append(f"{spec.access_table}(行{row_id}): {exc}")
+                continue
+            if outcome is None:
+                pushed += 1
+            else:
+                log.warning("%s(行%s): %s", spec.access_table, row_id, outcome)
+                errors.append(f"{spec.access_table}(行{row_id}): {outcome}")
         values = {c: row[c] for c in spec.mark_columns
                   if c in row.keys() and row[c] not in (None, "")}
         if not values:
@@ -443,6 +487,55 @@ def _put_marks(tx: "source_db.SourceTransaction", spec: WriteBackSpec,
                values: dict[str, Any]) -> Optional[str]:
     """送り先の行に印を書く。書けなかったら理由(書けたら None)。"""
     table = source_db.quote_identifier(spec.access_table)
+    got = _target_rows(tx, spec, where, row)
+    if isinstance(got, str):
+        return got
+    found, cond_sql, cond_params = got
+    for flag, blocker in spec.mark_blockers:
+        if flag in values and any(_is_set(r.get(blocker)) for r in found):
+            return (f"送り先では先に「{blocker}」が付いていたため、"
+                    f"「{flag}」は送りませんでした。次の取り込みで共有に合わせます")
+    sets = ", ".join(f"{source_db.quote_identifier(k)} = ?" for k in values)
+    tx.execute(f"UPDATE {table} SET {sets} WHERE {cond_sql}",
+               list(values.values()) + cond_params)
+    return None
+
+
+def _put_unmark(tx: "source_db.SourceTransaction", spec: WriteBackSpec,
+                where: Optional[dict[str, Any]], row: sqlite3.Row,
+                stamp: str) -> Optional[str]:
+    """送り先の行の印(`spec.unmark`)を空に戻す。戻せなかったら理由(戻せたら None)。
+
+    **外した印と同じ日時の印だけを外す。** 送り先でほかの端末があとから付け直して
+    いたら(日時が違う)、それは消さない。送り先でもう外れていれば、することは無い。
+    """
+    from . import import_specs
+    table = source_db.quote_identifier(spec.access_table)
+    flag, stamp_column = spec.unmark[0], spec.unmark[1]
+    got = _target_rows(tx, spec, where, row)
+    if isinstance(got, str):
+        return got
+    found, cond_sql, cond_params = got
+    marked = [r for r in found if _is_set(r.get(flag))]
+    if not marked:
+        return None                                   # もう外れている
+    def same_time(value: Any) -> bool:
+        a = (import_specs.to_datetime_text(value) or "").replace("T", " ")[:19]
+        b = (import_specs.to_datetime_text(stamp) or "").replace("T", " ")[:19]
+        return bool(a) and a == b
+    if not all(same_time(r.get(stamp_column)) for r in marked):
+        return (f"送り先では外した「{flag}」のあとに付け直されていたため、外しませんでした。"
+                "次の取り込みで共有に合わせます")
+    tx.execute(f"UPDATE {table} SET {source_db.quote_identifier(flag)} = NULL,"
+               f" {source_db.quote_identifier(stamp_column)} = NULL WHERE {cond_sql}",
+               cond_params)
+    return None
+
+
+def _target_rows(tx: "source_db.SourceTransaction", spec: WriteBackSpec,
+                 where: Optional[dict[str, Any]], row: sqlite3.Row):
+    """印を書く送り先の行。(行, 条件の文, 条件の値)。決まらなければ理由の文。"""
+    table = source_db.quote_identifier(spec.access_table)
 
     def rows_by(cond: dict[str, Any]) -> tuple[list[dict[str, Any]], str, list[Any]]:
         sql = " AND ".join(f"{source_db.quote_identifier(k)} = ?" for k in cond)
@@ -474,14 +567,7 @@ def _put_marks(tx: "source_db.SourceTransaction", spec: WriteBackSpec,
     if not found:
         return ("送り先に行がありません(共有側で消えています)。"
                 "印は送らず、次の取り込みで共有に合わせます")
-    for flag, blocker in spec.mark_blockers:
-        if flag in values and any(_is_set(r.get(blocker)) for r in found):
-            return (f"送り先では先に「{blocker}」が付いていたため、"
-                    f"「{flag}」は送りませんでした。次の取り込みで共有に合わせます")
-    sets = ", ".join(f"{source_db.quote_identifier(k)} = ?" for k in values)
-    tx.execute(f"UPDATE {table} SET {sets} WHERE {cond_sql}",
-               list(values.values()) + cond_params)
-    return None
+    return found, cond_sql, cond_params
 
 
 def unsent_tables(conn: sqlite3.Connection,

@@ -160,6 +160,12 @@ ORDER_ASK: dict[str, dict[str, str]] = {
         # 資材が受け取ったことの記録。現場はこれ以降取り消せなくなる
         "why": "確認済みにすると、現場はこの発注を取り消せなくなります。",
     },
+    "unconfirm": {
+        "title": "確認を外しますか？",
+        "ok": "確認を外す",
+        # 現場の声のとおりの文。外すと現場がまた取り消せる
+        "why": "未確認に戻り、現場は取り消せるようになります。",
+    },
     "cancel": {
         "title": "この発注を取り消しますか？",
         "ok": "取り消す",
@@ -226,6 +232,8 @@ class OrderRow:
     # (確認=資材だけ / 取消=現場だけ、どちらも未確認のときだけ)
     can_confirm: bool = False
     can_cancel: bool = False
+    # 倉庫の「確認を外す」(資材モード・確認済みの行)
+    can_unconfirm: bool = False
     # その発注がどのLotのものか。**押すとロット検索でそのLotが開く。**
     # 空なら出さない(Lotが入っていない発注は辿れない)
     lot_no: str = ""
@@ -409,6 +417,8 @@ def _row(item: dict, *, is_material: bool, terminal: str = "",
         # 受け取ったかに関わらず現場の都合で確認済みにでき、確認という
         # 工程が意味を失う
         can_confirm=is_material and status == svc.STATUS_PENDING,
+        # **確認を外すのも倉庫だけ。** どの資材端末からでも(確認した端末は記録していない)
+        can_unconfirm=is_material and status == svc.STATUS_CONFIRMED,
         # **取り消しは現場だけ。** 出した側が引っ込める操作で、資材は
         # 受けて確認する側なので消す立場ではない。VBAでも取り消しは
         # 現場の送信確認ダイアログ(`frmSendConfirm.btnDelete_Click`)に
@@ -541,6 +551,7 @@ def row_dict(row: OrderRow) -> dict[str, Any]:
         "status_kind": row.status_kind,
         "can_confirm": row.can_confirm,
         "can_cancel": row.can_cancel,
+        "can_unconfirm": row.can_unconfirm,
         "why": row.why,
         "unsent": row.unsent,
         "comments": row.comments,

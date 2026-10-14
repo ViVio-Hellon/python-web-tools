@@ -13,6 +13,7 @@ VBA `frmSendConfirm`(倉庫に発注データを送る確認ダイアログ)と
     frmWarehouseOrder.LoadOrders/RefreshList -> list_orders
     frmWarehouseOrder.btnConfirm_Click        -> confirm_order
     frmSendConfirm.btnDelete_Click             -> cancel_order
+    (VBAに無い。倉庫の「確認を外す」)           -> unconfirm_order
 
 【移植で変更した点】
     - VBA版は「取り消し済/確認済み」を文字列リテラル'1'として書き込み、
@@ -393,6 +394,58 @@ def cancel_order(conn: sqlite3.Connection, mgr_no: int, *,
     return ActionResult(ok=True, message="発注を取り消しました。")
 
 
+# 確認を外したとき、その発注に自動で残すコメント。**現場が気づけるように**
+# (外すと確認日時が消えて記録が残らない。コメントは現場に「新」で出る)
+UNCONFIRM_COMMENT = "倉庫が確認を外しました(元の確認日時: {when})。未確認に戻りました。"
+
+
+def unconfirm_order(conn: sqlite3.Connection, mgr_no: int, *,
+                    terminal: Optional[str] = None) -> ActionResult:
+    """倉庫の「確認を外す」。確認済みの発注を**未確認に戻す**(VBAには無い操作)。
+
+    現場の「取り消し」とは別の操作。取り消しは発注を無効にする(`取り消し済`)。
+    こちらは発注は生きたまま、確認済み・確認日時を空に戻す(送った直後と同じ姿)。
+    外すと、送った端末はまた取り消せる・発注データの集計(確認済みだけ)から外れる・
+    コメントがまた書ける。
+
+    **どの資材端末からでも外せる**(確認した端末は記録していない。現場の判断)。
+
+    【共有へ届ける】
+    印は「付けるだけ」のものとして空を送らない(`outbox_sync.push_marks`)ので、
+    外したことは `mark_unset_pending` で**外した確認の日時と一緒に**覚える。
+    共有では、その日時の確認が付いているときだけ空に戻す(ほかの資材端末が
+    あとから確認し直していたら消さない)。
+
+    【現場が気づけるように】
+    その発注にコメント `UNCONFIRM_COMMENT` を自動で残す(現場には「新」で出る)。
+    """
+    row = conn.execute(f"SELECT 確認日時 FROM {TABLE} WHERE 管理番号 = ?", (mgr_no,)).fetchone()
+    stamp = str(row[0] or "").strip() if row else ""
+    result = db.update_record(
+        conn, TABLE, "管理番号", mgr_no,
+        {"確認済み": None, "確認日時": None},
+        where_clause="管理番号 = ? AND 確認済み = '1' AND (取り消し済 IS NULL OR 取り消し済 <> '1')",
+        where_params=(mgr_no,),
+    )
+    if result.reason == "not_found":
+        return ActionResult(ok=False, message=_refusal(conn, mgr_no, "確認を外せません"))
+    if not result.ok:
+        return ActionResult(ok=False, message=f"更新に失敗しました。({result.error})")
+    _mark_unconfirmed(conn, mgr_no, stamp)
+    from . import order_comments
+    when = stamp.replace("T", " ")[:16] or "不明"
+    note = order_comments.add(conn, mgr_no, UNCONFIRM_COMMENT.format(when=when),
+                              terminal=terminal if terminal is not None else this_terminal(),
+                              side=order_comments.SIDE_MATERIAL)
+    message = "確認を外しました。未確認に戻りました。"
+    if note.ok:
+        message += "現場が気づけるよう、この発注にコメントを残しました。"
+    else:
+        log.warning("確認を外したコメントを残せませんでした: 管理番号=%s %s", mgr_no, note.message)
+        message += f"(コメントは残せませんでした: {note.message})"
+    return ActionResult(ok=True, message=message)
+
+
 def _refusal(conn: sqlite3.Connection, mgr_no: int, cannot: str) -> str:
     """断った理由を、**いまの状態から**言う。
 
@@ -410,6 +463,8 @@ def _refusal(conn: sqlite3.Connection, mgr_no: int, cannot: str) -> str:
         if cannot.startswith("確認"):
             return "この発注はもう確認済みです(ほかの端末で確認されています)。"
         return f"この発注は倉庫が確認済みのため、{cannot}。"
+    if status == STATUS_PENDING and cannot.startswith("確認を外"):
+        return "この発注はもう未確認です(ほかの端末で確認が外されています)。"
     return f"{cannot}でした。画面を更新してください。"
 
 
@@ -455,6 +510,16 @@ def find_again(conn: sqlite3.Connection, mgr_no: int,
         " WHERE 登録日時 = ? AND LotNo = ? AND 品名 = ? ORDER BY 管理番号 LIMIT 1",
         (before["登録日時"], before["LotNo"], before["品名"])).fetchone()
     return int(row[0]) if row else mgr_no
+
+
+def _mark_unconfirmed(conn: sqlite3.Connection, mgr_no: int, stamp: str) -> None:
+    """確認を外したことを「まだ共有へ送っていない」と覚える(外した確認の日時と一緒に)。"""
+    from . import data_sync
+    for spec in data_sync.WRITEBACK_SPECS:
+        if spec.sqlite_table == TABLE:
+            outbox_sync.mark_unset_pending(conn, spec, mgr_no, stamp)
+            conn.commit()
+            return
 
 
 def _mark_unsent(conn: sqlite3.Connection, mgr_no: int) -> None:

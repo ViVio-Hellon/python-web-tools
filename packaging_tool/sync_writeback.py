@@ -55,6 +55,8 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
                   # 手元に無いので、送り先でもう一度確かめる
                   mark_blockers=(("確認済み", "取り消し済"),
                                  ("取り消し済", "確認済み")),
+                  # 倉庫の「確認を外す」。外した確認と同じ日時の確認だけを外す
+                  unmark=("確認済み", "確認日時"),
                   match_columns=("登録日時", "LotNo", "品名"),
                   unique_column="発注キー",
                   number_column="管理番号",

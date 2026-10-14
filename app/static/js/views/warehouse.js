@@ -564,10 +564,16 @@ function actionsCell(row) {
       if (await ask("cancel", row)) act("/api/warehouse/cancel", row);
     }));
   }
+  // 倉庫の「確認を外す」(確認済みの行)。現場の取り消しとは別の操作
+  if (row.can_unconfirm) {
+    box.appendChild(button("確認を外す", "btn--find", async () => {
+      if (await ask("unconfirm", row)) act("/api/warehouse/unconfirm", row);
+    }));
+  }
   // Lotを開くだけなら「操作」ではないので、理由の文は出したままにする。
-  // **操作のボタン(確認・取り消し)だけを見る。** ボタンなら何でも数えて
+  // **操作のボタン(確認・取り消し・確認を外す)だけを見る。** ボタンなら何でも数えて
   // いたので、Lotの入った発注では理由が一度も出ていなかった
-  if (!row.can_confirm && !row.can_cancel) {
+  if (!row.can_confirm && !row.can_cancel && !row.can_unconfirm) {
     const why = document.createElement("span");
     why.className = "why";
     why.style.margin = "0";
