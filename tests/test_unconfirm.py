@@ -23,12 +23,13 @@ from pathlib import Path
 
 from packaging_tool import config, data_sync, db, order_comments, outbox_sync
 from packaging_tool import warehouse_service as svc
-from tests.test_data_sync import ImportDoesNotEchoBackTests, make_conn
+from tests import test_data_sync
+from tests.test_data_sync import make_conn
 
 
 class UnconfirmDbTests(unittest.TestCase):
     TABLE = config.TBL_WAREHOUSE_ORDER
-    COLUMNS = ImportDoesNotEchoBackTests.COLUMNS + ("発注キー",)
+    COLUMNS = test_data_sync.ImportDoesNotEchoBackTests.COLUMNS + ("発注キー",)
 
     def setUp(self) -> None:
         self.dir = Path(tempfile.mkdtemp(prefix="unconfirm_"))
