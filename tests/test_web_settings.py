@@ -1953,6 +1953,31 @@ class TableRefreshTests(TableBringTests):
         self.assertIn("書いたあと読み直して Access と照らし合わせました: PalletMaster(3行 すべて同じ)",
                       body["message"])
 
+    def test_パレットを入れ替えたら発注コードの重複を知らせる(self) -> None:
+        """現場の声:「パレットマスターの重複チェックは必要」。Access にあるものなので入れ替えでは直らない。"""
+        import sqlite3
+        for path in (self.master, self.converted):
+            conn = sqlite3.connect(path)
+            conn.execute("ALTER TABLE PalletMaster ADD COLUMN コード")
+            conn.execute("ALTER TABLE PalletMaster ADD COLUMN 単位")
+            conn.execute("UPDATE PalletMaster SET コード = '05' || 管理番号, 単位 = '台'")
+            conn.commit()
+            conn.close()
+        conn = sqlite3.connect(self.converted)
+        conn.execute("UPDATE PalletMaster SET コード = '057417' WHERE 管理番号 IN (1, 3)")
+        conn.commit()
+        conn.close()
+        self.session.admin = True
+        body = self.refresh(["PalletMaster"])
+        self.assertTrue(body["ok"], body)
+        self.assertIn("PalletMaster に発注コードの重複があります: 1種(2行)。寸法が違う 1", body["message"])
+        self.assertIn("「発注コードの重複だけ」", body["message"])
+
+    def test_重複が無ければ知らせない(self) -> None:
+        self.session.admin = True
+        body = self.refresh(["PalletMaster"])
+        self.assertNotIn("発注コードの重複", body["message"])
+
     def test_確定する前に合わなければ書く前に戻す(self) -> None:
         from unittest import mock
         from packaging_tool import source_db

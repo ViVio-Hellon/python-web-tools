@@ -241,6 +241,9 @@
             列名を直して作り直す</button>
           {# 列を足す。**マスタ管理で直せる表だけ**に出す。戻せない #}
           <button class="btn btn--run" type="button" id="mAddCol" hidden>+ 列を足す…</button>
+          {# PalletMaster の発注コードの重複だけを出す(押すたびに出す⇔戻す)。重複が無ければ出さない #}
+          <button class="btn btn--find" type="button" id="mDup" aria-pressed="false" hidden>
+            発注コードの重複だけ</button>
           <button class="btn btn--find" type="button" id="mReload">
             <span class="gl">⟳</span>読み直す</button>
           {# 表そのものを消す。**このツールが使わない表だけ**に出す
@@ -251,6 +254,9 @@
 
         {# 直せない理由は**先に**言う。押してから断られるのは手戻り #}
         <p class="status status--warn" id="mWhy" hidden></p>
+        {# PalletMaster の発注コードの重複(`pallet_dupes`)。同じコードが2つの品物を指すと、
+           倉庫がどちらを用意するか決められない #}
+        <p class="status status--warn" id="mDupNote" hidden></p>
         <p class="status status--ng" id="mError" hidden></p>
 
         <div class="tablewrap tablewrap--rows">

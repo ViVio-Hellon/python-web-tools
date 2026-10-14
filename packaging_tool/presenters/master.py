@@ -48,7 +48,8 @@ def frame(conn: Optional[sqlite3.Connection]) -> MasterViewModel:
 
 def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
            sort: str = "", sort_dir: str = "asc",
-           path: Optional[Path] = None, message: str = "") -> MasterViewModel:
+           path: Optional[Path] = None, message: str = "",
+           dupes: bool = False) -> MasterViewModel:
     """面を開いたとき / 直したあとに返す、まるごとの状態。
 
     直したあとも同じものを返す(設計.md §1)。「保存しました」だけを
@@ -83,7 +84,7 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
 
     view.source_note = _where(found)
     view.page = master_admin.page(found, view.table, query=view.query,
-                                  sort=sort, sort_dir=sort_dir)
+                                  sort=sort, sort_dir=sort_dir, dupes=dupes)
     # 打ち込める欄は、**取り込み元に本当にある列**だけにする。
     # 上流がまだ足していない列を出すと、保存の瞬間に断られる
     view.columns = master_admin.columns(conn, view.table, view.page.columns,

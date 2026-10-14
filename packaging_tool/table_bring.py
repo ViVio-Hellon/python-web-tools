@@ -1133,6 +1133,13 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
                     + " という名前で残しています(要らなければ消してください)。")
     if notes:
         message += " " + "。".join(notes) + "。"
+    if any(t == "PalletMaster" for t, _b, _a in done):
+        # **発注コードの重複を知らせる。** Access の中にあるもので、入れ替えでは直らない
+        from . import pallet_dupes
+        dupes = pallet_dupes.from_path(dest)
+        if dupes:
+            message += (f" PalletMaster に発注コードの重複があります: {pallet_dupes.summary(dupes)}"
+                        "(設定の「マスタ管理」で PalletMaster を開き「発注コードの重複だけ」で全部見られます)。")
     if checked:
         message += (" 書いたあと読み直して Access と照らし合わせました: "
                     + "、".join(f"{t}({n:,}行 すべて同じ)" for t, n in checked) + "。")

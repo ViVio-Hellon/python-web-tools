@@ -134,6 +134,11 @@ class Page:
     # 列を足せるか(直せる表だけ)と、足す前に言うこと(`master_schema.add_column`)
     can_add_column: bool = False
     add_column_note: str = ""
+    # PalletMaster の発注コードの重複(`pallet_dupes`)。ほかの表では出さない
+    dupes_available: bool = False
+    dupes_on: bool = False
+    dupes_text: str = ""
+    dupes_groups: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {"table": self.table, "label": self.label,
@@ -146,12 +151,14 @@ class Page:
                 "sort": self.sort, "sort_dir": self.sort_dir,
                 "droppable": self.droppable, "drop_note": self.drop_note,
                 "can_add_column": self.can_add_column,
-                "add_column_note": self.add_column_note}
+                "add_column_note": self.add_column_note,
+                "dupes": {"available": self.dupes_available, "on": self.dupes_on,
+                          "text": self.dupes_text, "groups": self.dupes_groups}}
 
 
 def page(path: Optional[Path], table: str, *, query: str = "",
          sort: str = "", sort_dir: str = "asc",
-         limit: int = ROW_LIMIT) -> Page:
+         limit: int = ROW_LIMIT, dupes: bool = False) -> Page:
     """表の中身を読む。**取り込み元から直に読む。**
 
     手元の写しではなく元を読むのは、直したあと「本当に入ったか」を
@@ -196,6 +203,23 @@ def page(path: Optional[Path], table: str, *, query: str = "",
 
     where, params = _filter(names, query)
     order, sort_col = _order(names, sort, sort_dir)
+    if table == DUPES_TABLE:
+        # **発注コードの重複を知らせる。** 同じコードが2つの品物を指すと、倉庫がどちらを
+        # 用意するか決められない(現場の声:「重複チェックは必要」)
+        from . import pallet_dupes
+        groups = pallet_dupes.from_path(path)
+        view.dupes_available = bool(groups)
+        view.dupes_groups = len(groups)
+        view.dupes_text = pallet_dupes.summary(groups)
+        if dupes and groups:
+            view.dupes_on = True
+            ids = pallet_dupes.rowids(path)
+            inside = f"rowid IN ({', '.join('?' * len(ids))})"
+            where = f"{where} AND {inside}" if where else f" WHERE {inside}"
+            params = [*params, *ids]
+            if not sort_col:
+                # 同じコードの行を隣どうしに並べる
+                order = f"ORDER BY TRIM(CAST({source_db.quote_identifier('コード')} AS TEXT)), rowid ASC"
     view.sort = sort_col
     view.sort_dir = "desc" if sort_dir == "desc" else "asc"
     quoted = source_db.quote_identifier(table)
@@ -219,6 +243,10 @@ def page(path: Optional[Path], table: str, *, query: str = "",
                      f"(ほか {hidden}件)。絞り込むと目当ての行が出ます。"
                      "見出しを押すと、出ていない行も含めた全件で並び替えます。")
     return view
+
+
+# 発注コードの重複を見る表
+DUPES_TABLE = "PalletMaster"
 
 
 def _order(names: list[str], sort: str, sort_dir: str) -> tuple[str, str]:

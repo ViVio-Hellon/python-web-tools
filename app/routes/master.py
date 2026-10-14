@@ -60,7 +60,9 @@ def browse():
         table=request.args.get("table", ""),
         query=request.args.get("q", ""),
         sort=request.args.get("sort", ""),
-        sort_dir=request.args.get("sort_dir", "asc"))
+        sort_dir=request.args.get("sort_dir", "asc"),
+        # PalletMaster の「発注コードの重複だけ」
+        dupes=request.args.get("dup") == "1")
     return jsonify(master_presenter.to_dict(view))
 
 

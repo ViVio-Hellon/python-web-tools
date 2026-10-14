@@ -27,8 +27,9 @@ let view = null;          // サーバが返した最後の状態。**画面の�
 let loaded = false;
 let editing = null;       // いま開いている行(足すときは null)
 let authPending = false;  // 1行の窓を開いている間に認証が変わった(閉じたら読み直す)
+let dupOnly = false;      // PalletMaster の「発注コードの重複だけ」を出している
 
-const IDS = ["mTables", "mMark", "mTitle", "mCan", "mCount", "mQuery", "mFind",
+const IDS = ["mTables", "mMark", "mTitle", "mCan", "mCount", "mQuery", "mFind", "mDup", "mDupNote",
              "mAdd", "mAddCol", "mCreate", "mRebuild", "mDrop", "mReload", "mWhy", "mError", "mHead",
              "mRows", "mNote", "mSource",
              "mEdit", "mEditTitle", "mEditKind", "mEditWhy", "mEditError",
@@ -64,6 +65,8 @@ export function start(frame) {
     if (event.key === "Enter") { event.preventDefault(); loadKeepSort(view && view.table); }
   });
   el.mReload.addEventListener("click", () => loadKeepSort(view && view.table));
+  // 押すたびに「重複だけ」⇔「全部」。並び替えは外す(重複だけのときはコードの順に並ぶ)
+  el.mDup.addEventListener("click", () => { dupOnly = !dupOnly; load(view && view.table); });
   el.mAdd.addEventListener("click", () => openRow(null));
   el.mCreate.addEventListener("click", createTable);
   el.mRebuild.addEventListener("click", rebuildTable);
@@ -85,7 +88,7 @@ export function start(frame) {
     // 表を変えたら絞り込みも並び替えも外す。前の表の言葉/列で
     // 絞ったままにすると、「0件」や意味の無い並びだけが出て、
     // なぜそうなっているのか分からない
-    if (row) { el.mQuery.value = ""; load(row.dataset.table); }
+    if (row) { el.mQuery.value = ""; dupOnly = false; load(row.dataset.table); }
   });
 
   // 見出しクリックで並び替え。**サーバが並べ替えた結果を描き直すだけ**
@@ -191,6 +194,7 @@ async function load(table, sort, sortDir) {
     table: table || "", q: query,
     sort: sort || "", sort_dir: sortDir || "asc",
   });
+  if (dupOnly) params.set("dup", "1");
   try {
     render(await api.get(`/api/master/browse?${params}`));
   } catch (err) {
@@ -329,6 +333,20 @@ function render(next) {
     }
     return tr;
   }));
+
+  // 発注コードの重複(PalletMaster だけ)。**数と内訳を先に言い**、押せば重複の行だけを並べる
+  const dupes = page.dupes || {};
+  dupOnly = Boolean(dupes.on);
+  el.mDup.hidden = !dupes.available;
+  el.mDup.setAttribute("aria-pressed", dupOnly ? "true" : "false");
+  el.mDup.textContent = dupOnly ? "全部の行に戻す" : "発注コードの重複だけ";
+  el.mDupNote.hidden = !dupes.available;
+  el.mDupNote.textContent = dupes.available
+    ? `発注コードが重複している行があります: ${dupes.text}。`
+      + "同じコードが別の品物を指すと、倉庫がどちらを用意するか決められません。"
+      + (dupOnly ? "いまは重複している行だけを、コードの順に出しています。"
+        : "「発注コードの重複だけ」を押すと、その行だけを並べます。")
+    : "";
 
   // 出しきれなかった分は**黙って落とさない**(文言はサーバが持つ)
   el.mNote.hidden = !page.note;

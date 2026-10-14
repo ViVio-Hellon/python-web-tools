@@ -39,6 +39,8 @@ INFO = "info"      # 良し悪しではない事実
 # 「書き方のゆれ」を見出しに並べる件数。**全部は並べない**が、
 # 数は必ず言う(切ったことを黙らない)
 LOOSE_SAMPLE = 3
+# 発注コードの重複の例に出す組の数(危ない種類から)
+DUPE_SAMPLE = 3
 
 # 見出しに出す言葉。**色だけで良し悪しを伝えない**(§3.8)。
 # 工場は照明も見え方もまちまちで、色覚特性のある人もいる
@@ -811,6 +813,22 @@ def _check_local_master(section: Section, conn) -> None:
             f"{sample}{more}。そろえて拾っているので選定は通りますが、"
             f"マスタ側をそろえておくと確実です。"
             f"「適合範囲を再計算」を押すと、どの行かが全部出ます。"))
+
+    # **発注コードの重複。** 同じコードが2つの品物を指すと、倉庫がどちらを用意するか
+    # 決められない(現場の声:「パレットマスターに発注コードが重複しているものがあった。
+    # 重複チェックは必要」)。Access の中に前からあったので、取り込みでは直らない
+    from .. import pallet_dupes
+    dupes = pallet_dupes.from_conn(conn)
+    if dupes:
+        sample = "、".join(g.describe() for g in dupes[:DUPE_SAMPLE])
+        more = f" ほか{len(dupes) - DUPE_SAMPLE}種" if len(dupes) > DUPE_SAMPLE else ""
+        section.checks.append(Check(
+            "発注コードの重複", f"パレットマスタに {len(dupes)}種({sum(len(g.rows) for g in dupes)}行)",
+            WARN,
+            f"{pallet_dupes.summary(dupes)}。例: {sample}{more}。"
+            "同じコードが別の品物を指すと、倉庫がどちらを用意するか決められません。"
+            "「マスタ管理」で PalletMaster を開き「発注コードの重複だけ」を押すと全部出ます"
+            "(直すのは Access の PalletMaster か、マスタ管理で)。"))
 
     # **文字化けは版を上げただけでは消えない。** 置き換わった時点で元の
     # バイトが失われているので、取り込み直すまで手元に残る
