@@ -290,8 +290,6 @@ function render(next) {
   // どの操作でも画面ぜんぶが返ってくる設計なので、無条件に代入すると
   // 「まだセットしていない打鍵」が関係ないボタン1つで消える
   // (tkinter版は入力欄に触れないので消えなかった)
-  setInput(el.palWidth, next.pallet_width);
-  setInput(el.palLength, next.pallet_length);
   // 「パレット 幅・丈」の欄。サーバが変えたとき(やり直す)だけ書き換える
   setInput(el.palFindWidth, next.pallet_find_width);
   setInput(el.palFindLength, next.pallet_find_length);
@@ -755,12 +753,12 @@ export function start(initial) {
   });
   for (const id of ["lotCaption", "banner", "listNote", "palletRows", "rowNote", "exPair",
                     "pickLid", "clearLid", "decideMark", "lidMark",
-                    "palWidth", "palLength", "prodWidth", "prodLength",
+                    "prodWidth", "prodLength",
                     "palFindWidth", "palFindLength",
                     "sizeStatus", "decideWhy", "productFrom", "exOnlyWhy",
                     "showOnStock",
                     "showAll", "exOnly", "twoStack",
-                    "applyPallet", "decide", "clearSizes",
+                    "decide", "clearSizes",
                     // ボード
                     "boardCard", "boardType", "boardRows", "candidateNote",
                     "addCount", "addUpper", "addLower",
@@ -839,16 +837,11 @@ export function start(initial) {
       symbol: tr.dataset.symbol || "", key: tr.dataset.key, id: tr.dataset.id || "",
       unit: tr.dataset.unit || "",
     };
-    el.palWidth.value = tr.dataset.width;
-    el.palLength.value = tr.dataset.length;
     el.rowNote.textContent = tr.dataset.note || "";
     applySelection();
   });
 
-  // 一覧に無い寸法を使うときの逃げ道。押した寸法で決める
-  el.applyPallet.addEventListener("click", () =>
-    send("/api/selection/pallet/apply",
-         { width: el.palWidth.value, length: el.palLength.value }));
+  // 「一覧に無い寸法を使う」は無くした(VER4.8.50)。一覧に無いパレットは倉庫送信できないため
 
   // 製品 幅・丈を打つたびに、**確定させずに**候補を一覧へ出す。
   // 片方だけでもその辺に近いパレットを、両方そろえば「載るか」の

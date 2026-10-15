@@ -305,22 +305,8 @@
       <p class="status {{ 'status--ok' if view.lid_set else 'status--ng' }}" id="exPair"
          {% if not view.lid_note %}hidden{% endif %}>{{ view.lid_note }}</p>
 
-      {# 一覧に無い寸法を使うときの逃げ道。**普段は使わない**ので畳んでおく
-         (§1.3 段階的開示)。押せば開く #}
-      <div class="card--sub foldable" id="manualBox">
-        <header><h4>一覧に無い寸法を使う</h4></header>
-        <div class="pad">
-          <div class="field">
-            <label for="palWidth">幅</label>
-            <input class="input num" id="palWidth" inputmode="numeric" style="width:6em"
-                   value="{{ view.pallet_width }}" autocomplete="off">
-            <label for="palLength">丈</label>
-            <input class="input num" id="palLength" inputmode="numeric" style="width:6em"
-                   value="{{ view.pallet_length }}" autocomplete="off">
-            <button class="btn" type="button" id="applyPallet">この寸法にする</button>
-          </div>
-        </div>
-      </div>
+      {# 「一覧に無い寸法を使う」(一覧に無い寸法を打って決める)は無くした(VER4.8.50)。
+         一覧に無いパレットはコードが無く倉庫送信できない(現場の声)。寸法で探すときは上の「パレット 幅・丈」 #}
       {# 決まったものは**1行にまとめて**出す。製品とパレットは1つの
          決めごとなので、2行に分けると読む場所が2つになる #}
       <p class="status {{ 'status--ok' if view.product_set and view.pallet_set else 'status--ng' }}"
@@ -643,8 +629,7 @@
          置いてみただけの試しはここに出ない。以前は印刷を合図にして
          いたが、確かめるために印刷しても積まれ、印刷せずに使えば
          積まれないので、押した人の意図と合わなかった(現場の指摘)。
-         `.card--sub` は段の中の小さな区切り(既存の「一覧に無い寸法を
-         使う」と同じ見た目)を流用する #}
+         `.card--sub` は段の中の小さな区切り #}
       <div class="card--sub">
         <header><h4>ボード使用実績</h4></header>
         <div class="pad">
@@ -788,7 +773,7 @@
   }
   .foldable.is-open > header::after { content: "▴"; }
   .foldable > header:hover { background: var(--raised); }
-  /* 段の中に置く小さな畳み(「一覧に無い寸法を使う」)。
+  /* 段の中に置く小さな区切り(「ボード使用実績」)。
      カードの中のカードにはしない ── 紙は2枚までなので、
      区切りは線1本と字の大きさだけで作る */
   .card--sub { border-top: 1px solid var(--hairline); }
@@ -845,7 +830,7 @@
   /* 一覧は縦に長い。丈をここで決めておかないと、
      全件(数百行)のときに画面がどこまでも伸びる */
   /* 候補の一覧。**中で動かす**(§4.2「一覧の中は動いてよい」)。
-     ここを伸ばすと、下の「この寸法にする」と状態表示が操作の列から
+     ここを伸ばすと、下の状態表示が操作の列から
      追い出される ── 押せる場所が消えるほうが困る。
      低い画面ではさらに詰める(基準は FHD 100% の 894px) */
   .tablewrap--tall { max-height:38vh; overflow:auto; }

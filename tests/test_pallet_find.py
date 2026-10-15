@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from tests.test_web_selection import SelectionWebTestCase, insert_pallet
 
@@ -82,6 +83,22 @@ class PalletFindTests(SelectionWebTestCase):
         self.assertIn('id="palFindWidth"', page)
         self.assertIn('id="palFindLength"', page)
         self.assertIn("パレットの寸法の前後50mmで探します", page)
+
+
+class NoOffListSizeTests(SelectionWebTestCase):
+    """「一覧に無い寸法を使う」は無くした(現場の声:「一覧に無い寸法パレットでボード選定する機能でしょうが、
+    倉庫送信できないので無くして」)。寸法で探すときは「パレット 幅・丈」。"""
+
+    def test_画面に無い(self) -> None:
+        page = self.client.get("/selection", headers=self.auth()).get_data(as_text=True)
+        for gone in ('id="manualBox"', 'id="applyPallet"', 'id="palWidth"', 'id="palLength"',
+                     "<h4>一覧に無い寸法を使う</h4>", "この寸法にする"):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, page)
+        js = Path(__file__).resolve().parent.parent / "app/static/js/views/selection.js"
+        text = js.read_text(encoding="utf-8")
+        self.assertNotIn("applyPallet", text)
+        self.assertNotIn("el.palWidth", text)
 
 
 class PalletFindExOnlyTests(SelectionWebTestCase):
