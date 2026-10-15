@@ -628,7 +628,9 @@ PALLET_COLUMNS: tuple[tuple[str, str, bool], ...] = (
     ("丈min", "l_min", True),
     ("丈max", "l_max", True),
     ("業界", "industry", False),
-    ("記号", "symbol", False),
+    # **表示だけ。** 記号 ＋ 品種(台は ﾊﾟﾚｯﾄ台・枚は ﾊﾟﾚｯﾄ蓋)＋ 備考(`pallet_symbol.list_label`)。
+    # マスタの記号は記号のまま(品名・判定・行の見分けは `symbol` を使う)
+    ("記号(品種・備考)", "list_label", False),
     # 同じ寸法・記号で台と枚の行がある(EX・保護材確定時は両方が出る)。押さなくても見分けられるように
     ("単位", "unit", False),
     ("脚数", "leg_count", True),

@@ -111,3 +111,50 @@ class FitRangeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListLabelTests(unittest.TestCase):
+    """資材選択の一覧に出す「記号(品種・備考)」(表示だけ)。
+
+    現場の声:「記号は記号として扱うべき。リストには 記号・備考・台はﾊﾟﾚｯﾄ台・枚はﾊﾟﾚｯﾄ蓋 を混ぜたものを表示」。
+    """
+
+    def test_記号と品種と備考をつなぐ(self) -> None:
+        from packaging_tool.pallet_symbol import list_label
+        cases = [
+            (("C1", "台", ""), "C1 ﾊﾟﾚｯﾄ台"),
+            (("C1", "枚", None), "C1 ﾊﾟﾚｯﾄ蓋"),
+            (("EXﾀｲﾄ", "枚", "熱処理輸出"), "EXﾀｲﾄ ﾊﾟﾚｯﾄ蓋 熱処理輸出"),
+            (("", "台", "マトリックス"), "ﾊﾟﾚｯﾄ台 マトリックス"),
+            (("脚75", "組", ""), "脚75"),                          # 組は品種を付けない
+            (("脚60", "台", "脚60"), "脚60 ﾊﾟﾚｯﾄ台"),               # 備考が記号と同じなら重ねない
+            (("", "", ""), ""),
+            # 記号にまだ品種の印が混ざっている(マスタを戻す前)。印を重ねない
+            (("EXﾀｲﾄ ﾊﾟﾚｯﾄ台 熱処理輸出", "台", "熱処理輸出"), "EXﾀｲﾄ ﾊﾟﾚｯﾄ台 熱処理輸出"),
+        ]
+        for (symbol, unit, remark), want in cases:
+            with self.subTest(symbol=symbol, unit=unit, remark=remark):
+                self.assertEqual(list_label(symbol, unit, remark), want)
+
+
+class ListColumnTests(unittest.TestCase):
+    """一覧の列は「記号(品種・備考)」。品名と行の見分けはマスタの記号のまま。"""
+
+    def test_一覧の列と行(self) -> None:
+        from packaging_tool.pallet_common import _row_to_pallet_size_row
+        from packaging_tool.presenters import selection as presenter
+        labels = [label for label, _key, _num in presenter.PALLET_COLUMNS]
+        self.assertIn("記号(品種・備考)", labels)
+        self.assertNotIn("記号", labels)
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        conn.execute("INSERT INTO PalletMaster (管理番号, 幅, 丈, 業界, 記号, 位置, 単位, コード, 備考, 更新日時)"
+                     " VALUES (7, 1110, 2530, 'タイト', 'EXﾀｲﾄ', '', '枚', '820527', '熱処理輸出', '')")
+        row = _row_to_pallet_size_row(conn.execute("SELECT * FROM PalletMaster").fetchone())
+        shown = presenter._pallet_row(row)
+        self.assertIn("EXﾀｲﾄ ﾊﾟﾚｯﾄ蓋 熱処理輸出", shown.values)
+        self.assertEqual(shown.symbol, "EXﾀｲﾄ")                   # 行の見分けはマスタの記号
+        self.assertTrue(shown.is_ex)
+        self.assertEqual(lot_service.build_hinmei("タイト", row.symbol, 1110, 2530),
+                         "タイト　EXﾀｲﾄ　1110x2530")                # 品名に品種・備考は入らない

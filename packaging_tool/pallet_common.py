@@ -118,6 +118,8 @@ class PalletSizeRow:
     keta: int
     code: str
     unit: str
+    # 備考(一覧の「記号(品種・備考)」に出す。`pallet_symbol.list_label`)
+    remark: str = ""
     # --- どう当たった行なのか(製品サイズで絞ったときだけ入る) ---
     #
     # **当たり方が違えば、同じ「候補」でも意味が違う。** 製品を回して
@@ -131,6 +133,12 @@ class PalletSizeRow:
     # 2山積で当てたときだけ、その積み方(`幅2山` / `丈2山`)。通常は空
     two_stack: str = ""
 
+    @property
+    def list_label(self) -> str:
+        """一覧に出す「記号(品種・備考)」。表示だけ(`symbol` はマスタの記号のまま)。"""
+        from .pallet_symbol import list_label
+        return list_label(self.symbol, self.unit, self.remark)
+
 
 def _row_to_pallet_size_row(row: sqlite3.Row) -> PalletSizeRow:
     return PalletSizeRow(
@@ -140,6 +148,7 @@ def _row_to_pallet_size_row(row: sqlite3.Row) -> PalletSizeRow:
         industry=row["業界"] or "", symbol=(row["記号"] or "").strip(),
         leg_count=row["脚数"], keta=row["桁数"],
         code=row["コード"] or "", unit=row["単位"] or "",
+        remark=(row["備考"] or "") if "備考" in row.keys() else "",
     )
 
 
