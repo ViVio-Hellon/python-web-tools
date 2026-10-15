@@ -304,6 +304,10 @@ def _clean(conn: sqlite3.Connection, table: str, values: dict[str, Any],
                 continue
             if column.required:
                 return {}, f"「{column.name}」は空にできません。"
+            if column.blank_text:
+                # 空の文字として書く(型録の行の位置は空の文字。NULL と混ぜない)
+                out[column.name] = ""
+                continue
             # 空欄は「無し」。取り込みのときに手元の既定値で埋まる
             out[column.name] = None
             continue

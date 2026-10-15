@@ -183,6 +183,34 @@ class ColumnTests(MasterTestCase):
         self.assertTrue(need["幅"])          # NOT NULL・既定なし
         self.assertFalse(need["在庫数"])      # NOT NULL だが既定 0
 
+    def test_パレットの位置は必須ではない(self) -> None:
+        """現場の声:「マスタの1行修正: 位置 必須 をなくしたほうがいい」。型録の行は位置が空。"""
+        cols = {c.name: c for c in master_admin.columns(self.conn, "PalletMaster")}
+        self.assertFalse(cols["位置"].required)
+        self.assertTrue(cols["位置"].blank_text)
+        self.assertIn("空欄でよい", cols["位置"].note)
+        self.assertTrue(cols["幅"].required)            # ほかの必須はそのまま
+
+    def test_位置を空にして保存すると空の文字になる(self) -> None:
+        key = self.rows("PalletMaster")[0][master_admin.ROW_KEY]
+        result = master_admin.save_row(self.conn, "PalletMaster", key,
+                                       {"位置": "", "記号": "C1"}, path=self.src)
+        self.assertTrue(result.ok, result.message)
+        conn = sqlite3.connect(self.src)
+        try:
+            row = conn.execute("SELECT 位置, typeof(位置), 記号 FROM PalletMaster WHERE rowid = ?",
+                               (key,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row, ("", "text", "C1"))         # NULL ではなく空の文字(型録の行と同じ)
+
+    def test_位置を空にして行を足せる(self) -> None:
+        result = master_admin.add_row(
+            self.conn, "PalletMaster",
+            {"幅": "1150", "丈": "2650", "位置": "", "業界": "タイト", "単位": "台", "コード": "099999"},
+            path=self.src)
+        self.assertTrue(result.ok, result.message)
+
     def test_日時は空欄で入る(self) -> None:
         """手で打たせる意味が無く、打ち間違いだけが増える。"""
         stamp = {c.name: c.stamp

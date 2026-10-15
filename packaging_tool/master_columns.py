@@ -38,11 +38,24 @@ class Column:
     required: bool = False
     stamp: bool = False     # 空欄なら今の日時が入る
     note: str = ""
+    # 空欄を「空の文字」として書く列(`BLANK_TEXT`)。NULL にしない
+    blank_text: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "kind": self.kind,
                 "required": self.required, "note": self.note}
 
+
+# **空欄でよい(空の文字として書く)列。** 手元の表では NULL にできない(NOT NULL)が、
+# 空の文字に意味がある列。必須と読むと、空のまま保存できなかった。
+#   PalletMaster の位置 … 空 = 型録の行(在庫ではない)。型録の行はみな位置が空
+#   (現場の声:「マスタの1行修正: 位置 必須 をなくしたほうがいい」)
+BLANK_TEXT: dict[str, tuple[str, ...]] = {
+    "PalletMaster": ("位置",),
+}
+BLANK_TEXT_NOTE = {
+    ("PalletMaster", "位置"): "空欄でよい(空 = 型録の行。在庫の棚の行だけ位置を入れる)",
+}
 
 # 画面に出す型の名前。**サーバが言葉を持つ**(画面側で書き分けない)
 KIND_LABEL = {"int": "整数", "real": "小数", "text": "文字"}
@@ -140,11 +153,15 @@ def columns(conn: sqlite3.Connection, table: str,
             continue
         kind = _kind_of(str(row["type"]))
         stamp = local in STAMP_COLUMNS
+        blank_text = local in BLANK_TEXT.get(table, ())
         # 既定値のある列は空欄で通してよい。NULL も既定も無い列だけが必須
-        required = bool(row["notnull"]) and row["dflt_value"] is None and not stamp
+        # (空の文字に意味がある列 `BLANK_TEXT` は除く)
+        required = (bool(row["notnull"]) and row["dflt_value"] is None
+                    and not stamp and not blank_text)
         out.append(Column(
-            name=local, kind=kind, required=required, stamp=stamp,
-            note="空欄なら今の日時が入ります" if stamp else ""))
+            name=local, kind=kind, required=required, stamp=stamp, blank_text=blank_text,
+            note=("空欄なら今の日時が入ります" if stamp
+                  else BLANK_TEXT_NOTE.get((table, local), ""))))
     # マスタ管理で足した列(`master_schema.add_column`)。取り込みは読まないが、
     # 足した人が直すために足した列なので直せる列に出す。型は足したときの型
     if source_path is not None:
