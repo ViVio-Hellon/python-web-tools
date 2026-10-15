@@ -178,6 +178,9 @@ function scheduleLiveList() {
     send("/api/selection/pallet/list", {
       product_width: el.prodWidth.value,
       product_length: el.prodLength.value,
+      // 製品 幅・丈が空のときだけ、パレットの寸法で探す(どちらで探すかはサーバが決める)
+      pallet_width: el.palFindWidth.value,
+      pallet_length: el.palFindLength.value,
     });
   }, 300);
 }
@@ -289,6 +292,9 @@ function render(next) {
   // (tkinter版は入力欄に触れないので消えなかった)
   setInput(el.palWidth, next.pallet_width);
   setInput(el.palLength, next.pallet_length);
+  // 「パレット 幅・丈」の欄。サーバが変えたとき(やり直す)だけ書き換える
+  setInput(el.palFindWidth, next.pallet_find_width);
+  setInput(el.palFindLength, next.pallet_find_length);
   const widthChanged = setInput(el.prodWidth, next.product_width);
   const lengthChanged = setInput(el.prodLength, next.product_length);
   // サーバ側の製品サイズが変わった(資材展開・自動選定の確定など)。
@@ -750,6 +756,7 @@ export function start(initial) {
   for (const id of ["lotCaption", "banner", "listNote", "palletRows", "rowNote", "exPair",
                     "pickLid", "clearLid", "decideMark", "lidMark",
                     "palWidth", "palLength", "prodWidth", "prodLength",
+                    "palFindWidth", "palFindLength",
                     "sizeStatus", "decideWhy", "productFrom", "exOnlyWhy",
                     "showOnStock",
                     "showAll", "exOnly", "twoStack",
@@ -847,7 +854,8 @@ export function start(initial) {
   // 片方だけでもその辺に近いパレットを、両方そろえば「載るか」の
   // 厳密な判定に切り替わる(`list_pallets_by_product_dims`)。
   // 連打で毎回サーバへ聞きに行かないよう間を置く(デバウンス)。
-  for (const node of [el.prodWidth, el.prodLength]) {
+  // パレット 幅・丈も同じく打つたびに出す(製品 幅・丈が空のときだけ効く)
+  for (const node of [el.prodWidth, el.prodLength, el.palFindWidth, el.palFindLength]) {
     node.addEventListener("input", scheduleLiveList);
   }
 

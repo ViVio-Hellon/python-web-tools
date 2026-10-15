@@ -258,6 +258,9 @@ def list_pallets_live():
     session.list_mode = selection_session.LIST_PRODUCT_LIVE
     session.live_product_width = str(body.get("product_width", "")).strip()
     session.live_product_length = str(body.get("product_length", "")).strip()
+    # パレット 幅・丈(製品 幅・丈が空のときだけ使う。`SelectionSession.live_search`)
+    session.live_pallet_width = str(body.get("pallet_width", "")).strip()
+    session.live_pallet_length = str(body.get("pallet_length", "")).strip()
     return _state(session)
 
 

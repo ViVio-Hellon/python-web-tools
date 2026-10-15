@@ -107,6 +107,10 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
     # 動かしてはいけない
     live_product_width: str = ""
     live_product_length: str = ""
+    # パレット 幅・丈の入力中の値(`LIST_PRODUCT_LIVE` 用)。**製品 幅・丈が空のときだけ**
+    # パレット自身の寸法の前後50mmで探す(`live_search`)。これも確定ではない
+    live_pallet_width: str = ""
+    live_pallet_length: str = ""
 
     # 一覧で選んでいる行(VBA `pal_tree.selection()`)。
     # **発注コードと単位はここにしか無い** ── 幅と丈だけでは決まらず、
@@ -285,6 +289,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self.list_mode = LIST_ALL
         self.direct_width = self.direct_length = ""
         self.live_product_width = self.live_product_length = ""
+        self.live_pallet_width = self.live_pallet_length = ""
         self.pallet_row = None
         self.lid_row = None
         self.invalidate_placement()
@@ -1144,6 +1149,23 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self.selected_angles = []
         self.angle_drawn = False
         self.angle_need_cut = False
+
+    def live_search(self) -> str:
+        """入力中の一覧が何で探すか。`"product"`(製品 幅・丈)/ `"pallet"`(パレット 幅・丈)/ `""`。
+
+        **製品 幅・丈が優先。** 製品の欄に幅か丈の数があれば製品で探し、パレットの欄は見ない。
+        製品の欄が両方空(数でない)ときに、パレットの欄に数があればパレットの寸法で探す。
+        """
+        def number(text: str) -> bool:
+            try:
+                return float(str(text or "").strip()) > 0
+            except ValueError:
+                return False
+        if number(self.live_product_width) or number(self.live_product_length):
+            return "product"
+        if number(self.live_pallet_width) or number(self.live_pallet_length):
+            return "pallet"
+        return ""
 
     def flags(self) -> dict[str, Any]:
         """一覧の絞り込みに渡す値。

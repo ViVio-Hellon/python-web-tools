@@ -256,6 +256,18 @@
                 title="ロットの選択ごと外して、何も選んでいない状態に戻します">
           <span class="gl">×</span>やり直す</button>
       </div>
+      {# パレットの寸法で直接探す。**製品 幅・丈が空のときだけ**効く(製品が優先)。
+         パレット自身の幅・丈の前後50mm。幅だけ・丈だけ・両方は製品の欄と同じ
+         (現場の声:「パレット 幅丈の入力で直接パレットを探すを追加して」) #}
+      <div class="field">
+        <label for="palFindWidth">パレット 幅</label>
+        <input class="input num" id="palFindWidth" inputmode="numeric" style="width:6em"
+               value="{{ view.pallet_find_width }}" autocomplete="off">
+        <label for="palFindLength">丈</label>
+        <input class="input num" id="palFindLength" inputmode="numeric" style="width:6em"
+               value="{{ view.pallet_find_length }}" autocomplete="off">
+        <span class="why">製品 幅・丈が空のとき、パレットの寸法の前後{{ view.search_tolerance }}mmで探します</span>
+      </div>
       <p class="why" id="productFrom" {% if not view.product_from %}hidden{% endif %}>{{ view.product_from }}</p>
       <p class="why" id="decideWhy" {% if not view.decide_why %}hidden{% endif %}>{{ view.decide_why }}</p>
 

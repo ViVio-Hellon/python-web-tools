@@ -121,6 +121,7 @@ def search_pallet_direct(
     pallet_width_text: str = "",
     pallet_length_text: str = "",
     show_all: bool = False,
+    ex_only: bool = False,
     last_hosozai: str = "",
     is_1p1185_mode: bool = False,
     is_ex_order: bool = False,
@@ -128,8 +129,13 @@ def search_pallet_direct(
     """VBA `btnAutoSelectPallet_Click`の「直接検索モード」の移植。
 
     製品サイズが未入力のときに使う、パレット自身の幅・丈を対象とした
-    ±50mmの単純検索。EXオンリーモードは(元VBA仕様どおり)考慮しない。
+    ±50mmの単純検索。**入れた辺だけで絞る**(幅だけ・丈だけ・両方)。
+
+    EXオンリー(`ex_only`)は、資材選択の「パレット 幅・丈」から呼ぶときは効かせる
+    (製品 幅・丈で探すときと同じ絞り込みにする。現場の声:「製品の入力検索方法を引き継いで」)。
+    元VBA の「パレット検索」ボタン(`/api/selection/pallet/search`)は渡さないので、今までどおり考慮しない。
     """
+    ex_only_mode = is_ex_order and ex_only
     pw = int(float(pallet_width_text)) if _is_numeric(pallet_width_text) else 0
     pl = int(float(pallet_length_text)) if _is_numeric(pallet_length_text) else 0
 
@@ -151,8 +157,12 @@ def search_pallet_direct(
 
         symbol = (row["記号"] or "").strip()
         is_ex = "EX" in symbol.upper()
+        if ex_only_mode:
+            # EXオンリーは EX の行だけ(`list_pallet_sizes` と同じ)
+            if not is_ex:
+                continue
         # 「EXまで表示」が外すのはEX除外だけ。単位の条件は残す
-        if not unit_allowed(row["単位"], last_hosozai, is_ex_order) or (is_ex and not show_all):
+        elif not unit_allowed(row["単位"], last_hosozai, is_ex_order) or (is_ex and not show_all):
             continue
 
         result.append(_row_to_pallet_size_row(row))

@@ -1018,6 +1018,10 @@ class SelectionViewModel:
 
     # 入力欄の値(サーバが決める。画面は言われたものを入れる)
     pallet_width: str = ""
+    # 「パレット 幅・丈」の欄(入力中の値。製品 幅・丈が空のときだけ探すのに使う)
+    pallet_find_width: str = ""
+    pallet_find_length: str = ""
+    search_tolerance: int = SEARCH_TOLERANCE
     pallet_length: str = ""
     product_width: str = ""
     product_length: str = ""
@@ -1124,6 +1128,8 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
     if context.product_width and context.product_length:
         view.product_width = str(context.product_width)
         view.product_length = str(context.product_length)
+    view.pallet_find_width = session.live_pallet_width
+    view.pallet_find_length = session.live_pallet_length
     if session.product.is_set:
         # 2山は2山分を1つの製品として確定している。**そう書かないと、
         # 入力欄(1山分)と数字が合わない理由が分からない**
@@ -1846,6 +1852,16 @@ def list_rows(session: Any) -> list[Any]:
             user_log=session.presenter.user_log,
             **flags)
 
+    if session.list_mode == ss.LIST_PRODUCT_LIVE and session.live_search() == "pallet":
+        # 製品 幅・丈が空で、パレット 幅・丈が入っている。**パレット自身の寸法の前後50mm**で探す
+        # (幅だけ・丈だけ・両方。製品の欄と同じく、入れた辺だけで絞る)。
+        # 製品の欄と同じ絞り込み(単位・EXまで表示・EXオンリー・1P1185)を掛ける
+        return svc.search_pallet_direct(
+            conn, pallet_width_text=session.live_pallet_width,
+            pallet_length_text=session.live_pallet_length,
+            last_hosozai=session.presenter.last_hosozai,
+            **flags)
+
     if session.list_mode == ss.LIST_PRODUCT_LIVE:
         return svc.list_pallets_by_product_dims(
             conn, product_width_text=session.live_product_width,
@@ -1961,14 +1977,21 @@ def _list_note(session: Any, count: int) -> str:
     if session.list_mode == ss.LIST_PRODUCT:
         return f"製品サイズに収まる候補 {count} 件"
     if session.list_mode == ss.LIST_PRODUCT_LIVE:
+        source = session.live_search()
+        if source == "pallet":
+            return (f"パレット寸法 {session.live_pallet_width or '—'}×"
+                    f"{session.live_pallet_length or '—'} の前後 {SEARCH_TOLERANCE}mm: {count} 件")
+        # 製品 幅・丈が優先。パレットの欄にも入っていれば、使っていないことを言う
+        unused = ("(製品サイズが入っているので、パレット 幅・丈では探していません)"
+                  if session.live_pallet_width.strip() or session.live_pallet_length.strip() else "")
         has_width = bool(session.live_product_width.strip())
         has_length = bool(session.live_product_length.strip())
         if has_width and has_length:
-            return f"製品サイズに収まる候補 {count} 件(入力中)"
+            return f"製品サイズに収まる候補 {count} 件(入力中){unused}"
         if has_width:
-            return f"製品 幅に近いパレット {count} 件(丈も入れると絞り込みます)"
+            return f"製品 幅に近いパレット {count} 件(丈も入れると絞り込みます){unused}"
         if has_length:
-            return f"製品 丈に近いパレット {count} 件(幅も入れると絞り込みます)"
+            return f"製品 丈に近いパレット {count} 件(幅も入れると絞り込みます){unused}"
         return f"{count} 件"
     if session.list_mode == ss.LIST_DIRECT:
         return (f"パレット寸法 {session.direct_width or '—'}×"
@@ -2002,6 +2025,8 @@ def to_dict(view: SelectionViewModel) -> dict[str, Any]:
         "pallet_length": view.pallet_length,
         "product_width": view.product_width,
         "product_length": view.product_length,
+        "pallet_find_width": view.pallet_find_width,
+        "pallet_find_length": view.pallet_find_length,
         "pallet_status": view.pallet_status,
         "pallet_set": view.pallet_set,
         "product_status": view.product_status,
