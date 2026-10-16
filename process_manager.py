@@ -127,7 +127,10 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
                           f"    保存せず・中断して止めるには --force を付けてください")
         return result
 
-    if asked.get("ok") and _wait_gone(info.port, GRACEFUL_WAIT_SEC):
+    # **待ち受けが閉じただけでは「終わった」と言わない。** プロセスが消えるまで見る
+    # ── 残った Python はフォルダを掴んだままで、消せなくなる(all-tools で起きた形)
+    if (asked.get("ok") and _wait_gone(info.port, GRACEFUL_WAIT_SEC)
+            and _wait_pid_gone(info.pid, GRACEFUL_WAIT_SEC)):
         launch_guard.remove_lock(mode)
         result.stopped = True
         result.method = "graceful"
@@ -215,6 +218,11 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopRes
         os.kill(info.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
     except OSError as exc:
         result.message = f"強制終了できませんでした: {exc}"
+        return result
+    # **消えたのを確かめてから**「強制終了しました」と言う
+    if not _wait_pid_gone(info.pid, FORCE_WAIT_SEC):
+        result.message = (f"強制終了を頼みましたが、pid {info.pid} がまだ残っています。"
+                          "タスクマネージャーで python / pythonw を確かめてください")
         return result
     launch_guard.remove_lock(mode)
     result.stopped = True

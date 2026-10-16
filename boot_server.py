@@ -9,9 +9,19 @@
 
     GET /             待機画面(1往復で出る。外部への要求は無し)
     GET /api/health   まだ準備できていないことを、本体と同じ形で返す
+    POST /api/shutdown 止める(トークン必須)。本体を組み立てられなかったときも
+                      止められるように(下の【止める合図に答える】)
 
 `packaging_tool.boot_screen` と `app_config` 以外は読み込みません
 (Flask も、業務のモジュールも読みません)。
+
+【止める合図に答える】
+本体を組み立てられなかった(フォルダの一部が欠けた・設定が壊れた・部品が無い)ときは、
+待機画面に理由を出したまま Python が残る。以前はここが `/api/shutdown` に 503 を返して
+いたので、stop.bat は正常終了を頼めず、PID で落とす道しか無かった ── その道は
+Windows で `wmic` が無いとコマンドラインを照合できず、`--force` でも止まらなかった
+(業務ツール統合の all-tools で、Python が残ってフォルダを消せなくなった不具合と同じ形)。
+待機画面のあいだは実行中の処理も保存していない図も無いので、トークンが合えばそのまま止める。
 
 【本体との入れ替え】
 `Handover` が WSGI の呼び先を1つ持ちます。本体ができたら
@@ -21,6 +31,7 @@
 """
 from __future__ import annotations
 
+import hmac
 import json
 import threading
 from typing import Any, Callable, Optional
@@ -34,6 +45,9 @@ log = get_logger("boot_server")
 # 404 にすると「無い」に見えるので、**まだであることを言う**
 _NOT_READY = {"error": {"code": "starting",
                         "message": "起動しています。しばらくお待ちください。"}}
+
+# 止める合図を受けてから止めるまでの猶予(秒)。応答を返しきってから止める(本体と同じ)
+SHUTDOWN_DELAY_SEC = 0.4
 
 
 class BootApp:
@@ -52,6 +66,10 @@ class BootApp:
         self.stage_key = "prepare"
         self.startup_error = ""
         self._page: Optional[bytes] = None
+        # 止め方。`server.AppServer` が差し込む(ここが waitress を知らないように)
+        self.on_stop: Optional[Callable[[], None]] = None
+        # デスクトップ版は外枠(exe)からしか要求が来ない(ポートを開かない)ので、トークンを見ない
+        self.trusted = False
 
     # -- 状態 ---------------------------------------------------------
     def mark_stage(self, stage: str, key: str = "prepare") -> None:
@@ -103,6 +121,8 @@ class BootApp:
         path = environ.get("PATH_INFO", "/")
         if path == "/api/health":
             return _json(start_response, self.health())
+        if path == "/api/shutdown" and environ.get("REQUEST_METHOD") == "POST":
+            return self.shutdown(environ, start_response)
         if path == "/" or path == "":
             body = self.page()
             start_response("200 OK", [
@@ -114,6 +134,28 @@ class BootApp:
             return [body]
         # 業務の要求。まだ答えられないので、そう言う
         return _json(start_response, _NOT_READY, status="503 Service Unavailable")
+
+
+    def shutdown(self, environ: dict, start_response: Callable) -> list:
+        """止める(本体の `/api/shutdown` と同じ答えの形)。**トークンが合うときだけ。**"""
+        if not self.trusted and not self._token_ok(environ):
+            return _json(start_response, {"stopped": False, "error": {
+                "code": "forbidden", "message": "トークンが合いません"}},
+                status="403 Forbidden")
+        if self.on_stop is None:
+            return _json(start_response, {"stopped": False, "reason": "no_hook",
+                                          "message": "このプロセスは停止操作に対応していません"},
+                         status="501 Not Implemented")
+        log.info("待機画面のまま止めます(%s)", self.startup_error or "起動の途中")
+        threading.Timer(SHUTDOWN_DELAY_SEC, self.on_stop).start()
+        return _json(start_response, {"stopped": True, "message": "終了します"})
+
+    def _token_ok(self, environ: dict) -> bool:
+        sent = environ.get("HTTP_X_TOOL_TOKEN", "")
+        if not sent:
+            from urllib.parse import parse_qs
+            sent = (parse_qs(environ.get("QUERY_STRING", "")).get("t") or [""])[0]
+        return bool(self.token) and hmac.compare_digest(sent.encode(), self.token.encode())
 
 
 class Handover:

@@ -170,6 +170,8 @@ def make_server_class():
             import werkzeug.datastructures  # noqa: F401
             import werkzeug.test  # noqa: F401
             super().__init__(mode, 0, token=token)
+            # 要求は外枠(exe)からしか来ない。待機画面の「終了」もトークン無しで通す
+            self.boot.trusted = True
             self.writer = writer
             self.reader = reader
             self.url = f"http://{DEFAULT_HOST}/"

@@ -211,24 +211,46 @@ def process_command_line(pid: int) -> str:
     if pid <= 0:
         return ""
     if os.name == "nt":
-        try:
-            out = subprocess.run(
-                ["wmic", "process", "where", f"ProcessId={pid}", "get",
-                 "CommandLine", "/format:list"],
-                capture_output=True, text=True, timeout=5,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            for line in out.stdout.splitlines():
-                if line.startswith("CommandLine="):
-                    return line.split("=", 1)[1].strip()
-        except (OSError, subprocess.SubprocessError) as exc:
-            log.warning("wmic を実行できませんでした: %s", exc)
-        return ""
+        # `wmic` は新しい Windows(11 24H2〜)では入っていない。無ければ PowerShell で引く。
+        # **取れないと PID で止める道が閉じる** ── 本体を組み立てられず待機画面のまま
+        # 残った Python が、stop.bat でも --force でも止まらなくなる(all-tools で起きた形)
+        return _command_line_wmic(pid) or _command_line_powershell(pid)
     try:
         raw = Path(f"/proc/{pid}/cmdline").read_bytes()
         return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
     except OSError:
         return ""
+
+
+def _command_line_wmic(pid: int) -> str:
+    try:
+        out = subprocess.run(
+            ["wmic", "process", "where", f"ProcessId={pid}", "get",
+             "CommandLine", "/format:list"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.info("wmic を実行できませんでした(PowerShell で引きます): %s", exc)
+        return ""
+    for line in (out.stdout or "").splitlines():
+        if line.startswith("CommandLine="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def _command_line_powershell(pid: int) -> str:
+    script = f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("PowerShell でもコマンドラインを引けませんでした: %s", exc)
+        return ""
+    return (out.stdout or "").strip()
 
 
 # ------------------------------------------------------------------
