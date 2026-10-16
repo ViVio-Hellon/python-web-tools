@@ -318,7 +318,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
 
         現場の声:「一度でも【1P1185モード タイトサイズ限定表示】のような特殊モードが発火すると
         やり直すでは消せない。ロット展開で消えるのは当たり前として、やり直すでも消せるように」。
-        外すのは包装仕様NOで立つ3つ(1P1185・プロテック・1P0113。強制1P0113 も)。
+        外すのは包装仕様NOで立つ3つ(1P1185・プロテック・1P0113。強制1P0113・強制プロテック も)。
         **EX受注と上下共用は外さない** ── どちらも注文そのものの性質(EX の発注の仕方・
         保護材で決まる組み方)で、外すと倉庫送信や上用の組み方を取り違える。
         もう一度ロットを展開すれば、包装仕様NOから判定し直して立つ。
@@ -328,7 +328,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         if presenter.mode_1p1185.is_1p1185:
             presenter.mode_1p1185 = spk.Mode1P1185State()
             cleared.append("1P1185")
-        if presenter.protec.is_protec:
+        if presenter.protec.is_protec or presenter.force_protec:
+            presenter.force_protec = False
             outcome = presenter.check_and_set_protec_mode(
                 "", available_board_types=self.board_types(),
                 current_board_type=self.board_type)
@@ -672,6 +673,33 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         now = self.presenter.force_1p0113
         return BoardOpResult(
             True, f"1P0113強制: {'ON' if now else 'OFF'}")
+
+    def toggle_force_protec(self) -> BoardOpResult:
+        """「プロテック 強制」(1P0113 強制と同じく、**ロットを切り替えると解除**)。
+
+        ボード種別がプロテックボードに切り替わり、ボード選定・配置・切断依頼が
+        プロテックの挙動になる。**選定済みのボードと配置は外す** ── 前のモードの
+        前提(上用の許容・上下共用)で選んだもので、そのまま配置・発注に進むと食い違う。
+        """
+        presenter = self.presenter
+        had = bool(self.selected.lower or self.selected.upper)
+        outcome = presenter.toggle_force_protec(
+            available_board_types=self.board_types(), current_board_type=self.board_type)
+        if outcome.should_switch:
+            self.board_type = outcome.target_board_type
+            log.info("プロテック強制のためボード種別を切り替えました: %s", self.board_type)
+        if had:
+            self.clear_boards()
+            presenter.user_log.log("[プロテック強制] 選定したボードを外しました(選定し直してください)")
+        now = presenter.force_protec
+        message = f"プロテック強制: {'ON' if now else 'OFF'}"
+        if not now and presenter.protec.is_protec:
+            message += "(包装仕様NOの条件でプロテックのままです)"
+        if outcome.missing_from_master:
+            message += f"(ボード種別「{outcome.target_board_type}」がマスタにありません)"
+        if had:
+            message += "。選定したボードを外しました。選定し直してください"
+        return BoardOpResult(True, message)
 
     def reload_1p0113_materials(self) -> None:
         """資材を引き直す。製品サイズが変わったときは乗数も入れ直す。"""

@@ -108,7 +108,7 @@ def create_table(conn: sqlite3.Connection, table: str, *,
     あるのは、最初の1行をここで決め打ちすると、その1行が何を意味するか
     (誰にどの権限を与えたか)が画面に現れないためです。
 
-    **パレット適合閾値の7表だけは中身も入れます。** ここは「誰かが
+    **パレット適合閾値の7表とプロテック条件だけは中身も入れます。** ここは「誰かが
     決める1行」ではなく社内の選定基準表そのもので、しかも空だと
     適合範囲の再計算がまるごと止まります(帯が0〜999999を覆えない)。
     空の表を作って渡すと、押した人には作れたように見えて、次に再計算を
@@ -163,8 +163,11 @@ def _seed_source(src: source_db.SourceConnection, table: str) -> int:
     だけです。アクセス権限のように「最初の1行が決めごと」の表は、
     ここでは何もしません ── 理由は `create_table` の説明にあります。
     """
-    from . import pallet_threshold
+    from . import pallet_threshold, protec_rules
     seed_rows = pallet_threshold.SEED.get(table)
+    if table == protec_rules.TABLE:
+        # プロテック条件も、作った時点で前と同じに動くよう初期値を入れる(空だとプロテックに入らない)
+        seed_rows = protec_rules.SEED
     if not seed_rows:
         return 0
     columns = list(seed_rows[0])

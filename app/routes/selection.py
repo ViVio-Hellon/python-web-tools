@@ -430,6 +430,16 @@ def toggle_force_1p0113():
     return _apply(session, session.toggle_force_1p0113())
 
 
+@bp.post("/api/selection/protec/force")
+def toggle_force_protec():
+    """「プロテック 強制」。包装仕様NO・条件の表に関わらずプロテックにする。
+
+    1P0113 強制と同じく**ロットを切り替えると解除される**。
+    """
+    session = _session()
+    return _apply(session, session.toggle_force_protec())
+
+
 @bp.post("/api/selection/1p0113/qty")
 def set_qty_1p0113():
     """乗数(VBA `spn1P0113Qty`)。角材本数・松板枚数にそのまま掛かる。"""

@@ -235,6 +235,7 @@ function render(next) {
   el.banner.hidden = !next.banner.visible;
   el.banner.textContent = next.banner.text;
   el.banner.dataset.kind = next.banner.kind;
+  setToggle(el.forceProtec, Boolean(next.protec_forced), "btn--on");
 
   // どの行が最終確定しているかはサーバが `picked` で返す。まだ
   // クリックで選んでいる途中(`pickedPalletRow`)なら、そちらを優先する
@@ -784,7 +785,7 @@ export function start(initial) {
                     "planAngleBox", "planAngle",
                     // 1P0113 / 出す / 管理者
                     "sizeCard", "p1Card", "p1Materials", "p1Tip", "p1Qty",
-                    "p1Why", "force1p",
+                    "p1Why", "force1p", "forceProtec",
                     "sendWarehouse", "sendWarehouseHead", "outputWhy", "useBoards", "useWhy", "useLabel",
                     "adminState", "authWhere", "savePattern",
                     "saveWhy", "patternsNote", "patternRows", "usageRows",
@@ -978,6 +979,8 @@ export function start(initial) {
 
   // --- 1P0113 -----------------------------------------------------
   el.force1p.addEventListener("click", () => send("/api/selection/1p0113/force"));
+  // プロテック強制。ボード種別・選定・配置・切断依頼がプロテックの挙動になる(ロット切替で解除)
+  el.forceProtec.addEventListener("click", () => send("/api/selection/protec/force"));
   el.p1Qty.addEventListener("change", () =>
     send("/api/selection/1p0113/qty", { qty: el.p1Qty.value }));
   // 資材を押すとフル情報に差し替わる(VBA `Show1P0113LabelTip`)。

@@ -31,8 +31,11 @@ class ModeDetectionTests(unittest.TestCase):
         self.assertFalse(spk.is_1p0113(""))
 
     def test_protec_specs(self):
-        for spec in ("1P1216", "1P1125", "1P1211"):
+        for spec in ("1P1216", "1P1211"):
             self.assertTrue(spk.protec_state(spec).is_protec, spec)
+        # 1P1125 はｵｰﾀﾞｰ厚 3.0〜15.0 のときだけ(VER4.8.56〜。表 プロテック条件)
+        self.assertTrue(spk.protec_state("1P1125", thickness=6.0).is_protec)
+        self.assertFalse(spk.protec_state("1P1125").is_protec)
         self.assertFalse(spk.protec_state("1P0113").is_protec)
 
     def test_only_1p1216_gets_the_tighter_tolerance(self):
@@ -258,10 +261,24 @@ class モード一覧と実装が合っているか(unittest.TestCase):
     `CheckAndSet1P1185Mode` / `Apply1P0113Mode`)と突き合わせ済み。
     """
 
-    def test_プロテックは3つの包装仕様NO(self) -> None:
-        for spec in ("1P1216", "1P1125", "1P1211"):
+    def test_プロテックは条件の表の初期値どおり(self) -> None:
+        """包装仕様NOだけで決まるもの(1P1216・1P1211)と、ｵｰﾀﾞｰ寸法も見るもの(1P1125・1P1255)。"""
+        for spec in ("1P1216", "1P1211"):
             with self.subTest(spec=spec):
                 self.assertTrue(spk.protec_state(spec).is_protec)
+        cases = [
+            (("1P1125", 3.0, 0, 0), True), (("1P1125", 15.0, 0, 0), True),
+            (("1P1125", 2.9, 0, 0), False), (("1P1125", 15.1, 0, 0), False),
+            (("1P1255", 12.0, 1075, 2332), True), (("1P1255", 12.0, 1081, 2338), True),
+            (("1P1255", 12.0, 1072, 2262), True), (("1P1255", 12.0, 1078, 2268), True),
+            (("1P1255", 12.0, 1074, 2335), False),      # 幅は2行目、丈は1行目(組み合わせが違う)
+            (("1P1255", 12.0, 1078, 2335), True),       # 幅 1078 は両方の行にかかる。丈で1行目
+            (("1P1255", 11.0, 1078, 2335), False),      # 厚は 12.0 ちょうど
+            (("1P1255", 12.0, 0, 0), False),            # 寸法が無いと確かめられない
+        ]
+        for (spec, t, w, l), want in cases:
+            with self.subTest(spec=spec, t=t, w=w, l=l):
+                self.assertEqual(spk.protec_state(spec, thickness=t, width=w, length=l).is_protec, want)
 
     def test_1P1216だけ許容が違う(self) -> None:
         """コーミ金属。幅の許容が -10mm(ほかは -80mm)。"""

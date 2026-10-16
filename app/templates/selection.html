@@ -159,6 +159,12 @@
          **ロットを切り替えると解除される**(VBA `ClearForNewLot`) #}
       <button class="btn {% if view.p1.forced %}btn--on{% endif %}" type="button" id="force1p"
               aria-pressed="{{ 'true' if view.p1.forced else 'false' }}">1P0113 強制</button>
+      {# 強制プロテック。包装仕様NO・条件の表(プロテック条件)に関わらずプロテックにする。
+         ボード種別がプロテックボードになり、選定・配置・切断依頼がプロテックの挙動になる。
+         1P0113 強制と同じく**ロットを切り替えると解除される** #}
+      <button class="btn {% if view.protec_forced %}btn--on{% endif %}" type="button" id="forceProtec"
+              aria-pressed="{{ 'true' if view.protec_forced else 'false' }}"
+              title="包装仕様NOに関わらずプロテックボードで選定・配置・切断依頼します(ロットを切り替えると解除)">プロテック 強制</button>
     </div>
 
     {# 次の一手。**押すべきものは1つ**であることを言葉でも示す #}

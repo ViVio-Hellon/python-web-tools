@@ -8,10 +8,13 @@
    溝切角材/松板の必要数を出す小さなパネルを動的生成していた。
    資材は `松板角材` テーブルから寸法帯で引く。
 
-2. **1P1216 / 1P1125 / 1P1211 = プロテックモード**
+2. **プロテックモード**(発火条件は表 `プロテック条件` ── `protec_rules`)
    `CheckAndSetProtecMode` がボード種別を「プロテックボード」に切り替え、
    上用ボードは下用と同サイズを強制する(選定側は
    `board_selection_algorithm.select_upper_boards` に移植済み)。
+   もとは 1P1216 / 1P1125 / 1P1211 の3つをプログラムに書いていた。いまは
+   包装仕様NOと SIKALOT のオーダー厚・幅・丈で決め、マスタ管理で行を足せる。
+   「プロテック 強制」で包装仕様NOに関わらず入れる(1P0113 強制と同じ逃げ道)。
 
 3. それ以外は通常モード。
 
@@ -24,7 +27,7 @@
     Update1P0113CountLabels         -> kakuzai_count_caption / matsuita_count_caption
     ExtractCount                    -> extract_count
     Parse1P0113Info                 -> parse_info
-    CheckAndSetProtecMode           -> protec_state
+    CheckAndSetProtecMode           -> protec_state(条件は protec_rules)
 """
 from __future__ import annotations
 
@@ -85,8 +88,8 @@ _ERROR_INFOS = (INFO_NOT_FOUND, INFO_DB_ERROR, "テーブル名エラー")
 # プロテックモード 定数 — VBA `CheckAndSetProtecMode`
 # ==================================================================
 # VBA は納入先「ｶ)ﾏﾂｼﾀｼﾖｳﾃﾝ」判定も持っていたが `cond1 = False` で
-# 明示的に廃止済み。包装仕様NOだけで判定する
-PROTEC_SPECS = ("1P1216", "1P1125", "1P1211")
+# 明示的に廃止済み。包装仕様NOとオーダー寸法で判定する(条件は表 `プロテック条件`。
+# 以前の決め打ち 1P1216 / 1P1125 / 1P1211 は表の初期値に入れてある ── `protec_rules.SEED`)
 PROTEC_SPEC_1P1216 = "1P1216"   # ｺｰﾐ金属。上用の幅許容が -5mm になる
 
 PROTEC_BOARD_TYPE = "プロテックボード"
@@ -114,10 +117,15 @@ def is_1p0113(packaging_spec: str) -> bool:
 
 @dataclass
 class ProtecState:
-    """VBA `mIsProtecMode` / `mIsProtec1P1216` の組。"""
+    """VBA `mIsProtecMode` / `mIsProtec1P1216` の組。
+
+    `forced` は「プロテック 強制」で入ったとき。`rule` は当たった条件の行(表 `プロテック条件`)。
+    """
 
     is_protec: bool = False
     is_1p1216: bool = False
+    forced: bool = False
+    rule: str = ""
 
     @property
     def board_type(self) -> str:
@@ -125,13 +133,26 @@ class ProtecState:
         return PROTEC_BOARD_TYPE if self.is_protec else DEFAULT_BOARD_TYPE
 
 
-def protec_state(packaging_spec: str) -> ProtecState:
-    """VBA `CheckAndSetProtecMode` の移植(判定部分だけ)。"""
-    spec = (packaging_spec or "").strip()
-    state = ProtecState(is_protec=spec in PROTEC_SPECS,
-                        is_1p1216=(spec == PROTEC_SPEC_1P1216))
-    log.debug("protec_state: spec=%s is_protec=%s is_1p1216=%s",
-              spec, state.is_protec, state.is_1p1216)
+def protec_state(packaging_spec: str, *, thickness: float = 0, width: float = 0,
+                 length: float = 0, rules=None, forced: bool = False) -> ProtecState:
+    """VBA `CheckAndSetProtecMode` の移植(判定部分だけ)。
+
+    包装仕様NOと **SIKALOT のオーダー板厚・板幅・板丈** を、表 `プロテック条件` の行
+    (`rules`。省略すると初期値)に当てる。`forced` なら条件に関わらずプロテック。
+    1P1216 の許容(-5mm)は包装仕様NOで決まる(強制のときも同じ)。
+    """
+    from . import protec_rules
+
+    spec = protec_rules.normalize_spec(packaging_spec)
+    found = protec_rules.find(rules if rules is not None else protec_rules.DEFAULT_RULES,
+                              spec, thickness, width, length)
+    on = forced or found is not None
+    state = ProtecState(is_protec=on,
+                        is_1p1216=on and spec == PROTEC_SPEC_1P1216,
+                        forced=forced,
+                        rule=found.describe() if found is not None else "")
+    log.debug("protec_state: spec=%s 厚=%s 幅=%s 丈=%s 強制=%s -> is_protec=%s (%s)",
+              spec, thickness, width, length, forced, state.is_protec, state.rule)
     return state
 
 

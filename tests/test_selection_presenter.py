@@ -202,10 +202,10 @@ class Force1P0113Tests(PresenterTestCase):
 # ==================================================================
 class ProtecTests(PresenterTestCase):
     def test_プロテックの包装仕様NOで入る(self) -> None:
-        for spec in ("1P1216", "1P1125", "1P1211"):
+        for spec, size in (("1P1216", None), ("1P1125", (6.0, 1000, 2000)), ("1P1211", None)):
             with self.subTest(spec=spec):
                 p = SelectionPresenter(self.conn, user_log=UserLog())
-                p.check_and_set_protec_mode(spec)
+                p.check_and_set_protec_mode(spec, order_size=size)
                 self.assertTrue(p.protec.is_protec, spec)
 
     def test_1P1216だけ許容が違う(self) -> None:
@@ -214,7 +214,7 @@ class ProtecTests(PresenterTestCase):
         self.assertIn("-5mm", self.logged())
 
     def test_他のプロテックは80mm(self) -> None:
-        self.p.check_and_set_protec_mode("1P1125")
+        self.p.check_and_set_protec_mode("1P1125", order_size=(6.0, 1000, 2000))
         self.assertFalse(self.p.protec.is_1p1216)
         self.assertIn("-80mm", self.logged())
 

@@ -140,6 +140,8 @@ class SelectionPresenter:
     # --- 包装仕様NOで切り替わるモード群 ---
     mode_1p0113: bool = False
     force_1p0113: bool = False
+    # 「プロテック 強制」。包装仕様NO・条件の表に関わらずプロテックにする(1P0113 強制と同じ逃げ道)
+    force_protec: bool = False
     protec: spk.ProtecState = field(default_factory=spk.ProtecState)
     mode_1p1185: spk.Mode1P1185State = field(default_factory=spk.Mode1P1185State)
     last_hosozai: str = ""
@@ -292,8 +294,18 @@ class SelectionPresenter:
     # ------------------------------------------------------------------
     # 2. プロテックモード
     # ------------------------------------------------------------------
+    def order_size(self) -> tuple[float, float, float]:
+        """いまのロットの SIKALOT オーダー板厚・板幅・板丈(プロテックの条件に当てる)。無ければ 0。"""
+        lot = getattr(self.lot_result, "lot", None)
+        if lot is None:
+            return (0.0, 0.0, 0.0)
+        return (getattr(lot, "order_thickness", 0) or 0,
+                getattr(lot, "order_width", 0) or 0,
+                getattr(lot, "order_length", 0) or 0)
+
     def check_and_set_protec_mode(
         self, packaging_spec: str, *,
+        order_size: Optional[tuple[float, float, float]] = None,
         available_board_types: Optional[list[str]] = None,
         current_board_type: str = "",
     ) -> ProtecResult:
@@ -302,9 +314,29 @@ class SelectionPresenter:
         プロテック対象ならボード種別を「プロテックボード」に、
         そうでなければ既定の「ハードボード」に戻すよう指示する。
         実際に切り替えるのは呼び出し側(ウィジェット/画面の都合があるため)。
+
+        対象かどうかは表 `プロテック条件`(包装仕様NO と SIKALOT のオーダー厚・幅・丈。
+        `protec_rules`)で決める。「プロテック 強制」が ON なら条件に関わらず対象。
         """
-        self.protec = spk.protec_state(packaging_spec)
+        from .. import protec_rules
+
+        thickness, width, length = order_size or (0, 0, 0)
+        rules = protec_rules.load(self.conn)
+        was_on = self.protec.is_protec
+        self.protec = spk.protec_state(
+            packaging_spec, thickness=thickness, width=width, length=length,
+            rules=rules, forced=self.force_protec)
         target = self.protec.board_type
+        if not self.protec.is_protec and packaging_spec:
+            # 包装仕様NOは条件の表にあるのに、寸法が当たらなかった。黙ると「なぜ入らない」が分からない
+            near = protec_rules.specs_with_size(rules, packaging_spec)
+            if near:
+                self.user_log.log(
+                    f"[プロテック] 包装仕様NO={packaging_spec} の条件にｵｰﾀﾞｰ寸法が当たりません"
+                    f"(厚 {thickness:g} / 幅 {width:g} / 丈 {length:g}。条件: "
+                    + " または ".join(r.describe() for r in near) + ")。通常のボードで選定します")
+        if was_on and not self.protec.is_protec:
+            self.user_log.log("[プロテックモード] 解除")
 
         result = ProtecResult(target_board_type=target)
         if available_board_types is not None:
@@ -324,11 +356,30 @@ class SelectionPresenter:
                     f"種別を切り替えずに選定します", emphasis=True)
 
         if self.protec.is_protec:
+            why = ("強制" if self.protec.forced and not self.protec.rule
+                   else f"条件 {self.protec.rule}" + ("・強制" if self.protec.forced else ""))
             self.user_log.log(
-                f"[プロテックモード] 有効 包装仕様NO={packaging_spec}"
+                f"[プロテックモード] 有効 包装仕様NO={packaging_spec or '(なし)'}({why})"
                 f" (上用は下用と同サイズ・許容"
                 f"-{5 if self.protec.is_1p1216 else 80}mm)", emphasis=True)
         return result
+
+    def toggle_force_protec(self, *, available_board_types: Optional[list[str]] = None,
+                            current_board_type: str = "") -> ProtecResult:
+        """「プロテック 強制」を切り替える(1P0113 強制と同じ: ロットを切り替えると解除)。
+
+        ON にするとボード種別がプロテックボードになり、ボード選定・配置・切断依頼が
+        プロテックの挙動になる。OFF に戻すと、いまのロットの包装仕様NO・オーダー寸法で
+        判定し直す。
+        """
+        self.force_protec = not self.force_protec
+        self.user_log.log(f"[プロテック強制] {'ON' if self.force_protec else 'OFF'}", emphasis=True)
+        outcome = self.check_and_set_protec_mode(
+            self.current_packaging_spec(), order_size=self.order_size(),
+            available_board_types=available_board_types,
+            current_board_type=current_board_type)
+        self.apply_hosozai(self.last_hosozai)    # 上用の欄の出し方(上下共用)を合わせる
+        return outcome
 
     # ------------------------------------------------------------------
     # 2.5. 1P1185(タイト限定)モード
@@ -531,6 +582,11 @@ class SelectionPresenter:
             force_change = self.toggle_force_1p0113(
                 product_width=product_width, product_length=product_length)
             force_released = True
+        # プロテック強制も同じ(ロットを切り替えたら、包装仕様NOと条件の表で決め直す)
+        if self.force_protec:
+            self.force_protec = False
+            force_released = True
+            self.user_log.log("[プロテック強制] ロットを切り替えたので解除しました")
 
         self.set_ex_order(result.odr.is_ex)
 
@@ -538,7 +594,8 @@ class SelectionPresenter:
         mode_change = self.apply_1p0113_mode(
             spec, product_width=product_width, product_length=product_length)
         protec = self.check_and_set_protec_mode(
-            spec, available_board_types=available_board_types,
+            spec, order_size=self.order_size(),
+            available_board_types=available_board_types,
             current_board_type=current_board_type)
         self.check_and_set_1p1185_mode(
             spec, result.odr.customer_name, result.lot.width, result.lot.length)
@@ -590,7 +647,8 @@ class SelectionPresenter:
                 BANNER_1P0113,
                 f"【{spk.HOSOSIYO_1P0113} 裸梱包モード】角材+松板で組みます")
         if self.protec.is_protec:
-            return ModeBanner(BANNER_PROTEC, "【プロテックボードオーダー選択中】")
+            return ModeBanner(BANNER_PROTEC, "【プロテックボードオーダー選択中】"
+                              + ("(強制)" if self.protec.forced else ""))
         if self.mode_1p1185.is_1p1185:
             return ModeBanner(BANNER_1P1185, "【1P1185モード タイトサイズ限定表示】")
         if self.is_shared_board_mode:
@@ -1001,6 +1059,8 @@ class SelectionViewModel:
     lot_no: str = ""
     lot_caption: str = ""
     banner: ModeBanner = field(default_factory=ModeBanner)
+    # 「プロテック 強制」が ON か(ボタンの押された見た目)
+    protec_forced: bool = False
 
     # 一覧
     rows: list[PalletRow] = field(default_factory=list)
@@ -1101,6 +1161,7 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
         lot_no=presenter.lot_no,
         lot_caption=presenter.lot_caption(),
         banner=presenter.mode_banner(),
+        protec_forced=presenter.force_protec,
         list_mode=session.list_mode,
         show_all=session.show_all,
         ex_only=session.ex_only,
@@ -2011,6 +2072,7 @@ def to_dict(view: SelectionViewModel) -> dict[str, Any]:
         "unavailable_message": view.unavailable_message,
         "lot_no": view.lot_no,
         "lot_caption": view.lot_caption,
+        "protec_forced": view.protec_forced,
         "banner": {"kind": view.banner.kind, "text": view.banner.text,
                    "visible": view.banner.visible},
         "rows": [{"values": r.values, "width": r.width, "length": r.length,

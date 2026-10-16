@@ -57,6 +57,14 @@ BLANK_TEXT_NOTE = {
     ("PalletMaster", "位置"): "空欄でよい(空 = 型録の行。在庫の棚の行だけ位置を入れる)",
 }
 
+# 列の横に出す案内(上の2つに当たらない列)
+_RANGE_NOTE = "空欄なら見ない。ちょうどの値は最小・最大に同じ値(例 12)"
+COLUMN_NOTE: dict[tuple[str, str], str] = {
+    ("プロテック条件", "包装仕様NO"): "受注の包装仕様NO(例 1P1255)。同じ包装仕様NOで行を分けると「または」",
+    **{("プロテック条件", f"オーダー{d}_{e}"): f"SIKALOT のｵｰﾀﾞｰ板{d}。{_RANGE_NOTE}"
+       for d in ("厚", "幅", "丈") for e in ("最小", "最大")},
+}
+
 # 画面に出す型の名前。**サーバが言葉を持つ**(画面側で書き分けない)
 KIND_LABEL = {"int": "整数", "real": "小数", "text": "文字"}
 
@@ -161,7 +169,8 @@ def columns(conn: sqlite3.Connection, table: str,
         out.append(Column(
             name=local, kind=kind, required=required, stamp=stamp, blank_text=blank_text,
             note=("空欄なら今の日時が入ります" if stamp
-                  else BLANK_TEXT_NOTE.get((table, local), ""))))
+                  else BLANK_TEXT_NOTE.get((table, local), "")
+                  or COLUMN_NOTE.get((table, local), ""))))
     # マスタ管理で足した列(`master_schema.add_column`)。取り込みは読まないが、
     # 足した人が直すために足した列なので直せる列に出す。型は足したときの型
     if source_path is not None:

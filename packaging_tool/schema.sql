@@ -701,6 +701,24 @@ CREATE TABLE IF NOT EXISTS 仕掛受注 (
 -- 外した分だけ帯に穴が開くことは上の検査が言います。
 -- ==================================================================
 
+-- プロテックモードの発火条件(`protec_rules`)。1行が1つの条件で、どれか1行に当たればプロテック。
+-- 包装仕様NO と SIKALOT のｵｰﾀﾞｰ板厚・板幅・板丈(範囲。空なら見ない)。マスタ管理で行を足せる。
+-- 取り込み元に無ければ手元の初期値(起動時に空なら入れる)で動く
+CREATE TABLE IF NOT EXISTS プロテック条件 (
+    ID              INTEGER PRIMARY KEY AUTOINCREMENT,
+    包装仕様NO       TEXT NOT NULL,
+    オーダー厚_最小   REAL,
+    オーダー厚_最大   REAL,
+    オーダー幅_最小   REAL,
+    オーダー幅_最大   REAL,
+    オーダー丈_最小   REAL,
+    オーダー丈_最大   REAL,
+    有効            INTEGER NOT NULL DEFAULT 1,
+    並び順           INTEGER NOT NULL DEFAULT 0,
+    備考            TEXT NOT NULL DEFAULT '',
+    更新日時         TEXT NOT NULL DEFAULT ''
+);
+
 -- 丈(長手)の帯 → その帯に載せられる製品丈の範囲
 CREATE TABLE IF NOT EXISTS PalletDakeThreshold (
     ID          INTEGER PRIMARY KEY AUTOINCREMENT,

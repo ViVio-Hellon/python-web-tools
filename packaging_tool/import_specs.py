@@ -420,6 +420,19 @@ _THRESHOLD_HEAD: dict[str, list[ColumnSpec]] = {
 
 THRESHOLD_TABLES: tuple[str, ...] = tuple(_THRESHOLD_HEAD)
 
+# プロテックモードの発火条件(`protec_rules`)。**梱包資材マスタに置く**(閾値の別ファイルではない)。
+# このツールが足した表なので任意(`OPTIONAL_TABLES`)── 取り込み元に無ければ手元の初期値で動く
+from .protec_rules import TABLE as PROTEC_RULE_TABLE  # noqa: E402 - 表の名前は持ち主の1か所
+IMPORT_SPECS[PROTEC_RULE_TABLE] = [
+    ("包装仕様NO", "包装仕様NO", to_text),
+    ("オーダー厚_最小", "オーダー厚_最小", to_real),
+    ("オーダー厚_最大", "オーダー厚_最大", to_real),
+    ("オーダー幅_最小", "オーダー幅_最小", to_real),
+    ("オーダー幅_最大", "オーダー幅_最大", to_real),
+    ("オーダー丈_最小", "オーダー丈_最小", to_real),
+    ("オーダー丈_最大", "オーダー丈_最大", to_real),
+] + _THRESHOLD_TAIL
+
 for _threshold_table, _head in _THRESHOLD_HEAD.items():
     IMPORT_SPECS[_threshold_table] = _head + _THRESHOLD_TAIL
 
@@ -474,7 +487,8 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
                                                config.TBL_ORDER_COMMENT_SEEN,
                                                config.TBL_CUT_REQUEST,
                                                config.TBL_CUT_REQUEST_EVENT,
-                                               config.TBL_STOCK_RESERVE})
+                                               config.TBL_STOCK_RESERVE,
+                                               PROTEC_RULE_TABLE})
                                    | frozenset(THRESHOLD_TABLES))
 
 # **取り込み元に無くても知らせない列**(表 → 取り込み元の列名)。
