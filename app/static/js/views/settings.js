@@ -256,6 +256,50 @@ function renderStatus(state) {
   // **開いていない面の問題を隠さない。** 面で分けたせいで
   // 「足りません」に気づけなくなるなら、スクロールのほうがまだまし
   if (el.settingsTabs) tabs.setBadges(el.settingsTabs, state.tab_badges);
+  renderSource(state.source_state);
+  renderRailBadge(state.rail_badge);
+}
+
+/**
+ * 取り込み元の面の見出しと「何が要確認か」。**保存・取り込みのたびに付け直す。**
+ *
+ * 開いたときにサーバが描いたまま残していたので、保存して直っても「要確認」が
+ * 残り、別の画面へ行って戻ると消えていた(現場の声:「何が要確認かわからん」
+ * 「別タブから戻ると消えてました」)。
+ */
+function renderSource(src) {
+  if (!src) return;
+  const pill = document.getElementById("sourceLevel");
+  if (pill) {
+    pill.className = `lv lv--${src.level}`;
+    pill.textContent = src.label;
+  }
+  const box = document.getElementById("sourceAttention");
+  const text = document.getElementById("sourceAttentionText");
+  if (box && text) {
+    box.hidden = !src.text;
+    text.textContent = src.text ? `${src.label}: ${src.text}` : "";
+  }
+}
+
+/** レールの「設定」の印(? / !)。直ったら消す。指を置くと何が要確認かが出る。 */
+function renderRailBadge(badge) {
+  if (!badge) return;
+  const link = document.querySelector('.rail a[href="/settings"]');
+  if (!link) return;
+  let node = link.querySelector(".badge");
+  if (!badge.text) {
+    if (node) node.remove();
+    return;
+  }
+  if (!node) {
+    node = document.createElement("span");
+    link.append(node);
+  }
+  node.className = `badge badge--${badge.kind}`;
+  node.textContent = badge.text;
+  if (badge.title) node.title = badge.title;
+  else node.removeAttribute("title");
 }
 
 /** 相対で書かれた道の行き先。同じ道なら出さない(判断はサーバ)。 */
@@ -513,6 +557,14 @@ export function start(state, jobState, masterFrame) {
     const go = event.target.closest("[data-goto]");
     if (go && el.settingsTabs) tabs.select(el.settingsTabs, go.dataset.goto);
   });
+  // 取り込み元の面の「いまの状態で見る」
+  const sourceAttention = document.getElementById("sourceAttention");
+  if (sourceAttention) {
+    sourceAttention.addEventListener("click", (event) => {
+      const go = event.target.closest("[data-goto]");
+      if (go && el.settingsTabs) tabs.select(el.settingsTabs, go.dataset.goto);
+    });
+  }
 
   // 置き場所と動作は**別々に保存する**。片方を直したいだけのときに
   // もう片方まで送ると、他のタブで変えた値を上書きしてしまう

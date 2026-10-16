@@ -134,7 +134,8 @@
             <b class="label">{{ item.label }}</b>
             {% if item.note %}<small>{{ item.note }}</small>{% endif %}
           </span>
-          {% if item.badge %}<span class="badge badge--{{ item.badge_kind }}">{{ item.badge }}</span>{% endif %}
+          {% if item.badge %}<span class="badge badge--{{ item.badge_kind }}"
+            {% if item.badge_title %}title="{{ item.badge_title }}"{% endif %}>{{ item.badge }}</span>{% endif %}
         </a>
       </li>
       {% endfor %}

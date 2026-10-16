@@ -338,10 +338,17 @@
     <header>
       <i class="ib ib--sm" aria-hidden="true">元</i>
       <h3>取り込み元</h3>
-      <span class="lv lv--{{ view.level }}">{{ level_label[view.level] }}</span>
+      {# 見出しが背負うのは**取り込み元の節(マスタ・看板・閾値・仕掛台帳)だけ**。権限など
+         面と関係の無い「要確認」は出さない。何がそうなのかを下に書く。
+         保存・取り込みのたびに JS が付け直す(`renderSource`)── 開いたときのまま残さない #}
+      <span class="lv lv--{{ source_state.level }}" id="sourceLevel">{{ source_state.label }}</span>
       <span class="eyebrow">全ラインで共通の共有フォルダ</span>
     </header>
     <div class="pad">
+      <p class="status status--ng" id="sourceAttention" {% if not source_state.text %}hidden{% endif %}>
+        <span id="sourceAttentionText">{{ source_state.label }}: {{ source_state.text }}</span>
+        <button class="btn" type="button" data-goto="status">いまの状態で見る</button>
+      </p>
       <div class="paths">
         <label for="masterDir">梱包資材マスタ</label>
         <span class="pathrow">

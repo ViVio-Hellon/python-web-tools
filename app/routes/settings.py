@@ -82,6 +82,8 @@ def page():
         # **面の印も初回から出す。** 開いていない面の問題を、JSが動くのを
         # 待たずに読めるようにする
         tab_badges=settings_presenter.tab_badges(view),
+        # 取り込み元の面の見出しと、何が要確認か
+        source_state=settings_presenter.source_state(view),
         # 初回の描画をJSに任せない。開いた瞬間に読める
         state=settings_presenter.to_dict(view),
         job_state=settings_presenter.jobs_dict(registry),
@@ -90,13 +92,10 @@ def page():
     )
 
 
-def _badge(view) -> tuple[str, str]:
-    """レールに出す印。行く前に「その先に何があるか」を示す。"""
-    if view.level == settings_presenter.NG:
-        return ("!", "todo")
-    if view.level == settings_presenter.WARN:
-        return ("?", "todo")
-    return ("", "done")
+def _badge(view) -> tuple[str, str, str]:
+    """レールに出す印。行く前に「その先に何があるか」を示す。3つ目は印に指を置くと出る中身。"""
+    badge = settings_presenter.rail_badge(view)
+    return (badge["text"], badge["kind"], badge["title"])
 
 
 @bp.get("/api/settings/state")

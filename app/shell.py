@@ -27,6 +27,7 @@ class NavItem:
     note: str = ""                  # 名前の下に出す一行。何をする画面か
     badge: str = ""
     badge_kind: str = "todo"        # "todo" | "done"
+    badge_title: str = ""           # 印に指を置くと出る中身(何が要確認か)
     ready: bool = True              # まだ作っていない画面は False
 
 
@@ -103,7 +104,7 @@ PENDING_SCREENS: dict[str, tuple[str, str, str]] = {}
 
 
 def nav_items(mode: str, badges: Optional[dict[str, tuple[str, str]]] = None) -> list[NavItem]:
-    """レールの項目。`badges` は `{key: (文言, 種別)}`。
+    """レールの項目。`badges` は `{key: (文言, 種別)}` か `{key: (文言, 種別, 指を置くと出る中身)}`。
 
     バッジは「その先に何があるか」を行く前に示すためのもの
     (情報の匂い)。未読の選定ログ件数など。
@@ -114,11 +115,12 @@ def nav_items(mode: str, badges: Optional[dict[str, tuple[str, str]]] = None) ->
     items = []
     for key, label, url, note in source:
         ready = key in READY_SCREENS
-        badge, kind = badges.get(key, ("", "todo"))
+        badge, kind, *rest = badges.get(key, ("", "todo"))
+        title = rest[0] if rest else ""
         if not ready and not badge:
             badge, kind = "準備中", "todo"
         items.append(NavItem(key=key, label=label, url=url, note=note,
-                             badge=badge, badge_kind=kind, ready=ready))
+                             badge=badge, badge_kind=kind, badge_title=title, ready=ready))
     return items
 
 

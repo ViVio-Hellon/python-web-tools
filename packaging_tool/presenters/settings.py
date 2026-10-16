@@ -1187,6 +1187,59 @@ def jobs_dict(registry: Optional[jobs.JobRegistry] = None) -> dict[str, Any]:
     }
 
 
+# 「取り込み元」の面が見出しに背負う節(取り込み元の置き場所で直るもの)。
+# **面と関係の無い節(権限・この端末)の「要確認」を、取り込み元の見出しに出さない**
+SOURCE_SECTIONS = ("梱包資材マスタ", "看板マスタ", "パレット閾値マスタ", "仕掛台帳")
+# 何が要確認かを一言で言うときに並べる件数(残りは「ほか N件」)
+ATTENTION_SHOWN = 2
+
+
+def attention(sections: list[Section]) -> list[dict[str, str]]:
+    """「足りません」「要確認」の中身(重い順)。**何が**要確認かを言うため。
+
+    現場の声:「何が要確認かわからんのですが」── 見出しの「要確認」は節ぜんぶの
+    いちばん重い状態だけで、どの項目かを書いていなかった。
+    """
+    items = [{"section": s.title, "label": c.label, "value": c.value, "level": c.level}
+             for s in sections for c in s.checks if c.level in (NG, WARN)]
+    items.sort(key=lambda i: 0 if i["level"] == NG else 1)
+    return items
+
+
+def attention_text(items: list[dict[str, str]]) -> str:
+    """「仕掛台帳 › 2つ目 SIKALOT.sqlite3: 見つかりません ほか1件」。無ければ空。"""
+    if not items:
+        return ""
+    head = " / ".join(f"{i['section']} › {i['label']}: {i['value']}"
+                      for i in items[:ATTENTION_SHOWN])
+    rest = len(items) - ATTENTION_SHOWN
+    return head + (f" ほか{rest}件" if rest > 0 else "")
+
+
+def section_level(sections: list[Section]) -> str:
+    """節の束の一番重い状態。"""
+    for level in (NG, WARN, OK):
+        if any(s.level == level for s in sections):
+            return level
+    return INFO
+
+
+def source_state(view: SettingsViewModel) -> dict[str, str]:
+    """「取り込み元」の面の見出しに出す状態と、何がそうなのか。"""
+    sections = [s for s in view.sections if s.title in SOURCE_SECTIONS]
+    level = section_level(sections)
+    return {"level": level, "label": LEVEL_LABEL.get(level, level),
+            "text": attention_text(attention(sections))}
+
+
+def rail_badge(view: SettingsViewModel) -> dict[str, str]:
+    """レールの「設定」に出す印。`title` に何が要確認かを入れる(印に指を置くと読める)。"""
+    text = {NG: "!", WARN: "?"}.get(view.level, "")
+    detail = attention_text(attention(view.sections))
+    return {"text": text, "kind": "todo" if text else "done",
+            "title": f"{LEVEL_LABEL[view.level]}: {detail}" if text and detail else ""}
+
+
 def tab_badges(view: SettingsViewModel) -> dict[str, dict[str, str]]:
     """タブ見出しに出す状態と件数。
 
@@ -1302,6 +1355,9 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
     return {
         "level": view.level,
         "tab_badges": tab_badges(view),
+        # 何が要確認か(見出しの「要確認」だけでは分からない)。画面を描き直すたびに付け直す
+        "source_state": source_state(view),
+        "rail_badge": rail_badge(view),
         # 文言はサーバが持つ(設計書 §4)。画面側で書き分けない
         "level_label": LEVEL_LABEL,
         "sections": [
