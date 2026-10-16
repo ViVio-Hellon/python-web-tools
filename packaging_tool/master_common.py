@@ -351,6 +351,11 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
         summary = pallet_service.recompute_fit_ranges(conn)
         notes.append("適合範囲も計算し直しました" if summary.ok
                      else f"ただし適合範囲の再計算に失敗しました({summary.error})")
+    if table == import_specs.PROTEC_RULE_TABLE:
+        # **条件はロットを開いたときに当てる。** いま開いているロットには、開き直すまで効かない。
+        # ほかの端末は、取り込み(起動時・まとめて取り込み)で手元に入ってから
+        notes.append("この端末では次にロットを開いたときから効きます(いま開いているロットは開き直してください)。"
+                     "ほかの端末は、次の取り込みのあとから効きます")
     if table == "アクセス権限":
         # **足した権限は、開き直すまで全部は効かない。** 使える画面は
         # 起動時の権限で決まっているので、切り替えは通っても画面が出ない

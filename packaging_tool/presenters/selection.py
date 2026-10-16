@@ -361,7 +361,7 @@ class SelectionPresenter:
             self.user_log.log(
                 f"[プロテックモード] 有効 包装仕様NO={packaging_spec or '(なし)'}({why})"
                 f" (上用は下用と同サイズ・許容"
-                f"-{5 if self.protec.is_1p1216 else 80}mm)", emphasis=True)
+                f"-{10 if self.protec.is_1p1216 else 80}mm)", emphasis=True)
         return result
 
     def toggle_force_protec(self, *, available_board_types: Optional[list[str]] = None,

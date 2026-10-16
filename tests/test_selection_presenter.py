@@ -211,7 +211,7 @@ class ProtecTests(PresenterTestCase):
     def test_1P1216だけ許容が違う(self) -> None:
         self.p.check_and_set_protec_mode("1P1216")
         self.assertTrue(self.p.protec.is_1p1216)
-        self.assertIn("-5mm", self.logged())
+        self.assertIn("-10mm", self.logged())
 
     def test_他のプロテックは80mm(self) -> None:
         self.p.check_and_set_protec_mode("1P1125", order_size=(6.0, 1000, 2000))

@@ -90,7 +90,7 @@ _ERROR_INFOS = (INFO_NOT_FOUND, INFO_DB_ERROR, "テーブル名エラー")
 # VBA は納入先「ｶ)ﾏﾂｼﾀｼﾖｳﾃﾝ」判定も持っていたが `cond1 = False` で
 # 明示的に廃止済み。包装仕様NOとオーダー寸法で判定する(条件は表 `プロテック条件`。
 # 以前の決め打ち 1P1216 / 1P1125 / 1P1211 は表の初期値に入れてある ── `protec_rules.SEED`)
-PROTEC_SPEC_1P1216 = "1P1216"   # ｺｰﾐ金属。上用の幅許容が -5mm になる
+PROTEC_SPEC_1P1216 = "1P1216"   # ｺｰﾐ金属。上用の幅許容が -10mm になる(ほかは -80mm)
 
 PROTEC_BOARD_TYPE = "プロテックボード"
 DEFAULT_BOARD_TYPE = "ハードボード"
@@ -139,7 +139,7 @@ def protec_state(packaging_spec: str, *, thickness: float = 0, width: float = 0,
 
     包装仕様NOと **SIKALOT のオーダー板厚・板幅・板丈** を、表 `プロテック条件` の行
     (`rules`。省略すると初期値)に当てる。`forced` なら条件に関わらずプロテック。
-    1P1216 の許容(-5mm)は包装仕様NOで決まる(強制のときも同じ)。
+    1P1216 の許容(-10mm)は包装仕様NOで決まる(強制のときも同じ)。
     """
     from . import protec_rules
 

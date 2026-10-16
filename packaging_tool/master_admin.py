@@ -166,6 +166,9 @@ def delete_row(conn: sqlite3.Connection, table: str, row_key: Any, *,
     path, refused = _ready(conn, table, path)
     if refused:
         return refused
+    why = _last_row_why(path, table)
+    if why:
+        return Result(False, why, REFUSE_BAD_VALUE)
 
     try:
         changed = _write_row(path, table, row_key, seen,
@@ -178,6 +181,29 @@ def delete_row(conn: sqlite3.Connection, table: str, row_key: Any, *,
 
     log.info("マスタから消しました: %s rowid=%s", table, row_key)
     return Result(True, f"{_label(table)}の1行を消しました{_follow(conn, path, table)}")
+
+
+# **最後の1行を消させない表。** 取り込みは「取り込み元が0行なら手元を消さない」ので、全部消すと
+# 取り込み元は空なのに手元(と他の端末)の行が効いたまま残る。起動時に空なら初期値も入り直す。
+# 止めたいときは有効を 0 にしてもらう(それなら全端末で効く)
+KEEP_LAST_ROW: dict[str, str] = {
+    import_specs.PROTEC_RULE_TABLE:
+        "プロテック条件の最後の1行は消せません(全部消すと、取り込み元は空でも手元や他の端末の条件が"
+        "残って効き続けるため)。止めたいときは、その行の「有効」を 0 にしてください。",
+}
+
+
+def _last_row_why(path: Path, table: str) -> str:
+    """消すと0行になる表なら、断る理由。それ以外は空。"""
+    why = KEEP_LAST_ROW.get(table, "")
+    if not why:
+        return ""
+    try:
+        rows = source_db.read_query(
+            path, f"SELECT COUNT(*) AS n FROM {source_db.quote_identifier(table)}")
+    except source_db.SourceError:
+        return ""                                 # 数えられない。消す側の失敗に任せる
+    return why if rows and int(rows[0]["n"] or 0) <= 1 else ""
 
 
 def _write_row(path: Path, table: str, row_key: Any, seen: Optional[dict[str, Any]],

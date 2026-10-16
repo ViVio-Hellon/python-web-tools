@@ -21,6 +21,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from typing import Any
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -293,3 +294,76 @@ class LotRuleWebTests(SelectionWebTestCase):
             with self.subTest(spec=spec, t=t, w=w, l=l):
                 self.open_lot(spec, t, w, l)
                 self.assertEqual(self.session().presenter.protec.is_protec, want)
+
+
+class ReflectTests(unittest.TestCase):
+    """マスタ管理で 足す・直す・有効0・消す が、すぐ効くか(現場の声:「足し方と、足した条件が即反映するかのチェックを」)。
+
+    - この端末: 書いたら手元も取り込み直す → **次にロットを開いたときから**効く(開いているロットは開き直す)
+    - ほかの端末: 取り込み(起動時・まとめて取り込み)のあとから効く
+    - 列と列は「かつ」、行と行は「または」
+    """
+
+    def setUp(self) -> None:
+        from packaging_tool import config, master_admin, selection_session
+        self.admin = master_admin
+        self.dir = Path(tempfile.mkdtemp(prefix="protec_reflect_"))
+        self.src = self.dir / config.MATERIAL_DB_NAME
+        sqlite3.connect(self.src).execute("CREATE TABLE PalletMaster (管理番号 INTEGER)").connection.close()
+        self.conn = make_conn()
+        selection_session.reset_session()
+        self.addCleanup(selection_session.reset_session)
+        selection_session.get_session(self.conn).admin = True
+        self.assertTrue(master_admin.create_table(self.conn, TABLE, path=self.src).ok)
+
+    def on(self, spec, t=0, w=0, l=0, conn=None) -> bool:
+        return spk.protec_state(spec, thickness=t, width=w, length=l,
+                                rules=protec_rules.load(conn or self.conn)).is_protec
+
+    def add(self, **values) -> Any:
+        got = self.admin.add_row(self.conn, TABLE, {k: str(v) for k, v in values.items()}, path=self.src)
+        self.assertTrue(got.ok, got.message)
+        return got
+
+    def key(self, spec) -> int:
+        rows = self.admin.page(self.src, TABLE).rows
+        return next(r["__行"] for r in rows if r["包装仕様NO"] == spec)
+
+    def test_列と列はかつ(self) -> None:
+        got = self.add(包装仕様NO="1P7777", オーダー厚_最小=4, オーダー厚_最大=6,
+                       オーダー幅_最小=1000, オーダー幅_最大=1100)
+        self.assertIn("次にロットを開いたときから効きます", got.message)
+        self.assertTrue(self.on("1P7777", 5, 1050))
+        self.assertFalse(self.on("1P7777", 5, 1200))           # 幅が外れる
+        self.assertFalse(self.on("1P7777", 7, 1050))           # 厚が外れる
+        self.assertFalse(self.on("1P7776", 5, 1050))           # 包装仕様NOが違う
+
+    def test_直す_有効0_消すもすぐ効く(self) -> None:
+        self.add(包装仕様NO="1P7777", オーダー厚_最小=4, オーダー厚_最大=6)
+        key = self.key("1P7777")
+        self.assertTrue(self.admin.save_row(self.conn, TABLE, key, {"オーダー厚_最大": "8"},
+                                            path=self.src).ok)
+        self.assertTrue(self.on("1P7777", 7))
+        self.assertTrue(self.admin.save_row(self.conn, TABLE, key, {"有効": "0"}, path=self.src).ok)
+        self.assertFalse(self.on("1P7777", 5))
+        self.assertTrue(self.admin.save_row(self.conn, TABLE, key, {"有効": "1"}, path=self.src).ok)
+        self.assertTrue(self.admin.delete_row(self.conn, TABLE, key, path=self.src).ok)
+        self.assertFalse(self.on("1P7777", 5))
+
+    def test_最後の1行は消せない(self) -> None:
+        """全部消すと、取り込み元は空でも手元・他の端末の条件が残って効き続ける。止めるのは有効0で。"""
+        rows = self.admin.page(self.src, TABLE).rows
+        for row in rows[:-1]:
+            self.assertTrue(self.admin.delete_row(self.conn, TABLE, row["__行"], path=self.src).ok)
+        last = self.admin.delete_row(self.conn, TABLE, rows[-1]["__行"], path=self.src)
+        self.assertFalse(last.ok)
+        self.assertIn("有効」を 0", last.message)
+        self.assertEqual(len(self.admin.page(self.src, TABLE).rows), 1)
+
+    def test_ほかの端末は取り込みのあとから(self) -> None:
+        from packaging_tool import data_sync
+        other = make_conn()                                       # 初期値だけの端末
+        self.add(包装仕様NO="1P7777")
+        self.assertFalse(self.on("1P7777", conn=other))
+        data_sync.import_master(other, self.src)
+        self.assertTrue(self.on("1P7777", conn=other))

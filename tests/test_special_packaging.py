@@ -39,7 +39,7 @@ class ModeDetectionTests(unittest.TestCase):
         self.assertFalse(spk.protec_state("1P0113").is_protec)
 
     def test_only_1p1216_gets_the_tighter_tolerance(self):
-        """幅許容-5mmは1P1216(ｺｰﾐ金属)限定。他のプロテックは-80mm。"""
+        """幅許容-10mmは1P1216(ｺｰﾐ金属)限定。他のプロテックは-80mm。"""
         self.assertTrue(spk.protec_state("1P1216").is_1p1216)
         self.assertFalse(spk.protec_state("1P1125").is_1p1216)
 
