@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from . import angle_service
 from .board_scoring import (FatigueEntry, PASS1_TOLERANCE,
                             get_best_orientation,
                             sort_boards_by_target_width)
@@ -271,20 +272,47 @@ def run_narrow_palette_lower_fill(
 WIDE_CUT_MIN_SHORT_SIDE = 200
 
 
-# 疲労度計算のカット係数(modAngleSelect の CUT_FAT_MULT と同値)
-CUT_FAT_MULT = 233.0
+# 疲労度計算のカット係数。**値は angle_service の1か所だけ**(以前はここに 233.0 を
+# 別に書いていた。外向けの名前は残す)
+CUT_FAT_MULT = angle_service.CUT_FAT_MULT
+# 丈カットの記録と同じ誤差吸収(`select_boards_for_wide_lower` / `select_upper_boards_wide_cut`)
+WIDE_CUT_LENGTH_SLACK = 3
 
+
+
+def wide_cut_fatigue(
+    entry: Optional[FatigueEntry], short_side: int, count: int,
+    target_width: int, cut_base_length: int,
+) -> float:
+    """カット前提の板の疲労度。
+
+        距離x1 + (面積 + 手間)x枚数 + 幅カットx枚数 + 丈カットx1
+
+    幅カット: 全数(切断線=短辺)。マップのカット値は使わず前提値で数える。
+    丈カット: 枚数を切り上げで決めるので、短辺x枚数 が基準丈を超えれば最後の
+    1枚を切る(切断線=切った後の幅=対象幅)。選定が丈カットを記録する条件
+    (`+3` の誤差吸収)と同じ。【VER4.8.61】以前は丈カットが入っていなかった。
+    """
+    dist = entry.dist if entry else 0.0
+    area = entry.area if entry else 0.0
+    n = max(count, 1)
+    total = (dist + (area + angle_service.FAT_SHEET_SCORE) * n
+             + angle_service.fat_cut_score1(short_side) * n)
+    if cut_base_length > 0 and short_side * n > cut_base_length + WIDE_CUT_LENGTH_SLACK:
+        total += angle_service.fat_cut_score1(target_width)
+    return total
 
 
 def _pick_wide_cut_board(
     available: list[BoardModel], target_width: int, product_length: int,
     fatigue_map: Optional[dict[str, FatigueEntry]], fatigue_mode: bool,
+    cut_base_length: int = 0,
 ) -> Optional[tuple[BoardModel, int, int, int]]:
     """カット前提の主ボードを1件選ぶ。戻り値は (ボード, 最大辺, 短辺, 枚数)。
 
-    疲労度モードは「距離x1 + 面積x枚数 + カット前提の幅カット疲労」が
-    最小のものを、通常モードは「最大辺と対象幅の差」が最小
-    (同値なら短辺が大きい方)を選ぶ。
+    疲労度モードは `wide_cut_fatigue` が最小のものを、通常モードは
+    「最大辺と対象幅の差」が最小(同値なら短辺が大きい方)を選ぶ。
+    `cut_base_length` は丈カットを判定する基準丈(下用=パレット丈 / 上用=製品丈)。
     """
     best: Optional[tuple[BoardModel, int, int, int]] = None
 
@@ -295,12 +323,8 @@ def _pick_wide_cut_board(
             if ab_min < WIDE_CUT_MIN_SHORT_SIDE or ab_max < target_width:
                 continue
             cnt = max(1, -(-product_length // ab_min))
-            entry = fatigue_map.get(f"{ab.width}x{ab.length}")
-            dist = entry.dist if entry else 0.0
-            area = entry.area if entry else 0.0
-            # カット前提: 幅カットが全数発生する(マップのカット値は使わず前提値で上書き)
-            cut_fat = (ab_min / 3000) * CUT_FAT_MULT * cnt
-            total = dist + area * cnt + cut_fat
+            total = wide_cut_fatigue(fatigue_map.get(f"{ab.width}x{ab.length}"),
+                                     ab_min, cnt, target_width, cut_base_length)
             if total < best_total:
                 best_total = total
                 best = (ab, ab_max, ab_min, cnt)
@@ -384,10 +408,12 @@ def _select_wide_cut(
     available: list[BoardModel], target_width: int, product: ProductSize,
     fallback_tag: str,
     fatigue_map: Optional[dict[str, FatigueEntry]], fatigue_mode: bool,
+    cut_base_length: int = 0,
 ) -> WideCutResult:
-    """カット前提選定の共通処理(上用・下用で対象幅とフォールバックのタグのみ異なる)。"""
+    """カット前提選定の共通処理(上用・下用で対象幅・丈カットの基準丈・フォールバックのタグが異なる)。"""
     result = WideCutResult(boards=[])
-    picked = _pick_wide_cut_board(available, target_width, product.length, fatigue_map, fatigue_mode)
+    picked = _pick_wide_cut_board(available, target_width, product.length, fatigue_map, fatigue_mode,
+                                  cut_base_length)
 
     if picked is not None:
         board_obj, max_side, short_side, cnt = picked
@@ -433,7 +459,8 @@ def select_boards_for_wide_lower(
     (`select_upper_boards_wide_cut` と同じ `+3` の誤差吸収)。
     """
     result = _select_wide_cut(
-        available, palette.width, product, TAG_MAIN, fatigue_map, fatigue_mode)
+        available, palette.width, product, TAG_MAIN, fatigue_map, fatigue_mode,
+        cut_base_length=palette.length)
     if not result.boards:
         return result
 
@@ -466,7 +493,8 @@ def select_boards_for_wide_product(
 
     対象幅は製品幅。フォールバック時のタグは空("")。
     """
-    return _select_wide_cut(available, product.width, product, "", fatigue_map, fatigue_mode)
+    return _select_wide_cut(available, product.width, product, "", fatigue_map, fatigue_mode,
+                            cut_base_length=product.length)
 
 
 def select_upper_boards_wide_cut(

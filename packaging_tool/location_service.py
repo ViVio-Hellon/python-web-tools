@@ -311,15 +311,30 @@ def materials_at_label(conn: sqlite3.Connection, label: str) -> list[ShelfMateri
 # ------------------------------------------------------------------
 # 疲労度スコア (VBA `AddFatigue`/`AddAngleFatigue`/`AddCutFatigue`/`AddLengthCutFatigue`)
 # ------------------------------------------------------------------
+def carry_board_score(width: int, length: int, count: int = 1) -> float:
+    """ボードを運ぶぶん(距離を除く): (面積 + 手間)x枚数。"""
+    n = max(count, 1)
+    return (angle_service.fat_area_score1(width, length) + angle_service.FAT_SHEET_SCORE) * n
+
+
+def carry_angle_score(angle_length: int, count: int = 1) -> float:
+    """アングルを運ぶぶん(距離を除く): (長さ + 手間)x本数。"""
+    n = max(count, 1)
+    return (angle_service.fat_angle_length_score1(angle_length) + angle_service.FAT_SHEET_SCORE) * n
+
+
 def score_board_pick(dist: float, width: int, length: int, count: int = 1) -> float:
-    """VBA `AddFatigue` の移植(距離x1 + 面積x枚数)。"""
-    return angle_service.fat_dist_score(dist) + angle_service.fat_area_score1(width, length) * count
+    """VBA `AddFatigue` の移植(距離x1 + (面積 + 手間)x枚数)。
+
+    棚から取ってくるぶん(運搬)だけ。カットは入れない ── 棚配置図は
+    「全部でどれだけ歩いて運ぶか」を見る画面。
+    """
+    return angle_service.fat_dist_score(dist) + carry_board_score(width, length, count)
 
 
 def score_angle_pick(dist: float, angle_length: int, count: int = 1) -> float:
-    """VBA `AddAngleFatigue` の移植(距離1回・長さ×本数)。"""
-    length_score = min((angle_length / angle_service.FAT_MAX_LEN) * angle_service.FAT_SCORE_CAP, angle_service.FAT_SCORE_CAP)
-    return angle_service.fat_dist_score(dist) + length_score * count
+    """VBA `AddAngleFatigue` の移植(距離1回 + (長さ + 手間)x本数)。"""
+    return angle_service.fat_dist_score(dist) + carry_angle_score(angle_length, count)
 
 
 def build_angle_fatigue_map(
@@ -327,9 +342,13 @@ def build_angle_fatigue_map(
 ) -> dict[str, float]:
     """VBA `btnAngleAuto_Click` の `angleFatMap` 構築の移植。
 
-    候補アングル丈ごとに「拠点からの距離 + 長さ」の疲労度を出し、
+    候補アングル丈ごとに**拠点からの距離スコアだけ**を出し、
     `angle_service.select_angles` に渡せる形(キーは丈の文字列)にする。
     棚が引けない丈は入れない(疲労度不明として通常の優先順位に任せる)。
+
+    【修正 VER4.8.61】以前は「距離 + 長さ1本分」を入れていた。受け取る側
+    (`angle_service._agl_fat_score`)が長さx本数を自分で足すので、長さが
+    本数+1回入っていた(2500x1本 と 1300x2本 の順位が逆転していた)。
     """
     fat_map: dict[str, float] = {}
     for length in angles:
@@ -339,6 +358,6 @@ def build_angle_fatigue_map(
         nearest = find_nearest_shelf_for_angle(conn, length, base_point)
         if nearest.shelf_name is None:
             continue
-        fat_map[key] = score_angle_pick(nearest.distance, length)
+        fat_map[key] = angle_service.fat_dist_score(nearest.distance)
     log.debug("build_angle_fatigue_map: %s件", len(fat_map))
     return fat_map

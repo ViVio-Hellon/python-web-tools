@@ -17,7 +17,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from . import floor_plan, location_service as svc, user_settings
+from . import angle_service, floor_plan, location_service as svc, user_settings
 from .logging_utils import get_logger
 from .presenters.layout import KIND_BOARD, KIND_LABEL, KINDS
 
@@ -213,19 +213,25 @@ class LayoutSession:
                 continue
             if kind == KIND_BOARD:
                 nearest = svc.find_nearest_shelf_for_board(conn, width, length, base)
-                score = svc.score_board_pick(nearest.distance, width, length, count)
+                carry = svc.carry_board_score(width, length, count)
                 label = f"{width}×{length}"
             else:
                 nearest = svc.find_nearest_shelf_for_angle(conn, length, base)
-                score = svc.score_angle_pick(nearest.distance, length, count)
+                carry = svc.carry_angle_score(length, count)
                 label = f"アングル {length}"
             if nearest.shelf_name is None:
                 # **置き場が登録されていないものは、黙って落とさない。**
                 # 光らないぶんは合計にも入らないので、言わないと嘘になる
                 missing.append(label)
                 continue
+            # **歩くのは置き場ごとに1回。** 同じ置き場のもの(アングルの2本対称、
+            # 上用と下用が同じサイズ、同じ棚の別サイズ)は1回で取ってくるので、
+            # 距離は初めてその置き場に行くときだけ足す(VER4.8.61。以前は1件
+            # ごとに足していて二重になっていた)。運ぶぶんは1件ずつ足す
+            if nearest.shelf_name not in self.highlight:
+                total += angle_service.fat_dist_score(nearest.distance)
             self.highlight.add(nearest.shelf_name)
-            total += score
+            total += carry
             found += 1
 
         if not self.highlight:

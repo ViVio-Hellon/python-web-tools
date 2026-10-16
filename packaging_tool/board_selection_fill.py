@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from . import angle_service
 from .board_scoring import (FatigueEntry, LOWER_OVERHANG_Y, MAX_WIDTH_STRIPS,
                             PASS1_TOLERANCE, UPPER_WIDTH_TOLERANCE,
                             WIDTH_OVERSHOOT_LIMIT, get_best_orientation,
@@ -248,7 +249,8 @@ def _run_length_fill_loop(
             if fatigue_mode and fatigue_map is not None:
                 entry = fatigue_map.get(f"{b.width}x{b.length}")
                 if entry is not None:
-                    fat_score = entry.dist + entry.area
+                    # 1枚ぶんの運搬(距離 + 面積 + 手間)。補填板は切らない
+                    fat_score = entry.dist + entry.area + angle_service.FAT_SHEET_SCORE
 
             if f_short <= cur_gap:
                 if best is not None and best[0] > cur_gap:

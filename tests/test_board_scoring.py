@@ -180,8 +180,8 @@ class BuildFatigueMapTests(unittest.TestCase):
 
         boards = [board(500, 1000), board(500, 1000), board(600, 1200)]
         result = svc.build_fatigue_map(self.conn, boards, "HVC")
-        # VBA `BuildFatigueMap3` は正キーと反転キーの両方を登録する。
-        # 同じ板でも向きが変わればカットの有無が変わるので別エントリになる
+        # VBA `BuildFatigueMap3` は正キーと反転キーの両方を登録する
+        # (選定側はリストの並びのままのキーで引くため)
         self.assertEqual(set(result.keys()),
                          {"500x1000", "1000x500", "600x1200", "1200x600"})
         # 配置図にあるラベルが付いているサイズは距離スコアが付く
@@ -222,7 +222,8 @@ class SelectionFatigueMapsTests(unittest.TestCase):
         lower, upper = self.build()
         self.assertIsNotNone(lower)
         self.assertIsNotNone(upper)
-        # 基準丈が違えば丈カットの推定も変わる(パレット丈2000 / 製品丈1800)
+        # 基準丈が違えば丈カットの推定も変わる(パレット丈2000 / 製品丈1800)。
+        # 500x1000 はどちらも回して有効丈500: 2000 は割り切れ、1800 は端数が出る
         self.assertNotEqual(lower["500x1000"].length_cut,
                             upper["500x1000"].length_cut)
 
@@ -279,10 +280,27 @@ class EstimateCutFatigueTests(unittest.TestCase):
         width_cut, _ = svc.estimate_cut_fatigue(900, 800, 1000, 800, "上用")
         self.assertEqual(width_cut, 0.0)
 
+    def test_the_lower_overhang_is_not_a_width_cut(self):
+        """下用はパレット幅x1.2まで切らずに使う(選定・配置と同じ許容。VER4.8.61)。
+
+        以前は1mmでも超えれば全数カットと数え、近くて切らない板が負けていた
+        (パレット1100に 1105x1000 → 幅カット77.7x枚数)。
+        """
+        width_cut, _ = svc.estimate_cut_fatigue(1105, 1000, 1100, 2000, "下用")
+        self.assertEqual(width_cut, 0.0)
+        width_cut, _ = svc.estimate_cut_fatigue(1320, 1000, 1100, 2000, "下用")
+        self.assertEqual(width_cut, 0.0)                  # 1100x1.2 = 1320 まで
+        width_cut, _ = svc.estimate_cut_fatigue(1400, 1500, 1100, 2000, "下用")
+        self.assertGreater(width_cut, 0)                  # どちらの向きでも1320を超える
+
+    def test_the_upper_has_no_overhang(self):
+        width_cut, _ = svc.estimate_cut_fatigue(1105, 2000, 1100, 2000, "上用")
+        self.assertGreater(width_cut, 0)
+
     def test_a_length_that_does_not_divide_evenly_gets_a_length_cut(self):
         # 基準丈3000 を 有効丈800 で敷くと 4枚目に端数が出る → 丈カット
         _, length_cut = svc.estimate_cut_fatigue(900, 800, 1000, 3000, "上用")
-        self.assertGreater(length_cut, 0)
+        self.assertEqual(length_cut, svc.angle_service.fat_cut_score1(900))
 
     def test_a_length_that_divides_evenly_gets_no_length_cut(self):
         # 基準丈2400 は 有効丈800 でちょうど3枚 → 端数なし
@@ -301,7 +319,9 @@ class EstimateCutFatigueTests(unittest.TestCase):
 
 
 class TotalFatigueTests(unittest.TestCase):
-    """合算式 (VBA `CalcTotalFat3`): 距離x1 + 面積x枚数 + 幅Cx枚数 + 丈Cx1。"""
+    """合算式 (VBA `CalcTotalFat3`): 距離x1 + (面積+手間)x枚数 + 幅Cx枚数 + 丈Cx1。"""
+
+    SHEET = svc.angle_service.FAT_SHEET_SCORE
 
     def _map(self, **kw):
         base = {"dist": 1.0, "area": 2.0, "width_cut": 4.0, "length_cut": 8.0}
@@ -309,18 +329,35 @@ class TotalFatigueTests(unittest.TestCase):
         return {"k": svc.FatigueEntry(**base)}
 
     def test_the_cut_terms_are_part_of_the_total(self):
-        # 3枚: 1 + 2*3 + 4*3 + 8 = 27
-        self.assertEqual(svc.total_fatigue(self._map(), "k", 3), 27.0)
+        # 3枚: 1 + (2+手間)*3 + 4*3 + 8
+        self.assertEqual(svc.total_fatigue(self._map(), "k", 3), 27.0 + self.SHEET * 3)
 
-    def test_the_width_cut_scales_with_the_sheet_count(self):
+    def test_the_width_cut_and_the_handling_scale_with_the_sheet_count(self):
         one = svc.total_fatigue(self._map(), "k", 1)
         two = svc.total_fatigue(self._map(), "k", 2)
-        self.assertEqual(two - one, 2.0 + 4.0)   # 面積1枚分 + 幅カット1枚分
+        self.assertEqual(two - one, 2.0 + self.SHEET + 4.0)   # 面積・手間・幅カット 各1枚分
 
     def test_the_length_cut_is_counted_once_whatever_the_sheet_count(self):
         with_cut = svc.total_fatigue(self._map(length_cut=8.0), "k", 5)
         without = svc.total_fatigue(self._map(length_cut=0.0), "k", 5)
         self.assertEqual(with_cut - without, 8.0)
+
+    def test_a_single_piece_leaves_out_the_length_cut(self):
+        """1枚物は端数を埋めないので、丈カットの見込みを足さない(VER4.8.61)。"""
+        self.assertEqual(svc.total_fatigue(self._map(), "k", 1, length_cut=False),
+                         1.0 + 2.0 + self.SHEET + 4.0)
+
+    def test_the_sort_leaves_out_the_handling(self):
+        """並べ替えは手間を入れない(割合で掛けるので、同じだけ足すと差が薄まる)。"""
+        self.assertEqual(svc.total_fatigue(self._map(), "k", 3)
+                         - svc.total_fatigue(self._map(), "k", 3, handling=False),
+                         self.SHEET * 3)
+
+    def test_the_handling_makes_many_small_sheets_cost_more(self):
+        """面積が同じでも、枚数が多いほど手間のぶん重い(以前は同じ点だった)。"""
+        small = {"k": svc.FatigueEntry(dist=0.0, area=2.0, width_cut=0.0, length_cut=0.0)}
+        large = {"k": svc.FatigueEntry(dist=0.0, area=6.0, width_cut=0.0, length_cut=0.0)}
+        self.assertGreater(svc.total_fatigue(small, "k", 6), svc.total_fatigue(large, "k", 2))
 
 
 if __name__ == "__main__":

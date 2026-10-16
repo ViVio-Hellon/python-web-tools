@@ -45,24 +45,42 @@ class FatigueEntry:
     length_cut: float
 
 
+def width_limit(target_width: int, board_category: str) -> int:
+    """切らずに使える幅の上限(下用=パレット幅x1.2 / 上用=製品幅)。
+
+    選定(`get_best_orientation`)と配置(`PlacementContext`)が使う許容と同じ。
+    """
+    if board_category == "下用":
+        return int(target_width * LOWER_OVERHANG_Y)
+    return target_width
+
+
 def estimate_cut_fatigue(
     width: int, length: int, target_width: int, base_len_for_cut: int,
     board_category: str,
 ) -> tuple[float, float]:
     """この向きで置いたときに発生するカット疲労(幅1枚分, 丈1回分)。
 
-    VBA `AddFatigueEntry3` の後半の移植。
+    VBA `AddFatigueEntry3` の後半の移植。カットが要る組み合わせを最初から
+    不利に評価するための作りで、「カットするくらいなら遠くから運ぶ」という
+    現場ルールはここで効く。
 
-    カットが起きるかは**選定してみないと分からない**ように見えるが、
-    VBAは選定の前に「この寸法をこの向きで使うならカットが要るか」を
-    推定してマップに入れ、それを見て選定する。カットが要る組み合わせを
-    最初から不利に評価するための作りで、「カットするくらいなら遠くから
-    運ぶ」という現場ルールはここで効く。
-
-        幅カット: 有効幅が目標幅を超えるなら発生(全数カットなので1枚分を
-                  持ち、合算時に枚数を掛ける)。切断線の長さは有効丈
+        幅カット: 有効幅が**切らずに使える幅**(`width_limit`)を超えるなら
+                  発生(全数カットなので1枚分を持ち、合算時に枚数を掛ける)。
+                  切断線の長さは有効丈
         丈カット: 基準丈を有効丈で割り切れず、端数が出るなら発生
                   (最後の1枚だけなので常に1回分)。切断線の長さは有効幅
+
+    **丈カットは「基準丈を覆いきる」ための見込み。** 実際の選定は端数を補填板で
+    埋めることもあるが、補填板の枚数・運搬は疲労度に入っていないので、ここが
+    「端数を埋める手間」の代わりになっている。外すと、補填が要る板ほど安く
+    見えてしまう(実データで確かめた: パレット900x1800 で 900x900x2枚 より
+    750x1130 + 補填3枚 を選ぶようになった)。ただし**1枚物**は製品を1枚で覆う
+    板で端数を埋めないので、合算のときに外す(`total_fatigue(..., length_cut=False)`)。
+
+    【修正 VER4.8.61】以前は幅を、目標幅を1mmでも超えれば全数カットと数えて
+    いた。実際の下用はパレット幅x1.2まで切らずに使い、切断依頼にも出ない
+    (切断依頼は「カット前提」の板だけ)。近くて切らない板が不当に負けていた。
 
     `base_len_for_cut` は 下用=パレット丈 / 上用=製品丈(VBA踏襲)。
     """
@@ -70,7 +88,8 @@ def estimate_cut_fatigue(
     _rot, eff_w, eff_l = get_best_orientation(
         board, target_width, force_category=board_category)
 
-    width_cut = angle_service.fat_cut_score1(eff_l) if eff_w > target_width else 0.0
+    width_cut = (angle_service.fat_cut_score1(eff_l)
+                 if eff_w > width_limit(target_width, board_category) else 0.0)
 
     length_cut = 0.0
     if eff_l > 0 and base_len_for_cut > 0:
@@ -90,8 +109,9 @@ def build_fatigue_map(
     サイズ("WxL")ごとに、拠点からの最寄り棚距離(距離スコア)・面積スコア・
     幅カット(1枚分)・丈カット(1回分)を計算する。合算は `total_fatigue`。
 
-    VBA同様、**正キーと反転キーの両方**を登録する(同じ板でも向きが違えば
-    カットの有無が変わるので、向きごとに別のエントリになる)。
+    VBA同様、**正キーと反転キーの両方**を登録する(選定側はリストの並びの
+    ままのキーで引くため)。向きは `get_best_orientation` が両方試して決めるので、
+    中身は同じになる。
 
     `target_width` / `base_len_for_cut` を省略するとカットの推定はしない
     (距離と面積だけ)。棚検索の絞り込みには `board_type` を使う。
@@ -164,11 +184,16 @@ def build_selection_fatigue_maps(
 
 def total_fatigue(
     fatigue_map: Optional[dict[str, FatigueEntry]], key: str, count: int,
+    *, length_cut: bool = True, handling: bool = True,
 ) -> float:
     """VBA `CalcTotalFat3` の移植(統一式による合算)。
 
-        総疲労 = 距離x1 + 面積x枚数 + 幅カットx枚数 + 丈カットx1
+        総疲労 = 距離x1 + (面積 + 手間)x枚数 + 幅カットx枚数 + 丈カットx1
 
+    `count` は**選定がその板を採る枚数**。`length_cut=False` は1枚物
+    (製品を1枚で覆い、端数を埋めない)のとき ── 丈カットの見込みを足さない。
+    `handling=False` は手間を足さない(候補の並べ替えだけが使う。理由は
+    `sort_boards_by_target_width` の中)。
     マップに該当キーが無ければ0を返す(疲労度不明=罰則なしとして扱う)。
     """
     if fatigue_map is None:
@@ -177,7 +202,11 @@ def total_fatigue(
     if entry is None:
         return 0.0
     n = max(count, 1)
-    return entry.dist + entry.area * n + entry.width_cut * n + entry.length_cut
+    sheet = angle_service.FAT_SHEET_SCORE if handling else 0.0
+    total = entry.dist + (entry.area + sheet) * n + entry.width_cut * n
+    if length_cut:
+        total += entry.length_cut
+    return total
 
 
 def sort_boards_by_target_width(
@@ -242,10 +271,16 @@ def sort_boards_by_target_width(
 
             key = f"{board.width}x{board.length}"
             if fatigue_map is not None and key in fatigue_map:
+                # 並べ替えの目安は「基準丈を覆う枚数」(切り上げ)
                 expected_cnt = 1
                 if base_length > 0 and best_l > 0:
                     expected_cnt = max(1, -(-base_length // best_l))  # 切り上げ除算
-                fat_penalty = 100.0 / (100.0 + total_fatigue(fatigue_map, key, expected_cnt))
+                # **手間は入れない。** 並べ替えは「幅の合い方」に疲労度を割合で掛ける
+                # 作りなので、どの候補にも同じくらい足すと疲労度の差が薄まり、幅の
+                # 合い方だけで順番が決まってしまう(実データで確かめた: パレット
+                # 1100x1800 で 1000x1000x2枚 が 1030x1520 + 補填3枚 に変わった)。
+                # 手間は、決めるところ(1枚物・PASS1・カット前提)で足す
+                fat_penalty = 100.0 / (100.0 + total_fatigue(fatigue_map, key, expected_cnt, handling=False))
                 score *= fat_penalty
         else:
             score = -1.0

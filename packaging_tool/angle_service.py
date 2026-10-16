@@ -6,11 +6,14 @@ Public Function)の移植。ソースは実際のVBAコードを1行ずつ確認
 (优先順位・端数条件など、business-criticalなロジックのため要約からの
 再構成ではなく逐語訳している)。
 
-疲労度計算式(SSOT、元コメント引用):
+疲労度計算式(SSOT、元コメント引用に「手間」を足したもの):
     総疲労 = 距離スコア x1
            + 面積スコア x 枚数     (運搬は枚数分)
+           + 手間       x 枚数     (取り回し・テープ貼り。VER4.8.61〜)
            + 幅カット   x 枚数     (丈方向に並べるため全数カット)
            + 丈カット   x1         (丈オーバーは最後の1枚のみカット)
+
+考え方と例は `docs/疲労度の計算.md`。
 """
 from __future__ import annotations
 
@@ -47,6 +50,11 @@ FAT_MAX_DIST = 1000.0    # 距離スコア分母
 FAT_MAX_LEN = 3000       # 長さスコア分母
 FAT_SCORE_CAP = 50.0     # スコア上限
 FAT_DIST_DEFAULT = 25.0  # 距離不明時デフォルト
+# 1枚(アングルは1本)ごとの手間 ── 取り回し・テープ貼り(VER4.8.61〜)。
+# 面積だけで数えると、面積が同じなら「小さい板6枚」と「大きい板2枚」が同じ点に
+# なり、枚数に比例する手間が点に出なかった。**仮の値**: 中くらいの板
+# (1100x2000 の面積 12.2点)の4割ほど。現場の感覚に合わなければここだけ直す
+FAT_SHEET_SCORE = 5.0
 
 
 @dataclass
@@ -101,19 +109,37 @@ def fat_length_cut_score(cut_line_length: float) -> float:
 
 def fat_combine(d: float, a1: float, wc1: float, lc1: float, sheet_cnt: int) -> float:
     """統一式による合算。d=距離(1回分) a1=面積(1枚分) wc1=幅カット(1枚分) lc1=丈カット(1回分)。"""
-    return d + a1 * max(sheet_cnt, 1) + wc1 * max(sheet_cnt, 1) + lc1
+    n = max(sheet_cnt, 1)
+    return d + (a1 + FAT_SHEET_SCORE) * n + wc1 * n + lc1
+
+
+def fat_angle_length_score1(a_len: float) -> float:
+    """アングルの長さスコア(1本分・キャップ付)。ボードの面積スコアに当たる運搬の点。"""
+    return min((float(a_len) / FAT_MAX_LEN) * FAT_SCORE_CAP, FAT_SCORE_CAP)
+
+
+# アングルの切断線は断面(幅50mm)の1本。長さによらず一定
+ANGLE_CUT_LINE = 50
 
 
 def _agl_fat_score(a_len: int, cnt: int, need_cut: bool, cut_len: int, fat_map: Optional[Mapping[str, float]]) -> float:
-    """1種アングル × cnt本のスコア(VBA `AglFatScore`)。"""
+    """1種アングル × cnt本のスコア(VBA `AglFatScore`)。
+
+        距離x1 + (長さ + 手間) x 本数 + カット(1回)
+
+    `fat_map` の値は**距離スコアだけ**(`location_service.build_angle_fatigue_map`)。
+    以前はマップに「距離 + 長さ1本分」が入っていて、ここでさらに長さx本数を
+    足すため、長さが「本数+1回」入っていた(1本と2本の順位が逆転する)。
+    棚が分からないときの既定値 `FAT_DIST_DEFAULT` も距離だけなので、意味を揃えた。
+    """
     ds = FAT_DIST_DEFAULT
     if fat_map is not None and str(a_len) in fat_map:
         ds = float(fat_map[str(a_len)])
-    ls = min((a_len / 3000) * 50, 50)
+    ls = fat_angle_length_score1(a_len)
     cs = 0.0
     if need_cut and cut_len > 0:
-        cs = (50 / 3000) * CUT_FAT_MULT
-    return ds + ls * cnt + cs
+        cs = fat_cut_score1(ANGLE_CUT_LINE)
+    return ds + (ls + FAT_SHEET_SCORE) * cnt + cs
 
 
 def _agl_fat_score_asym(a1: int, a2: int, fat_map: Optional[Mapping[str, float]]) -> float:
@@ -171,8 +197,11 @@ def select_angles(
         best: Optional[AngleResult] = None
 
         # F1: 1本そのまま(製品丈以上 かつ パレット丈以下)
+        # 【修正 VER4.8.61】条件が `a * 2 >= product_len`(製品丈の半分以上)に
+        # なっていて、製品丈に足りない1本(製品丈2400に1300の1本)を選んでいた。
+        # 疲労度OFFの「1本」(Step1)・このコメントと同じく製品丈以上にする
         for a in u:
-            if a * 2 >= product_len and a <= pallet_len and (min_len == 0 or a >= min_len):
+            if a >= product_len and a <= pallet_len and (min_len == 0 or a >= min_len):
                 score = _agl_fat_score(a, 1, False, 0, fat_map)
                 if score < best_score:
                     best_score = score

@@ -85,7 +85,10 @@ def _select_lower_single_piece(
 
         fat = 0.0
         if fatigue_mode and fatigue_map is not None:
-            fat = total_fatigue(fatigue_map, f"{b.width}x{b.length}", 1)
+            # 1枚物はパレット丈に収まる1枚で製品を覆う(端数を埋めない)ので、丈カットの
+            # 見込みは足さない。【VER4.8.61】以前は「パレット丈 / 有効丈 が割り切れない」
+            # だけで丈カットが付き、近くて切らない1枚物が遠くの板に負けていた
+            fat = total_fatigue(fatigue_map, f"{b.width}x{b.length}", 1, length_cut=False)
 
         if not fatigue_mode:
             best = (b.width, b.length, eff_w, eff_l, fat)

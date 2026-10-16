@@ -26,9 +26,10 @@ class FatigueFormulaTests(unittest.TestCase):
         self.assertEqual(svc.fat_cut_score1(-5), 0.0)
 
     def test_fat_combine(self):
-        # d + a1*sheetCnt + wc1*sheetCnt + lc1
-        self.assertAlmostEqual(svc.fat_combine(10, 2, 3, 4, 5), 10 + 2 * 5 + 3 * 5 + 4)
-        self.assertAlmostEqual(svc.fat_combine(10, 2, 3, 4, 0), 10 + 2 * 1 + 3 * 1 + 4)  # sheetCnt<1は1に矯正
+        # d + (a1 + 手間)*sheetCnt + wc1*sheetCnt + lc1
+        h = svc.FAT_SHEET_SCORE
+        self.assertAlmostEqual(svc.fat_combine(10, 2, 3, 4, 5), 10 + (2 + h) * 5 + 3 * 5 + 4)
+        self.assertAlmostEqual(svc.fat_combine(10, 2, 3, 4, 0), 10 + (2 + h) * 1 + 3 * 1 + 4)  # sheetCnt<1は1に矯正
 
 
 class SelectAnglesTests(unittest.TestCase):
