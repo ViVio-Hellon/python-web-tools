@@ -1207,7 +1207,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             "show_all": self.show_all,
             "ex_only": self.ex_only,
             "is_ex_order": self.presenter.is_ex_order,
-            "is_1p1185_mode": self.presenter.mode_1p1185.is_1p1185,
+            # 真偽値として読める組。発火中は当たった条件の業界・パレット寸法で絞る(`reject_1p1185`)
+            "is_1p1185_mode": self.presenter.mode_1p1185,
         }
 
 

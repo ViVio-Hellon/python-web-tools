@@ -394,12 +394,16 @@ class SelectionPresenter:
         含む、製造板幅・製造板丈がそれぞれ1242〜1249。有効になった
         瞬間だけ選定ログに記録する(VBA `changed` 判定と同じ)。
         """
+        from .. import pallet_limit_rules
+
         was_on = self.mode_1p1185.is_1p1185
         self.mode_1p1185 = spk.check_1p1185_mode(
-            packaging_spec, customer_name, manufactured_width, manufactured_length)
+            packaging_spec, customer_name, manufactured_width, manufactured_length,
+            rules=pallet_limit_rules.load(self.conn))
         if self.mode_1p1185.is_1p1185 and not was_on:
             self.user_log.log(
-                f"[1P1185タイト限定モード] 有効 取引先={customer_name}", emphasis=True)
+                f"[{self.mode_1p1185.spec}モード パレット限定] 有効 取引先={customer_name}"
+                f"(条件 {self.mode_1p1185.rule})", emphasis=True)
 
     # ------------------------------------------------------------------
     # 3. 保護材 → アングルの要否 / 上下共用
@@ -650,7 +654,8 @@ class SelectionPresenter:
             return ModeBanner(BANNER_PROTEC, "【プロテックボードオーダー選択中】"
                               + ("(強制)" if self.protec.forced else ""))
         if self.mode_1p1185.is_1p1185:
-            return ModeBanner(BANNER_1P1185, "【1P1185モード タイトサイズ限定表示】")
+            m = self.mode_1p1185
+            return ModeBanner(BANNER_1P1185, f"【{m.spec}モード {m.pallet_text()} 限定表示】")
         if self.is_shared_board_mode:
             if self.is_ex_order:
                 return ModeBanner(
@@ -1942,7 +1947,7 @@ def list_rows(session: Any) -> list[Any]:
             pallet_length_text=session.direct_length,
             show_all=session.show_all,
             last_hosozai=session.presenter.last_hosozai,
-            is_1p1185_mode=session.presenter.mode_1p1185.is_1p1185,
+            is_1p1185_mode=session.presenter.mode_1p1185,
             is_ex_order=session.presenter.is_ex_order)
 
     return svc.list_pallet_sizes(

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from typing import Any
 
 from . import db
 from .logging_utils import get_logger
@@ -158,47 +159,66 @@ def protec_state(packaging_spec: str, *, thickness: float = 0, width: float = 0,
 
 @dataclass
 class Mode1P1185State:
-    """VBA `m_is1P1185Mode` の組。"""
+    """VBA `m_is1P1185Mode` の組。発火したら、当たった条件の行の **業界・パレット幅・丈** も持つ。
+
+    条件と決め打つパレットは表 `パレット限定条件`(`pallet_limit_rules`)。初期値は前の決め打ち
+    (1P1185・ﾅﾒｶﾜｱﾙﾐ・製造板幅/丈 1242〜1249 → タイト 1300×1300)。
+
+    **真偽値としても読める**(`bool(state)` = 発火しているか)── パレットの絞り込みへは
+    この組をそのまま渡す(`reject_1p1185`)。
+    """
 
     is_1p1185: bool = False
+    industry: str = IND_TIGHT
+    pallet_width: int = P1185_PAL_W
+    pallet_length: int = P1185_PAL_L
+    rule: str = ""
+    spec: str = HOSO_1P1185
+
+    def __bool__(self) -> bool:
+        return self.is_1p1185
+
+    def pallet_text(self) -> str:
+        """「タイト 1300×1300」。"""
+        return f"{self.industry + ' ' if self.industry else ''}{self.pallet_width}×{self.pallet_length}"
 
 
 def check_1p1185_mode(
     packaging_spec: str, customer_name: str,
-    manufactured_width: float, manufactured_length: float,
+    manufactured_width: float, manufactured_length: float, *, rules=None,
 ) -> Mode1P1185State:
     """VBA `CheckAndSet1P1185Mode` の移植(判定部分だけ)。
 
-    発動条件(AND):
-        包装仕様NO = 1P1185
-        取引先名称に "ﾅﾒｶﾜｱﾙﾐ" を含む
-        製造板幅 が 1242〜1249
-        製造板丈 が 1242〜1249
+    条件は表 `パレット限定条件` の行(`rules`。省略すると初期値 = 前の決め打ち)。
+    1行の中は「かつ」(包装仕様NO・取引先名称を含む・製造板幅・製造板丈)、行と行は「または」。
     """
-    spec = (packaging_spec or "").strip()
-    cond1 = spec.upper().replace(" ", "") == HOSO_1P1185
-    cond2 = TORI_1P1185 in (customer_name or "")
-    w = int(manufactured_width or 0)
-    l = int(manufactured_length or 0)
-    cond3 = P1185_W_MIN <= w <= P1185_W_MAX
-    cond4 = P1185_L_MIN <= l <= P1185_L_MAX
-    is_on = cond1 and cond2 and cond3 and cond4
-    log.debug("check_1p1185_mode: hosoNo=%s 取引先=%s 幅=%s 丈=%s "
-              "cond1=%s cond2=%s cond3=%s cond4=%s -> %s",
-              spec, customer_name, w, l, cond1, cond2, cond3, cond4, is_on)
-    return Mode1P1185State(is_1p1185=is_on)
+    from . import pallet_limit_rules
+
+    found = pallet_limit_rules.find(
+        rules if rules is not None else pallet_limit_rules.DEFAULT_RULES,
+        packaging_spec, customer_name, manufactured_width, manufactured_length)
+    state = (Mode1P1185State(is_1p1185=True, industry=found.industry,
+                             pallet_width=found.pallet_width, pallet_length=found.pallet_length,
+                             rule=found.describe(), spec=found.spec)
+             if found is not None else Mode1P1185State())
+    log.debug("check_1p1185_mode: hosoNo=%s 取引先=%s 幅=%s 丈=%s -> %s (%s)",
+              packaging_spec, customer_name, manufactured_width, manufactured_length,
+              state.is_1p1185, state.rule)
+    return state
 
 
-def reject_1p1185(is_1p1185_mode: bool, industry: str, width: int, length: int) -> bool:
+def reject_1p1185(mode: Any, industry: str, width: int, length: int) -> bool:
     """VBA `Reject1P1185` の移植。True ならこのレコードは載せない。
 
-    1P1185モードでは業界=タイト かつ 幅=1300・丈=1300 のみを通す。
+    発火中は、当たった条件の行の **業界(空なら見ない)・パレット幅・丈** のパレットだけを通す。
+    `mode` は `Mode1P1185State`(当たった行の寸法を使う)か真偽値(真なら初期値のタイト 1300×1300)。
     """
-    if not is_1p1185_mode:
+    if not mode:
         return False
-    if (industry or "").strip() != IND_TIGHT:
+    state = mode if isinstance(mode, Mode1P1185State) else Mode1P1185State(is_1p1185=True)
+    if state.industry and (industry or "").strip() != state.industry:
         return True
-    return width != P1185_PAL_W or length != P1185_PAL_L
+    return width != state.pallet_width or length != state.pallet_length
 
 
 # ==================================================================

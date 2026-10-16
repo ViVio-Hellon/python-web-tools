@@ -309,7 +309,7 @@ def search_pallet():
         last_hosozai=session.presenter.last_hosozai,
         manufactured_thickness=session.presenter.manufactured_thickness,
         user_log=session.presenter.user_log,
-        is_1p1185_mode=session.presenter.mode_1p1185.is_1p1185)
+        is_1p1185_mode=session.presenter.mode_1p1185)
 
     # 一覧は**失敗しても**この製品サイズの候補だけに絞る。
     # 検索前の一覧が残ると「検索したのに何も変わらない」ように見える

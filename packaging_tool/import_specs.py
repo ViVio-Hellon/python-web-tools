@@ -433,6 +433,20 @@ IMPORT_SPECS[PROTEC_RULE_TABLE] = [
     ("オーダー丈_最大", "オーダー丈_最大", to_real),
 ] + _THRESHOLD_TAIL
 
+# 1P1185モード(パレットを決め打つ)の発火条件と、決め打つパレット(`pallet_limit_rules`)。プロテック条件と同じ扱い
+from .pallet_limit_rules import TABLE as PALLET_LIMIT_TABLE  # noqa: E402 - 表の名前は持ち主の1か所
+IMPORT_SPECS[PALLET_LIMIT_TABLE] = [
+    ("包装仕様NO", "包装仕様NO", to_text),
+    ("取引先名称", "取引先名称", to_text),
+    ("製造板幅_最小", "製造板幅_最小", to_real),
+    ("製造板幅_最大", "製造板幅_最大", to_real),
+    ("製造板丈_最小", "製造板丈_最小", to_real),
+    ("製造板丈_最大", "製造板丈_最大", to_real),
+    ("業界", "業界", to_text),
+    ("パレット幅", "パレット幅", lambda v: to_int(v) or 0),
+    ("パレット丈", "パレット丈", lambda v: to_int(v) or 0),
+] + _THRESHOLD_TAIL
+
 for _threshold_table, _head in _THRESHOLD_HEAD.items():
     IMPORT_SPECS[_threshold_table] = _head + _THRESHOLD_TAIL
 
@@ -488,7 +502,8 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
                                                config.TBL_CUT_REQUEST,
                                                config.TBL_CUT_REQUEST_EVENT,
                                                config.TBL_STOCK_RESERVE,
-                                               PROTEC_RULE_TABLE})
+                                               PROTEC_RULE_TABLE,
+                                               PALLET_LIMIT_TABLE})
                                    | frozenset(THRESHOLD_TABLES))
 
 # **取り込み元に無くても知らせない列**(表 → 取り込み元の列名)。

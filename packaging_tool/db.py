@@ -185,10 +185,11 @@ def _seed_thresholds(conn: sqlite3.Connection) -> None:
     入れるのは空のときだけなので、資材課がマスタ管理画面で直した値を
     起動のたびに書き戻すことはありません(`pallet_threshold.seed`)。
     """
-    from . import pallet_threshold, protec_rules
+    from . import pallet_limit_rules, pallet_threshold, protec_rules
     pallet_threshold.seed(conn)
-    # プロテック条件も同じ(空なら初期値。直した値は書き戻さない)
+    # プロテック条件・パレット限定条件も同じ(空なら初期値。直した値は書き戻さない)
     protec_rules.seed(conn)
+    pallet_limit_rules.seed(conn)
 
 
 def _migrate_before_schema(conn: sqlite3.Connection) -> None:

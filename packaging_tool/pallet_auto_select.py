@@ -129,7 +129,9 @@ def auto_select_pallet(
         # 1P1185モード: 業界=タイト かつ 1300x1300 のみが探索対象になる。
         # 特定業界/一般/全面のパスは自然に候補ゼロになるので、VBAの
         # パス番号ジャンプ(9〜12,17〜20のみ実行)を再現する必要はない
-        ulog.log("【1P1185モード】業界=タイト・1300x1300限定で検索します", emphasis=True)
+        target = (is_1p1185_mode if isinstance(is_1p1185_mode, spk.Mode1P1185State)
+                  else spk.Mode1P1185State(is_1p1185=True))
+        ulog.log(f"【{target.spec}モード】{target.pallet_text()} 限定で検索します", emphasis=True)
 
     # 探索に入る前に落ちている行を先に知らせる(「なんで検索に乗らないの?」対策)。
     # ここはVBAには無い追加ログ。
