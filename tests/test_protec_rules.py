@@ -367,3 +367,39 @@ class ReflectTests(unittest.TestCase):
         self.assertFalse(self.on("1P7777", conn=other))
         data_sync.import_master(other, self.src)
         self.assertTrue(self.on("1P7777", conn=other))
+
+
+class AutoCreateOnImportTests(unittest.TestCase):
+    """取り込みのとき、梱包資材マスタに発火条件の表が無ければ初期値入りで作る(現場の声:「なければつくる」)。"""
+
+    def setUp(self) -> None:
+        from packaging_tool import config
+        self.dir = Path(tempfile.mkdtemp(prefix="autocreate_"))
+        self.src = self.dir / config.MATERIAL_DB_NAME
+        sqlite3.connect(self.src).execute("CREATE TABLE PalletMaster (管理番号 INTEGER)").connection.close()
+
+    def counts(self) -> dict:
+        from packaging_tool import pallet_limit_rules
+        conn = sqlite3.connect(self.src)
+        try:
+            names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            return {t: (conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] if t in names else None)
+                    for t in (TABLE, pallet_limit_rules.TABLE)}
+        finally:
+            conn.close()
+
+    def test_無ければ作り_あれば触らない(self) -> None:
+        from packaging_tool import data_sync, pallet_limit_rules
+        conn = make_conn()
+        got = data_sync.import_master(conn, self.src)
+        self.assertEqual(self.counts(), {TABLE: len(protec_rules.SEED),
+                                         pallet_limit_rules.TABLE: len(pallet_limit_rules.SEED)})
+        self.assertTrue(any("作りました" in n for n in got.notes), got.notes)
+        src = sqlite3.connect(self.src)                       # 誰かが直した
+        src.execute(f'DELETE FROM "{TABLE}" WHERE 包装仕様NO = ?', ("1P1211",))
+        src.commit()
+        src.close()
+        got = data_sync.import_master(conn, self.src)
+        self.assertEqual(self.counts()[TABLE], len(protec_rules.SEED) - 1)   # 作り直さない・足さない
+        self.assertFalse(any("作りました" in n for n in got.notes))
+        self.assertFalse(spk.protec_state("1P1211", rules=protec_rules.load(conn)).is_protec)

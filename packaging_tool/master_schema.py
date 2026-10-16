@@ -156,6 +156,48 @@ def create_table(conn: sqlite3.Connection, table: str, *,
     return Result(True, made + _follow(conn, found, table))
 
 
+# **取り込みのとき、取り込み元に無ければ作る表。** 発火条件の表(このツールが足した表)で、
+# 現場の声:「プロテック条件・パレット限定条件は梱包資材マスタに入っているのか(なければつくる)」。
+# 無いあいだも手元の初期値で動くが、マスタ管理で直す前に誰かが「取り込み元に作る」を押す必要があった。
+# 作るのは初期値入りの表だけ(中身は前の決め打ちと同じ)なので、権限の確認はしない
+AUTO_CREATE_TABLES = (import_specs.PROTEC_RULE_TABLE, import_specs.PALLET_LIMIT_TABLE)
+
+
+def ensure_rule_tables(conn: sqlite3.Connection, path: Optional[Path]) -> list[str]:
+    """取り込み元(梱包資材マスタ)に発火条件の表が無ければ、初期値入りで作る。言うことの一覧を返す。
+
+    ほかの端末が同時に作ったとき(「もうある」)は黙って通す。書けない(読み取り専用など)ときは
+    一言だけ返す ── 手元の初期値で動くので、取り込みは止めない。
+    """
+    if path is None:
+        return []
+    try:
+        present = set(source_db.list_tables(path))
+    except source_db.SourceError as exc:
+        log.info("取り込み元の表を数えられません(発火条件の表は作りません): %s", exc)
+        return []
+    if not present:
+        return []                                 # 読めない・空のファイル。取り込み側が言う
+    notes: list[str] = []
+    for table in AUTO_CREATE_TABLES:
+        if table in present:
+            continue
+        try:
+            ddl = _ddl_for(conn, table)
+            with source_db.connect(path) as src:
+                if table in src.table_names():
+                    continue
+                src.execute(ddl)
+                seeded = _seed_source(src, table)
+        except (source_db.SourceError, ValueError, sqlite3.Error) as exc:
+            log.warning("取り込み元に %s を作れませんでした: %s", table, exc)
+            notes.append(f"{table} を取り込み元に作れませんでした({exc})。手元の初期値で動きます")
+            continue
+        log.info("取り込み元に %s を作りました(初期値%s件): %s", table, seeded, path)
+        notes.append(f"梱包資材マスタに {table} が無かったので作りました(初期値{seeded}件)")
+    return notes
+
+
 def _seed_source(src: source_db.SourceConnection, table: str) -> int:
     """作ったばかりの表に初期値を入れる。**入れる表だけ入れる。**
 

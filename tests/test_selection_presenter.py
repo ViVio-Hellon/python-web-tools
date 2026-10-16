@@ -213,10 +213,12 @@ class ProtecTests(PresenterTestCase):
         self.assertTrue(self.p.protec.is_1p1216)
         self.assertIn("-10mm", self.logged())
 
-    def test_他のプロテックは80mm(self) -> None:
+    def test_他のプロテックも10mm(self) -> None:
+        """VER4.8.59 から全部 -10mm(それまでは 1P1216 以外 -80mm)。"""
         self.p.check_and_set_protec_mode("1P1125", order_size=(6.0, 1000, 2000))
         self.assertFalse(self.p.protec.is_1p1216)
-        self.assertIn("-80mm", self.logged())
+        self.assertIn("-10mm", self.logged())
+        self.assertNotIn("-80mm", self.logged())
 
     def test_抜けると既定のボード種別に戻る(self) -> None:
         self.p.check_and_set_protec_mode("1P1216")

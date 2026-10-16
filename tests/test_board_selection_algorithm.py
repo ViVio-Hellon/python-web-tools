@@ -845,11 +845,11 @@ class DecideProtecOrientationTests(unittest.TestCase):
     def test_width_cut_uses_product_width_minus_tolerance(self):
         """カットするなら、仕上がり幅は「製品幅」ではなく
 
-        「製品幅-許容」まで削る(通常は-80mm)。
+        「製品幅-許容」まで削る(VER4.8.59 から全部 -10mm。それまでは 1P1216 以外 -80mm)。
         """
         r = alg.decide_protec_orientation(1100, 1800, 900, is_1p1216=False)
         self.assertTrue(r.need_cut)
-        self.assertEqual(r.cut_eff_width, 820)  # 900 - 80
+        self.assertEqual(r.cut_eff_width, 890)  # 900 - 10
 
     def test_1p1216_uses_10mm_tolerance(self):
         r = alg.decide_protec_orientation(1100, 1800, 900, is_1p1216=True)
@@ -873,7 +873,7 @@ class DecideProtecOrientationTests(unittest.TestCase):
         """
         r = alg.decide_protec_orientation(1100, 2000, 900, is_1p1216=False)
         self.assertEqual(r.eff_width_before_cut, 1100)  # カット前の実効幅
-        self.assertEqual(r.cut_eff_width, 820)           # カット後の仕上がり幅
+        self.assertEqual(r.cut_eff_width, 890)           # カット後の仕上がり幅(900-10。VER4.8.59〜)
 
     def test_rotates_when_that_orientation_is_closer(self):
         # 600x1000: 回転する(幅1000, +100mm)方が、回転しない(幅600, -300mm)
@@ -895,16 +895,16 @@ class DecideProtecOrientationTests(unittest.TestCase):
         要る)」が「余裕を持って不足(カット不要)」より僅差で近い
         というだけでカットが要る側を選んでしまうことがあった)。
 
-        920x850(product_width=900, tol=80, min_w=820):
-            向き1(回転なし): 幅920(超過20、カット要、距離20)
-            向き2(回転あり): 幅850(不足50、カット不要、距離50)
-        距離だけなら向き1(20<50)が勝つが、カット不要な向き2を優先する。
+        903x892(product_width=900, tol=10, min_w=890。VER4.8.59 から許容は全部10mm):
+            向き1(回転なし): 幅903(超過3、カット要、距離3)
+            向き2(回転あり): 幅892(不足8、カット不要、距離8)
+        距離だけなら向き1(3<8)が勝つが、カット不要な向き2を優先する。
         """
-        r = alg.decide_protec_orientation(920, 850, 900, is_1p1216=False)
+        r = alg.decide_protec_orientation(903, 892, 900, is_1p1216=False)
         self.assertFalse(r.need_cut)
         self.assertTrue(r.is_rotated)
-        self.assertEqual(r.cut_eff_width, 850)
-        self.assertEqual(r.eff_length, 920)
+        self.assertEqual(r.cut_eff_width, 892)
+        self.assertEqual(r.eff_length, 903)
 
     def test_picks_closest_among_cut_candidates_when_no_no_cut_option(self):
         # 両方とも超過(カット要)しかない場合は、従来どおり最も近い方を選ぶ
@@ -1373,26 +1373,26 @@ class SelectUpperBoardsTests(unittest.TestCase):
         向き(幅600。-300mmで大きく不足)より製品幅に近いので、
         1000の向きが採用され、プロテックとして成立する。
         カット後の仕上がり幅は「製品幅そのもの」ではなく
-        「製品幅-許容」(通常80mm)まで削る: 900-80=820。
+        「製品幅-許容」(VER4.8.59 から全部10mm)まで削る: 900-10=890。
         """
         r = alg.select_upper_boards(
             self.lower, [board(880, 1900)], self.palette, self.product, is_protec_mode=True,
         )
         self.assertEqual(r.mode, "プロテック")
         self.assertTrue(r.protec_result.need_cut)
-        self.assertEqual(r.protec_result.cut_eff_width, 820)
+        self.assertEqual(r.protec_result.cut_eff_width, 890)
 
     def test_protec_mode_applies_when_lower_width_fits(self):
-        lower = [SelectedBoard(width=880, length=600, count=2, tag=alg.TAG_MAIN)]
-        # 880 >= 900-80=820 なのでプロテックモード成立。
+        lower = [SelectedBoard(width=895, length=600, count=2, tag=alg.TAG_MAIN)]
+        # 895 >= 900-10=890 なのでプロテックモード成立(VER4.8.59 から許容は全部10mm)。
         # 丈カウントは上用専用に製品丈基準で決め直す(下用の`count`を
         # そのまま引き継がない): 製品丈1900 // 600 = 3枚、残り100mmは
         # 閾値ちょうどなので切り捨てて3枚のまま
         r = alg.select_upper_boards(
-            lower, [board(880, 1900)], self.palette, self.product, is_protec_mode=True,
+            lower, [board(895, 1900)], self.palette, self.product, is_protec_mode=True,
         )
         self.assertEqual(r.mode, "プロテック")
-        self.assertEqual((r.boards[0].width, r.boards[0].count), (880, 3))
+        self.assertEqual((r.boards[0].width, r.boards[0].count), (895, 3))
         self.assertFalse(r.protec_result.need_length_cut)
 
     def test_protec_1p1216_uses_tighter_tolerance(self):

@@ -36,6 +36,7 @@ from .. import (
     material_service,
     special_packaging as spk,
 )
+from ..board_selection_protec import PROTEC_TOLERANCE
 from ..logging_utils import get_logger
 from ..user_log import UserLog
 
@@ -361,7 +362,7 @@ class SelectionPresenter:
             self.user_log.log(
                 f"[プロテックモード] 有効 包装仕様NO={packaging_spec or '(なし)'}({why})"
                 f" (上用は下用と同サイズ・許容"
-                f"-{10 if self.protec.is_1p1216 else 80}mm)", emphasis=True)
+                f"-{PROTEC_TOLERANCE}mm)", emphasis=True)
         return result
 
     def toggle_force_protec(self, *, available_board_types: Optional[list[str]] = None,
@@ -651,8 +652,12 @@ class SelectionPresenter:
                 BANNER_1P0113,
                 f"【{spk.HOSOSIYO_1P0113} 裸梱包モード】角材+松板で組みます")
         if self.protec.is_protec:
+            # パレット限定(1P1185モード)も立っていれば**一緒に言う** ── プロテックの表示に隠れると、
+            # パレットが1種類に絞られている理由が画面から読めない(2つの表は別々に当たる)
+            limit = (f"【{self.mode_1p1185.spec}モード {self.mode_1p1185.pallet_text()} 限定表示】"
+                     if self.mode_1p1185.is_1p1185 else "")
             return ModeBanner(BANNER_PROTEC, "【プロテックボードオーダー選択中】"
-                              + ("(強制)" if self.protec.forced else ""))
+                              + ("(強制)" if self.protec.forced else "") + limit)
         if self.mode_1p1185.is_1p1185:
             m = self.mode_1p1185
             return ModeBanner(BANNER_1P1185, f"【{m.spec}モード {m.pallet_text()} 限定表示】")

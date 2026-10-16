@@ -73,9 +73,9 @@ UPPER_MAIN_LENGTH_SLACK = 5
 # `LENGTH_FILL_BOARD_W`、モジュール冒頭で定義)。
 
 # プロテックの上用/下用が製品幅より小さくてよい許容量(mm)。
-# 1P1216 のみ精度の都合で厳しめの10mm(本来は-20mmだが切断精度を
-# 考慮して厳しめにする)、それ以外は80mm(VBA `DecideProtecOrientation`
-# の判定基準)。カットが必要なときの仕上がり幅(「製品幅-この許容」)
+# VER4.8.59 からプロテックは全部 10mm(上下共用。`board_selection_protec.PROTEC_TOLERANCE`)。
+# それまでは 1P1216 だけ 10mm(本来は-20mmだが切断精度を考慮して厳しめ)、それ以外は 80mm
+# (VBA `DecideProtecOrientation` の判定基準)だった。カットが必要なときの仕上がり幅(「製品幅-この許容」)
 
 
 

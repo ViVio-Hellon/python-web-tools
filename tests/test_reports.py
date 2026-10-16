@@ -312,11 +312,12 @@ class ProtecCutSizeTests(unittest.TestCase):
         self.assertTrue(out.size_width_only.startswith("1090x"))
         self.assertEqual(out.count_width_only, 4, "上下2セット分")
 
-    def test_other_protec_uses_80mm(self):
+    def test_other_protec_also_uses_10mm(self):
+        """VER4.8.59 からプロテックは全部 -10mm(それまでは 1P1216 以外 -80mm で 1020x だった)。"""
         pr = alg.decide_protec_orientation(1250, 1250, 1100, is_1p1216=False)
         pr.count = 2
         out = reports.protec_cut_size_info(pr)
-        self.assertTrue(out.size_width_only.startswith("1020x"))
+        self.assertTrue(out.size_width_only.startswith("1090x"))
 
     def test_no_cut_needed_when_width_fits(self):
         """有効幅が製品幅以内なら幅カット自体が発生しない。"""

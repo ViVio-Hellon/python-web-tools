@@ -221,22 +221,22 @@ class TryPlaceInsidePaletteProtecModeTests(unittest.TestCase):
     """
 
     def test_only_normal_orientation_within_tolerance_is_forced(self):
-        # 幅950は許容内(920〜1000)、丈1100は製品幅超過で許容外。
-        # 距離だけなら丈1100側(距離50)が幅950側(距離200)より近いが、
-        # プロテックルールにより許容内の向き(幅950)が強制される。
+        # 幅995は許容内(990〜1000。VER4.8.59 から許容は全部10mm)、丈1100は製品幅超過で許容外。
+        # 距離だけなら丈1100側(距離50)が幅995側(距離155)より近いが、
+        # プロテックルールにより許容内の向き(幅995)が強制される。
         ctx = make_ctx(pal_w=1150, pal_l=2650, prod_w=1000)
         ctx.is_protec_mode = True
-        self.assertTrue(pl.try_place_inside_palette(ctx, model(950, 1100, LOWER)))
-        self.assertEqual(ctx.placed[0].width, 950)
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(995, 1100, LOWER)))
+        self.assertEqual(ctx.placed[0].width, 995)
 
     def test_only_rotated_orientation_within_tolerance_is_forced(self):
-        # 幅850は許容外(920未満)、丈950は許容内 → 回転が強制される。
-        # target(パレット幅850)への距離だけなら幅850側(距離0)が丈950側
-        # (距離100)より近く、距離基準の従来ロジックなら誤って幅850を選ぶ。
+        # 幅850は許容外(990未満)、丈995は許容内 → 回転が強制される。
+        # target(パレット幅850)への距離だけなら幅850側(距離0)が丈995側
+        # (距離145)より近く、距離基準の従来ロジックなら誤って幅850を選ぶ。
         ctx = make_ctx(pal_w=850, pal_l=2650, prod_w=1000)
         ctx.is_protec_mode = True
-        self.assertTrue(pl.try_place_inside_palette(ctx, model(850, 950, LOWER)))
-        self.assertEqual(ctx.placed[0].width, 950)
+        self.assertTrue(pl.try_place_inside_palette(ctx, model(850, 995, LOWER)))
+        self.assertEqual(ctx.placed[0].width, 995)
 
     def test_neither_orientation_within_tolerance_falls_back_to_distance(self):
         # どちらも許容外(警告ログを出しつつ従来の距離比較で続行)
@@ -277,14 +277,14 @@ class TryPlaceInsidePaletteProtecModeTests(unittest.TestCase):
 
 class AutoPlaceBoardsProtecModeTests(unittest.TestCase):
     def test_protec_flags_reach_placement_context(self):
-        lower = [SelectedBoard(950, 1100, 1, "")]
+        lower = [SelectedBoard(995, 1100, 1, "")]
         ctx = pl.auto_place_boards(lower, [], make_palette(1150, 2650),
                                    ProductSize(width=1000, length=2000),
                                    is_protec_mode=True, is_1p1216=False)
         self.assertTrue(ctx.is_protec_mode)
         self.assertFalse(ctx.is_1p1216)
-        # プロテックルール(-80mm許容)で幅950(許容内)側が強制される
-        self.assertEqual(ctx.placed[0].width, 950)
+        # プロテックルール(-10mm許容。VER4.8.59〜)で幅995(許容内)側が強制される
+        self.assertEqual(ctx.placed[0].width, 995)
 
     def test_defaults_to_normal_mode(self):
         ctx = pl.auto_place_boards([], [], make_palette(1150, 2650),

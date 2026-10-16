@@ -159,3 +159,44 @@ class PresenterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from tests.test_web_selection import SelectionWebTestCase, insert_pallet  # noqa: E402
+
+
+class CombinedWebTests(SelectionWebTestCase):
+    """プロテック条件 と パレット限定条件 の両方に当たるロット(現場の質問の例)。
+
+    2つの表は**別々に**当たる: プロテックは SIKALOT の**オーダー**厚・幅・丈、パレット限定は
+    取引先・**製造**板幅・丈 を見る。両方当たれば、プロテック(ボード)かつ パレットはその寸法だけ。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from app.routes import lot as lot_routes
+        from tests.test_lot_service import insert_hiki, insert_lot, insert_odr
+        original = lot_routes.get_db
+        lot_routes.get_db = lambda: self.conn
+        self.addCleanup(lambda: setattr(lot_routes, "get_db", original))
+        for w, l in ((1100, 2500), (1200, 2600)):
+            insert_pallet(self.conn, width=w, length=l, industry="タイト", w_min=900, w_max=w,
+                          l_min=2000, l_max=l)
+        self.conn.execute(f'INSERT INTO "{TABLE}" (包装仕様NO, 製造板幅_最小, 製造板幅_最大,'
+                          ' 製造板丈_最小, 製造板丈_最大, パレット幅, パレット丈) VALUES (?,?,?,?,?,?,?)',
+                          ("1P1255", 1080, 1080, 2340, 2340, 1100, 2500))
+        self.conn.commit()
+        insert_lot(self.conn, **{"オーダー板厚": 12.0, "オーダー板幅": 1075.0, "オーダー板丈": 2332.0,
+                                 "製造板幅": 1080.0, "製造板丈": 2340.0})
+        insert_hiki(self.conn, order_no="A100", qty=22.0, no="00000001")
+        insert_odr(self.conn, order_no="A100", 包装仕様NO="1P1255")
+        self.client.get("/api/lot/1234567", headers=self.auth())
+
+    def test_両方当たればプロテックかつパレットはその寸法だけ(self) -> None:
+        presenter = self.session().presenter
+        self.assertTrue(presenter.protec.is_protec)                     # オーダー 12 / 1075 / 2332
+        self.assertTrue(presenter.mode_1p1185)                          # 製造 1080 / 2340
+        state = self.get()
+        self.assertEqual(state["banner"]["text"],
+                         "【プロテックボードオーダー選択中】【1P1255モード 1100×2500 限定表示】")
+        rows = self.post("/api/selection/pallet/list", {})["rows"]
+        self.assertEqual({(r["width"], r["length"]) for r in rows}, {(1100, 2500)})

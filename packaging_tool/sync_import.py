@@ -370,6 +370,10 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
         return result
 
     log.info("マスタ取り込み開始: %s", path)
+    # 発火条件の表(プロテック条件・パレット限定条件)が取り込み元に無ければ、初期値入りで作る
+    # (`master_schema.ensure_rule_tables`)。作れなくても取り込みは続ける(手元の初期値で動く)
+    from . import master_schema
+    created_notes = master_schema.ensure_rule_tables(conn, path)
     apart = import_specs.KANBAN_TABLES | frozenset(import_specs.THRESHOLD_TABLES)
     specs = {t: s for t, s in import_specs.IMPORT_SPECS.items()
              if t not in apart}
@@ -399,6 +403,7 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
     split_pct = start_pct + span * len(specs) // total_tables
     split2_pct = split_pct + span * len(kanban_specs) // total_tables
 
+    result.notes.extend(created_notes)
     result = import_tables(
         conn, path, specs,
         required=import_specs.REQUIRED_KEY_COLUMNS,

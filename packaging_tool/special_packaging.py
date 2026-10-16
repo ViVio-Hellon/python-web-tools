@@ -91,7 +91,7 @@ _ERROR_INFOS = (INFO_NOT_FOUND, INFO_DB_ERROR, "テーブル名エラー")
 # VBA は納入先「ｶ)ﾏﾂｼﾀｼﾖｳﾃﾝ」判定も持っていたが `cond1 = False` で
 # 明示的に廃止済み。包装仕様NOとオーダー寸法で判定する(条件は表 `プロテック条件`。
 # 以前の決め打ち 1P1216 / 1P1125 / 1P1211 は表の初期値に入れてある ── `protec_rules.SEED`)
-PROTEC_SPEC_1P1216 = "1P1216"   # ｺｰﾐ金属。上用の幅許容が -10mm になる(ほかは -80mm)
+PROTEC_SPEC_1P1216 = "1P1216"   # ｺｰﾐ金属。VER4.8.59 まではここだけ許容 -10mm(ほかは -80mm)。いまは全部 -10mm
 
 PROTEC_BOARD_TYPE = "プロテックボード"
 DEFAULT_BOARD_TYPE = "ハードボード"
