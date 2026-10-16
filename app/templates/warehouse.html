@@ -40,6 +40,9 @@
         </div>
         {% endfor %}
       </div>
+      {# 同じロットで、もう発注しているとき(ほかの端末の分も数える)。**警告であって止めない** ──
+         追加の注文もある(現場の声)。言葉はサーバが決める(`presenters/warehouse.same_lot_note`) #}
+      <p class="status status--warn samelot" id="sameLotWarn" hidden></p>
       {# 資材選択の「倉庫送信」から来た下書き。**まだ登録していない**。
          1P0113 は角材と松板の2行になるので、1件ずつ確認して送る #}
       {% if drafts %}
@@ -278,7 +281,7 @@
     <div class="modal__title"><h2 id="askTitle">—</h2></div>
   </header>
   <div class="pad">
-    {# 先に言っておくこと(二重送信の確認など)。確認・取り消しでは使わない #}
+    {# 先に言っておくこと(同じロットの確認など)。確認・取り消しでは使わない #}
     <p class="status status--warn" id="askLead" hidden></p>
     <dl class="fields fields--order" id="askFields"></dl>
     <p class="why" id="askWhy"></p>

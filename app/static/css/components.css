@@ -233,6 +233,8 @@ a.btn { text-decoration: none; }
 }
 .status--ng { background: var(--warn-bg); color: var(--warn-fg); border-left-color: var(--state-error); }
 .status--ok { background: var(--ok-bg);   color: var(--state-ok); border-left-color: var(--state-ok); }
+/* 倉庫連携: 同じロットで、もう発注している(警告。止めはしない)。`status--warn` には色が無いので、ここだけ付ける */
+.samelot { background: var(--warn-bg); color: var(--state-warn); border-left-color: var(--state-warn); margin-top: 8px; }
 
 /* ================================================================
    入力

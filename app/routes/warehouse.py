@@ -322,7 +322,8 @@ def send():
     起こすことがあるため。
 
     **同じロットをもう送ってあれば、続けるかを聞く**(VBA `ConfirmNotAlreadySent`)。
-    `confirm_duplicate` が無ければ 409 と、送信済みの一覧を返す。
+    `confirm_duplicate` が無ければ 409 と、送信済みの一覧を返す。警告であって止めはしない
+    (追加の注文もある)。ほかの端末の発注も数えるよう、確かめる前に共有から取り込み直す。
     """
     body = request.get_json(silent=True) or {}
     raw_rows = body.get("rows")
@@ -364,14 +365,19 @@ def send():
             "message": f"コメントは{order_comments.MAX_LENGTH}文字までです(いま{len(note)}文字)。"}}), 400
 
     conn = get_db()
+    # **送る直前に、共有で変わっていれば取り込み直す(1回だけ)。** ほかの端末が出した発注
+    # (同じロットの確かめ)・使った在庫(「在庫分を引く」の確かめ)は、取り込むまで手元に無い
+    _refresh_before("送る前の確かめ", conn)
     if not body.get("confirm_duplicate"):
-        lot_no = orders[0]["lot_no"]
-        sent = svc.already_sent(conn, lot_no)
-        if sent:
-            log.info("同じロットの送信済みがあるので確かめます: LotNo=%s %s件", lot_no, len(sent))
-            return jsonify({"error": {"code": "already_sent",
-                                      "message": f"このロット({lot_no})は、すでに倉庫へ送信されています。"},
-                            "ask": presenter.already_sent_ask(lot_no, sent)}), 409
+        # 同じロットで発注していれば訊く(現場の声:「ロットNoが重複していたら、同じロットで
+        # 発注していると警告を。追加注文もあるので、あくまで警告でいい」)
+        for lot_no in dict.fromkeys(o["lot_no"] for o in orders):
+            sent = svc.already_sent(conn, lot_no)
+            if sent:
+                log.info("同じロットの送信済みがあるので確かめます: LotNo=%s %s件", lot_no, len(sent))
+                return jsonify({"error": {"code": "already_sent",
+                                          "message": presenter.same_lot_text(lot_no, sent)},
+                                "ask": presenter.already_sent_ask(lot_no, sent)}), 409
 
     # **オーダー。** 下書きなら、含めたオーダー(画面のチェック)と納入先をサーバで決め直す
     if body.get("from_draft"):
@@ -501,10 +507,7 @@ def _stock_to_use(conn, orders: list[dict], use: int, *, from_draft: bool):
     if not from_draft or len(orders) != 1 or orders[0].get("is_ex_order") or size is None:
         return None, (jsonify({"error": {"code": "bad_stock", "field": "hatchu_suu",
                                          "message": STOCK_ONLY_DRAFT}}), 400)
-    try:
-        data_sync.refresh_orders(conn, only_if_changed=True)
-    except Exception:                               # noqa: BLE001 - 手元の在庫で確かめる
-        log.exception("在庫を確かめる前の取り込み直しに失敗(手元の在庫で確かめます)")
+    # 共有の最新は `send` が取り込み直してある(`_refresh_before`)
     found = stock_reserve.offer(conn, *size)
     if found.total < use:
         qty = presenter._qty(orders[0]["hatchu_suu"])
@@ -518,6 +521,31 @@ def _stock_to_use(conn, orders: list[dict], use: int, *, from_draft: bool):
             "before": qty + use,
             "stock": presenter.stock_view(conn, drafts[0], qty + use)}), 409)
     return {"size": size, "takes": stock_reserve.plan(found, use)}, None
+
+
+def _refresh_before(label: str, conn) -> None:
+    """共有で変わっていれば取り込み直す。失敗しても止めない(手元で確かめて続ける)。"""
+    try:
+        data_sync.refresh_orders(conn, only_if_changed=True)
+    except Exception:                               # noqa: BLE001 - 送る操作は止めない
+        log.exception("%s の前の取り込み直しに失敗(手元の発注で確かめます)", label)
+
+
+@field_only.get("/api/warehouse/same-lot")
+def same_lot():
+    """このLotNoで、もう発注しているか(取り消していないもの)。**送る前から**欄の下に一言出す。
+
+    止めはしない ── 追加の注文もある(現場の声)。送るときにも同じ一覧を見せて訊く(`send`)。
+    ほかの端末が出した分も数えるよう、共有で変わっていれば取り込み直してから数える。
+    """
+    lot_no = (request.args.get("lot_no") or "").strip()
+    if not lot_no:
+        return jsonify({"lot_no": "", "count": 0, "message": ""})
+    conn = get_db()
+    _refresh_before("同じロットの一言", conn)
+    sent = svc.already_sent(conn, lot_no)
+    return jsonify({"lot_no": lot_no, "count": len(sent),
+                    "message": presenter.same_lot_note(lot_no, sent)})
 
 
 @field_only.post("/api/warehouse/stock/plan")

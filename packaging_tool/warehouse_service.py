@@ -9,7 +9,7 @@ VBA `frmSendConfirm`(倉庫に発注データを送る確認ダイアログ)と
     ------------------------------------------------------------
     SendWarehouseRow                       -> create_order
     WriteWarehouseRows(全行を1回で登録)      -> create_orders
-    ConfirmNotAlreadySent(二重送信の確認)    -> already_sent
+    ConfirmNotAlreadySent(同じロットの確認)    -> already_sent
     frmWarehouseOrder.LoadOrders/RefreshList -> list_orders
     frmWarehouseOrder.btnConfirm_Click        -> confirm_order
     frmSendConfirm.btnDelete_Click             -> cancel_order

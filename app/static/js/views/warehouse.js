@@ -711,7 +711,7 @@ function ask(kind, row) {
 
 /**
  * 訊く窓そのもの。題・理由・押す言葉・見せる項目は**呼ぶ側(サーバ)が決める**
- * (二重送信の確認は `/api/warehouse/send` が `ask` で中身を返す)。
+ * (同じロットの確認は `/api/warehouse/send` が `ask` で中身を返す)。
  */
 function askWith(spec) {
   return new Promise((resolve) => {
@@ -796,6 +796,7 @@ async function send(confirmDuplicate = false) {
     // 送った内容は消す。同じものを二度送らせないため
     for (const node of Object.values(el.fields)) node.value = "";
     if (el.sendComment) el.sendComment.value = "";
+    if (el.sameLotWarn) el.sameLotWarn.hidden = true;
     draftStore.done(el.sendComment, ...Object.values(el.fields));
     stock = null;
     stockUsed = 0;
@@ -816,8 +817,10 @@ async function send(confirmDuplicate = false) {
       setStatus(el.sendStatus, err.message, "ng");
       return;
     }
-    // 同じロットをもう送ってある。**何を送ってあるかを見せてから**続けるかを訊く
+    // 同じロットで、もう発注している。**何を送ってあるかを見せてから**続けるかを訊く。
+    // 警告であって止めない(追加の注文もある)
     if (err.code === "already_sent" && err.body && err.body.ask && !confirmDuplicate) {
+      checkSameLot(0);
       if (await askWith(err.body.ask)) return send(true);
       setStatus(el.sendStatus, "送信をやめました。", "warn");
       return;
@@ -1075,6 +1078,37 @@ function showDraft() {
   el.draftPos.textContent = `${draftAt + 1} / ${drafts.length}`;
   el.draftPrev.disabled = draftAt === 0;
   el.draftNext.disabled = draftAt === drafts.length - 1;
+  checkSameLot(0);
+}
+
+// ------------------------------------------------------------------
+// 同じロットで、もう発注しているか(送る前の一言)
+// ------------------------------------------------------------------
+let sameLotTimer = 0;
+let sameLotAsked = "";
+
+/**
+ * LotNo が入ったら、同じロットの発注(取り消していないもの・ほかの端末の分も)を数えて欄の下に出す。
+ * **警告であって止めない** ── 追加の注文もある(現場の声)。送るときにも一覧を見せて訊く。
+ */
+function checkSameLot(delay = 400) {
+  if (!el.sameLotWarn || !el.fields.lot_no) return;
+  window.clearTimeout(sameLotTimer);
+  sameLotTimer = window.setTimeout(async () => {
+    const lot = el.fields.lot_no.value.trim();
+    sameLotAsked = lot;
+    if (!lot) { el.sameLotWarn.hidden = true; return; }
+    try {
+      const body = await api.get(`/api/warehouse/same-lot?lot_no=${encodeURIComponent(lot)}`);
+      // 待つ間に打ち変えていたら古い答えは出さない
+      if (sameLotAsked !== lot || el.fields.lot_no.value.trim() !== lot) return;
+      el.sameLotWarn.hidden = !body.message;
+      el.sameLotWarn.textContent = body.message || "";
+    } catch (err) {
+      // 数えられなくても送れる(送るときにもう一度確かめる)
+      el.sameLotWarn.hidden = true;
+    }
+  }, delay);
 }
 
 /** 送れたぶんは下書きから外す。同じものを二度送らせない。 */
@@ -1097,7 +1131,7 @@ export function start(state, material, lotPeekWhy) {
   draftIsEx = false;
   for (const id of ["reach", "rows", "listNote", "found", "pending", "unreadComments", "readAllComments", "q", "refresh",
                     "sendComment",
-                    "send", "clearForm", "sendStatus", "cancelled", "exNote",
+                    "send", "clearForm", "sendStatus", "cancelled", "exNote", "sameLotWarn",
                     "drafts", "draftPrev", "draftNext", "draftPos", "draftNote",
                     "draftsArrived", "draftsCount",
                     "draftNotice", "cutRows", "cutEmpty", "cutUnread",
@@ -1110,6 +1144,7 @@ export function start(state, material, lotPeekWhy) {
   for (const node of document.querySelectorAll('[id^="f-"]')) {
     el.fields[node.id.slice(2)] = node;
   }
+  if (el.fields.lot_no) el.fields.lot_no.addEventListener("input", () => checkSameLot());
 
   // **絞り込みの道具は取りに行く前に揃える。** `query()` が期間の
   // セグメントを見るので、`load()` より後に拾うと1回目が投げる
@@ -1226,6 +1261,7 @@ export function start(state, material, lotPeekWhy) {
       for (const node of Object.values(el.fields)) node.value = "";
       draftStore.done(...Object.values(el.fields));
       setStatus(el.sendStatus, "", "ok");
+      checkSameLot(0);
     });
   }
 
@@ -1261,6 +1297,8 @@ function keepTyping() {
   for (const [key, node] of Object.entries(el.fields)) {
     draftStore.bind(node, `warehouse.send.${key}`, "発注の欄");
   }
+  // 打ちかけの LotNo が戻ったときも数える
+  checkSameLot(0);
 }
 
 // ------------------------------------------------------------------

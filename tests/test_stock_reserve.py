@@ -406,7 +406,8 @@ class StockWebTests(unittest.TestCase):
 
     def test_在庫を使わなければ今までどおり(self) -> None:
         self.assertEqual(self.send().status_code, 200)
-        self.refresh_orders.assert_not_called()
+        # 送る前の取り込み直しは同じロットの確かめのため(VER4.8.53〜)。変わっていなければ見るだけ
+        self.refresh_orders.assert_called_once_with(mock.ANY, only_if_changed=True)
         self.assertEqual(stock_reserve.waiting(self.conn), [])
 
     def test_資材モードからは押せない(self) -> None:

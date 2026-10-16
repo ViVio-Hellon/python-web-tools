@@ -193,7 +193,7 @@ class WorkContext:
         何も届かない。下書きは、送る(`drop_pending_orders`)・「入力を消す」で
         捨てる・ロットが変わる(`clear`)まで預かっておく。
         開き直すたびに同じ下書きが出ても、二重に登録される前に
-        「二重送信の確認」が止める(`warehouse_service.already_sent`)。
+        「同じロットで発注しています」で訊く(`warehouse_service.already_sent`)。
         """
         return [dict(order) for order in self.pending_orders]
 

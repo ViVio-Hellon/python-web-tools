@@ -124,13 +124,13 @@ class SendApiTests(WarehouseWebTestCase):
         body = self.post(ORDER, expect=409)
         self.assertEqual(body["error"]["code"], "already_sent")
         ask = body["ask"]
-        self.assertEqual(ask["title"], "二重送信の確認")
+        self.assertEqual(ask["title"], "同じロットで発注しています")
         self.assertIn("二重発注", ask["lead"])
         self.assertIn("1件", ask["why"])
         self.assertEqual(len(ask["fields"]), 1)
         self.assertIn("発注数:4", ask["fields"][0]["value"])
         self.assertEqual(count(self.conn), 1)
-        # 「それでも送信する」
+        # 「送信する(追加の注文)」
         self.post({**ORDER, "confirm_duplicate": True})
         self.assertEqual(count(self.conn), 2)
 

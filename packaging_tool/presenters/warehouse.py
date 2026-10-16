@@ -574,8 +574,28 @@ def order_dict(result: svc.OrderResult) -> dict[str, Any]:
     return {"ok": result.ok, "message": result.message, "mgr_no": result.mgr_no}
 
 
-# 二重送信の確認で見せる送信済みの件数(VBA は最新5件まで)
+# 同じロットの確認で見せる送信済みの件数(VBA は最新5件まで)
 ALREADY_SENT_SHOWN = 5
+
+
+def same_lot_text(lot_no: str, sent: list[dict]) -> str:
+    """「このロット(4102781)は、すでに 2件 発注しています。」"""
+    return f"このロット({lot_no})は、すでに {len(sent)}件 発注しています。"
+
+
+def same_lot_note(lot_no: str, sent: list[dict]) -> str:
+    """送る前に欄の下へ出す一言(`/api/warehouse/same-lot`)。送信済みが無ければ空。
+
+    **警告であって止めない**(現場の声:「追加注文もあるので、あくまで警告でいい」)。
+    いちばん新しい1件を添える ── 同じものか、追加で要る分かを見分ける手がかり。
+    """
+    if not sent:
+        return ""
+    last = sent[0]
+    mark = "・倉庫確認済" if last["confirmed"] else ""
+    return (same_lot_text(lot_no, sent).rstrip("。")
+            + f"(最新: {last['registered']}　{last['hinmei']}　発注数:{last['qty'] or '---'}{mark})。"
+            + "同じものなら二重発注です。追加の注文なら、そのまま送れます。")
 
 
 def already_sent_ask(lot_no: str, sent: list[dict]) -> dict[str, Any]:
@@ -583,6 +603,7 @@ def already_sent_ask(lot_no: str, sent: list[dict]) -> dict[str, Any]:
 
     **何を送ってあるかを見せてから訊く。** 件数だけでは、前に送ったのが
     同じ内容なのか(二重発注)、追加で要る分なのかを判断できない。
+    **警告であって止めない** ── 追加の注文もある(現場の声)。押せばそのまま送る。
     """
     fields = []
     for item in sent[:ALREADY_SENT_SHOWN]:
@@ -593,12 +614,13 @@ def already_sent_ask(lot_no: str, sent: list[dict]) -> dict[str, Any]:
     if len(sent) > ALREADY_SENT_SHOWN:
         fields.append({"label": "ほか", "value": f"{len(sent) - ALREADY_SENT_SHOWN}件"})
     return {
-        "title": "二重送信の確認",
-        "lead": (f"このロット({lot_no})は、すでに倉庫へ送信されています。"
-                 "もう一度送信すると、二重発注になります。"),
-        "why": (f"送信済み(取り消していないもの){len(sent)}件。新しい順に"
-                f"{min(len(sent), ALREADY_SENT_SHOWN)}件まで出しています。それでも送信しますか？"),
-        "ok": "それでも送信する",
+        "title": "同じロットで発注しています",
+        "lead": (same_lot_text(lot_no, sent)
+                 + "同じものをもう一度送ると、二重発注になります。"),
+        "why": (f"取り消していない発注 {len(sent)}件 を新しい順に"
+                f"{min(len(sent), ALREADY_SENT_SHOWN)}件まで出しています(ほかの端末で出した分も含みます)。"
+                "追加の注文なら、そのまま送信してください。"),
+        "ok": "送信する(追加の注文)",
         # 何件かを並べるので、1件を大きく見せる並べ方にしない
         "compact": True,
         "fields": fields,
