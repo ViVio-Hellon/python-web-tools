@@ -388,6 +388,7 @@ class SelectionPresenter:
     def check_and_set_1p1185_mode(
         self, packaging_spec: str, customer_name: str,
         manufactured_width: float, manufactured_length: float,
+        order_size: Optional[tuple[float, float, float]] = None,
     ) -> None:
         """VBA `CheckAndSet1P1185Mode` の移植。
 
@@ -400,7 +401,8 @@ class SelectionPresenter:
         was_on = self.mode_1p1185.is_1p1185
         self.mode_1p1185 = spk.check_1p1185_mode(
             packaging_spec, customer_name, manufactured_width, manufactured_length,
-            rules=pallet_limit_rules.load(self.conn))
+            rules=pallet_limit_rules.load(self.conn),
+            order_size=order_size if order_size is not None else self.order_size())
         if self.mode_1p1185.is_1p1185 and not was_on:
             self.user_log.log(
                 f"[{self.mode_1p1185.spec}モード パレット限定] 有効 取引先={customer_name}"

@@ -702,7 +702,7 @@ CREATE TABLE IF NOT EXISTS 仕掛受注 (
 -- ==================================================================
 
 -- 1P1185モード(パレットを決め打つ)の発火条件と、決め打つパレット(`pallet_limit_rules`)。
--- 1行が1つの条件で、どれか1行に当たれば発火。包装仕様NO・取引先名称(含む)・製造板幅/丈(範囲。空なら見ない)、
+-- 1行が1つの条件で、どれか1行に当たれば発火。包装仕様NO・取引先名称(含む)・製造板幅/丈・オーダー板厚/幅/丈(範囲。空なら見ない)、
 -- 発火したら 業界(空なら見ない)・パレット幅・パレット丈 のパレットだけにする。マスタ管理で行を足せる
 CREATE TABLE IF NOT EXISTS パレット限定条件 (
     ID              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -712,6 +712,12 @@ CREATE TABLE IF NOT EXISTS パレット限定条件 (
     製造板幅_最大     REAL,
     製造板丈_最小     REAL,
     製造板丈_最大     REAL,
+    オーダー板厚_最小  REAL,
+    オーダー板厚_最大  REAL,
+    オーダー板幅_最小  REAL,
+    オーダー板幅_最大  REAL,
+    オーダー板丈_最小  REAL,
+    オーダー板丈_最大  REAL,
     業界            TEXT NOT NULL DEFAULT '',
     パレット幅       INTEGER NOT NULL,
     パレット丈       INTEGER NOT NULL,

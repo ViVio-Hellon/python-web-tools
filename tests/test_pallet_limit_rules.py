@@ -200,3 +200,113 @@ class CombinedWebTests(SelectionWebTestCase):
                          "【プロテックボードオーダー選択中】【1P1255モード 1100×2500 限定表示】")
         rows = self.post("/api/selection/pallet/list", {})["rows"]
         self.assertEqual({(r["width"], r["length"]) for r in rows}, {(1100, 2500)})
+
+
+class OrderColumnTests(unittest.TestCase):
+    """製造とオーダーの列を分ける(VER4.8.60)。現場の声:「オーダーで見る必要があれば製造を空、製造で見る必要があればオーダーを空」。"""
+
+    def rules(self, **cols) -> tuple:
+        conn = make_conn()
+        conn.execute(f'DELETE FROM "{TABLE}"')
+        names = ["包装仕様NO", "パレット幅", "パレット丈", *cols]
+        conn.execute(f'INSERT INTO "{TABLE}" ({", ".join(names)}) VALUES ({", ".join("?" for _ in names)})',
+                     ("1P1255", 1100, 2500, *cols.values()))
+        conn.commit()
+        return pallet_limit_rules.load(conn)
+
+    def on(self, rules, w=0, l=0, order=(0, 0, 0)) -> bool:
+        return bool(spk.check_1p1185_mode("1P1255", "", w, l, rules=rules, order_size=order))
+
+    def test_オーダーで見る行_製造は空(self) -> None:
+        rules = self.rules(**{"オーダー板厚_最小": 12.0, "オーダー板厚_最大": 12.0,
+                              "オーダー板幅_最小": 1075, "オーダー板幅_最大": 1081,
+                              "オーダー板丈_最小": 2332, "オーダー板丈_最大": 2338})
+        self.assertTrue(self.on(rules, 1080, 2340, (12.0, 1075.0, 2332.0)))
+        self.assertTrue(self.on(rules, 0, 0, (12.0, 1081.0, 2338.0)))          # 製造は見ない
+        self.assertFalse(self.on(rules, 1080, 2340, (11.9, 1075.0, 2332.0)))   # ｵｰﾀﾞｰ厚が外れる
+        self.assertFalse(self.on(rules, 1080, 2340, (12.0, 1074.5, 2332.0)))   # 小数のまま比べる
+        self.assertEqual(rules[0].describe(),
+                         "1P1255 ｵｰﾀﾞｰ厚 12 / ｵｰﾀﾞｰ幅 1075〜1081 / ｵｰﾀﾞｰ丈 2332〜2338 → 1100×2500")
+
+    def test_製造で見る行_オーダーは空(self) -> None:
+        rules = self.rules(**{"製造板幅_最小": 1080, "製造板幅_最大": 1080})
+        self.assertTrue(self.on(rules, 1080.9, 0, (0, 0, 0)))                  # 製造は切り捨て
+        self.assertFalse(self.on(rules, 1081, 0, (12.0, 1080.0, 0)))
+
+    def test_両方書けば両方かつ(self) -> None:
+        rules = self.rules(**{"製造板幅_最小": 1080, "製造板幅_最大": 1080,
+                              "オーダー板幅_最小": 1075, "オーダー板幅_最大": 1075})
+        self.assertTrue(self.on(rules, 1080, 0, (0, 1075.0, 0)))
+        self.assertFalse(self.on(rules, 1080, 0, (0, 1076.0, 0)))
+        self.assertFalse(self.on(rules, 1079, 0, (0, 1075.0, 0)))
+
+
+class OldTableColumnsTests(unittest.TestCase):
+    """前の版(VER4.8.58/59)で作った表にも、オーダーの列を足しに行く(手元・梱包資材マスタとも)。"""
+
+    OLD_DDL = (f'CREATE TABLE "{TABLE}" (ID INTEGER PRIMARY KEY AUTOINCREMENT, 包装仕様NO TEXT NOT NULL,'
+               " 取引先名称 TEXT NOT NULL DEFAULT '', 製造板幅_最小 REAL, 製造板幅_最大 REAL,"
+               " 製造板丈_最小 REAL, 製造板丈_最大 REAL, 業界 TEXT NOT NULL DEFAULT '',"
+               " パレット幅 INTEGER NOT NULL, パレット丈 INTEGER NOT NULL, 有効 INTEGER NOT NULL DEFAULT 1,"
+               " 並び順 INTEGER NOT NULL DEFAULT 0, 備考 TEXT NOT NULL DEFAULT '',"
+               " 更新日時 TEXT NOT NULL DEFAULT '')")
+
+    def test_手元の古い表に列を足す(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(self.OLD_DDL)
+        db.apply_schema(conn)
+        cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{TABLE}")')}
+        self.assertIn("オーダー板厚_最小", cols)
+        self.assertIn("オーダー板丈_最大", cols)
+
+    def test_梱包資材マスタの古い表に列を足して取り込める(self) -> None:
+        from packaging_tool import config, data_sync
+        d = Path(tempfile.mkdtemp(prefix="oldlimit_"))
+        src = d / config.MATERIAL_DB_NAME
+        c = sqlite3.connect(src)
+        c.execute("CREATE TABLE PalletMaster (管理番号 INTEGER)")
+        c.execute(self.OLD_DDL)
+        c.execute(f'INSERT INTO "{TABLE}" (包装仕様NO, 取引先名称, パレット幅, パレット丈) VALUES (?,?,?,?)',
+                  ("1P9000", "ﾃｽﾄ", 1000, 2000))
+        c.commit()
+        c.close()
+        conn = make_conn()
+        got = data_sync.import_master(conn, src)
+        self.assertTrue(any("列を足しました" in n for n in got.notes), got.notes)
+        c = sqlite3.connect(src)
+        self.assertIn("オーダー板幅_最小", {r[1] for r in c.execute(f'PRAGMA table_info("{TABLE}")')})
+        c.close()
+        rules = pallet_limit_rules.load(conn)
+        self.assertEqual([r.spec for r in rules], ["1P9000"])                   # 足した行が取り込まれた
+        self.assertTrue(spk.check_1p1185_mode("1P9000", "ｶ)ﾃｽﾄ", 0, 0, rules=rules))
+
+
+class DocExampleWebTests(SelectionWebTestCase):
+    """`docs/モード一覧.md` の例: プロテックで、パレットも 1100×2500 に決め打つ(オーダーの列だけで書く)。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from app.routes import lot as lot_routes
+        from tests.test_lot_service import insert_hiki, insert_lot, insert_odr
+        original = lot_routes.get_db
+        lot_routes.get_db = lambda: self.conn
+        self.addCleanup(lambda: setattr(lot_routes, "get_db", original))
+        for w, l in ((1100, 2500), (1200, 2600)):
+            insert_pallet(self.conn, width=w, length=l, industry="タイト", w_min=900, w_max=w,
+                          l_min=2000, l_max=l)
+        self.conn.execute(
+            f'INSERT INTO "{TABLE}" (包装仕様NO, オーダー板厚_最小, オーダー板厚_最大, オーダー板幅_最小,'
+            ' オーダー板幅_最大, オーダー板丈_最小, オーダー板丈_最大, パレット幅, パレット丈)'
+            ' VALUES (?,?,?,?,?,?,?,?,?)', ("1P1255", 12, 12, 1075, 1081, 2332, 2338, 1100, 2500))
+        self.conn.commit()
+        insert_lot(self.conn, **{"オーダー板厚": 12.0, "オーダー板幅": 1076.0, "オーダー板丈": 2335.0,
+                                 "製造板幅": 1090.0, "製造板丈": 2350.0})
+        insert_hiki(self.conn, order_no="A100", qty=22.0, no="00000001")
+        insert_odr(self.conn, order_no="A100", 包装仕様NO="1P1255")
+        self.client.get("/api/lot/1234567", headers=self.auth())
+
+    def test_文書の例どおり(self) -> None:
+        self.assertEqual(self.get()["banner"]["text"],
+                         "【プロテックボードオーダー選択中】【1P1255モード 1100×2500 限定表示】")
+        rows = self.post("/api/selection/pallet/list", {})["rows"]
+        self.assertEqual({(r["width"], r["length"]) for r in rows}, {(1100, 2500)})

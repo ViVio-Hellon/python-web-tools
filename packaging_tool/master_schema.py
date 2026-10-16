@@ -181,6 +181,7 @@ def ensure_rule_tables(conn: sqlite3.Connection, path: Optional[Path]) -> list[s
     notes: list[str] = []
     for table in AUTO_CREATE_TABLES:
         if table in present:
+            notes.extend(_add_missing_rule_columns(path, table))
             continue
         try:
             ddl = _ddl_for(conn, table)
@@ -196,6 +197,33 @@ def ensure_rule_tables(conn: sqlite3.Connection, path: Optional[Path]) -> list[s
         log.info("取り込み元に %s を作りました(初期値%s件): %s", table, seeded, path)
         notes.append(f"梱包資材マスタに {table} が無かったので作りました(初期値{seeded}件)")
     return notes
+
+
+def _rule_added_columns(table: str) -> tuple[tuple[str, str], ...]:
+    """発火条件の表に、あとの版で足した列(前の版で作った取り込み元の表に足しに行く)。"""
+    from . import pallet_limit_rules
+    return pallet_limit_rules.ADDED_COLUMNS if table == pallet_limit_rules.TABLE else ()
+
+
+def _add_missing_rule_columns(path: Path, table: str) -> list[str]:
+    """取り込み元の表に無い列(あとの版で足した列)を足す。中身は空(= その条件は見ない)。"""
+    added = _rule_added_columns(table)
+    if not added:
+        return []
+    have = set(source_db.columns(path, table))
+    missing = [(c, kind) for c, kind in added if c not in have]
+    if not have or not missing:
+        return []
+    try:
+        with source_db.connect(path) as src:
+            for column, kind in missing:
+                src.execute(f"ALTER TABLE {source_db.quote_identifier(table)} "
+                            f"ADD COLUMN {source_db.quote_identifier(column)} {kind}")
+    except (source_db.SourceError, sqlite3.Error) as exc:
+        log.warning("取り込み元の %s に列を足せませんでした: %s", table, exc)
+        return [f"{table} に列を足せませんでした({exc})"]
+    log.info("取り込み元の %s に列を足しました: %s", table, ", ".join(c for c, _ in missing))
+    return [f"梱包資材マスタの {table} に列を足しました({'・'.join(c for c, _ in missing)}。空 = 見ない)"]
 
 
 def _seed_source(src: source_db.SourceConnection, table: str) -> int:

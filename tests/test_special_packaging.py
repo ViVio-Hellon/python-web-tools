@@ -280,8 +280,11 @@ class モード一覧と実装が合っているか(unittest.TestCase):
             with self.subTest(spec=spec, t=t, w=w, l=l):
                 self.assertEqual(spk.protec_state(spec, thickness=t, width=w, length=l).is_protec, want)
 
-    def test_1P1216だけ許容が違う(self) -> None:
-        """コーミ金属。幅の許容が -10mm(ほかは -80mm)。"""
+    def test_許容は全部_上下共用10mm(self) -> None:
+        """VER4.8.59 から全部 -10mm(それまでは 1P1216 だけ -10mm、ほかは -80mm)。1P1216 の印は残す。"""
+        from packaging_tool import board_selection_protec as bp
+        self.assertEqual((bp.PROTEC_TOLERANCE, bp.PROTEC_1P1216_TOLERANCE, bp.PROTEC_OTHER_TOLERANCE),
+                         (10, 10, 10))
         self.assertTrue(spk.protec_state("1P1216").is_1p1216)
         for spec in ("1P1125", "1P1211"):
             with self.subTest(spec=spec):
@@ -327,7 +330,11 @@ class モード一覧と実装が合っているか(unittest.TestCase):
         doc = (Path(__file__).resolve().parent.parent
                / "docs" / "モード一覧.md").read_text(encoding="utf-8")
         for name in ("EX受注", "1P0113", "プロテック", "1P1185",
-                     "上下共用", "疲労度優先", "在庫考慮", "サイズ指定"):
+                     "上下共用", "疲労度優先", "在庫考慮", "サイズ指定",
+                     "プロテック 強制", "1P0113 強制",
+                     # 表で決まるモードと、その設定方法
+                     "プロテック条件", "パレット限定条件", "表で決まるモードの設定方法",
+                     "オーダー板厚_最小", "上下共用で -10mm"):
             with self.subTest(name=name):
                 self.assertIn(name, doc)
 

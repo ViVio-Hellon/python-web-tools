@@ -292,10 +292,25 @@ def _migrate_after_schema(conn: sqlite3.Connection) -> None:
     _move_old_comment_read(conn)
     _add_order_mark_columns(conn)
     _add_origin_columns(conn)
+    _add_rule_columns(conn)
     # 実績(スナップショット)の表。名前が `config.TBL_PT_*` の仮の値なので、
     # schema.sql に書かずに定数から作る(名前を直すのが1か所で済む)
     from . import pattern_store
     pattern_store.ensure_tables(conn)
+
+
+def _add_rule_columns(conn: sqlite3.Connection) -> None:
+    """発火条件の表にあとから足した列を、前の版の手元DBにも足す(`pallet_limit_rules.ADDED_COLUMNS`)。"""
+    from . import pallet_limit_rules
+    for table, added in ((pallet_limit_rules.TABLE, pallet_limit_rules.ADDED_COLUMNS),):
+        have = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+        if not have:
+            continue
+        for column, kind in added:
+            if column not in have:
+                conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {kind}')
+                log.info("%s に %s 列を足しました", table, column)
+    conn.commit()
 
 
 # 発注テーブルにあとから足した列。`CREATE TABLE IF NOT EXISTS` は

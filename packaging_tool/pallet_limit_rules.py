@@ -12,12 +12,16 @@
     取引先名称          … 受注の取引先名称にこの文字を**含む**なら(空なら見ない)
     製造板幅_最小/最大   … SIKALOT の製造板幅がこの範囲なら(空・0 なら見ない)
     製造板丈_最小/最大   … SIKALOT の製造板丈がこの範囲なら(空・0 なら見ない)
+    オーダー板厚/幅/丈_最小/最大 … SIKALOT のｵｰﾀﾞｰ板厚・幅・丈がこの範囲なら(空・0 なら見ない。VER4.8.60〜)
+
+**製造で見る行はオーダーの欄を空に、オーダーで見る行は製造の欄を空に**(現場の声:「製造とオーダー列を
+分けて。オーダーで見る必要があれば製造を空、製造で見る必要があればオーダーを空」)。両方書けば両方「かつ」。
     ----- 発火したら -----
     業界               … この業界のパレットだけ(空なら業界は見ない)
     パレット幅・パレット丈 … この寸法のパレットだけ(必須)
 
 製造板幅・丈は**整数に切り捨ててから**比べる(VBA `CheckAndSet1P1185Mode` の `CLng` 相当。
-もとのプログラムも `int()` で比べていた)。寸法の欄を書いたのにロットの寸法が無い(0)ときは当たらない。
+もとのプログラムも `int()` で比べていた)。オーダー寸法は小数のまま比べる(プロテック条件と同じ。12.0 ちょうど等)。寸法の欄を書いたのにロットの寸法が無い(0)ときは当たらない。
 
 【表が無いとき】
 起動のたびに手元の表が空なら初期値(`SEED` = もとの 1P1185 の決め打ち)を入れる。取り込み元に表が
@@ -41,15 +45,47 @@ RANGE_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("製造板幅_最小", "製造板幅_最大", "製造板幅"),
     ("製造板丈_最小", "製造板丈_最大", "製造板丈"),
 )
+# オーダー寸法(VER4.8.60 で足した列)
+ORDER_RANGE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("オーダー板厚_最小", "オーダー板厚_最大", "ｵｰﾀﾞｰ厚"),
+    ("オーダー板幅_最小", "オーダー板幅_最大", "ｵｰﾀﾞｰ幅"),
+    ("オーダー板丈_最小", "オーダー板丈_最大", "ｵｰﾀﾞｰ丈"),
+)
+# あとから足した列(前の版で作った表に足しに行く ── 手元 `db._add_rule_columns`、
+# 取り込み元 `master_schema.ensure_rule_tables`)
+ADDED_COLUMNS: tuple[tuple[str, str], ...] = tuple(
+    (c, "REAL") for lo, hi, _ in ORDER_RANGE_COLUMNS for c in (lo, hi))
+EPS = 1e-6
 
 # 初期値 = もとのプログラムの決め打ち(`special_packaging` の P1185_* と同じ値)
 SEED: tuple[dict[str, Any], ...] = (
     {"包装仕様NO": "1P1185", "取引先名称": "ﾅﾒｶﾜｱﾙﾐ",
      "製造板幅_最小": 1242.0, "製造板幅_最大": 1249.0,
      "製造板丈_最小": 1242.0, "製造板丈_最大": 1249.0,
+     "オーダー板厚_最小": None, "オーダー板厚_最大": None,
+     "オーダー板幅_最小": None, "オーダー板幅_最大": None,
+     "オーダー板丈_最小": None, "オーダー板丈_最大": None,
      "業界": "タイト", "パレット幅": 1300, "パレット丈": 1300,
      "有効": 1, "並び順": 10, "備考": "", "更新日時": ""},
 )
+
+
+def _num(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _within(low: Optional[float], high: Optional[float], number: float, eps: float) -> bool:
+    """範囲に入るか。端が両方空なら見ない。寸法が無い(0)のに端があれば入らない(確かめられない)。"""
+    if low is None and high is None:
+        return True
+    if number <= 0:
+        return False
+    if low is not None and number < low - eps:
+        return False
+    return not (high is not None and number > high + eps)
 
 
 def _int(value: Any) -> int:
@@ -66,24 +102,23 @@ class Rule:
     spec: str
     customer: str = ""
     ranges: tuple[tuple[Optional[float], Optional[float]], ...] = ((None, None),) * 2
+    order_ranges: tuple[tuple[Optional[float], Optional[float]], ...] = ((None, None),) * 3
     industry: str = ""
     pallet_width: int = 0
     pallet_length: int = 0
 
-    def matches(self, spec: Any, customer: Any, width: Any, length: Any) -> bool:
+    def matches(self, spec: Any, customer: Any, width: Any, length: Any,
+                order: tuple[Any, Any, Any] = (0, 0, 0)) -> bool:
+        """`width`/`length` は製造板幅・丈、`order` は ｵｰﾀﾞｰ板厚・幅・丈。"""
         if not self.spec or normalize_spec(spec) != self.spec:
             return False
         if self.customer and self.customer not in str(customer or ""):
             return False
         for (low, high), value in zip(self.ranges, (width, length)):
-            if low is None and high is None:
-                continue
-            number = _int(value)                  # もとの判定と同じく整数に切り捨てて比べる
-            if number <= 0:
+            if not _within(low, high, _int(value), 0):     # 製造は整数に切り捨てて(もとの判定と同じ)
                 return False
-            if low is not None and number < low:
-                return False
-            if high is not None and number > high:
+        for (low, high), value in zip(self.order_ranges, order):
+            if not _within(low, high, _num(value), EPS):    # オーダーは小数のまま
                 return False
         return True
 
@@ -110,6 +145,14 @@ class Rule:
             else:
                 text = f"{fmt(low)}以上" if low is not None else f"{fmt(high)}以下"
             parts.append(f"{name} {text}")
+        for (low, high), (_, _, name) in zip(self.order_ranges, ORDER_RANGE_COLUMNS):
+            if low is None and high is None:
+                continue
+            if low is not None and high is not None:
+                text = f"{low:g}" if abs(low - high) < EPS else f"{low:g}〜{high:g}"
+            else:
+                text = f"{low:g}以上" if low is not None else f"{high:g}以下"
+            parts.append(f"{name} {text}")
         head = self.spec + (f" {' / '.join(parts)}" if parts else "")
         return f"{head} → {self.pallet_text()}"
 
@@ -119,6 +162,8 @@ def _rule_of(row: dict[str, Any]) -> Rule:
                 customer=str(row.get("取引先名称") or "").strip(),
                 ranges=tuple((_bound(row.get(lo)), _bound(row.get(hi)))
                              for lo, hi, _ in RANGE_COLUMNS),
+                order_ranges=tuple((_bound(row.get(lo)), _bound(row.get(hi)))
+                                   for lo, hi, _ in ORDER_RANGE_COLUMNS),
                 industry=str(row.get("業界") or "").strip(),
                 pallet_width=_int(row.get("パレット幅")),
                 pallet_length=_int(row.get("パレット丈")))
@@ -151,10 +196,10 @@ def load(conn: Optional[sqlite3.Connection]) -> tuple[Rule, ...]:
 
 
 def find(rules: Iterable[Rule], spec: Any, customer: Any, width: Any,
-         length: Any) -> Optional[Rule]:
-    """当たった最初の行。当たらなければ None。"""
+         length: Any, order: tuple[Any, Any, Any] = (0, 0, 0)) -> Optional[Rule]:
+    """当たった最初の行。当たらなければ None。`order` は ｵｰﾀﾞｰ板厚・幅・丈。"""
     for rule in rules:
-        if rule.matches(spec, customer, width, length):
+        if rule.matches(spec, customer, width, length, order):
             return rule
     return None
 

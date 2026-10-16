@@ -186,17 +186,19 @@ class Mode1P1185State:
 def check_1p1185_mode(
     packaging_spec: str, customer_name: str,
     manufactured_width: float, manufactured_length: float, *, rules=None,
+    order_size: tuple = (0, 0, 0),
 ) -> Mode1P1185State:
     """VBA `CheckAndSet1P1185Mode` の移植(判定部分だけ)。
 
     条件は表 `パレット限定条件` の行(`rules`。省略すると初期値 = 前の決め打ち)。
-    1行の中は「かつ」(包装仕様NO・取引先名称を含む・製造板幅・製造板丈)、行と行は「または」。
+    1行の中は「かつ」(包装仕様NO・取引先名称を含む・製造板幅・製造板丈・ｵｰﾀﾞｰ板厚/幅/丈 `order_size`)、
+    行と行は「または」。空欄は見ない。
     """
     from . import pallet_limit_rules
 
     found = pallet_limit_rules.find(
         rules if rules is not None else pallet_limit_rules.DEFAULT_RULES,
-        packaging_spec, customer_name, manufactured_width, manufactured_length)
+        packaging_spec, customer_name, manufactured_width, manufactured_length, order_size)
     state = (Mode1P1185State(is_1p1185=True, industry=found.industry,
                              pallet_width=found.pallet_width, pallet_length=found.pallet_length,
                              rule=found.describe(), spec=found.spec)
