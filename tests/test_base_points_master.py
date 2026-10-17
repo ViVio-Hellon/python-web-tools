@@ -123,5 +123,23 @@ class SettingsTests(_Case):
         self.assertFalse(settings_presenter.save(position="どこか", conn=self.conn).ok)
 
 
+class DocTests(unittest.TestCase):
+    """データラベル欄の案内は専用の文書に書く。欄の横の案内はその文書を指す。"""
+
+    DOC = Path(__file__).resolve().parent.parent / "docs" / "データラベルの書き方.md"
+
+    def test_文書があり_書き方と決まりが載っている(self):
+        text = self.DOC.read_text(encoding="utf-8")
+        for word in ("lblItem34", "拠点大板", "ボード幅", "ボードタイプ", "拠点L-1", "配置編集",
+                     board_selection_service.BASE_ROW_TYPE, svc.BASE_PREFIX):
+            self.assertIn(word, text)
+
+    def test_マスタ管理の欄の案内が文書を指す(self):
+        from packaging_tool import master_columns
+        for table in ("BoardMaster", "CornerboardMaster"):
+            self.assertIn("docs/データラベルの書き方.md",
+                          master_columns.COLUMN_NOTE[(table, "データラベル")])
+
+
 if __name__ == "__main__":
     unittest.main()
