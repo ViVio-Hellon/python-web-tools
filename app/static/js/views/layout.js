@@ -45,6 +45,12 @@ function why(target, text) {
 /* ================================================================
    図
    ================================================================ */
+/** 置き場の名前を図に出す形に。`lblItem34` → `34`。拠点(L1 など)はそのまま。 */
+export function shortName(name) {
+  const m = /^lblItem(\d+)$/.exec(name || "");
+  return m ? m[1] : (name || "");
+}
+
 function box(item, className) {
   const group = node("g", { class: className, "data-name": item.name });
   group.appendChild(node("rect", {
@@ -53,7 +59,10 @@ function box(item, className) {
   const text = node("text", {
     x: item.x + item.w / 2, y: item.y + item.h / 2,
   });
-  text.textContent = item.name;
+  // 置き場は番号だけ出す(lblItem34 → 34)。図が小さく、前の「lblItem」が
+  // 読む邪魔になる(現場の声)。押さずに分かる説明(title)には元の名前を残す
+  // ── マスタの「データラベル」に書くのはそちらなので
+  text.textContent = shortName(item.name);
   group.appendChild(text);
 
   // 図の中の文字は小さい。押さなくても分かる説明を添える

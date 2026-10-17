@@ -14,7 +14,7 @@
 """
 from __future__ import annotations
 
-from . import angle_service, location_service, user_settings
+from . import angle_service, location_service
 from . import user_log as user_log_mod
 from .logging_utils import get_logger
 from .selection_common import (BoardOpResult, REFUSE_BAD_INPUT,
@@ -135,10 +135,17 @@ class AngleMixin:
 
         notes: list[str] = []
         fat_map = None
-        if self.fatigue:
+        base_point = location_service.current_base_point()
+        if self.fatigue and not base_point.known:
+            # ボード選定と同じ扱い: 原点が配置図に無ければ距離を測れないので通常に倒す
+            message = (f"[疲労度優先] 拠点「{base_point.name}」が棚の配置図に無いため"
+                       "通常の優先順位で選定します")
+            self.presenter.user_log.log(message)
+            notes.append(message)
+        elif self.fatigue:
             try:
                 fat_map = location_service.build_angle_fatigue_map(
-                    conn, angles, user_settings.get_position())
+                    conn, angles, base_point.name)
             except Exception as exc:                  # noqa: BLE001 - 補助情報
                 # 棚データが未登録でもアングル選定自体は続けられる
                 log.warning("アングル疲労度の算出に失敗: %s", exc)

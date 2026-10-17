@@ -235,7 +235,7 @@
     <div class="pad">
       {# 製品サイズ。**人が決めるものではなく、決まっているものを確かめる** #}
       <div class="field">
-        <label for="prodWidth">製品 幅</label>
+        <label for="prodWidth" class="field__lead">製品 幅</label>
         <input class="input num" id="prodWidth" inputmode="numeric" style="width:6em"
                value="{{ view.product_width }}" autocomplete="off">
         <label for="prodLength">丈</label>
@@ -266,7 +266,7 @@
          パレット自身の幅・丈の前後50mm。幅だけ・丈だけ・両方は製品の欄と同じ
          (現場の声:「パレット 幅丈の入力で直接パレットを探すを追加して」) #}
       <div class="field">
-        <label for="palFindWidth">パレット 幅</label>
+        <label for="palFindWidth" class="field__lead">パレット 幅</label>
         <input class="input num" id="palFindWidth" inputmode="numeric" style="width:6em"
                value="{{ view.pallet_find_width }}" autocomplete="off">
         <label for="palFindLength">丈</label>

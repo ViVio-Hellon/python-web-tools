@@ -186,8 +186,8 @@ class BuildFatigueMapTests(unittest.TestCase):
                          {"500x1000", "1000x500", "600x1200", "1200x600"})
         # 配置図にあるラベルが付いているサイズは距離スコアが付く
         self.assertGreater(result["500x1000"].dist, 0)
-        # データラベル未設定のサイズは距離0(=置き場不明扱い、選定を妨げない)
-        self.assertEqual(result["600x1200"].dist, 0.0)
+        # データラベル未設定のサイズは既定の距離(アングルと同じ。以前は0点=いちばん近い扱い)
+        self.assertEqual(result["600x1200"].dist, svc.angle_service.FAT_DIST_DEFAULT)
         # 面積スコアは常に計算される
         self.assertGreater(result["600x1200"].area, 0)
 

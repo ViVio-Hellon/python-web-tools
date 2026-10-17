@@ -151,6 +151,14 @@ def lot_list_remove():
     return _list_apply(lot_browse_session.get_session().remove(index))
 
 
+@bp.post("/api/lot/list/filter/quick")
+def lot_list_quick():
+    """すぐ絞るボタン(板・コイル / 実績あり・なし)。押すたびに入る・外れる。"""
+    body = request.get_json(silent=True) or {}
+    return _list_apply(lot_browse_session.get_session().toggle_quick(
+        str(body.get("name", ""))))
+
+
 @bp.post("/api/lot/list/filter/clear")
 def lot_list_clear():
     return _list_apply(lot_browse_session.get_session().clear())

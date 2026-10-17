@@ -99,6 +99,17 @@
       </div>
       <p class="why" id="saveWhy" hidden></p>
 
+      {# すぐ絞る。**中身はふつうの条件**(上のチップに出る・外せる・保存できる)。
+         同じ組は片方だけ、押してある方をもう一度押すと外れる(`lot_browse_session.QUICK`)。
+         現場の声:「製造板丈を >1 にすれば済む話だが面倒なのでコイル・板のボタンを」
+         「BOX最終実績_設備名の有無で絞るボタンも(実績あり・なし)」 #}
+      <div class="filterbar filterbar--quick">
+        <span class="filterbar__title">すぐ絞る</span>
+        <span class="seg seg--toggle" role="group" aria-label="板・コイル" id="quickShape"></span>
+        <span class="seg seg--toggle" role="group" aria-label="BOX最終実績" id="quickFinal"></span>
+        <span class="why">コイル = 製造板丈 0 / 実績 = BOX最終実績_設備名 が入っているか</span>
+      </div>
+
       {# よく使う条件。押すと足す、×で消す #}
       <div class="filterbar filterbar--saved" id="savedBar" hidden>
         <span class="filterbar__title">よく使う条件</span>

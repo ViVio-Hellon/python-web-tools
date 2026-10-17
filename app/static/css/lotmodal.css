@@ -118,6 +118,15 @@
 .nextstep { display: flex; flex: 0 0 auto; flex-direction: column;
             align-items: flex-end; gap: 4px; }
 .nextstep .why { margin: 0; text-align: right; max-width: 32ch; }
+/* 見出しの右の道具(倉庫連携: CSVで出す と 最新にする を1列に) */
+.headtools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+/* 中身を見出しの道具と同じ並びに流す(折り返しても1つの列として並ぶ) */
+.headtools .exportrow { display: contents; }
+/* 道具が増えた見出し(倉庫連携)は**折り返す**。見出しの字を縦に潰さない
+   (幅1366で「倉庫連携」が1字ずつ縦に並んだ) */
+.pane__head:has(.headtools) { flex-wrap: wrap; row-gap: 8px; }
+.pane__head:has(.headtools) > div:first-child { flex: 0 0 auto; white-space: nowrap; }
+.pane__head .nextstep:has(.headtools) { flex: 1 1 auto; min-width: 0; }
 
 /* ---- 包装仕様書の図面 ---- */
 /* NOをクリックでコピーできる。押せることが分かるようにする */

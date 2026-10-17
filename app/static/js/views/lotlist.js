@@ -107,6 +107,24 @@ function savedChip(name) {
   return span;
 }
 
+/** すぐ絞るボタン。押してあるかはサーバが決める(押した瞬間に色を変えない) */
+function renderQuick(quick) {
+  const groups = { shape: el.quickShape, final: el.quickFinal };
+  for (const [group, box] of Object.entries(groups)) {
+    if (!box) continue;
+    box.replaceChildren(...quick.filter((q) => q.group === group).map((q) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "seg__btn";
+      b.dataset.quick = q.name;
+      b.setAttribute("aria-pressed", String(q.on));
+      b.title = q.on ? `${q.title}(もう一度押すと外します)` : q.title;
+      b.textContent = q.text;
+      return b;
+    }));
+  }
+}
+
 export function render(view) {
   if (!view) return;
   lastView = view;
@@ -119,6 +137,7 @@ export function render(view) {
 
   el.chips.replaceChildren(...view.conditions.map(conditionChip));
   el.chipCount.textContent = `${view.conditions.length}件`;
+  renderQuick(view.quick || []);
   el.countNote.textContent = view.count_note;
 
   el.savedBar.hidden = view.saved.length === 0;
@@ -262,7 +281,7 @@ export function start(options) {
   for (const id of ["listCard", "lotHead", "lotRows", "chips", "chipCount",
                     "countNote", "listText", "pageSize", "condInput",
                     "suggest", "saveFilter", "saveWhy", "clearFilter",
-                    "savedBar", "savedChips", "listEmpty",
+                    "savedBar", "savedChips", "listEmpty", "quickShape", "quickFinal",
                     "searchHint", "rowHint"]) {
     el[id] = document.getElementById(id);
   }
@@ -316,6 +335,12 @@ export function start(options) {
     if (x) send("/api/lot/list/saved/delete", { name: x.dataset.deleteName });
   });
   el.clearFilter.addEventListener("click", () => send("/api/lot/list/filter/clear"));
+  for (const box of [el.quickShape, el.quickFinal]) {
+    box?.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-quick]");
+      if (b) send("/api/lot/list/filter/quick", { name: b.dataset.quick });
+    });
+  }
 
   el.saveFilter.addEventListener("click", async () => {
     const name = await promptBox("この条件に名前を付けてください", { ok: "名前を付けて残す" });

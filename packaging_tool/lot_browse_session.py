@@ -41,6 +41,19 @@ class OpResult:
     reason: str = ""
 
 
+# すぐ絞るボタン(VER4.8.62)。現場の声:「製造板丈を >1 にすれば済む話だが面倒なので
+# コイル・板のボタンを」「BOX最終実績_設備名の有無で絞るボタンも(実績あり・なし)」。
+# **中身はふつうの条件**なので、チップに出て、外せて、よく使う条件にも保存できる。
+# 同じ組のボタンは片方だけ(板とコイルを両方入れると0件になる)
+#   名前: (組, 条件, ボタンの字)
+QUICK: dict[str, tuple[str, q.Condition, str]] = {
+    "plate": ("shape", q.Condition("length", q.OP_GT, "0"), "板"),
+    "coil": ("shape", q.Condition("length", q.OP_EQ, "0"), "コイル"),     # 製造板丈 = 0 がコイル
+    "done": ("final", q.Condition("final_equipment", q.OP_FILLED, ""), "実績あり"),
+    "notdone": ("final", q.Condition("final_equipment", q.OP_BLANK, ""), "実績なし"),
+}
+
+
 @dataclass
 class LotBrowseSession:
     """一覧の絞り込み。プロセスに1つ。"""
@@ -65,6 +78,28 @@ class LotBrowseSession:
         self.conditions.append(cond)
         log.info("条件を追加: %s", cond.label)
         return OpResult(True, f"{cond.label} で絞りました")
+
+    def toggle_quick(self, name: str) -> OpResult:
+        """すぐ絞るボタン。入っていれば外す。入っていなければ、同じ組の
+        もう片方を外してから入れる。"""
+        if name not in QUICK:
+            return OpResult(False, f"「{name}」というボタンはありません。", q.REFUSE_NOT_LISTED)
+        group, cond, text = QUICK[name]
+        if cond in self.conditions:
+            self.conditions.remove(cond)
+            log.info("すぐ絞る: %s を外した", text)
+            return OpResult(True, f"{cond.label} を外しました")
+        others = [c for g, c, _ in QUICK.values() if g == group and c != cond]
+        self.conditions = [c for c in self.conditions if c not in others]
+        self.conditions.append(cond)
+        log.info("すぐ絞る: %s", text)
+        return OpResult(True, f"{cond.label} で絞りました")
+
+    def quick_states(self) -> list[dict[str, Any]]:
+        """ボタンの並びと、いま入っているか(画面はこれをそのまま描く)。"""
+        return [{"name": name, "group": group, "text": text,
+                 "on": cond in self.conditions, "title": cond.label}
+                for name, (group, cond, text) in QUICK.items()]
 
     def remove(self, index: int) -> OpResult:
         if not 0 <= index < len(self.conditions):

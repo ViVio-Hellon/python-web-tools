@@ -45,6 +45,11 @@ OP_LT = "<"
 OP_GE = "≥"
 OP_LE = "≤"
 OP_CONTAINS = "含む"
+# 値が入っているか(VER4.8.62)。値を打たない。いまは「すぐ絞る」ボタン
+# (`lot_browse_session.QUICK`)だけが使う ── 条件の入力欄には出さない
+OP_FILLED = "あり"
+OP_BLANK = "なし"
+OPS_PRESENCE = (OP_FILLED, OP_BLANK)
 
 _SQL_BY_OP = {OP_EQ: "=", OP_NE: "<>", OP_GT: ">", OP_LT: "<",
               OP_GE: ">=", OP_LE: "<="}
@@ -198,8 +203,8 @@ class Condition:
 
     @property
     def label(self) -> str:
-        """チップに出す文言。例「製造板厚 ≥ 3」"""
-        return f"{self.col.label} {self.op} {self.value}"
+        """チップに出す文言。例「製造板厚 ≥ 3」「BOX最終実績_設備名 あり」"""
+        return f"{self.col.label} {self.op} {self.value}".rstrip()
 
     def to_dict(self) -> dict[str, str]:
         return {"column": self.column, "op": self.op, "value": self.value,
@@ -223,6 +228,9 @@ def make_condition(column: str, op: str, value: Any) -> tuple[
     col = BY_KEY.get(column)
     if col is None:
         return None, Refusal(f"「{column}」は一覧にない列です。", REFUSE_NOT_LISTED)
+    if op in OPS_PRESENCE and col.kind == TYPE_TEXT:
+        # 「あり / なし」は値を取らない
+        return Condition(column=col.key, op=op, value=""), None
     if op not in col.ops:
         return None, Refusal(
             f"{col.label} に「{op}」は使えません。"
@@ -267,6 +275,10 @@ def _where(conditions: list[Condition], text: str) -> tuple[str, list[Any]]:
         if cond.op == OP_CONTAINS:
             clauses.append(f"{name} LIKE ?")
             params.append(f"%{cond.value}%")
+        elif cond.op in OPS_PRESENCE:
+            # 空白だけ・NULL は「なし」(取り込みで空欄が NULL にも '' にもなりうる)
+            test = "<>" if cond.op == OP_FILLED else "="
+            clauses.append(f"TRIM(COALESCE(CAST({name} AS TEXT), '')) {test} ''")
         elif col.kind == TYPE_NUMBER:
             clauses.append(f"{name} {_SQL_BY_OP[cond.op]} ?")
             params.append(float(cond.value))

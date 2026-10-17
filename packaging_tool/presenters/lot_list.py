@@ -58,6 +58,8 @@ class LotListViewModel:
     rows: list[RowView] = field(default_factory=list)
 
     conditions: list[dict[str, str]] = field(default_factory=list)
+    # すぐ絞るボタン(板・コイル / 実績あり・なし)。押してあるかはサーバが言う
+    quick: list[dict[str, Any]] = field(default_factory=list)
     text: str = ""
     saved: list[str] = field(default_factory=list)
     page_size: int = q.DEFAULT_PAGE_SIZE
@@ -90,6 +92,7 @@ class LotListViewModel:
             "rows": [{"lot_no": r.lot_no, "values": r.values,
                       "current": r.current} for r in self.rows],
             "conditions": self.conditions,
+            "quick": self.quick,
             "text": self.text,
             "saved": self.saved,
             "page_size": self.page_size,
@@ -131,6 +134,7 @@ def build(session: Any, conn: sqlite3.Connection, *,
     ]
 
     view.conditions = [c.to_dict() for c in session.conditions]
+    view.quick = session.quick_states()
     view.text = session.text
     view.saved = sorted(session.saved())
 

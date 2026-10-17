@@ -77,12 +77,16 @@ class MapItemsTests(unittest.TestCase):
         self.session.selected.upper.append(svc.SelectedBoard(600, 900, 1))
         self.session.selected_angles.append(1200)
 
+        self.session.board_type = "ハードボード"
         items = self.session.map_items()
         self.assertEqual(len(items), 3)
+        # ボード種別も渡す(棚検索が選定と同じ種別の置き場で測るため)
         self.assertEqual(items[0], {"kind": "board", "category": "下用",
-                                    "width": 750, "length": 1130, "count": 2})
+                                    "width": 750, "length": 1130, "count": 2,
+                                    "board_type": "ハードボード"})
         self.assertEqual(items[1], {"kind": "board", "category": "上用",
-                                    "width": 600, "length": 900, "count": 1})
+                                    "width": 600, "length": 900, "count": 1,
+                                    "board_type": "ハードボード"})
         self.assertEqual(items[2], {"kind": "angle", "width": 0,
                                     "length": 1200, "count": 1})
 

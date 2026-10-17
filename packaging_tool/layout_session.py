@@ -52,6 +52,11 @@ class LayoutSession:
     length_text: str = ""
     result: str = ""
     highlight: set = field(default_factory=set)
+    # いま出ている答えが「1件の検索」か「選んだ資材をまとめて」か。
+    # 拠点を替えたら**同じものを**出し直す(VER4.8.62。以前は検索の寸法が
+    # 残っていなければ何もせず、前の拠点の合計疲労度が残っていた)
+    showing: str = ""                      # "" / "search" / "selection"
+    selection_items: list = field(default_factory=list)
 
     # 押した置き場
     selected: str = ""
@@ -83,7 +88,14 @@ class LayoutSession:
                                   REFUSE_FAILED)
         log.info("拠点を切り替えました: %s", name)
 
-        if self.width_text or self.length_text:
+        if self.showing == "selection" and self.selection_items:
+            if conn is not None:
+                # まとめて見ていたなら、まとめて出し直す(合計疲労度も新しい拠点から)
+                self.show_selection(conn, self.selection_items)
+            else:
+                self.result = ""
+                self.highlight.clear()
+        elif self.showing == "search" and (self.width_text or self.length_text):
             if conn is not None:
                 # 探し直した結果(見つからなくても)がそのまま画面に載る。
                 # 拠点の切替そのものは成功しているので、断りにはしない
@@ -126,6 +138,7 @@ class LayoutSession:
 
         self.width_text = width_text
         self.length_text = length_text
+        self.showing = "search"
         self.highlight.clear()
         self.result = ""
 
@@ -185,10 +198,13 @@ class LayoutSession:
         分かるのが要点です(取りに行く順を決めるのは人)。
 
         `items` は資材選択が渡したもの:
-            {"kind": "board"/"angle", "width": int, "length": int, "count": int}
+            {"kind": "board"/"angle", "width": int, "length": int, "count": int,
+             "board_type": str(ボードだけ。選定のボード種別)}
         """
         self.highlight.clear()
         self.result = ""
+        self.showing = "selection"
+        self.selection_items = [dict(item) for item in items or []]
         if not items:
             return LayoutOpResult(False, "選定した資材がありません。"
                                   "先に資材選択でボードを決めてください。",
@@ -212,7 +228,11 @@ class LayoutSession:
             if length is None or (kind == KIND_BOARD and width is None):
                 continue
             if kind == KIND_BOARD:
-                nearest = svc.find_nearest_shelf_for_board(conn, width, length, base)
+                # **選定と同じボード種別の置き場で測る**(VER4.8.62)。種別を見ないと、
+                # 同じ寸法の別種別(プロテックボードなど)の棚が近ければそちらを
+                # 光らせ、選定の疲労度と違う距離で合計していた
+                nearest = svc.find_nearest_shelf_for_board(
+                    conn, width, length, base, str(item.get("board_type") or ""))
                 carry = svc.carry_board_score(width, length, count)
                 label = f"{width}×{length}"
             else:

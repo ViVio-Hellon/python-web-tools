@@ -136,8 +136,27 @@
       <h2>{{ '発注一覧' if is_material else '倉庫連携' }}</h2>
     </div>
     <div class="nextstep">
-      <button class="btn btn--find" type="button" id="refresh">
-        <span class="gl">⟳</span>最新にする</button>
+      {# CSVで出すは「最新にする」の隣。一覧の絞り込み(期間ボタン)のすぐ下に
+         あったので、絞り込むつもりで押してしまっていた(現場の声:「間違えて押してしまうので」)。
+         期間を決めてCSVに出す(`order_export`)。**ブラウザには渡さず、設定タブの
+         「発注CSVの出力先」へ書く**。一覧の絞り込み(文字・期間ボタン)とは別で、ここの日付だけを見る #}
+      <div class="headtools">
+        {# 「最新にする」を先頭に置く。幅が狭くて折り返しても「CSVで出す」と隣り合ったままになる #}
+        <button class="btn btn--find" type="button" id="refresh">
+          <span class="gl">⟳</span>最新にする</button>
+        <div class="field exportrow">
+          <label for="exportStart">CSVで出す</label>
+          <input class="input" type="date" id="exportStart" value="{{ export_start }}">
+          <span class="x">〜</span>
+          <label for="exportEnd" class="sr">終了日</label>
+          <input class="input" type="date" id="exportEnd" value="{{ export_end }}">
+          <button class="btn btn--commit" type="button" data-export="summary">
+            <span class="gl">▸</span>集計(確認済み・サイズ×発注コード)</button>
+          <button class="btn btn--commit" type="button" data-export="rows">
+            <span class="gl">▸</span>発注データ</button>
+        </div>
+      </div>
+      <p class="status" id="exportStatus" hidden></p>
       <p class="why" id="found"></p>
     </div>
   </div>
@@ -197,22 +216,8 @@
         </label>
         {% endif %}
       </div>
-      {# 期間を決めてCSVに出す(`order_export`)。**ブラウザには渡さず、設定タブの
-         「発注CSVの出力先」へ書く**。上の絞り込み(文字・期間ボタン)とは別で、ここの日付だけを見る #}
-      <div class="field exportrow">
-        <label for="exportStart">CSVで出す</label>
-        <input class="input" type="date" id="exportStart" value="{{ export_start }}">
-        <span class="x">〜</span>
-        <label for="exportEnd" class="sr">終了日</label>
-        <input class="input" type="date" id="exportEnd" value="{{ export_end }}">
-        <button class="btn btn--commit" type="button" data-export="summary">
-          <span class="gl">▸</span>集計(確認済み・サイズ×発注コード)</button>
-        <button class="btn btn--commit" type="button" data-export="rows">
-          <span class="gl">▸</span>発注データ</button>
-      </div>
-      <p class="why">出力先: <span id="exportDir">{{ export_dir }}</span>(設定タブの「置き場所」→「発注CSVの出力先」で変えられます)。
+      <p class="why">右上の「CSVで出す」の出力先: <span id="exportDir">{{ export_dir }}</span>(設定タブの「置き場所」→「発注CSVの出力先」で変えられます)。
         集計は<b>倉庫が確認した発注だけ</b>を数えます(取り消した発注と、発注数が 0 か空(EX・在庫で全部まかなえた発注など)の発注も数えません)。発注データは期間内の発注をそのまま出します。</p>
-      <p class="status" id="exportStatus" hidden></p>
 
       {# 主(太字)と従(小さい灰色)の2行組。**どれを畳むかはサーバが
          決める**(`presenters/warehouse.ORDER_VIEW`)ので、ここは

@@ -132,8 +132,13 @@ def build_fatigue_map(
         if target_width > 0:
             width_cut, length_cut = estimate_cut_fatigue(
                 width, length, target_width, base_len_for_cut, board_category)
+        # 置き場が分からない板はアングルと同じ既定の距離(`FAT_DIST_DEFAULT`)。
+        # 以前は0点(=いちばん近い扱い)で、置き場を登録していない板ほど
+        # 選ばれやすかった(アングルは25点で、ボードとアングルで扱いが違った。VER4.8.62)
+        dist = (angle_service.fat_dist_score(nearest.distance)
+                if nearest.shelf_name is not None else angle_service.FAT_DIST_DEFAULT)
         result[key] = FatigueEntry(
-            dist=angle_service.fat_dist_score(nearest.distance),
+            dist=dist,
             area=angle_service.fat_area_score1(width, length),
             width_cut=width_cut, length_cut=length_cut)
 

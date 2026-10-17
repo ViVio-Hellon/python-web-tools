@@ -243,6 +243,9 @@ a.btn { text-decoration: none; }
    ================================================================ */
 .field { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); flex-wrap: wrap; }
 .field > label { color: var(--muted); }
+/* 行の先頭の見出しを同じ幅に揃える。上下に並ぶ行の入力欄が縦にそろう
+   (「製品 幅」と「パレット 幅」で字数が違い、欄がずれて見えた。現場の声) */
+.field > label.field__lead { min-width: 5.5em; }
 
 .input {
   font: inherit;
@@ -688,6 +691,8 @@ select.input { cursor: pointer; }
   box-shadow: 0 1px 3px rgb(21 56 77 / 12%);
 }
 .seg__btn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+/* 押してある方をもう一度押すと外れる組(ロット検索の「すぐ絞る」) */
+.seg--toggle .seg__btn[aria-pressed="true"] { cursor: pointer; }
 
 /* ================================================================
    分類バッジ — 見出しに必ず「印」を付ける

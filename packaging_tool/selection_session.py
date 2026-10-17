@@ -50,7 +50,7 @@ from . import special_packaging as spk
 from . import placement_algorithm as place
 from . import tiling_algorithm as tiling
 from . import user_log as user_log_mod
-from . import user_settings, work_context
+from . import work_context
 from .logging_utils import get_logger
 from .presenters.selection import SelectionPresenter
 from .selection_common import (  # noqa: F401 - ここから外へも公開する
@@ -122,6 +122,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
 
     # --- ボード (VBA `cboBoardType` / `lstSelectedBoards*`) ---
     board_type: str = ""
+    # 出ているボードが疲労度優先で選ばれたか(`auto_select_boards` が決める)
+    selected_with_fatigue: bool = False
     # 在庫考慮。**マップの有無がそのままON/OFF**(tkinter版 `_stock_map` と同じ)。
     # 別にbool を持つと、片方だけ立った状態を作れてしまう
     stock_map: Optional[dict[str, str]] = None
@@ -602,6 +604,14 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             # 「なぜこの選定結果になったか」は後から選定ログでしか辿れない
             self.presenter.user_log.log(
                 f"[疲労度優先] {'ON' if now else 'OFF'}", emphasis=True)
+            # **出ている選定は選び直さない**(VBAも同じ)。ボタンの字は今の設定に
+            # 変わるので、出ている選定がどちらで選ばれたかと食い違って見える。
+            # 食い違うときだけ、そう言う(VER4.8.62)
+            if (self.selected.lower or self.selected.upper) and \
+                    self.selected_with_fatigue != now:
+                self.presenter.user_log.log(
+                    f"  ※出ているボードは疲労度{'ON' if self.selected_with_fatigue else 'OFF'}"
+                    "で選んだものです。新しい設定で選ぶには、もう一度ボード選定を押してください")
         return now
 
     def _toggle_stock_aware(self) -> bool:
@@ -791,9 +801,17 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
 
         notes: list[str] = []
         fatigue_lower = fatigue_upper = None
-        if self.fatigue:
+        base_point = location_service.current_base_point()
+        if self.fatigue and not base_point.known:
+            # **原点が配置図に無ければ距離が1つも測れない。** 黙って続けると、
+            # 距離ぬきの点で「疲労度優先」を名乗る選定になる(棚検索は同じとき
+            # 断っている)。通常選定に倒して、そう言う(VER4.8.62)
+            notes.append(f"拠点「{base_point.name}」が棚の配置図に無いため距離を測れません。"
+                         "通常選定で実行しました(設定画面の「動作」で拠点を選び直してください)。")
+            ulog.log(f"  ※拠点 {base_point.name} が配置図に無いため、通常選定に切り替えました")
+        elif self.fatigue:
             fatigue_lower, fatigue_upper = board_scoring.build_selection_fatigue_maps(
-                self.presenter.conn, available, user_settings.get_position(),
+                self.presenter.conn, available, base_point.name,
                 board_type=self.board_type,
                 pallet_width=self.palette.width, pallet_length=self.palette.length,
                 product_width=self.product.width, product_length=self.product.length)
@@ -806,7 +824,6 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                 # なったか」を追うときに拠点が要る。既定を当てている
                 # だけのときはそう書く(`get_position` は空を返さないので、
                 # 名前だけ出すと人が選んだように読める)
-                base_point = location_service.current_base_point()
                 ulog.log(f"  疲労度マップ: 拠点 {base_point.name}"
                          + ("" if base_point.chosen else "(未登録のため既定)"))
 
@@ -823,7 +840,11 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                 result = alg.auto_select_boards(
                     available, self.palette, self.product,
                     fatigue_map_lower=fatigue_lower, fatigue_map_upper=fatigue_upper,
-                    fatigue_mode=self.fatigue, stock_aware=self.stock_aware,
+                    # **マップが無ければ疲労度モードで走らせない。** 「通常選定で
+                    # 実行しました」と言いながら疲労度モードの経路(PASS1.5競合・
+                    # 代替ボード)を点0で走らせていて、実データで544通り中18通りが
+                    # 本当の通常選定と違う結果になっていた(VER4.8.62)
+                    fatigue_mode=fatigue_lower is not None, stock_aware=self.stock_aware,
                     # 包装仕様NOで決まったモードを選定へ渡す。プロテックと
                     # 上下共用は「上用=下用と同サイズ」を強制する分岐に効く。
                     # どのモードを渡すかはプレゼンタが知っている
@@ -835,6 +856,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
 
         self.select_result = result
         self.restored = None
+        # いま出ている選定が疲労度で選ばれたか(切り替えたときに言うため)
+        self.selected_with_fatigue = fatigue_lower is not None
         self.selected.lower = list(result.lower)
         self.selected.upper = list(result.upper)
         # 現行の選定に戻ったのだから、「候補変更」の回り位置も戻す。
@@ -1050,9 +1073,11 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                 if key in merged:
                     merged[key]["count"] += board.count
                     continue
+                # ボード種別も渡す: 棚検索が選定の疲労度と同じ種別の置き場で
+                # 距離を測るため(同じ寸法の別種別の棚を光らせない。VER4.8.62)
                 merged[key] = {"kind": "board", "category": category,
                                "width": board.width, "length": board.length,
-                               "count": board.count}
+                               "count": board.count, "board_type": self.board_type}
                 items.append(merged[key])
         for length in self.selected_angles:
             items.append({"kind": "angle", "width": 0,

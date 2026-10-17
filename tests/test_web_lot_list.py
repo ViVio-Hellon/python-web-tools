@@ -443,3 +443,73 @@ class PageTests(ListWebTestCase):
 
 if __name__ == "__main__":                       # pragma: no cover
     unittest.main()
+
+
+class QuickFilterTests(ListWebTestCase):
+    """すぐ絞るボタン(VER4.8.62)。
+
+    現場の声:「製造板丈を >1 にすれば済む話だが面倒なのでコイル・板のボタンを
+    (製造板丈=0 がコイル)」「BOX最終実績_設備名の有無で絞るボタンも(実績あり・なし)」。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # 2222222 はコイル(製造板丈 0)。1111111 だけ最終実績の設備名が入っている。
+        # 3333333 は空白だけ(取り込みで空欄が空白になることがある → 実績なし)
+        self.conn.execute('UPDATE 仕掛ロット SET 製造板丈 = 0 WHERE ロット番号 = ?', ("2222222",))
+        self.conn.execute('UPDATE 仕掛ロット SET "BOX最終実績_設備名" = ? WHERE ロット番号 = ?',
+                          ("BOX3", "1111111"))
+        self.conn.execute('UPDATE 仕掛ロット SET "BOX最終実績_設備名" = ? WHERE ロット番号 = ?',
+                          ("  ", "3333333"))
+        self.conn.commit()
+
+    def press(self, name: str) -> dict:
+        return self.post("/api/lot/list/filter/quick", {"name": name})
+
+    def test_ボタンの並びが画面に渡る(self) -> None:
+        quick = self.get()["quick"]
+        self.assertEqual([(q["name"], q["text"], q["on"]) for q in quick],
+                         [("plate", "板", False), ("coil", "コイル", False),
+                          ("done", "実績あり", False), ("notdone", "実績なし", False)])
+
+    def test_コイルは製造板丈0_板はそれ以外(self) -> None:
+        self.assertEqual(self.lots(self.press("coil")), ["2222222"])
+        body = self.press("plate")
+        # 同じ組は片方だけ。板を押したらコイルは外れる
+        self.assertEqual(self.lots(body), ["1111111", "3333333"])
+        self.assertEqual([c["label"] for c in body["conditions"]], ["製造板丈 > 0"])
+
+    def test_もう一度押すと外れる(self) -> None:
+        self.press("coil")
+        body = self.press("coil")
+        self.assertEqual(body["conditions"], [])
+        self.assertEqual(len(self.lots(body)), 3)
+
+    def test_実績あり_なし(self) -> None:
+        self.assertEqual(self.lots(self.press("done")), ["1111111"])
+        body = self.press("notdone")
+        self.assertEqual(self.lots(body), ["2222222", "3333333"])
+        self.assertEqual([c["label"] for c in body["conditions"]],
+                         ["BOX最終実績_設備名 なし"])
+
+    def test_組が違えば両方効く(self) -> None:
+        self.press("plate")
+        body = self.press("notdone")
+        self.assertEqual(self.lots(body), ["3333333"])
+        self.assertEqual([q["on"] for q in body["quick"]], [True, False, False, True])
+
+    def test_チップで外せる(self) -> None:
+        self.press("done")
+        body = self.post("/api/lot/list/filter/remove", {"index": 0})
+        self.assertFalse(any(q["on"] for q in body["quick"]))
+
+    def test_知らないボタンは400(self) -> None:
+        self.post("/api/lot/list/filter/quick", {"name": "秘密"}, expect=400)
+
+    def test_保存して呼び出せる(self) -> None:
+        self.press("coil")
+        self.press("done")
+        self.post("/api/lot/list/saved/save", {"name": "コイル実績あり"})
+        self.post("/api/lot/list/filter/clear")
+        body = self.post("/api/lot/list/saved/load", {"name": "コイル実績あり"})
+        self.assertEqual([q["on"] for q in body["quick"]], [False, True, True, False])
