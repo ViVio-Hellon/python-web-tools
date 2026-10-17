@@ -18,6 +18,7 @@ VBA版はハイライト状態をラベルの背景色に直接書き込む副�
 from __future__ import annotations
 
 import sqlite3
+import unicodedata
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -47,7 +48,8 @@ class BasePoint:
         """画面に添える一言。**言うことが無ければ空。**"""
         if not self.known:
             return (f"拠点「{self.name}」が配置図にありません。"
-                    "設定画面で選び直してください(距離を測る原点です)。")
+                    "棚検索の「配置編集」で図に置くか、設定画面で選び直してください"
+                    "(距離を測る原点です)。")
         if not self.chosen:
             return (f"拠点が未登録なので {self.name} から測っています。"
                     "設定画面で選ぶと、自分の持ち場からの距離になります。")
@@ -62,10 +64,81 @@ def current_base_point() -> BasePoint:
                      known=name in floor_plan.load().base_point_names)
 
 
-def _split_labels(data_label: Optional[str]) -> list[str]:
+# ------------------------------------------------------------------
+# 拠点をマスタで足す(VER4.8.62〜)
+# ------------------------------------------------------------------
+# 現場の声:「拠点ラベルの追加を BoardMaster に設定し(データラベル列: 拠点L-1, 拠点LVC,
+# 拠点HVC。例: 追加するとして 拠点大板 と入力)、最寄り置き場の検索の拠点のコンボボックスに
+# 追加、配置編集にも拠点の赤色ラベルで出現し配置できる」。
+#
+#   BoardMaster のデータラベルに「拠点」で始まる字を書くと、その後ろが拠点の名前になる。
+#   拠点だけを書く行は ボード幅・丈 を 0、ボードタイプを「拠点」にする(ボードの候補には出ない)。
+#   座標は配置図(配置編集)が持つ。マスタにあって図に無い拠点は、配置編集に入ると図に出る。
+#
+# 名前は**全角半角・ハイフン・空白・大小文字を見ずに**突き合わせる。「拠点L-1」は図の「L1」と
+# 同じ拠点(図の名前を使う。設定に保存した拠点名・距離が変わらないように)
+BASE_PREFIX = "拠点"
+
+
+def base_key(name: str) -> str:
+    """拠点名を突き合わせるための形(`L-1` と `L1`、`ＨＶＣ` と `HVC` を同じに)。"""
+    text = unicodedata.normalize("NFKC", name or "")
+    for ch in ("-", "ー", "‐", "−", "_", " ", "\u3000"):
+        text = text.replace(ch, "")
+    return text.upper()
+
+
+def _tokens(data_label: Optional[str]) -> list[str]:
     if not data_label:
         return []
-    return [t.strip() for t in data_label.split(",") if t.strip()]
+    return [t.strip() for t in str(data_label).split(",") if t.strip()]
+
+
+def _base_name_of(token: str) -> Optional[str]:
+    """「拠点大板」→「大板」。拠点の印でなければ None。"""
+    text = unicodedata.normalize("NFKC", token).strip()
+    if text.startswith(BASE_PREFIX):
+        name = text[len(BASE_PREFIX):].strip()
+        return name or None
+    return None
+
+
+def _split_labels(data_label: Optional[str]) -> list[str]:
+    """置き場のラベルだけ(拠点の印は除く ── 拠点は置き場ではない)。"""
+    return [t for t in _tokens(data_label) if _base_name_of(t) is None]
+
+
+def master_base_points(conn: Optional[sqlite3.Connection]) -> list[str]:
+    """BoardMaster のデータラベルに書かれた拠点(書かれた順、重複なし)。"""
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute("SELECT データラベル FROM BoardMaster ORDER BY 管理番号").fetchall()
+    except sqlite3.Error as exc:
+        log.warning("BoardMaster から拠点を読めません: %s", exc)
+        return []
+    names: list[str] = []
+    keys: set[str] = set()
+    for row in rows:
+        for token in _tokens(row[0]):
+            name = _base_name_of(token)
+            if name and base_key(name) not in keys:
+                keys.add(base_key(name))
+                names.append(name)
+    return names
+
+
+def base_point_names(conn: Optional[sqlite3.Connection] = None) -> list[str]:
+    """選べる拠点。配置図の拠点 + マスタで足した拠点(図と同じものは図の名前で1つ)。"""
+    plan_names = list(floor_plan.base_points())
+    keys = {base_key(n) for n in plan_names}
+    return plan_names + [n for n in master_base_points(conn) if base_key(n) not in keys]
+
+
+def unplaced_base_points(conn: Optional[sqlite3.Connection]) -> list[str]:
+    """マスタにあって、まだ配置図に置いていない拠点(距離を測れない)。"""
+    keys = {base_key(n) for n in floor_plan.load().base_point_names}
+    return [n for n in master_base_points(conn) if base_key(n) not in keys]
 
 
 def list_all_data_labels(conn: sqlite3.Connection) -> set[str]:

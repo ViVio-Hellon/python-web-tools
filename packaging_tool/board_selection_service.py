@@ -159,6 +159,13 @@ def apply_product_size(
     return (ApplyResult(True, f"製品: {width} × {length} (設定済){note}{yama}"),
             ProductSize(width=width, length=length), rotated)
 
+# **ボードの行だけ**(VER4.8.62)。拠点をマスタで足す行(ボード幅・丈 0、ボードタイプ「拠点」、
+# データラベル「拠点大板」。`location_service.BASE_PREFIX`)を候補・種別に出さない
+BASE_ROW_TYPE = "拠点"
+BOARD_ROWS_ONLY = (f"ボード幅 > 0 AND ボード丈 > 0 "
+                   f"AND COALESCE(ボードタイプ, '') <> '{BASE_ROW_TYPE}'")
+
+
 def list_board_types(conn: sqlite3.Connection) -> list[str]:
     """VBA `InitializeAvailableBoards` 内の `cboBoardType` 初期候補構築の移植。
 
@@ -166,7 +173,8 @@ def list_board_types(conn: sqlite3.Connection) -> list[str]:
     (アルファベット順ソートではない、元VBA仕様)。
     """
     rows = db.fetch_all(
-        conn, "SELECT ボードタイプ FROM BoardMaster ORDER BY ボード幅", caller_name="list_board_types",
+        conn, f"SELECT ボードタイプ FROM BoardMaster WHERE {BOARD_ROWS_ONLY} ORDER BY ボード幅",
+        caller_name="list_board_types",
     ) or []
     seen: list[str] = []
     for row in rows:
@@ -179,10 +187,10 @@ def list_available_boards(
     conn: sqlite3.Connection, board_type: str = "", *, stock_map: Optional[dict[str, str]] = None,
 ) -> list[BoardRow]:
     """VBA `InitializeAvailableBoards` の移植。`board_type` 指定時のみ絞り込む。"""
-    sql = "SELECT * FROM BoardMaster"
+    sql = f"SELECT * FROM BoardMaster WHERE {BOARD_ROWS_ONLY}"
     params: tuple = ()
     if board_type:
-        sql += " WHERE ボードタイプ = ?"
+        sql += " AND ボードタイプ = ?"
         params = (board_type,)
     sql += " ORDER BY ボード幅"
     rows = db.fetch_all(conn, sql, params, caller_name="list_available_boards") or []

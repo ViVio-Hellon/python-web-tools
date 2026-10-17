@@ -152,7 +152,9 @@ def save():
         spec_url=pick("spec_sheet_url"),
         position=pick("position"),
         # 置き場所を**変えるとき**だけ要る。値は保存も応答もしない
-        password=pick("password"))
+        password=pick("password"),
+        # 拠点はマスタ(BoardMaster のデータラベル「拠点〇〇」)でも足せるので、確かめるのに要る
+        conn=get_db())
     if not result.ok:
         # 断りの種別を HTTP に写す(設計.md §1)。
         #   400 … 入力の形が違う。**サーバの状態は動いていない**

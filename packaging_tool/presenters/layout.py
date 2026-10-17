@@ -148,7 +148,8 @@ def build(conn: sqlite3.Connection, session: Any) -> LayoutViewModel:
         background_y=plan.background.y,
         background_scale=plan.background.scale,
         base_point=user_settings.get_position(),
-        base_points=list(plan.base_point_names),
+        # 図の拠点 + マスタ(BoardMaster のデータラベル「拠点〇〇」)で足した拠点
+        base_points=(svc.base_point_names(conn) if available else list(plan.base_point_names)),
         kind=session.kind,
         width_text=session.width_text,
         length_text=session.length_text,

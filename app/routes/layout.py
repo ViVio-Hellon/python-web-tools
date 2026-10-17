@@ -145,7 +145,8 @@ def set_editing():
     """
     body = request.get_json(silent=True) or {}
     session = _session()
-    return _apply(session, session.set_editing(bool(body.get("on"))))
+    # マスタで足した拠点を図に出すために接続を渡す(`set_editing` の説明)
+    return _apply(session, session.set_editing(bool(body.get("on")), get_db()))
 
 
 @bp.post("/api/layout/move")

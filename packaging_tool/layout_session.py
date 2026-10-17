@@ -80,8 +80,9 @@ class LayoutSession:
         **同じ条件で探し直す** ── 拠点を替えるのは、そこからの答えが
         見たいからで、訊かれても答えは1つしかない。
         """
-        if name not in self.plan.base_point_names:
-            return LayoutOpResult(False, f"拠点 '{name}' は配置図にありません。",
+        on_plan = name in self.plan.base_point_names
+        if not on_plan and name not in svc.base_point_names(conn):
+            return LayoutOpResult(False, f"拠点 '{name}' は配置図にもマスタにもありません。",
                                   REFUSE_NOT_LISTED)
         if not user_settings.set_position(name):
             return LayoutOpResult(False, "設定を保存できませんでした。",
@@ -105,6 +106,10 @@ class LayoutSession:
                 # 残すと、新しい拠点の答えとして読まれる
                 self.result = ""
                 self.highlight.clear()
+        if not on_plan:
+            # マスタで足したが、まだ図に置いていない。選べるが、置くまで距離は測れない
+            return LayoutOpResult(True, f"拠点を {name} にしました。まだ図に置いていないので距離を測れません"
+                                  " ──「配置編集」で図に出して置いてください")
         return LayoutOpResult(True, f"拠点を {name} にしました")
 
     # --- 検索 -------------------------------------------------------
@@ -280,7 +285,7 @@ class LayoutSession:
         return LayoutOpResult(True, "")
 
     # --- 配置編集 ---------------------------------------------------
-    def set_editing(self, on: bool) -> LayoutOpResult:
+    def set_editing(self, on: bool, conn: Any = None) -> LayoutOpResult:
         """編集モードの入り切り。
 
         通常は動かせない。図はよく押す(中身を見る)ので、常時ドラッグ
@@ -325,7 +330,30 @@ class LayoutSession:
             self.editing = False
             return LayoutOpResult(True, "編集を終わりました。配置図を保存しました")
         self.editing = bool(on)
+        if self.editing and conn is not None:
+            placed = self._show_unplaced_bases(conn)
+            if placed:
+                return LayoutOpResult(
+                    True, f"配置編集: ON ── マスタで足した拠点 {'・'.join(placed)} を図の左上に出しました。"
+                    "動かして置いてください(編集を終えると保存します)")
         return LayoutOpResult(True, "配置編集: " + ("ON" if self.editing else "OFF"))
+
+    def _show_unplaced_bases(self, conn: Any) -> list[str]:
+        """マスタ(BoardMaster のデータラベル「拠点〇〇」)にあって図に無い拠点を図に出す。
+
+        **図に出すまで距離は測れない**(座標が無い)。出す場所は左上から縦に並べる ──
+        真ん中に重ねて出すと、どれがどれか分からない。保存は編集を終えたとき(ほかの
+        編集と同じ)。出しただけで保存しないのは、置き場所を決めるのが人だから
+        """
+        placed = []
+        for index, name in enumerate(svc.unplaced_base_points(conn)):
+            self.plan.base_points.append(floor_plan.MapItem(
+                name=name, x=10.0, y=10.0 + index * 18.0, w=66.0, h=12.0))
+            placed.append(name)
+        if placed:
+            self.dirty = True
+            log.info("マスタの拠点を図に出しました: %s", placed)
+        return placed
 
     def move(self, name: str, x: float, y: float) -> LayoutOpResult:
         """置き場を動かす。**保存するまでファイルには書かない**。"""

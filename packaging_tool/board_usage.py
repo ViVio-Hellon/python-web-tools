@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import db
+from .board_selection_service import BOARD_ROWS_ONLY
 from .logging_utils import get_logger
 from .models import PlacedBoardModel
 
@@ -269,8 +270,8 @@ def popularity(conn: sqlite3.Connection,
 
     listed = db.fetch_all(
         conn,
-        "SELECT ボード幅, ボード丈, ボードタイプ FROM BoardMaster "
-        + ("WHERE ボードタイプ = ?" if board_type else "")
+        f"SELECT ボード幅, ボード丈, ボードタイプ FROM BoardMaster WHERE {BOARD_ROWS_ONLY} "
+        + ("AND ボードタイプ = ?" if board_type else "")
         + " ORDER BY ボードタイプ, ボード幅, ボード丈",
         args, caller_name="board_usage.popularity.listed") or []
 
@@ -341,7 +342,7 @@ def board_types(conn: sqlite3.Connection) -> list[str]:
     rows = db.fetch_all(
         conn,
         "SELECT DISTINCT ボードタイプ FROM BoardMaster "
-        "WHERE ボードタイプ <> '' ORDER BY ボードタイプ",
+        f"WHERE ボードタイプ <> '' AND {BOARD_ROWS_ONLY} ORDER BY ボードタイプ",
         caller_name="board_usage.board_types") or []
     return [r["ボードタイプ"] for r in rows]
 

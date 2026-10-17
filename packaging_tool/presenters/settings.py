@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from .. import (admin_password, config, data_sync, floor_plan, jobs,
+from .. import (admin_password, config, data_sync, floor_plan, jobs, location_service,
                 lot_browse_session, lot_query, source_db, spec_sheet,
                 user_settings)
 from ..logging_utils import get_logger
@@ -272,7 +272,8 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
         # 未登録なら空(画面は「未登録」を出す)。既定の L1 を出すと、登録
         # していないのに L1 に決まっているように見える(配った直後の端末がこれ)
         position=str(user_settings.get(user_settings.KEY_POSITION) or ""),
-        positions=list(floor_plan.base_points()),
+        # 配置図の拠点 + マスタで足した拠点(BoardMaster のデータラベル「拠点〇〇」)
+        positions=location_service.base_point_names(conn),
         spec_sheet_url=spec_sheet.url_template(),
         spec_sheet_problem=spec_sheet.template_problem(spec_sheet.url_template()),
         admin_custom=admin_password.is_custom(),
@@ -1521,7 +1522,8 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
          threshold_dir: Optional[str] = None,
          lot_dir2: Optional[str] = None,
          lot_files2: Optional[dict] = None,
-         order_csv_dir: Optional[str] = None) -> SaveResult:
+         order_csv_dir: Optional[str] = None,
+         conn: Any = None) -> SaveResult:
     """設定を保存する。**渡されたものだけ**を触る。
 
     `None` は「この項目は今回いじらない」の意味。画面が一部だけ送って
@@ -1542,7 +1544,7 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
             return SaveResult(False, problem, REFUSE_BAD_INPUT)
 
     if position is not None:
-        allowed = floor_plan.base_points()
+        allowed = location_service.base_point_names(conn)
         if position not in allowed:
             # 図に無い拠点を入れると、疲労度も棚検索も当たらなくなる
             return SaveResult(
