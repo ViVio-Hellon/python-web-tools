@@ -150,6 +150,7 @@ SECTIONS: tuple[tuple[str, str, tuple[tuple[str, str, str, str], ...]], ...] = (
          ("angle_service", "FAT_DIST_DEFAULT", "距離が分からないときの距離スコア", ""),
          ("angle_service", "FAT_SHEET_SCORE", "1枚(アングルは1本)ごとの手間(仮の値)", ""),
          ("angle_service", "ANGLE_CUT_LINE", "アングルの切断線の長さ(断面の幅)", "mm"),
+         ("angle_service", "ANGLE_CUT_SCORE", "アングルのカット1回の点(配置図の端から端まで歩くのと同じ)", ""),
      )),
     ("アクセス権限",
      "アクセス権限の表はほかのツールも使う。本ツールの権限コード(mode:field / mode:material)だけを読み、ほかは読み飛ばす。",

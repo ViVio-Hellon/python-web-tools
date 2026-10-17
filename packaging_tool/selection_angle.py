@@ -154,9 +154,18 @@ class AngleMixin:
                 self.presenter.user_log.log(message)
                 notes.append(message)
 
-        result = angle_service.select_angles(
-            self.product.length, angles, pallet_len, leg_count,
-            fatigue_mode=bool(fat_map), fat_map=fat_map)
+        if fat_map:
+            # ボードと同じく、通常と疲労度の選定を両方作って、できあがった選定の点が
+            # 低いほうを採る(VER4.8.65)
+            result, n_score, f_score = angle_service.select_angles_lowest_fatigue(
+                self.product.length, angles, pallet_len, leg_count, fat_map)
+            self.presenter.user_log.log(
+                f"  疲労度の比べ: 通常の選定 {n_score:.1f}点 / 疲労度の選定 {f_score:.1f}点 → "
+                + ("疲労度の選定を採りました" if f_score <= n_score
+                   else "通常の選定のほうが楽なので、通常の選定を採りました"))
+        else:
+            result = angle_service.select_angles(
+                self.product.length, angles, pallet_len, leg_count)
         self.angle_need_cut = result.need_cut
         # 選び直した時点で、いま出ている図は別の組み合わせのもの
         self.invalidate_angle_plan()

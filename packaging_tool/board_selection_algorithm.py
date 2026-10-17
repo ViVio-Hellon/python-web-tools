@@ -48,6 +48,7 @@ VBAソースを1行ずつ確認して移植した。対応関係:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 from .board_scoring import FatigueEntry
@@ -255,3 +256,108 @@ def auto_select_boards(
         lower_result=lower_result, upper_result=upper_result,
         cut_info=cut_info, length_cut_info=length_cut_info, length_cut_count=length_cut_count,
     )
+
+
+# ==================================================================
+# 疲労度優先: 通常の選定と疲労度の選定を**本当の合計点**で比べる(VER4.8.65)
+# ==================================================================
+# 現場の声:「カットするぐらいなら運搬するという現場の思想は生きていますか？」。
+# 実データ(共有マスタの写し・ハードボード544通り)で比べると、疲労度ONのほうが切る選定が
+# 多かった(拠点L1: 切る選定 55 → 116、板 4761 → 5387枚)。選定の**前の見込み**で比べて
+# いるため、次の3つが点に入らないまま選ばれていた:
+#   1. 見込みの丈カットは「切る」と「補填板で埋める」を見分けられない(どちらも1回と数える)
+#   2. 下用PASS1(疲労度モードだけ)は、点を数えたあとで主ボードを1枚足す(丈残300以上)
+#   3. 上用の並べ替えは、幅が足りずカット前提(全数カット)になることを見込めない
+# 見込みの式を細かく直すより、**できあがった選定を数える**ほうが確か。両方作って、実際に切る
+# 箇所・補填板・枚数をすべて数えた合計点で低いほうを採る。ONがOFFより疲れる結果にならない。
+@dataclass
+class FatigueTally:
+    """できあがった選定の疲労度(`docs/疲労度の計算.md` と同じ式)。"""
+
+    distance: float = 0.0     # 棚まで歩く(サイズごとに1往復)
+    carry: float = 0.0        # 運ぶ(面積 + 手間)x枚数。補填板も入れる
+    cut: float = 0.0          # 実際に切るぶん
+    sheets: int = 0
+    cuts: int = 0             # 切る回数
+
+    @property
+    def total(self) -> float:
+        return self.distance + self.carry + self.cut
+
+    def text(self) -> str:
+        return (f"{self.total:.1f}点(歩く {self.distance:.1f} / 運ぶ {self.carry:.1f} / "
+                f"切る {self.cut:.1f}・{self.cuts}回 / 板 {self.sheets}枚)")
+
+
+def actual_fatigue(
+    result: AutoSelectResult,
+    fatigue_map_lower: Optional[dict[str, FatigueEntry]],
+    fatigue_map_upper: Optional[dict[str, FatigueEntry]],
+) -> FatigueTally:
+    """できあがった選定(上用・下用・補填板)を、実際に切る箇所まで数える。
+
+        歩く … サイズごとに1回(棚まで1往復。疲労度マップの距離。置き場不明は既定の25点)
+        運ぶ … (面積 + 手間) x 枚数。**補填板も1枚ずつ**
+        切る … 丈カット: 記録された丈カット(`length_cut_info` の L_/U_)x 切る枚数。切断線 = 値
+               幅カット: カット前提の板は全数(切断線 = 短辺)
+    """
+    from . import angle_service
+
+    tally = FatigueTally()
+    seen: set[tuple[int, int]] = set()
+    for b in list(result.lower) + list(result.upper):
+        size = (min(b.width, b.length), max(b.width, b.length))
+        n = max(int(b.count or 0), 0)
+        tally.sheets += n
+        tally.carry += (angle_service.fat_area_score1(b.width, b.length)
+                        + angle_service.FAT_SHEET_SCORE) * n
+        if size not in seen:
+            seen.add(size)
+            key = f"{b.width}x{b.length}"
+            entry = ((fatigue_map_lower or {}).get(key) or (fatigue_map_upper or {}).get(key))
+            tally.distance += entry.dist if entry else angle_service.FAT_DIST_DEFAULT
+        if (b.tag or "").strip() == TAG_CUT_PREMISE and n:
+            tally.cut += angle_service.fat_cut_score1(size[0]) * n
+            tally.cuts += n
+    for key, line in result.length_cut_info.items():
+        if not key.startswith(("L_", "U_")):
+            continue
+        n = max(1, int(result.length_cut_count.get(key, 1) or 1))
+        tally.cut += angle_service.fat_cut_score1(line) * n
+        tally.cuts += n
+    return tally
+
+
+@dataclass
+class FatigueChoice:
+    result: AutoSelectResult
+    normal: FatigueTally
+    fatigue: FatigueTally
+    used_fatigue: bool        # 疲労度の選定を採ったか(False なら通常の選定のほうが楽だった)
+
+
+def auto_select_lowest_fatigue(
+    available: list[BoardModel], palette: Palette, product: ProductSize,
+    *,
+    fatigue_map_lower: dict[str, FatigueEntry],
+    fatigue_map_upper: dict[str, FatigueEntry],
+    stock_aware: bool = False,
+    **flags,
+) -> FatigueChoice:
+    """疲労度優先: 通常の選定と疲労度の選定を作り、本当の合計点が低いほうを採る。
+
+    同じ点なら疲労度の選定(押した人が選んだ方式)。
+    """
+    normal = auto_select_boards(available, palette, product, fatigue_mode=False,
+                                stock_aware=stock_aware, **flags)
+    fatigue = auto_select_boards(available, palette, product,
+                                 fatigue_map_lower=fatigue_map_lower,
+                                 fatigue_map_upper=fatigue_map_upper,
+                                 fatigue_mode=True, stock_aware=stock_aware, **flags)
+    n_tally = actual_fatigue(normal, fatigue_map_lower, fatigue_map_upper)
+    f_tally = actual_fatigue(fatigue, fatigue_map_lower, fatigue_map_upper)
+    use_fatigue = f_tally.total <= n_tally.total + 1e-9
+    log.debug("疲労度の比べ: 通常 %s / 疲労度 %s → %s",
+              n_tally.text(), f_tally.text(), "疲労度" if use_fatigue else "通常")
+    return FatigueChoice(result=fatigue if use_fatigue else normal,
+                         normal=n_tally, fatigue=f_tally, used_fatigue=use_fatigue)

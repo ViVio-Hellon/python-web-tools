@@ -367,7 +367,11 @@ def select_upper_boards(
         boards.append(SelectedBoard(width=b.width, length=b.length, count=cnt, tag=""))
         key = f"{b.width}x{b.length}"
         if eff_l * cnt > product.length:
-            result.length_cut_info.setdefault(key, eff_w)
+            # 丈カットのキーは上用 `U_` を付ける(`recalc_length_cut_info` と同じ名前)。
+            # 以前は付けていなかったので、同じ丈カットが「945x2000」と「U_945x2000」の
+            # 2つで記録され、実績保存のカット行に余分な1行が入っていた(VER4.8.65)。
+            # 切断依頼は配置とカット前提の印から作るので、こちらには効いていなかった
+            result.length_cut_info.setdefault(f"U_{key}", eff_w)
         if eff_w > product.width:
             result.cut_info.setdefault(key, eff_l)
         main_eff_w = eff_w

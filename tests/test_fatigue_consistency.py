@@ -89,7 +89,9 @@ class SelectionFallbackTests(_PlanCase):
     def test_fatigue_mode_is_on_when_the_maps_are_built(self):
         self.session.toggle("fatigue")
         self.assertTrue(self.session.auto_select_boards().ok)
-        self.assertEqual(self.modes, [True])
+        # 通常の選定と疲労度の選定を両方作って比べる(VER4.8.65)
+        self.assertEqual(self.modes, [False, True])
+        self.assertIn("疲労度の比べ", self.log.text)
 
     def test_a_missing_map_really_runs_the_normal_selection(self):
         """1. 「通常選定で実行しました」なら、本当に通常選定で走らせる。"""

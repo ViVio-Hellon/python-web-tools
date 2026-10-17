@@ -120,6 +120,11 @@ def fat_angle_length_score1(a_len: float) -> float:
 
 # アングルの切断線は断面(幅50mm)の1本。長さによらず一定
 ANGLE_CUT_LINE = 50
+# アングルのカット1回の点(VER4.8.65)。切断線(断面50mm)でボードと同じ式に通すと 3.9点しかなく、
+# 切っても点がほとんど変わらなかった(疲労度ONで切る選定が 14 → 24 に増えていた)。
+# 現場の思想「カットするぐらいなら運搬する」に合わせ、**1回切るのは配置図の端から端まで
+# 歩くのと同じ重さ**(距離の上限 `FAT_SCORE_CAP`)にする。重すぎ・軽すぎならここだけ直す
+ANGLE_CUT_SCORE = FAT_SCORE_CAP
 
 
 def _agl_fat_score(a_len: int, cnt: int, need_cut: bool, cut_len: int, fat_map: Optional[Mapping[str, float]]) -> float:
@@ -138,8 +143,44 @@ def _agl_fat_score(a_len: int, cnt: int, need_cut: bool, cut_len: int, fat_map: 
     ls = fat_angle_length_score1(a_len)
     cs = 0.0
     if need_cut and cut_len > 0:
-        cs = fat_cut_score1(ANGLE_CUT_LINE)
+        cs = ANGLE_CUT_SCORE
     return ds + (ls + FAT_SHEET_SCORE) * cnt + cs
+
+
+def angle_result_fatigue(result: "AngleResult", fat_map: Optional[Mapping[str, float]]) -> float:
+    """できあがったアングルの選定の疲労度(VER4.8.65)。
+
+        歩く … 丈ごとに1往復(棚の距離。分からなければ既定の25点)
+        運ぶ … (長さ + 手間) x 本数
+        切る … 切るなら1回(`ANGLE_CUT_SCORE`)
+    """
+    pieces = [a for a in (result.angles or [result.angle1, result.angle2][:result.count]) if a > 0]
+    total = 0.0
+    for length in sorted(set(pieces)):
+        total += (float(fat_map[str(length)]) if fat_map and str(length) in fat_map
+                  else FAT_DIST_DEFAULT)
+    for length in pieces:
+        total += fat_angle_length_score1(length) + FAT_SHEET_SCORE
+    if result.need_cut:
+        total += ANGLE_CUT_SCORE
+    return total
+
+
+def select_angles_lowest_fatigue(
+    product_len: int, angles: Sequence[int], pallet_len: int, leg_count: int,
+    fat_map: Mapping[str, float],
+) -> tuple["AngleResult", float, float]:
+    """疲労度優先: 通常の選定と疲労度の選定を作り、できあがった選定の点が低いほうを採る。
+
+    ボード(`board_selection_algorithm.auto_select_lowest_fatigue`)と同じ考え方。
+    戻り値は (採った選定, 通常の点, 疲労度の点)。同じ点なら疲労度の選定。
+    """
+    normal = select_angles(product_len, angles, pallet_len, leg_count)
+    fatigue = select_angles(product_len, angles, pallet_len, leg_count,
+                            fatigue_mode=True, fat_map=fat_map)
+    n_score = angle_result_fatigue(normal, fat_map) if normal.count else float("inf")
+    f_score = angle_result_fatigue(fatigue, fat_map) if fatigue.count else float("inf")
+    return (fatigue if f_score <= n_score else normal), n_score, f_score
 
 
 def _agl_fat_score_asym(a1: int, a2: int, fat_map: Optional[Mapping[str, float]]) -> float:

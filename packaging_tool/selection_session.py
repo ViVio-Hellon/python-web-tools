@@ -837,23 +837,37 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                     ulog, "packaging_tool.board_selection_algorithm",
                     "packaging_tool.board_selection",
                     "packaging_tool.board_scoring"):
-                result = alg.auto_select_boards(
-                    available, self.palette, self.product,
-                    fatigue_map_lower=fatigue_lower, fatigue_map_upper=fatigue_upper,
-                    # **マップが無ければ疲労度モードで走らせない。** 「通常選定で
-                    # 実行しました」と言いながら疲労度モードの経路(PASS1.5競合・
-                    # 代替ボード)を点0で走らせていて、実データで544通り中18通りが
-                    # 本当の通常選定と違う結果になっていた(VER4.8.62)
-                    fatigue_mode=fatigue_lower is not None, stock_aware=self.stock_aware,
-                    # 包装仕様NOで決まったモードを選定へ渡す。プロテックと
-                    # 上下共用は「上用=下用と同サイズ」を強制する分岐に効く。
-                    # どのモードを渡すかはプレゼンタが知っている
-                    **self.presenter.selection_flags())
+                if fatigue_lower is not None:
+                    # **疲労度優先は、通常の選定と疲労度の選定を両方作り、できあがった
+                    # 選定を数えた本当の合計点(実際に切る箇所・補填板・枚数)で低いほうを
+                    # 採る**(VER4.8.65)。見込みで選ぶと、ONのほうが切る選定が多かった
+                    choice = alg.auto_select_lowest_fatigue(
+                        available, self.palette, self.product,
+                        fatigue_map_lower=fatigue_lower, fatigue_map_upper=fatigue_upper,
+                        stock_aware=self.stock_aware, **self.presenter.selection_flags())
+                    result = choice.result
+                else:
+                    # マップが無ければ疲労度モードで走らせない(VER4.8.62。「通常選定で
+                    # 実行しました」と言いながら疲労度モードの経路を点0で走らせていた)
+                    result = alg.auto_select_boards(
+                        available, self.palette, self.product,
+                        fatigue_mode=False, stock_aware=self.stock_aware,
+                        # 包装仕様NOで決まったモードを選定へ渡す。プロテックと
+                        # 上下共用は「上用=下用と同サイズ」を強制する分岐に効く。
+                        # どのモードを渡すかはプレゼンタが知っている
+                        **self.presenter.selection_flags())
         except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
             log.exception("自動選定エラー")
             ulog.log(f"  → 自動選定エラー: {exc}", emphasis=True)
             return BoardOpResult(False, f"自動選定エラー: {exc}", REFUSE_FAILED)
 
+        if fatigue_lower is not None:
+            # どちらを採ったかと、その理由(本当の合計点)を残す
+            ulog.log(f"  疲労度の比べ: 通常の選定 {choice.normal.text()}")
+            ulog.log(f"               疲労度の選定 {choice.fatigue.text()}")
+            ulog.log("  → " + ("疲労度の選定を採りました" if choice.used_fatigue
+                               else "通常の選定のほうが楽なので、通常の選定を採りました"),
+                     emphasis=True)
         self.select_result = result
         self.restored = None
         # いま出ている選定が疲労度で選ばれたか(切り替えたときに言うため)
