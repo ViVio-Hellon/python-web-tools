@@ -170,17 +170,20 @@ def select_angles_lowest_fatigue(
     product_len: int, angles: Sequence[int], pallet_len: int, leg_count: int,
     fat_map: Mapping[str, float],
 ) -> tuple["AngleResult", float, float]:
-    """疲労度優先: 通常の選定と疲労度の選定を作り、できあがった選定の点が低いほうを採る。
+    """疲労度優先: 通常の選定と疲労度の選定を作り、**切らないほう**、どちらも切る(切らない)
+    なら点が低いほうを採る。**カットは最終手段**(VER4.8.66)。
 
     ボード(`board_selection_algorithm.auto_select_lowest_fatigue`)と同じ考え方。
-    戻り値は (採った選定, 通常の点, 疲労度の点)。同じ点なら疲労度の選定。
+    戻り値は (採った選定, 通常の点, 疲労度の点)。同じなら疲労度の選定。
     """
     normal = select_angles(product_len, angles, pallet_len, leg_count)
     fatigue = select_angles(product_len, angles, pallet_len, leg_count,
                             fatigue_mode=True, fat_map=fat_map)
     n_score = angle_result_fatigue(normal, fat_map) if normal.count else float("inf")
     f_score = angle_result_fatigue(fatigue, fat_map) if fatigue.count else float("inf")
-    return (fatigue if f_score <= n_score else normal), n_score, f_score
+    use_fatigue = ((fatigue.count > 0, not fatigue.need_cut and fatigue.count > 0, -f_score)
+                   >= (normal.count > 0, not normal.need_cut and normal.count > 0, -n_score))
+    return (fatigue if use_fatigue else normal), n_score, f_score
 
 
 def _agl_fat_score_asym(a1: int, a2: int, fat_map: Optional[Mapping[str, float]]) -> float:

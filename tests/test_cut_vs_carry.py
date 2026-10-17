@@ -103,8 +103,12 @@ class BoardTests(_RealDataCase):
                                                 fatigue_map_lower=lo, fatigue_map_upper=up)
         self.assertNotIn("L_945x2000", choice.result.length_cut_info)
 
-    def test_疲労度ONが通常より疲れる結果にならない_切る回数も増えない(self):
-        """パレット幅・丈を振った全部で確かめる(実データで直す前は切る選定が倍になっていた)。"""
+    def test_カットは最終手段_切る回数は通常以下_同じなら合計点も通常以下(self):
+        """パレット幅・丈を振った全部で確かめる(実データで直す前は切る選定が倍になっていた)。
+
+        **カットは最終手段**(VER4.8.66): 切る回数が少ない選定を先に採る。そのぶん歩く・運ぶ点が
+        通常より増えることはある(切らずに済むなら運ぶ)。切る回数が同じなら合計点は通常以下。
+        """
         cuts_off = cuts_on = 0
         for pw in range(900, 1651, 150):
             for pl in range(1500, 3101, 400):
@@ -116,10 +120,44 @@ class BoardTests(_RealDataCase):
                 t_off = alg.actual_fatigue(off, lo, up)
                 t_on = alg.actual_fatigue(choice.result, lo, up)
                 with self.subTest(pallet=(pw, pl)):
-                    self.assertLessEqual(t_on.total, t_off.total + 1e-9)
+                    self.assertLessEqual(t_on.cuts, t_off.cuts)
+                    if t_on.cuts == t_off.cuts:
+                        self.assertLessEqual(t_on.total, t_off.total + 1e-9)
                 cuts_off += t_off.cuts
                 cuts_on += t_on.cuts
         self.assertLessEqual(cuts_on, cuts_off)
+
+    def test_切らずに済むなら_歩く点が増えても切らないほうを採る(self):
+        """合計点では切るほうが低くても、切らない選定があればそちらを採る(最終手段)。"""
+        from packaging_tool.board_selection_types import AutoSelectResult
+        cut = AutoSelectResult(lower=[SelectedBoard(1000, 2000, 1, "主")], upper=[],
+                               lower_result=None, upper_result=None,
+                               length_cut_info={"L_1000x2000": 300}, length_cut_count={"L_1000x2000": 1})
+        nocut = AutoSelectResult(lower=[SelectedBoard(1000, 1000, 2, "主")], upper=[],
+                                 lower_result=None, upper_result=None)
+        far = {"1000x1000": board_scoring.FatigueEntry(dist=50.0, area=0.0, width_cut=0.0, length_cut=0.0)}
+        near = {"1000x2000": board_scoring.FatigueEntry(dist=0.0, area=0.0, width_cut=0.0, length_cut=0.0)}
+        t_cut, t_nocut = alg.actual_fatigue(cut, near, {}), alg.actual_fatigue(nocut, far, {})
+        self.assertLess(t_cut.total, t_nocut.total)                    # 点だけなら切るほうが低い
+        self.assertLess(alg.fatigue_rank(t_nocut), alg.fatigue_rank(t_cut))   # それでも切らないほうが先
+
+    def test_プロテックは比べない_カットは決まり(self):
+        """プロテックは製品幅に合わせて切るのが決まり(カット前提とは別の考え方)。比べずにそのまま。"""
+        pal, prod = Palette(width=1100, length=2500), ProductSize(width=1050, length=2400)
+        lo, up = self.maps(pal, prod)
+        calls = []
+        original = alg.auto_select_boards
+
+        def spy(*args, **kwargs):
+            calls.append(kwargs.get("fatigue_mode"))
+            return original(*args, **kwargs)
+        alg.auto_select_boards = spy
+        self.addCleanup(lambda: setattr(alg, "auto_select_boards", original))
+        choice = alg.auto_select_lowest_fatigue(self.boards, pal, prod, fatigue_map_lower=lo,
+                                                fatigue_map_upper=up, is_protec_mode=True)
+        self.assertFalse(choice.compared)
+        self.assertEqual(calls, [True])
+        self.assertIn("プロテック", choice.why)
 
     def test_本当の合計点は補填板と実際のカットを数える(self):
         result = alg.AutoSelectResult(
@@ -167,8 +205,10 @@ class AngleTests(_RealDataCase):
                 on, n_score, f_score = angle_service.select_angles_lowest_fatigue(
                     plen, angles, pal, 0, fm)
                 with self.subTest(product=plen, pallet=pal):
-                    self.assertLessEqual(angle_service.angle_result_fatigue(on, fm),
-                                         angle_service.angle_result_fatigue(off, fm) + 1e-9)
+                    self.assertLessEqual(on.need_cut, off.need_cut)       # カットは最終手段
+                    if on.need_cut == off.need_cut:
+                        self.assertLessEqual(angle_service.angle_result_fatigue(on, fm),
+                                             angle_service.angle_result_fatigue(off, fm) + 1e-9)
                     self.assertGreaterEqual(on.total_len, plen)
                 cut_off += off.need_cut
                 cut_on += on.need_cut

@@ -270,6 +270,13 @@ def auto_select_boards(
 #   3. 上用の並べ替えは、幅が足りずカット前提(全数カット)になることを見込めない
 # 見込みの式を細かく直すより、**できあがった選定を数える**ほうが確か。両方作って、実際に切る
 # 箇所・補填板・枚数をすべて数えた合計点で低いほうを採る。ONがOFFより疲れる結果にならない。
+#
+# **カットは最終手段**(VER4.8.66。現場の声:「カットは絶対しないというわけではないですよね？
+# 最終手段の位置づけとしてください」)。比べるときは**切る回数が少ないほうを先に**採り、
+# 同じ回数なら合計点で比べる。切らずに済む選定があればそちらを採り、どちらも切るときだけ切る。
+# **プロテックは別の考え方**(「プロテックのカット前提とは別の考え方とも理解してください」)。
+# プロテックは製品幅に合わせて切るのが決まりで、疲労度でも比べない(下用・上用とも疲労度を
+# 使わない選定なので、ここでは疲労度の選定をそのまま採る)。
 @dataclass
 class FatigueTally:
     """できあがった選定の疲労度(`docs/疲労度の計算.md` と同じ式)。"""
@@ -334,6 +341,26 @@ class FatigueChoice:
     normal: FatigueTally
     fatigue: FatigueTally
     used_fatigue: bool        # 疲労度の選定を採ったか(False なら通常の選定のほうが楽だった)
+    compared: bool = True     # 比べたか(プロテックは比べない)
+
+    @property
+    def why(self) -> str:
+        """採った理由(選定ログに出す)。"""
+        if not self.compared:
+            return "プロテックは製品幅に合わせて切るのが決まりなので、比べずに疲労度の選定を採りました"
+        chosen, other = ((self.fatigue, self.normal) if self.used_fatigue
+                         else (self.normal, self.fatigue))
+        name = "疲労度の選定" if self.used_fatigue else "通常の選定"
+        if chosen.cuts < other.cuts:
+            return f"切る回数が少ないので{name}を採りました(カットは最終手段)"
+        if chosen.total < other.total:
+            return f"切る回数が同じで、合計点が低いので{name}を採りました"
+        return f"同じなので{name}を採りました"
+
+
+def fatigue_rank(tally: FatigueTally) -> tuple[int, float]:
+    """比べる順: **切る回数が先**(カットは最終手段)、同じなら合計点。"""
+    return tally.cuts, round(tally.total, 6)
 
 
 def auto_select_lowest_fatigue(
@@ -344,19 +371,23 @@ def auto_select_lowest_fatigue(
     stock_aware: bool = False,
     **flags,
 ) -> FatigueChoice:
-    """疲労度優先: 通常の選定と疲労度の選定を作り、本当の合計点が低いほうを採る。
+    """疲労度優先: 通常の選定と疲労度の選定を作り、**切る回数が少ないほう**、同じなら
+    本当の合計点が低いほうを採る(`fatigue_rank`)。同じなら疲労度の選定(押した人が選んだ方式)。
 
-    同じ点なら疲労度の選定(押した人が選んだ方式)。
+    プロテック(`is_protec_mode`)は比べない(カットは決まりで、選定も疲労度を使わない)。
     """
-    normal = auto_select_boards(available, palette, product, fatigue_mode=False,
-                                stock_aware=stock_aware, **flags)
     fatigue = auto_select_boards(available, palette, product,
                                  fatigue_map_lower=fatigue_map_lower,
                                  fatigue_map_upper=fatigue_map_upper,
                                  fatigue_mode=True, stock_aware=stock_aware, **flags)
-    n_tally = actual_fatigue(normal, fatigue_map_lower, fatigue_map_upper)
     f_tally = actual_fatigue(fatigue, fatigue_map_lower, fatigue_map_upper)
-    use_fatigue = f_tally.total <= n_tally.total + 1e-9
+    if flags.get("is_protec_mode"):
+        return FatigueChoice(result=fatigue, normal=f_tally, fatigue=f_tally,
+                             used_fatigue=True, compared=False)
+    normal = auto_select_boards(available, palette, product, fatigue_mode=False,
+                                stock_aware=stock_aware, **flags)
+    n_tally = actual_fatigue(normal, fatigue_map_lower, fatigue_map_upper)
+    use_fatigue = fatigue_rank(f_tally) <= fatigue_rank(n_tally)
     log.debug("疲労度の比べ: 通常 %s / 疲労度 %s → %s",
               n_tally.text(), f_tally.text(), "疲労度" if use_fatigue else "通常")
     return FatigueChoice(result=fatigue if use_fatigue else normal,

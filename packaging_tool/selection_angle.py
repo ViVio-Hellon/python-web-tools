@@ -161,8 +161,8 @@ class AngleMixin:
                 self.product.length, angles, pallet_len, leg_count, fat_map)
             self.presenter.user_log.log(
                 f"  疲労度の比べ: 通常の選定 {n_score:.1f}点 / 疲労度の選定 {f_score:.1f}点 → "
-                + ("疲労度の選定を採りました" if f_score <= n_score
-                   else "通常の選定のほうが楽なので、通常の選定を採りました"))
+                + ("切らずに済む選定を採りました(カットは最終手段)" if not result.need_cut
+                   else "どちらも切るので、点の低いほうを採りました"))
         else:
             result = angle_service.select_angles(
                 self.product.length, angles, pallet_len, leg_count)

@@ -863,11 +863,10 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
 
         if fatigue_lower is not None:
             # どちらを採ったかと、その理由(本当の合計点)を残す
-            ulog.log(f"  疲労度の比べ: 通常の選定 {choice.normal.text()}")
-            ulog.log(f"               疲労度の選定 {choice.fatigue.text()}")
-            ulog.log("  → " + ("疲労度の選定を採りました" if choice.used_fatigue
-                               else "通常の選定のほうが楽なので、通常の選定を採りました"),
-                     emphasis=True)
+            if choice.compared:
+                ulog.log(f"  疲労度の比べ: 通常の選定 {choice.normal.text()}")
+                ulog.log(f"               疲労度の選定 {choice.fatigue.text()}")
+            ulog.log(f"  → {choice.why}", emphasis=True)
         self.select_result = result
         self.restored = None
         # いま出ている選定が疲労度で選ばれたか(切り替えたときに言うため)
