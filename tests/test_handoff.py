@@ -83,10 +83,10 @@ class MapItemsTests(unittest.TestCase):
         # ボード種別も渡す(棚検索が選定と同じ種別の置き場で測るため)
         self.assertEqual(items[0], {"kind": "board", "category": "下用",
                                     "width": 750, "length": 1130, "count": 2,
-                                    "board_type": "ハードボード"})
+                                    "board_type": "ハードボード", "skip_shelves": []})
         self.assertEqual(items[1], {"kind": "board", "category": "上用",
                                     "width": 600, "length": 900, "count": 1,
-                                    "board_type": "ハードボード"})
+                                    "board_type": "ハードボード", "skip_shelves": []})
         self.assertEqual(items[2], {"kind": "angle", "width": 0,
                                     "length": 1200, "count": 1})
 

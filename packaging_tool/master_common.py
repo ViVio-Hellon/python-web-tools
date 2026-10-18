@@ -72,6 +72,9 @@ MANAGED: tuple[Managed, ...] = (
     # 1P1185モード(パレットを決め打つ)の発火条件と、決め打つパレット(`pallet_limit_rules`)
     Managed(import_specs.PALLET_LIMIT_TABLE, "パレット限定条件(1P1185モード)", "限",
             "パレットを決め打つ包装仕様NO・取引先・製造板幅/丈の範囲と、決め打つ業界・パレット幅/丈"),
+    # 看板と置き場の対応(`kanban_shelves`。VER4.8.68)。在庫考慮で、看板が出ている置き場を外す
+    Managed(import_specs.KANBAN_SHELF_TABLE, "看板置き場", "看",
+            "どの看板がどの置き場の看板か(看板_L1 → lblItem1,lblItem2…)。在庫考慮で使う"),
     # パレット適合閾値(タイトパレット選定基準表)。以前はプログラムに
     # 直接書かれていた数値で、基準が変わっても現場では直せなかった。
     # 触る頻度は低いので末尾に置く
@@ -358,6 +361,10 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
         # **条件はロットを開いたときに当てる。** いま開いているロットには、開き直すまで効かない。
         # ほかの端末は、取り込み(起動時・まとめて取り込み)で手元に入ってから
         notes.append("この端末では次にロットを開いたときから効きます(いま開いているロットは開き直してください)。"
+                     "ほかの端末は、次の取り込みのあとから効きます")
+    if table == import_specs.KANBAN_SHELF_TABLE:
+        # 在庫の地図はロットを引き直すたびに作り直す(`selection_session._refresh_stock_map`)
+        notes.append("この端末では次にロットを開いたときから効きます。"
                      "ほかの端末は、次の取り込みのあとから効きます")
     if table == "アクセス権限":
         # **足した権限は、開き直すまで全部は効かない。** 使える画面は

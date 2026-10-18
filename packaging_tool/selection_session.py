@@ -814,7 +814,10 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                 self.presenter.conn, available, base_point.name,
                 board_type=self.board_type,
                 pallet_width=self.palette.width, pallet_length=self.palette.length,
-                product_width=self.product.width, product_length=self.product.length)
+                product_width=self.product.width, product_length=self.product.length,
+                stock_map=self.stock_map)
+            if fatigue_lower is not None:
+                self._log_skipped_shelves(available)
             if fatigue_lower is None:
                 notes.append("疲労度マップを取得できなかったため通常選定で実行しました。")
                 ulog.log("  ※疲労度マップを取得できず、通常選定に切り替えました")
@@ -1065,6 +1068,30 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         log.info("帳票を直しました: %s %s件", report, len(clean))
         return BoardOpResult(True, "保存しました")
 
+    def _skip_shelves(self, width: int, length: int) -> list[str]:
+        """在庫考慮ONのとき、その板の看板が出ている(切れている)置き場(VER4.8.68)。"""
+        out_for = getattr(self.stock_map, "out_for", None)
+        if not out_for or not self.board_type:
+            return []
+        return sorted(out_for(self.board_type, width, length))
+
+    def _log_skipped_shelves(self, available: list) -> None:
+        """疲労度の距離から外した置き場を残す(看板の位置で疲労度が変わるので、あとから追えるように)。"""
+        seen: set[tuple[int, int]] = set()
+        parts: list[str] = []
+        for board in available:
+            size = (min(board.width, board.length), max(board.width, board.length))
+            if size in seen:
+                continue
+            seen.add(size)
+            skip = self._skip_shelves(board.width, board.length)
+            if skip:
+                numbers = "・".join(s.replace("lblItem", "") for s in skip)
+                parts.append(f"{board.width}×{board.length}(棚{numbers})")
+        if parts:
+            self.presenter.user_log.log(
+                "  在庫考慮: 看板が出ている置き場を外して距離を測ります: " + " / ".join(parts))
+
     def map_items(self) -> list[dict]:
         """棚検索へ渡す資材(旧版 `btnMap`)。
 
@@ -1087,9 +1114,12 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                     continue
                 # ボード種別も渡す: 棚検索が選定の疲労度と同じ種別の置き場で
                 # 距離を測るため(同じ寸法の別種別の棚を光らせない。VER4.8.62)
+                # 在庫考慮ONなら、看板が出ている置き場も渡す: 棚検索もそこを外して測る
+                # (選定の疲労度と同じ置き場。VER4.8.68)
                 merged[key] = {"kind": "board", "category": category,
                                "width": board.width, "length": board.length,
-                               "count": board.count, "board_type": self.board_type}
+                               "count": board.count, "board_type": self.board_type,
+                               "skip_shelves": self._skip_shelves(board.width, board.length)}
                 items.append(merged[key])
         for length in self.selected_angles:
             items.append({"kind": "angle", "width": 0,

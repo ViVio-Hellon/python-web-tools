@@ -20,7 +20,7 @@ from __future__ import annotations
 import sqlite3
 import unicodedata
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Iterable, Optional, Sequence
 
 from . import angle_service, db, floor_plan, user_settings
 from .logging_utils import get_logger
@@ -160,6 +160,8 @@ class NearestShelfResult:
     shelf_name: Optional[str]
     distance: float
     candidate_count: int
+    # 看板が出ている(切れている)ので外した置き場(在庫考慮。VER4.8.68)
+    skipped: tuple[str, ...] = ()
 
 
 def _nearest_among(label_names: list[str], base_point: str) -> NearestShelfResult:
@@ -171,12 +173,17 @@ def _nearest_among(label_names: list[str], base_point: str) -> NearestShelfResul
 
 def find_nearest_shelf_for_board(
     conn: sqlite3.Connection, width: int, length: int, base_point: str, board_type: str = "",
+    *, skip: Iterable[str] = (),
 ) -> NearestShelfResult:
     """VBA `FindNearestSameSize`(ボード用)の移植。
 
     `BoardMaster` から同一サイズ(向き入れ替え含む)の行を探し、その
     `データラベル`(`lblItem*`)が配置図のどこにあるかを見て、拠点から
     最も近いものを返す。ラベルの座標は `floor_plan` が持つ。
+
+    `skip` は看板が出ている(切れている)置き場(在庫考慮。VER4.8.68)。そこを外して、残りでいちばん
+    近い置き場を返す ── 切れている棚には取りに行かない。**全部切れているときは外さない**
+    (どこかで取るしかない。その板は在庫薄として選定が避ける)。
     """
     where = "((ボード幅 = ? AND ボード丈 = ?) OR (ボード幅 = ? AND ボード丈 = ?))"
     params: list = [width, length, length, width]
@@ -191,6 +198,12 @@ def find_nearest_shelf_for_board(
     labels: list[str] = []
     for row in rows:
         labels.extend(_split_labels(row["データラベル"]))
+    out = set(skip or ())
+    left = [name for name in labels if name not in out]
+    if out and left and len(left) < len(labels):
+        nearest = _nearest_among(left, base_point)
+        nearest.skipped = tuple(sorted(set(labels) & out))
+        return nearest
     return _nearest_among(labels, base_point)
 
 

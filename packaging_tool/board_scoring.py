@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from . import angle_service, location_service
 from .logging_utils import get_logger
@@ -103,6 +103,7 @@ def build_fatigue_map(
     conn: sqlite3.Connection, boards: list[BoardModel], base_point: str,
     *, board_type: str = "", target_width: int = 0,
     base_len_for_cut: int = 0, board_category: str = "",
+    stock_map: Optional[Any] = None,
 ) -> dict[str, FatigueEntry]:
     """VBA `BuildFatigueMap3` の移植。
 
@@ -118,8 +119,12 @@ def build_fatigue_map(
 
     `boards` の要素は `width`/`length` を持てばよく、`BoardModel` でも
     `board_selection_service.BoardRow` でも渡せる。
+
+    `stock_map`(在庫考慮ONのときの在庫の地図 `material_service.BoardStockMap`)を渡すと、
+    看板が出ている(切れている)置き場を外して距離を測る(VER4.8.68)。疲労度は看板の位置で変わる。
     """
     result: dict[str, FatigueEntry] = {}
+    out_for = getattr(stock_map, "out_for", None) if board_type else None
 
     def add(width: int, length: int) -> None:
         key = f"{width}x{length}"
@@ -127,6 +132,7 @@ def build_fatigue_map(
             return
         nearest = location_service.find_nearest_shelf_for_board(
             conn, width, length, base_point, board_type,
+            skip=out_for(board_type, width, length) if out_for else (),
         )
         width_cut = length_cut = 0.0
         if target_width > 0:
@@ -153,6 +159,7 @@ def build_selection_fatigue_maps(
     board_type: str = "",
     pallet_width: int = 0, pallet_length: int = 0,
     product_width: int = 0, product_length: int = 0,
+    stock_map: Optional[Any] = None,
 ) -> tuple[Optional[dict[str, FatigueEntry]], Optional[dict[str, FatigueEntry]]]:
     """自動選定に渡す下用・上用の疲労度マップ。
 
@@ -175,11 +182,11 @@ def build_selection_fatigue_maps(
         lower = build_fatigue_map(
             conn, boards, base_point, board_type=board_type,
             target_width=pallet_width, base_len_for_cut=pallet_length,
-            board_category="下用")
+            board_category="下用", stock_map=stock_map)
         upper = build_fatigue_map(
             conn, boards, base_point, board_type=board_type,
             target_width=product_width, base_len_for_cut=product_length,
-            board_category="上用")
+            board_category="上用", stock_map=stock_map)
     except Exception as exc:                      # noqa: BLE001 - 疲労度は補助情報
         # VBA版も「マップ取得失敗 → 通常選択で実行」とフォールバックする
         log.warning("疲労度マップ取得失敗: %s", exc)

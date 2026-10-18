@@ -255,16 +255,80 @@ def make_board_key(board_type: Optional[str], w: int, l: int) -> str:
     return f"{(board_type or '').strip()}|{w}|{l}"
 
 
-def build_board_stock_map(conn: sqlite3.Connection) -> dict[str, str]:
-    """VBA `BuildBoardStockMap` の移植。
+class BoardStockMap(dict):
+    """ボードキー("資材|幅|丈")→ "有"(在庫あり)/ "低"(在庫薄)。**置き場ごとの判定**の中身も持つ(VER4.8.68)。
+
+    `dict` のまま使える(`is_board_low`・在庫考慮のON/OFF = マップの有無は前と同じ)。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        # キー → 看板が出ている(切れている)置き場。疲労度の距離はここを外して測る
+        self.out_shelves: dict[str, frozenset[str]] = {}
+        # 置き場ごとに判定したキー(看板と置き場の対応が当たった板)
+        self.shelf_based: set[str] = set()
+        # 対応はあるのに、その資材がその看板の置き場に無い行(マスタのデータラベルか対応を見直す目印)
+        self.unplaced: list[str] = []
+
+    def out_for(self, board_type: str, w: int, l: int) -> frozenset[str]:
+        """その板の、看板が出ている置き場(向きは入れ替えても引く)。無ければ空。"""
+        for key in (make_board_key(board_type, w, l), make_board_key(board_type, l, w)):
+            if key in self.out_shelves:
+                return self.out_shelves[key]
+        return frozenset()
+
+
+def _int_or_zero(value) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _placed_boards(conn: sqlite3.Connection) -> dict[tuple[str, int, int], tuple[str, frozenset[str]]]:
+    """BoardMaster の板 →(キー, 置き場)。向きは問わない((種別, 短辺, 長辺) で引く)。"""
+    from .location_service import _split_labels
+    placed: dict[tuple[str, int, int], tuple[str, frozenset[str]]] = {}
+    rows = db.fetch_all(
+        conn, "SELECT ボードタイプ, ボード幅, ボード丈, データラベル FROM BoardMaster",
+        caller_name="build_board_stock_map:BoardMaster") or []
+    for row in rows:
+        w, l = _int_or_zero(row["ボード幅"]), _int_or_zero(row["ボード丈"])
+        if w <= 0 or l <= 0:                       # 拠点の行(幅・丈 0)はボードではない
+            continue
+        board_type = (row["ボードタイプ"] or "").strip()
+        idx = (board_type, min(w, l), max(w, l))
+        key, shelves = placed.get(idx, (make_board_key(board_type, w, l), frozenset()))
+        placed[idx] = (key, shelves | frozenset(_split_labels(row["データラベル"])))
+    return placed
+
+
+def build_board_stock_map(conn: sqlite3.Connection, rules=None) -> BoardStockMap:
+    """VBA `BuildBoardStockMap` の移植に、**置き場ごとの判定**を足したもの(VER4.8.68)。
 
     `config.BOARD_KANBAN_TABLES` (6テーブル)を横断し、ボードキーごとに
     在庫状態("有"=在庫あり/"低"=在庫薄)のマップを作る。
-    集約ルール: どこかのテーブルで 不='〇'(在庫あり)なら"有"を最優先で
-    確定する(後から他テーブルで"低"と判定されても上書きされない)。
-    "有"が一度も無く 欲='〇'(欲しい=品薄)なら"低"とする。
+
+    【置き場ごと】表 `看板置き場`(`kanban_shelves`)で、看板の行がどの置き場の看板か分かる。
+    看板の1行は、その資材が**その置き場に置いてあるとき**(BoardMaster のデータラベル)だけ、その
+    置き場の在庫を言う。欲='〇' ならその置き場は切れている(`out_shelves`)。
+    **置いてある置き場が全部切れているときだけ "低"。** 1つでも切れていない(または看板の無い)置き場が
+    あれば "有" ── そこまで取りに行ける(現場の声:「L-1でだされたとしてもLVCは出していないであれば
+    LVCにとりにいくことになる」)。
+
+    資材名の後ろの(…)は置き場の指定(「ハードボード(大板棚)」= 資材ハードボード・置き場は大板)。
+
+    【対応が当たらない板】(置き場の看板が1つも分からない板)は前と同じ集約ルール:
+    どこかのテーブルで 不='〇'(在庫あり)なら"有"を最優先で確定する(後から他テーブルで"低"と
+    判定されても上書きされない)。"有"が一度も無く 欲='〇'(欲しい=品薄)なら"低"とする。
     """
-    stock_map: dict[str, str] = {}
+    from . import kanban_shelves
+    rules = kanban_shelves.load(conn) if rules is None else rules
+    placed = _placed_boards(conn)
+    board_types = {board_type for board_type, _, _ in placed}
+    stock_map = BoardStockMap()
+    # (種別, 短辺, 長辺) → 置き場 → 切れているか
+    shelf_state: dict[tuple[str, int, int], dict[str, bool]] = {}
     for table in config.BOARD_KANBAN_TABLES:
         rows = db.fetch_all(
             conn, f"SELECT 資材, サイズ, 欲, 不 FROM [{table}]",
@@ -275,13 +339,41 @@ def build_board_stock_map(conn: sqlite3.Connection) -> dict[str, str]:
             if parsed is None:
                 continue
             w, l = parsed
-            key = make_board_key(row["資材"], w, l)
+            material, note = kanban_shelves.split_material(row["資材"])
+            key = make_board_key(material, w, l)
             in_stock = (row["不"] or "").strip() == "〇"
             is_out = (row["欲"] or "").strip() == "〇"
             if in_stock:
                 stock_map[key] = "有"
             elif is_out and key not in stock_map:
                 stock_map[key] = "低"
+
+            shelves = kanban_shelves.shelves_of(rules, table, note)
+            if shelves is None:
+                continue                            # どの置き場の看板か分からない
+            idx = (material.strip(), min(w, l), max(w, l))
+            found = placed.get(idx)
+            land = (found[1] & shelves) if found else frozenset()
+            if not land:
+                if material.strip() in board_types:      # 紙・バンドなどボードでない資材は言わない
+                    stock_map.unplaced.append(f"{table} {row['資材']} {w}×{l}")
+                continue
+            state = shelf_state.setdefault(idx, {})
+            for shelf in land:
+                state[shelf] = state.get(shelf, False) or is_out
+
+    for idx, state in shelf_state.items():
+        key, shelves = placed[idx]
+        out = frozenset(s for s, o in state.items() if o)
+        all_out = bool(shelves) and shelves <= out
+        board_type, short, long_ = idx
+        for k in {key, make_board_key(board_type, short, long_), make_board_key(board_type, long_, short)}:
+            stock_map[k] = "低" if all_out else "有"
+        stock_map.shelf_based.add(key)
+        if out:
+            stock_map.out_shelves[key] = out
+    if stock_map.unplaced:
+        log.info("看板置き場の対応はあるのに、その置き場に無い看板の行: %s", " / ".join(stock_map.unplaced))
     return stock_map
 
 

@@ -160,7 +160,8 @@ def create_table(conn: sqlite3.Connection, table: str, *,
 # 現場の声:「プロテック条件・パレット限定条件は梱包資材マスタに入っているのか(なければつくる)」。
 # 無いあいだも手元の初期値で動くが、マスタ管理で直す前に誰かが「取り込み元に作る」を押す必要があった。
 # 作るのは初期値入りの表だけ(中身は前の決め打ちと同じ)なので、権限の確認はしない
-AUTO_CREATE_TABLES = (import_specs.PROTEC_RULE_TABLE, import_specs.PALLET_LIMIT_TABLE)
+AUTO_CREATE_TABLES = (import_specs.PROTEC_RULE_TABLE, import_specs.PALLET_LIMIT_TABLE,
+                      import_specs.KANBAN_SHELF_TABLE)
 
 
 def ensure_rule_tables(conn: sqlite3.Connection, path: Optional[Path]) -> list[str]:
@@ -233,13 +234,15 @@ def _seed_source(src: source_db.SourceConnection, table: str) -> int:
     だけです。アクセス権限のように「最初の1行が決めごと」の表は、
     ここでは何もしません ── 理由は `create_table` の説明にあります。
     """
-    from . import pallet_limit_rules, pallet_threshold, protec_rules
+    from . import kanban_shelves, pallet_limit_rules, pallet_threshold, protec_rules
     seed_rows = pallet_threshold.SEED.get(table)
     if table == protec_rules.TABLE:
         # プロテック条件も、作った時点で前と同じに動くよう初期値を入れる(空だとプロテックに入らない)
         seed_rows = protec_rules.SEED
     if table == pallet_limit_rules.TABLE:
         seed_rows = pallet_limit_rules.SEED
+    if table == kanban_shelves.TABLE:
+        seed_rows = kanban_shelves.SEED
     if not seed_rows:
         return 0
     columns = list(seed_rows[0])

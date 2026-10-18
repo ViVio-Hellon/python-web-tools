@@ -23,6 +23,11 @@ from .presenters.layout import KIND_BOARD, KIND_LABEL, KINDS
 
 log = get_logger("layout_session")
 
+
+def _short(name: str) -> str:
+    """lblItem1 → 1(図の箱と同じ番号だけ)。"""
+    return name.replace("lblItem", "")
+
 # 断りの種類。`selection_session` と同じ語を使う
 REFUSE_BAD_INPUT = "bad_input"
 REFUSE_NOT_LISTED = "not_listed"
@@ -225,6 +230,7 @@ class LayoutSession:
         total = 0.0
         found = 0
         missing: list[str] = []
+        skipped: list[str] = []
         for item in items:
             kind = str(item.get("kind", KIND_BOARD))
             width = _to_int(str(item.get("width", "")))
@@ -236,8 +242,13 @@ class LayoutSession:
                 # **選定と同じボード種別の置き場で測る**(VER4.8.62)。種別を見ないと、
                 # 同じ寸法の別種別(プロテックボードなど)の棚が近ければそちらを
                 # 光らせ、選定の疲労度と違う距離で合計していた
+                # 在庫考慮ONで看板が出ている置き場は外す(資材選択が渡す。選定の疲労度と同じ。VER4.8.68)
                 nearest = svc.find_nearest_shelf_for_board(
-                    conn, width, length, base, str(item.get("board_type") or ""))
+                    conn, width, length, base, str(item.get("board_type") or ""),
+                    skip=[str(s) for s in item.get("skip_shelves") or []])
+                if nearest.skipped:
+                    skipped.append(f"{width}×{length}(棚"
+                                   + "・".join(_short(s) for s in nearest.skipped) + ")")
                 carry = svc.carry_board_score(width, length, count)
                 label = f"{width}×{length}"
             else:
@@ -269,6 +280,8 @@ class LayoutSession:
         self.kind = KIND_BOARD
         self.selected = ""
         note = f"({len(missing)}件は置き場が未登録: {', '.join(missing)})" if missing else ""
+        if skipped:
+            note += f"  看板が出ている置き場は外しました: {', '.join(skipped)}"
         # 合計疲労度も拠点からの距離で決まる。どこから測ったかを添える
         if base_point.note:
             note += f"  ※{base_point.note}"

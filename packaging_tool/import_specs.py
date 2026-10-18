@@ -453,6 +453,14 @@ IMPORT_SPECS[PALLET_LIMIT_TABLE] = [
     ("パレット丈", "パレット丈", lambda v: to_int(v) or 0),
 ] + _THRESHOLD_TAIL
 
+# 看板と置き場の対応(`kanban_shelves`。VER4.8.68)。プロテック条件と同じ扱い
+from .kanban_shelves import TABLE as KANBAN_SHELF_TABLE  # noqa: E402 - 表の名前は持ち主の1か所
+IMPORT_SPECS[KANBAN_SHELF_TABLE] = [
+    ("看板", "看板", to_text),
+    ("資材の注記", "資材の注記", lambda v: to_text(v) or ""),
+    ("置き場", "置き場", to_text),
+] + _THRESHOLD_TAIL
+
 for _threshold_table, _head in _THRESHOLD_HEAD.items():
     IMPORT_SPECS[_threshold_table] = _head + _THRESHOLD_TAIL
 
@@ -509,7 +517,8 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
                                                config.TBL_CUT_REQUEST_EVENT,
                                                config.TBL_STOCK_RESERVE,
                                                PROTEC_RULE_TABLE,
-                                               PALLET_LIMIT_TABLE})
+                                               PALLET_LIMIT_TABLE,
+                                               KANBAN_SHELF_TABLE})
                                    | frozenset(THRESHOLD_TABLES))
 
 # **取り込み元に無くても知らせない列**(表 → 取り込み元の列名)。
