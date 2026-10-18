@@ -2030,12 +2030,27 @@ class RecalcLengthCutInfoTests(unittest.TestCase):
         self.assertEqual(count["L_1000x700"], 1)  # 常に1枚(業務ルール)
 
     def test_skips_fill_rows(self):
+        """幅補填は丈に数えない。細板(100mm)の丈補填のはみ出しは「超過は許容」で記録しない。"""
         lower = [
             SelectedBoard(width=1000, length=700, count=3, tag=alg.TAG_WIDTH_FILL),
-            SelectedBoard(width=1000, length=700, count=3, tag=alg.TAG_LENGTH_FILL),
+            SelectedBoard(width=1000, length=600, count=3, tag=alg.TAG_MAIN),
+            SelectedBoard(width=100, length=2000, count=3, tag=alg.TAG_LENGTH_FILL),
         ]
         info, _ = alg.recalc_length_cut_info(lower, [], self.palette, self.product)
-        self.assertEqual(info, {})
+        self.assertEqual(info, {})        # 600x3 + 100x3 = 2100 > 2000 でも細板は切らない
+
+    def test_length_fill_board_overshoot_is_a_cut(self):
+        """主と同じサイズの丈補填が基準丈を超えたら丈カット(VER4.8.70。「350mmはみ出して使うロジックなんかねぇ」)。"""
+        lower = [
+            SelectedBoard(width=1000, length=1000, count=1, tag=alg.TAG_MAIN),
+            SelectedBoard(width=1000, length=1000, count=1, tag=alg.TAG_LENGTH_FILL),
+        ]
+        info, count = alg.recalc_length_cut_info(lower, [], self.palette, self.product)
+        self.assertEqual(info, {})                                    # 1000+1000 = 2000、超えない
+        lower[1].count = 2                                            # 3000 > 2000
+        info, count = alg.recalc_length_cut_info(lower, [], self.palette, self.product)
+        self.assertEqual(info, {"L_1000x1000": 1000})
+        self.assertEqual(count, {"L_1000x1000": 1})
 
     def test_skips_cut_premise_rows_in_upper(self):
         upper = [SelectedBoard(width=900, length=700, count=3, tag=alg.TAG_CUT_PREMISE)]

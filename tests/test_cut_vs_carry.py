@@ -76,32 +76,34 @@ class _RealDataCase(unittest.TestCase):
 
 class BoardTests(_RealDataCase):
 
-    def test_上用_切る1枚より切らない2枚(self):
-        """製品 980x1480。見込みでは 945x2000 を1枚(520mm切る)と 950x950 を2枚(補填で埋める、
-        切らない)が同じ「丈カット1回」に見え、1枚で済む切るほうを選んでいた。"""
+    def test_上用_950x950を2枚並べても切る(self):
+        """製品 980x1480。945x2000 を1枚(520mm切る)と 950x950 を2枚(主+丈補填で 1900mm)。
+        VER4.8.65 は 950x950 の2枚を「切らない」と数えていたが、1900 - 1480 = 420mm はみ出すので切る
+        (ボードMAPも「はみ出し丈カット」と描く。VER4.8.70)。どちらも1回切るので、合計点の低いほう。"""
         pal, prod = Palette(width=1000, length=1500), ProductSize(width=980, length=1480)
         lo, up = self.maps(pal, prod)
-        guess = alg.auto_select_boards(self.boards, pal, prod, fatigue_map_lower=lo,
-                                       fatigue_map_upper=up, fatigue_mode=True)
-        self.assertEqual([(b.width, b.length) for b in guess.upper], [(945, 2000)])   # 以前の結果(切る)
         choice = alg.auto_select_lowest_fatigue(self.boards, pal, prod,
                                                 fatigue_map_lower=lo, fatigue_map_upper=up)
-        self.assertNotIn("U_945x2000", choice.result.length_cut_info)
-        self.assertEqual(choice.normal.cuts if not choice.used_fatigue else choice.fatigue.cuts, 0)
+        self.assertEqual(choice.normal.cuts, choice.fatigue.cuts)
+        self.assertEqual([(b.width, b.length) for b in choice.result.upper], [(945, 2000)])
         self.assertLessEqual(alg.actual_fatigue(choice.result, lo, up).total,
-                             alg.actual_fatigue(guess, lo, up).total)
+                             min(choice.normal.total, choice.fatigue.total))
 
-    def test_下用_あとから足す1枚で切る選定を採らない(self):
+    def test_下用_あとから足す1枚の切りも数える(self):
         """パレット 950x2600。疲労度モードの下用は、点を数えたあとで主ボードを1枚足す
-        (945x2000 を2枚で 1400mm 切る)。足した1枚とカットが点に入っていなかった。"""
+        (945x2000 を2枚で 1400mm 切る)。足した1枚とカットを、できあがった選定で数える。
+        通常の選定も丈補填のはみ出し(上用 900x900 を3枚で 2700mm)で切るので、切る回数は同じ。"""
         pal, prod = Palette(width=950, length=2600), ProductSize(width=930, length=2580)
         lo, up = self.maps(pal, prod)
         guess = alg.auto_select_boards(self.boards, pal, prod, fatigue_map_lower=lo,
                                        fatigue_map_upper=up, fatigue_mode=True)
-        self.assertIn("L_945x2000", guess.length_cut_info)                          # 以前の結果(切る)
+        self.assertIn("L_945x2000", guess.length_cut_info)
+        self.assertGreaterEqual(alg.actual_fatigue(guess, lo, up).cuts, 1)
         choice = alg.auto_select_lowest_fatigue(self.boards, pal, prod,
                                                 fatigue_map_lower=lo, fatigue_map_upper=up)
-        self.assertNotIn("L_945x2000", choice.result.length_cut_info)
+        self.assertEqual(choice.normal.cuts, choice.fatigue.cuts)
+        self.assertLessEqual(alg.actual_fatigue(choice.result, lo, up).total,
+                             min(choice.normal.total, choice.fatigue.total))
 
     def test_カットは最終手段_切る回数は通常以下_同じなら合計点も通常以下(self):
         """パレット幅・丈を振った全部で確かめる(実データで直す前は切る選定が倍になっていた)。

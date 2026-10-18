@@ -75,6 +75,21 @@ class StockFirstTests(_RealDataCase):
         self.assertTrue(sel.low_used)
         self.assertTrue(sel.result.lower and sel.result.upper)
 
+    def test_丈補填のはみ出しも切る回数に数える_在庫ONとOFFで食い違わない(self):
+        """パレット 1100x1650・製品 1080x1620。1000x1000 を丈に2枚(主+丈補填)だと 2000mm で、
+        下用 350mm・上用 380mm はみ出して切る(ボードMAPもそう描く)。VER4.8.69 までは丈補填の
+        はみ出しを数えず「切らない」と見て、50x1600 が在庫薄かどうか(関係の無い細板)で選定が変わっていた。"""
+        pal, prod = Palette(width=1100, length=1650), ProductSize(width=1080, length=1620)
+        lo, up = self.maps(pal, prod)
+        off = alg.select_boards(boards(set()), pal, prod, stock_aware=False,
+                                fatigue_map_lower=lo, fatigue_map_upper=up)
+        on = alg.select_boards(boards({(50, 1600)}), pal, prod, stock_aware=True,
+                               fatigue_map_lower=lo, fatigue_map_upper=up)
+        size = lambda r: [(b.width, b.length, b.count) for b in r.lower + r.upper]
+        self.assertEqual(size(off.result), size(on.result))
+        self.assertEqual(off.choice.fatigue.cuts, 2)                 # 1000x1000 の案は上下とも切る
+        self.assertEqual(off.choice.fatigue.cuts, on.choice.fatigue.cuts)
+
     def test_全部で在庫薄をよける(self):
         """通常の選定がふつうに選ぶ板を在庫薄にしても、外して選べる限り使わない(在庫のみ・両方ON)。"""
         for pw in range(900, 1651, 150):

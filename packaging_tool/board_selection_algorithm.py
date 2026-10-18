@@ -198,7 +198,54 @@ def recalc_length_cut_info(
                 log.debug("丈カット記録[上用]: %s effLx%s=%s > 製品丈%s",
                           key, b.count, eff_l * b.count, product.length)
 
+    _record_length_fill_overshoot(lower, palette.length, "L_", palette.width, "下用",
+                                  length_cut_info, length_cut_count)
+    _record_length_fill_overshoot(upper, product.length, "U_", product.width, "上用",
+                                  length_cut_info, length_cut_count)
     return length_cut_info, length_cut_count
+
+
+def _record_length_fill_overshoot(
+    boards: list[SelectedBoard], base_length: int, prefix: str, target_width: int, category: str,
+    length_cut_info: dict[str, int], length_cut_count: dict[str, int],
+) -> None:
+    """丈補填の板(主と同じサイズの板など)が基準の丈を超えたら、その分を丈カットとして記録する(VER4.8.70)。
+
+    現場の声:「350mmはみ出して使うロジックなんかねぇだろ」。丈残が400mmを超えると主と同じサイズの板を
+    丈補填で足す(`LENGTH_FILL_THRESHOLD`)。例: パレット丈1650 に 1000x1000 を2枚 → 350mm はみ出す。
+    ボードMAPの図は「はみ出し丈カット 約350mm」と描くのに、ここでは丈補填を対象外にしていたので
+    記録されず、疲労度の比べで「切らない」と数えていた。同じ並びでも主2枚なら記録される(経路で違った)。
+
+    丈の合計は選定と同じ数え方(幅補填は数えない、丈補填は短辺×枚数、ほかは有効丈×枚数)。
+    **30/50/100mm の細板の丈補填は対象外**(「超過は許容」の決まり。`LENGTH_FILL_BOARD_W`)。
+    カット前提の行がある区分は、選定側が丈カットを記録するので触らない。切るのは最後の1枚(枚数1)。
+    切断線(値)は丈補填の板の幅方向の長さ = 長辺(短辺を丈に向けて置くため)。
+    """
+    if any(b.tag == TAG_CUT_PREMISE for b in boards):
+        return
+    if any(key.startswith(prefix) for key in length_cut_info):
+        return                                     # 主ボードの丈カットが記録済み
+    fills = [b for b in boards if b.tag == TAG_LENGTH_FILL and b.count > 0
+             and min(b.width, b.length) not in (FILL_SIZE_30, FILL_SIZE_50, FILL_SIZE_100)]
+    if not fills:
+        return
+    total = 0
+    for b in boards:
+        if b.tag == TAG_WIDTH_FILL:
+            continue
+        if b.tag == TAG_LENGTH_FILL:
+            total += min(b.width, b.length) * b.count
+        else:
+            total += _orient(b.width, b.length, target_width,
+                             **({"category": "上用"} if category == "上用" else {}))[2] * b.count
+    if total <= base_length:
+        return
+    last = fills[-1]
+    key = f"{prefix}{last.width}x{last.length}"
+    length_cut_info[key] = max(last.width, last.length)
+    length_cut_count[key] = 1
+    log.debug("丈カット記録[%s/丈補填]: %s 丈合計%s > 基準丈%s(%smm はみ出し)",
+              category, key, total, base_length, total - base_length)
 
 
 # ==================================================================
