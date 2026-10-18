@@ -10,6 +10,7 @@
 
     包装仕様NO          … 受注の包装仕様NOと同じなら(必須)
     取引先名称          … 受注の取引先名称にこの文字を**含む**なら(空なら見ない)
+    納入先              … 受注の納入先名称にこの文字を**含む**なら(空なら見ない。VER4.8.71)
     製造板幅_最小/最大   … SIKALOT の製造板幅がこの範囲なら(空・0 なら見ない)
     製造板丈_最小/最大   … SIKALOT の製造板丈がこの範囲なら(空・0 なら見ない)
     オーダー板厚/幅/丈_最小/最大 … SIKALOT のｵｰﾀﾞｰ板厚・幅・丈がこの範囲なら(空・0 なら見ない。VER4.8.60〜)
@@ -54,12 +55,14 @@ ORDER_RANGE_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # あとから足した列(前の版で作った表に足しに行く ── 手元 `db._add_rule_columns`、
 # 取り込み元 `master_schema.ensure_rule_tables`)
 ADDED_COLUMNS: tuple[tuple[str, str], ...] = tuple(
-    (c, "REAL") for lo, hi, _ in ORDER_RANGE_COLUMNS for c in (lo, hi))
+    (c, "REAL") for lo, hi, _ in ORDER_RANGE_COLUMNS for c in (lo, hi)) + (
+    # 納入先(VER4.8.71。現場の声:「列 納入先 を追加。無いときは自動で追加」)
+    ("納入先", "TEXT NOT NULL DEFAULT ''"),)
 EPS = 1e-6
 
 # 初期値 = もとのプログラムの決め打ち(`special_packaging` の P1185_* と同じ値)
 SEED: tuple[dict[str, Any], ...] = (
-    {"包装仕様NO": "1P1185", "取引先名称": "ﾅﾒｶﾜｱﾙﾐ",
+    {"包装仕様NO": "1P1185", "取引先名称": "ﾅﾒｶﾜｱﾙﾐ", "納入先": "",
      "製造板幅_最小": 1242.0, "製造板幅_最大": 1249.0,
      "製造板丈_最小": 1242.0, "製造板丈_最大": 1249.0,
      "オーダー板厚_最小": None, "オーダー板厚_最大": None,
@@ -101,6 +104,7 @@ class Rule:
 
     spec: str
     customer: str = ""
+    delivery: str = ""
     ranges: tuple[tuple[Optional[float], Optional[float]], ...] = ((None, None),) * 2
     order_ranges: tuple[tuple[Optional[float], Optional[float]], ...] = ((None, None),) * 3
     industry: str = ""
@@ -108,11 +112,17 @@ class Rule:
     pallet_length: int = 0
 
     def matches(self, spec: Any, customer: Any, width: Any, length: Any,
-                order: tuple[Any, Any, Any] = (0, 0, 0)) -> bool:
-        """`width`/`length` は製造板幅・丈、`order` は ｵｰﾀﾞｰ板厚・幅・丈。"""
+                order: tuple[Any, Any, Any] = (0, 0, 0), delivery: Any = "") -> bool:
+        """`width`/`length` は製造板幅・丈、`order` は ｵｰﾀﾞｰ板厚・幅・丈、`delivery` は納入先名称。
+
+        取引先名称・納入先は**含む**(書いた文字が入っていれば当たる)。文字はそのまま比べる
+        (半角カナ ﾅﾒｶﾜ と全角 ナメカワ は別の文字)。
+        """
         if not self.spec or normalize_spec(spec) != self.spec:
             return False
         if self.customer and self.customer not in str(customer or ""):
+            return False
+        if self.delivery and self.delivery not in str(delivery or ""):
             return False
         for (low, high), value in zip(self.ranges, (width, length)):
             if not _within(low, high, _int(value), 0):     # 製造は整数に切り捨てて(もとの判定と同じ)
@@ -136,6 +146,8 @@ class Rule:
         parts = []
         if self.customer:
             parts.append(f"取引先 {self.customer}")
+        if self.delivery:
+            parts.append(f"納入先 {self.delivery}")
         for (low, high), (_, _, name) in zip(self.ranges, RANGE_COLUMNS):
             if low is None and high is None:
                 continue
@@ -160,6 +172,7 @@ class Rule:
 def _rule_of(row: dict[str, Any]) -> Rule:
     return Rule(spec=normalize_spec(row.get("包装仕様NO")),
                 customer=str(row.get("取引先名称") or "").strip(),
+                delivery=str(row.get("納入先") or "").strip(),
                 ranges=tuple((_bound(row.get(lo)), _bound(row.get(hi)))
                              for lo, hi, _ in RANGE_COLUMNS),
                 order_ranges=tuple((_bound(row.get(lo)), _bound(row.get(hi)))
@@ -196,10 +209,11 @@ def load(conn: Optional[sqlite3.Connection]) -> tuple[Rule, ...]:
 
 
 def find(rules: Iterable[Rule], spec: Any, customer: Any, width: Any,
-         length: Any, order: tuple[Any, Any, Any] = (0, 0, 0)) -> Optional[Rule]:
-    """当たった最初の行。当たらなければ None。`order` は ｵｰﾀﾞｰ板厚・幅・丈。"""
+         length: Any, order: tuple[Any, Any, Any] = (0, 0, 0),
+         delivery: Any = "") -> Optional[Rule]:
+    """当たった最初の行。当たらなければ None。`order` は ｵｰﾀﾞｰ板厚・幅・丈、`delivery` は納入先名称。"""
     for rule in rules:
-        if rule.matches(spec, customer, width, length, order):
+        if rule.matches(spec, customer, width, length, order, delivery):
             return rule
     return None
 

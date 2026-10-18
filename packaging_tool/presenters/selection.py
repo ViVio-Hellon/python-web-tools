@@ -389,6 +389,7 @@ class SelectionPresenter:
         self, packaging_spec: str, customer_name: str,
         manufactured_width: float, manufactured_length: float,
         order_size: Optional[tuple[float, float, float]] = None,
+        delivery_name: str = "",
     ) -> None:
         """VBA `CheckAndSet1P1185Mode` の移植。
 
@@ -402,10 +403,12 @@ class SelectionPresenter:
         self.mode_1p1185 = spk.check_1p1185_mode(
             packaging_spec, customer_name, manufactured_width, manufactured_length,
             rules=pallet_limit_rules.load(self.conn),
-            order_size=order_size if order_size is not None else self.order_size())
+            order_size=order_size if order_size is not None else self.order_size(),
+            delivery_name=delivery_name)
         if self.mode_1p1185.is_1p1185 and not was_on:
             self.user_log.log(
                 f"[{self.mode_1p1185.spec}モード パレット限定] 有効 取引先={customer_name}"
+                + (f" 納入先={delivery_name}" if delivery_name else "") +
                 f"(条件 {self.mode_1p1185.rule})", emphasis=True)
 
     # ------------------------------------------------------------------
@@ -604,8 +607,10 @@ class SelectionPresenter:
             spec, order_size=self.order_size(),
             available_board_types=available_board_types,
             current_board_type=current_board_type)
+        # 納入先はロットを開いたときに受注情報に出たオーダーのもの(取引先名称と同じオーダー)
         self.check_and_set_1p1185_mode(
-            spec, result.odr.customer_name, result.lot.width, result.lot.length)
+            spec, result.odr.customer_name, result.lot.width, result.lot.length,
+            delivery_name=getattr(result.odr, "delivery_name", "") or "")
         hosozai = self.apply_hosozai(self.lookup_hosozai(result))
 
         return {

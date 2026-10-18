@@ -438,6 +438,7 @@ from .pallet_limit_rules import TABLE as PALLET_LIMIT_TABLE  # noqa: E402 - 表�
 IMPORT_SPECS[PALLET_LIMIT_TABLE] = [
     ("包装仕様NO", "包装仕様NO", to_text),
     ("取引先名称", "取引先名称", to_text),
+    ("納入先", "納入先", to_text),
     ("製造板幅_最小", "製造板幅_最小", to_real),
     ("製造板幅_最大", "製造板幅_最大", to_real),
     ("製造板丈_最小", "製造板丈_最小", to_real),

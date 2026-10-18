@@ -279,6 +279,64 @@ class OldTableColumnsTests(unittest.TestCase):
         rules = pallet_limit_rules.load(conn)
         self.assertEqual([r.spec for r in rules], ["1P9000"])                   # 足した行が取り込まれた
         self.assertTrue(spk.check_1p1185_mode("1P9000", "ｶ)ﾃｽﾄ", 0, 0, rules=rules))
+        c = sqlite3.connect(src)
+        self.assertIn("納入先", {r[1] for r in c.execute(f'PRAGMA table_info("{TABLE}")')})   # VER4.8.71
+        c.close()
+
+    def test_手元の古い表に納入先を足す(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(self.OLD_DDL)
+        conn.execute(f'INSERT INTO "{TABLE}" (包装仕様NO, 取引先名称, パレット幅, パレット丈) VALUES (?,?,?,?)',
+                     ("1P9000", "ﾃｽﾄ", 1000, 2000))
+        db.apply_schema(conn)
+        self.assertEqual(conn.execute(f'SELECT 納入先 FROM "{TABLE}"').fetchone()[0], "")  # 空 = 見ない
+        self.assertTrue(spk.check_1p1185_mode("1P9000", "ﾃｽﾄ", 0, 0, rules=pallet_limit_rules.load(conn)))
+
+
+class DeliveryTests(unittest.TestCase):
+    """納入先(VER4.8.71)。取引先名称と同じく「含む」。空欄なら見ない。"""
+
+    def rules(self, **cols) -> tuple:
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        conn.execute(f'DELETE FROM "{TABLE}"')
+        row = {"包装仕様NO": "1P2000", "パレット幅": 1100, "パレット丈": 1400, **cols}
+        conn.execute(f'INSERT INTO "{TABLE}" ({", ".join(row)}) VALUES ({", ".join("?" for _ in row)})',
+                     tuple(row.values()))
+        conn.commit()
+        return pallet_limit_rules.load(conn)
+
+    def test_納入先は含む(self) -> None:
+        rules = self.rules(納入先="ﾏﾂｼﾀ")
+        on = lambda d: bool(spk.check_1p1185_mode("1P2000", "", 0, 0, rules=rules, delivery_name=d))  # noqa: E731
+        self.assertTrue(on("ｶ)ﾏﾂｼﾀｼﾖｳﾃﾝ"))
+        self.assertFalse(on("ｶ)ﾃｽﾄ"))
+        self.assertFalse(on(""))
+        self.assertFalse(on("ｶ)マツシタ"))                  # 全角カナは別の文字
+        self.assertIn("納入先 ﾏﾂｼﾀ", rules[0].describe())
+
+    def test_空欄なら見ない_取引先と納入先は両方かつ(self) -> None:
+        self.assertTrue(spk.check_1p1185_mode("1P2000", "", 0, 0, rules=self.rules(),
+                                              delivery_name="どこでも"))
+        both = self.rules(取引先名称="ﾃｽﾄ", 納入先="ﾏﾂｼﾀ")
+        self.assertTrue(spk.check_1p1185_mode("1P2000", "ｶ)ﾃｽﾄ", 0, 0, rules=both, delivery_name="ﾏﾂｼﾀ"))
+        self.assertFalse(spk.check_1p1185_mode("1P2000", "ｶ)ﾃｽﾄ", 0, 0, rules=both, delivery_name="ﾎｶ"))
+        self.assertFalse(spk.check_1p1185_mode("1P2000", "ﾎｶ", 0, 0, rules=both, delivery_name="ﾏﾂｼﾀ"))
+
+    def test_ロットを開くと受注の納入先で判定する(self) -> None:
+        from packaging_tool.presenters.selection import SelectionPresenter
+        from packaging_tool.user_log import UserLog
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        conn.execute(f'UPDATE "{TABLE}" SET 納入先 = ?', ("ﾏﾂｼﾀ",))
+        conn.commit()
+        log = UserLog()
+        p = SelectionPresenter(conn, user_log=log)
+        p.check_and_set_1p1185_mode("1P1185", "ﾅﾒｶﾜｱﾙﾐ", 1245, 1245, delivery_name="ｶ)ﾎｶ")
+        self.assertFalse(p.mode_1p1185.is_1p1185)
+        p.check_and_set_1p1185_mode("1P1185", "ﾅﾒｶﾜｱﾙﾐ", 1245, 1245, delivery_name="ｶ)ﾏﾂｼﾀ")
+        self.assertTrue(p.mode_1p1185.is_1p1185)
+        self.assertIn("納入先=ｶ)ﾏﾂｼﾀ", log.text)
 
 
 class DocExampleWebTests(SelectionWebTestCase):

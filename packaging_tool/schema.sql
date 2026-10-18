@@ -708,6 +708,7 @@ CREATE TABLE IF NOT EXISTS パレット限定条件 (
     ID              INTEGER PRIMARY KEY AUTOINCREMENT,
     包装仕様NO       TEXT NOT NULL,
     取引先名称       TEXT NOT NULL DEFAULT '',
+    納入先           TEXT NOT NULL DEFAULT '',
     製造板幅_最小     REAL,
     製造板幅_最大     REAL,
     製造板丈_最小     REAL,

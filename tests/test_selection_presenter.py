@@ -56,6 +56,7 @@ class FakeOdr:
     packaging_spec: str = ""
     is_ex: bool = False
     customer_name: str = ""
+    delivery_name: str = ""
 
 
 @dataclass
