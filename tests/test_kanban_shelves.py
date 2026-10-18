@@ -10,7 +10,8 @@ LVCは出していないであればLVCにとりにいくことになる」
 2. 欲 = 〇 の置き場は切れている。疲労度の距離は切れている置き場を外して測る(在庫考慮ONのとき)
 3. 置いてある置き場が**全部**切れているときだけ在庫薄
 4. 「ハードボード(大板棚)」は資材ハードボード・置き場は大板(14・15)
-5. 対応が当たらない板(細板の 4 番など)は前と同じ(看板全体で判断)
+5. 対応が当たらない板(945x2000 の 20 番など)は前と同じ(看板全体で判断)
+   細板(4 番)は看板_L1、LVC の 1000x1600 と大板小板の 1000x1200・1000x1700 はサイズを書いた行で決める(VER4.8.69)
 6. 対応はマスタ管理で直せる(取り込み元に作ると初期値・最後の1行は消せない)
 7. 資材選択のログ・棚検索の「まとめて見る」も同じ置き場を外す
 """
@@ -47,14 +48,21 @@ class SplitTests(unittest.TestCase):
     def test_初期値は現場で了承した対応(self):
         rules = kanban_shelves.DEFAULT_RULES
 
-        def nums(kanban, note=""):
+        def nums(kanban, note="", w=0, l=0):
             return sorted(int(s.replace("lblItem", ""))
-                          for s in kanban_shelves.shelves_of(rules, kanban, note))
-        self.assertEqual(nums("看板_L1"), [1, 2, 3, 30, 31])
+                          for s in kanban_shelves.shelves_of(rules, kanban, note, w, l))
+        self.assertEqual(nums("看板_L1"), [1, 2, 3, 4, 30, 31])
         self.assertEqual(nums("看板_LVC"), [17, 18, 19, 32])
         self.assertEqual(nums("看板_HVC"), [7, 8, 35])
         self.assertEqual(nums("看板_大板小板"), [9, 11, 12, 21, 22, 23])
         self.assertEqual(nums("看板_L1", "大板棚"), [14, 15])
+        # サイズを書いた行は、そのサイズのときだけ(向きは問わない)
+        self.assertEqual(nums("看板_LVC", "", 1000, 1600), [17, 18, 19, 23, 32])
+        self.assertEqual(nums("看板_LVC", "", 1600, 1000), [17, 18, 19, 23, 32])
+        self.assertEqual(nums("看板_LVC", "", 1030, 1520), [17, 18, 19, 32])
+        self.assertEqual(nums("看板_大板小板", "", 1000, 1200), [9, 11, 12, 15, 21, 22, 23])
+        self.assertEqual(nums("看板_大板小板", "", 1000, 1700), [9, 11, 12, 15, 21, 22, 23])
+        self.assertEqual(nums("看板_大板小板", "", 660, 1050), [9, 11, 12, 21, 22, 23])
         self.assertIsNone(kanban_shelves.shelves_of(rules, "看板_AIM", ""))
 
 
@@ -103,7 +111,7 @@ class ShelfStockTests(_KanbanCase):
         self.kanban("看板_大板小板", HB, "1000 × 1200 : 100枚", False)
         stock = self.stock()
         self.assertTrue(material_service.is_board_low(stock, HB, 1000, 1200))
-        self.assertIn("看板_大板小板 ハードボード 1000×1200", stock.unplaced)
+        self.assertEqual(stock.unplaced, [])          # 大板小板の 1000x1200 は 15 番の看板(VER4.8.69)
         # 660x1050 は 9(中板・小板)と 15(大板)。大板棚が切れても 9 にある
         self.kanban("看板_L1", "ハードボード(大板棚)", "660 × 1050 : 100枚", True)
         self.kanban("看板_大板小板", HB, "660 × 1050 : 100枚", False)
@@ -112,13 +120,36 @@ class ShelfStockTests(_KanbanCase):
         self.assertEqual(stock.out_for(HB, 660, 1050), frozenset({"lblItem15"}))
 
     def test_対応が当たらない板は前と同じ_看板全体で判断(self):
-        """50x1600 は 4 番(どの看板の置き場でもない)。L1 で欲・ほかに不が無い → 在庫薄。"""
+        """945x2000 は 20 番(どの看板の置き場でもない)。L1 で欲・ほかに不が無い → 在庫薄。"""
+        self.kanban("看板_L1", HB, "945 × 2000 : 50枚", True)
+        stock = self.stock()
+        self.assertTrue(material_service.is_board_low(stock, HB, 945, 2000))
+        self.assertNotIn(f"{HB}|945|2000", stock.shelf_based)
+        self.assertIn("看板_L1 ハードボード 945×2000", stock.unplaced)
+        self.kanban("看板_HVC", HB, "945 × 2000 : 50枚", False)
+        self.assertFalse(material_service.is_board_low(self.stock(), HB, 945, 2000))
+
+    def test_細板は4番_L1の看板で決まる(self):
+        """50x1600 は 4 番だけ。L1 が欲なら、HVC の看板が不でも在庫薄(HVC の置き場には無い)。"""
         self.kanban("看板_L1", HB, "50 × 1600 : 50枚", True)
+        self.kanban("看板_HVC", HB, "50 × 1600 : 50枚", False)
         stock = self.stock()
         self.assertTrue(material_service.is_board_low(stock, HB, 50, 1600))
-        self.assertNotIn(f"{HB}|50|1600", stock.shelf_based)
-        self.kanban("看板_HVC", HB, "50 × 1600 : 50枚", False)
-        self.assertFalse(material_service.is_board_low(self.stock(), HB, 50, 1600))
+        self.assertEqual(stock.out_for(HB, 50, 1600), frozenset({"lblItem4"}))
+        # 30x2500 は 4 番と 13 番。4 番が切れても 13 番(看板の無い置き場)にあるので在庫薄にしない
+        self.kanban("看板_L1", HB, "30 × 2500 : 50枚", True)
+        stock = self.stock()
+        self.assertFalse(material_service.is_board_low(stock, HB, 30, 2500))
+        self.assertEqual(stock.out_for(HB, 30, 2500), frozenset({"lblItem4"}))
+
+    def test_LVCの1000x1600は23番_ほかのサイズの看板は23番に効かない(self):
+        self.kanban("看板_LVC", HB, "1000 × 1600 : 100枚", True)
+        self.kanban("看板_大板小板", HB, "1000 × 1600 : 100枚", False)
+        self.assertTrue(material_service.is_board_low(self.stock(), HB, 1000, 1600))   # 同じ棚に欲がある
+        # LVC の 1030x1520 の欲は 23 番を言わない(23 番は大板小板の看板)
+        self.all_in_stock_1030(l1_wanted=False)
+        self.kanban("看板_LVC", HB, "1030 × 1520 : 100枚", True)
+        self.assertEqual(self.stock().out_for(HB, 1030, 1520), frozenset({"lblItem19"}))
 
     def test_疲労度の距離は切れている置き場を外して測る(self):
         """L1 から 1030x1520 の最寄りは 1 番。1 番の看板が出ていれば、次に近い置き場まで歩く。"""
@@ -156,6 +187,56 @@ class ShelfStockTests(_KanbanCase):
 
 
 class TableTests(_KanbanCase):
+
+    def test_VER4_8_68の表に了承した対応を1回だけ足す(self):
+        """4.8.68 で作った表(幅・丈の列が無い)を開くと、列を足して 4 番・サイズの行を足す。直した行は触らない。"""
+        from packaging_tool import db
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        conn.execute(f'CREATE TABLE "{TABLE}" (ID INTEGER PRIMARY KEY AUTOINCREMENT, 看板 TEXT NOT NULL,'
+                     ' 資材の注記 TEXT NOT NULL DEFAULT \'\', 置き場 TEXT NOT NULL, 有効 INTEGER NOT NULL DEFAULT 1,'
+                     ' 並び順 INTEGER NOT NULL DEFAULT 0, 備考 TEXT NOT NULL DEFAULT \'\','
+                     ' 更新日時 TEXT NOT NULL DEFAULT \'\')')
+        conn.executemany(f'INSERT INTO "{TABLE}" (看板, 資材の注記, 置き場) VALUES (?,?,?)', [
+            ("看板_L1", "", kanban_shelves.L1_SHELVES_4_8_68),
+            ("看板_LVC", "", "lblItem17,lblItem18,lblItem19,lblItem32")])
+        conn.commit()
+        db.apply_schema(conn)
+        rules = kanban_shelves.load(conn)
+        self.assertIn("lblItem4", kanban_shelves.shelves_of(rules, "看板_L1", ""))
+        self.assertIn("lblItem23", kanban_shelves.shelves_of(rules, "看板_LVC", "", 1000, 1600))
+        self.assertIn("lblItem15", kanban_shelves.shelves_of(rules, "看板_大板小板", "", 1000, 1700))
+        count = conn.execute(f'SELECT COUNT(*) FROM "{TABLE}"').fetchone()[0]
+        db.apply_schema(conn)                                       # 2回目は何もしない
+        self.assertEqual(conn.execute(f'SELECT COUNT(*) FROM "{TABLE}"').fetchone()[0], count)
+
+    def test_梱包資材マスタのVER4_8_68の表にも足す(self):
+        from packaging_tool import config, master_schema, source_db
+        folder = Path(tempfile.mkdtemp(prefix="kanban_shelf_src_"))
+        src = folder / config.MATERIAL_DB_NAME
+        with sqlite3.connect(src) as raw:
+            raw.execute("CREATE TABLE PalletMaster (管理番号 INTEGER)")
+            raw.execute(f'CREATE TABLE "{TABLE}" (ID INTEGER PRIMARY KEY AUTOINCREMENT, 看板 TEXT NOT NULL,'
+                        " 資材の注記 TEXT NOT NULL DEFAULT '', 置き場 TEXT NOT NULL, 有効 INTEGER NOT NULL DEFAULT 1,"
+                        " 並び順 INTEGER NOT NULL DEFAULT 0, 備考 TEXT NOT NULL DEFAULT '',"
+                        " 更新日時 TEXT NOT NULL DEFAULT '')")
+            raw.execute(f'INSERT INTO "{TABLE}" (看板, 資材の注記, 置き場) VALUES (?,?,?)',
+                        ("看板_L1", "", kanban_shelves.L1_SHELVES_4_8_68))
+        raw.close()
+        notes = master_schema.ensure_rule_tables(self.conn, src)
+        self.assertTrue(any("了承した対応を足しました(4行)" in n for n in notes), notes)
+        rows = source_db.read_table(src, TABLE)
+        self.assertEqual(len(rows), 1 + len(kanban_shelves.ADDED_ROWS))
+        self.assertEqual(rows[0]["置き場"], kanban_shelves.L1_SHELVES)
+        self.assertFalse(any("了承" in n for n in master_schema.ensure_rule_tables(self.conn, src)))
+
+    def test_直した看板_L1の行は触らない(self):
+        rows = [{"ID": 1, "看板": "看板_L1", "資材の注記": "", "置き場": "lblItem1"}]
+        done: list = []
+        kanban_shelves.upgrade_rows(lambda sql: rows, lambda sql, params=(): done.append((sql, params)))
+        self.assertFalse(any(sql.startswith("UPDATE") for sql, _ in done))
+        self.assertEqual(sum(sql.startswith("INSERT") for sql, _ in done), len(kanban_shelves.ADDED_ROWS))
 
     def test_表を直すとすぐ効く_有効0は見ない(self):
         self.all_in_stock_1030(l1_wanted=True)

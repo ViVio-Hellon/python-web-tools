@@ -348,7 +348,7 @@ def build_board_stock_map(conn: sqlite3.Connection, rules=None) -> BoardStockMap
             elif is_out and key not in stock_map:
                 stock_map[key] = "低"
 
-            shelves = kanban_shelves.shelves_of(rules, table, note)
+            shelves = kanban_shelves.shelves_of(rules, table, note, w, l)
             if shelves is None:
                 continue                            # どの置き場の看板か分からない
             idx = (material.strip(), min(w, l), max(w, l))

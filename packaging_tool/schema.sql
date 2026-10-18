@@ -729,12 +729,15 @@ CREATE TABLE IF NOT EXISTS パレット限定条件 (
 
 -- 看板と置き場の対応(`kanban_shelves`。VER4.8.68)。1行が「この看板の、この注記の行は、この置き場の看板」。
 -- 資材の注記は資材名の後ろの(…)の中身(例 ハードボード(大板棚) → 大板棚)。空なら(…)の無い行。
--- 置き場は BoardMaster のデータラベルと同じ書き方(lblItem1,lblItem2)。在庫考慮で、看板が出ている置き場を外すのに使う
+-- 置き場は BoardMaster のデータラベルと同じ書き方(lblItem1,lblItem2)。幅・丈はそのサイズの行だけ(空ならどのサイズも。VER4.8.69)。
+-- 在庫考慮で、看板が出ている置き場を外すのに使う
 CREATE TABLE IF NOT EXISTS 看板置き場 (
     ID              INTEGER PRIMARY KEY AUTOINCREMENT,
     看板            TEXT NOT NULL,
     資材の注記       TEXT NOT NULL DEFAULT '',
     置き場           TEXT NOT NULL,
+    幅              INTEGER,
+    丈              INTEGER,
     有効            INTEGER NOT NULL DEFAULT 1,
     並び順           INTEGER NOT NULL DEFAULT 0,
     備考            TEXT NOT NULL DEFAULT '',

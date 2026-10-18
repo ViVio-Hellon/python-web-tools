@@ -302,16 +302,27 @@ def _migrate_after_schema(conn: sqlite3.Connection) -> None:
 
 
 def _add_rule_columns(conn: sqlite3.Connection) -> None:
-    """発火条件の表にあとから足した列を、前の版の手元DBにも足す(`pallet_limit_rules.ADDED_COLUMNS`)。"""
-    from . import pallet_limit_rules
-    for table, added in ((pallet_limit_rules.TABLE, pallet_limit_rules.ADDED_COLUMNS),):
+    """発火条件の表にあとから足した列を、前の版の手元DBにも足す(`pallet_limit_rules.ADDED_COLUMNS`)。
+
+    看板置き場(VER4.8.68 で作った表)に幅・丈を足したときは、VER4.8.69 で了承した対応も足す
+    (`kanban_shelves.upgrade_rows`。1回だけ)。
+    """
+    from . import kanban_shelves, pallet_limit_rules
+    for table, added in ((pallet_limit_rules.TABLE, pallet_limit_rules.ADDED_COLUMNS),
+                         (kanban_shelves.TABLE, kanban_shelves.ADDED_COLUMNS)):
         have = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
         if not have:
             continue
-        for column, kind in added:
-            if column not in have:
-                conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {kind}')
-                log.info("%s に %s 列を足しました", table, column)
+        missing = [(c, kind) for c, kind in added if c not in have]
+        for column, kind in missing:
+            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {kind}')
+            log.info("%s に %s 列を足しました", table, column)
+        if missing and table == kanban_shelves.TABLE:
+            def query(sql: str) -> list[dict]:
+                cursor = conn.execute(sql)
+                names = [d[0] for d in cursor.description]
+                return [dict(zip(names, tuple(r))) for r in cursor.fetchall()]
+            kanban_shelves.upgrade_rows(query, conn.execute)
     conn.commit()
 
 

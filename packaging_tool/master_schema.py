@@ -202,7 +202,9 @@ def ensure_rule_tables(conn: sqlite3.Connection, path: Optional[Path]) -> list[s
 
 def _rule_added_columns(table: str) -> tuple[tuple[str, str], ...]:
     """発火条件の表に、あとの版で足した列(前の版で作った取り込み元の表に足しに行く)。"""
-    from . import pallet_limit_rules
+    from . import kanban_shelves, pallet_limit_rules
+    if table == kanban_shelves.TABLE:
+        return kanban_shelves.ADDED_COLUMNS
     return pallet_limit_rules.ADDED_COLUMNS if table == pallet_limit_rules.TABLE else ()
 
 
@@ -215,16 +217,24 @@ def _add_missing_rule_columns(path: Path, table: str) -> list[str]:
     missing = [(c, kind) for c, kind in added if c not in have]
     if not have or not missing:
         return []
+    from . import kanban_shelves
+    upgraded = 0
     try:
         with source_db.connect(path) as src:
             for column, kind in missing:
                 src.execute(f"ALTER TABLE {source_db.quote_identifier(table)} "
                             f"ADD COLUMN {source_db.quote_identifier(column)} {kind}")
+            if table == kanban_shelves.TABLE:
+                # VER4.8.68 で作った看板置き場に、VER4.8.69 で了承した対応を足す(1回だけ)
+                upgraded = kanban_shelves.upgrade_rows(src.query, src.execute)
     except (source_db.SourceError, sqlite3.Error) as exc:
         log.warning("取り込み元の %s に列を足せませんでした: %s", table, exc)
         return [f"{table} に列を足せませんでした({exc})"]
     log.info("取り込み元の %s に列を足しました: %s", table, ", ".join(c for c, _ in missing))
-    return [f"梱包資材マスタの {table} に列を足しました({'・'.join(c for c, _ in missing)}。空 = 見ない)"]
+    notes = [f"梱包資材マスタの {table} に列を足しました({'・'.join(c for c, _ in missing)}。空 = 見ない)"]
+    if upgraded:
+        notes.append(f"梱包資材マスタの {table} に現場で了承した対応を足しました({upgraded}行)")
+    return notes
 
 
 def _seed_source(src: source_db.SourceConnection, table: str) -> int:

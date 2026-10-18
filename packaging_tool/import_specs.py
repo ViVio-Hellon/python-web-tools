@@ -459,6 +459,8 @@ IMPORT_SPECS[KANBAN_SHELF_TABLE] = [
     ("看板", "看板", to_text),
     ("資材の注記", "資材の注記", lambda v: to_text(v) or ""),
     ("置き場", "置き場", to_text),
+    ("幅", "幅", to_int),
+    ("丈", "丈", to_int),
 ] + _THRESHOLD_TAIL
 
 for _threshold_table, _head in _THRESHOLD_HEAD.items():
