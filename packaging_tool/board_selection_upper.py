@@ -402,6 +402,7 @@ def select_upper_boards(
             available, product, fatigue_map=fatigue_map, fatigue_mode=fatigue_mode,
         )
         boards.extend(wide.boards)
+        result.wide_fallback = wide.used_fallback
         result.cut_info.update(wide.cut_info)
         result.length_cut_info.update(wide.length_cut_info)
         # 丈計算/補填フェーズは select_upper_boards_wide_cut 内で完結する

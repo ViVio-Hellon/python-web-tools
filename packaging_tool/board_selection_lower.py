@@ -541,6 +541,7 @@ def select_lower_boards(
     # 9. 幅補填後もカバー不足ならカット前提選定へ
     needs_wide_cut = post_fill_max_w < product.width - PASS1_TOLERANCE
     length_cut_info: dict[str, int] = {}
+    wide_fallback = False
     if needs_wide_cut:
         log.debug("[下用] 幅補填後もカバー不足 -> カット前提選定へ")
         boards.clear()
@@ -550,8 +551,9 @@ def select_lower_boards(
         boards.extend(wide.boards)
         state.cut_info.update(wide.cut_info)
         length_cut_info.update(wide.length_cut_info)
+        wide_fallback = wide.used_fallback
 
     return LowerSelectionResult(
         boards=boards, state=state, post_fill_max_w=post_fill_max_w, needs_wide_cut=needs_wide_cut,
-        length_cut_info=length_cut_info,
+        length_cut_info=length_cut_info, wide_fallback=wide_fallback,
     )

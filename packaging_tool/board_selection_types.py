@@ -80,6 +80,9 @@ class LowerSelectionResult:
     post_fill_max_w: int = 0
     needs_wide_cut: bool = False   # カット前提選定(SelectBoardsForWideLower)が必要
     needs_narrow: bool = False     # 狭幅パレット選定が必要
+    # カット前提選定でも対象幅に届く板が無く、いちばん長い板をそのまま採った(幅が足りない)。
+    # 在庫考慮で在庫薄を外して選んだ結果が使えるかの判断に使う(VER4.8.67)
+    wide_fallback: bool = False
     # カット前提選定(`select_boards_for_wide_lower`)が記録した丈カット情報。
     # `recalc_length_cut_info` は「カット前提」タグのボードを判定対象外に
     # するので(通常モードの再判定と二重に扱わないため)、その代わりに
@@ -112,6 +115,7 @@ class UpperSelectionResult:
     mode: str = "normal"           # "normal"/"共用"/"プロテック"
     narrow_pallet: bool = False
     needs_wide_cut: bool = False   # SelectUpperBoardsWideCut が必要
+    wide_fallback: bool = False    # カット前提でも幅に届かなかった(下用と同じ)
     cut_info: dict[str, int] = field(default_factory=dict)
     length_cut_info: dict[str, int] = field(default_factory=dict)
     # プロテック確定値(下用選定と共有する「唯一の正解」)。mode="プロテック"

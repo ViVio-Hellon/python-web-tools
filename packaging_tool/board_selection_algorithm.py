@@ -286,20 +286,23 @@ class FatigueTally:
     cut: float = 0.0          # 実際に切るぶん
     sheets: int = 0
     cuts: int = 0             # 切る回数
+    low: int = 0              # 在庫薄の板の枚数(在庫考慮ONのときだけ数える。VER4.8.67)
 
     @property
     def total(self) -> float:
         return self.distance + self.carry + self.cut
 
     def text(self) -> str:
+        low = f" / 在庫薄 {self.low}枚" if self.low else ""
         return (f"{self.total:.1f}点(歩く {self.distance:.1f} / 運ぶ {self.carry:.1f} / "
-                f"切る {self.cut:.1f}・{self.cuts}回 / 板 {self.sheets}枚)")
+                f"切る {self.cut:.1f}・{self.cuts}回 / 板 {self.sheets}枚{low})")
 
 
 def actual_fatigue(
     result: AutoSelectResult,
     fatigue_map_lower: Optional[dict[str, FatigueEntry]],
     fatigue_map_upper: Optional[dict[str, FatigueEntry]],
+    low_sizes: frozenset = frozenset(),
 ) -> FatigueTally:
     """できあがった選定(上用・下用・補填板)を、実際に切る箇所まで数える。
 
@@ -316,6 +319,8 @@ def actual_fatigue(
         size = (min(b.width, b.length), max(b.width, b.length))
         n = max(int(b.count or 0), 0)
         tally.sheets += n
+        if size in low_sizes:
+            tally.low += n
         tally.carry += (angle_service.fat_area_score1(b.width, b.length)
                         + angle_service.FAT_SHEET_SCORE) * n
         if size not in seen:
@@ -351,6 +356,8 @@ class FatigueChoice:
         chosen, other = ((self.fatigue, self.normal) if self.used_fatigue
                          else (self.normal, self.fatigue))
         name = "疲労度の選定" if self.used_fatigue else "通常の選定"
+        if chosen.low < other.low:
+            return f"在庫薄の板が少ないので{name}を採りました(在庫考慮)"
         if chosen.cuts < other.cuts:
             return f"切る回数が少ないので{name}を採りました(カットは最終手段)"
         if chosen.total < other.total:
@@ -358,9 +365,13 @@ class FatigueChoice:
         return f"同じなので{name}を採りました"
 
 
-def fatigue_rank(tally: FatigueTally) -> tuple[int, float]:
-    """比べる順: **切る回数が先**(カットは最終手段)、同じなら合計点。"""
-    return tally.cuts, round(tally.total, 6)
+def fatigue_rank(tally: FatigueTally) -> tuple[int, int, float]:
+    """比べる順: **在庫薄の枚数**(在庫考慮ONのとき)→ **切る回数**(カットは最終手段)→ 合計点。
+
+    在庫が先(VER4.8.67。現場の声:「在庫と疲労度は重複で切る必要はあります(両方on)。
+    両方onの場合在庫がなければ切るしかないので仕方がない」)。
+    """
+    return tally.low, tally.cuts, round(tally.total, 6)
 
 
 def auto_select_lowest_fatigue(
@@ -369,6 +380,7 @@ def auto_select_lowest_fatigue(
     fatigue_map_lower: dict[str, FatigueEntry],
     fatigue_map_upper: dict[str, FatigueEntry],
     stock_aware: bool = False,
+    low_sizes: frozenset = frozenset(),
     **flags,
 ) -> FatigueChoice:
     """疲労度優先: 通常の選定と疲労度の選定を作り、**切る回数が少ないほう**、同じなら
@@ -380,15 +392,117 @@ def auto_select_lowest_fatigue(
                                  fatigue_map_lower=fatigue_map_lower,
                                  fatigue_map_upper=fatigue_map_upper,
                                  fatigue_mode=True, stock_aware=stock_aware, **flags)
-    f_tally = actual_fatigue(fatigue, fatigue_map_lower, fatigue_map_upper)
+    f_tally = actual_fatigue(fatigue, fatigue_map_lower, fatigue_map_upper, low_sizes)
     if flags.get("is_protec_mode"):
         return FatigueChoice(result=fatigue, normal=f_tally, fatigue=f_tally,
                              used_fatigue=True, compared=False)
     normal = auto_select_boards(available, palette, product, fatigue_mode=False,
                                 stock_aware=stock_aware, **flags)
-    n_tally = actual_fatigue(normal, fatigue_map_lower, fatigue_map_upper)
+    n_tally = actual_fatigue(normal, fatigue_map_lower, fatigue_map_upper, low_sizes)
     use_fatigue = fatigue_rank(f_tally) <= fatigue_rank(n_tally)
     log.debug("疲労度の比べ: 通常 %s / 疲労度 %s → %s",
               n_tally.text(), f_tally.text(), "疲労度" if use_fatigue else "通常")
     return FatigueChoice(result=fatigue if use_fatigue else normal,
                          normal=n_tally, fatigue=f_tally, used_fatigue=use_fatigue)
+
+
+# ==================================================================
+# 在庫考慮: 先に在庫薄の板を外して選ぶ(VER4.8.67)
+# ==================================================================
+# 現場の声:「在庫加味が正しく動くか(在庫が少ないものをよけているか)」。点検すると、在庫考慮は
+# 「在庫のある板を先に並べる」だけで、544通り中289通りで在庫薄の板を使っていた(外せば全部
+# 在庫のある板だけで選べた)。選定は「1枚で覆える板」から順に探すので、その段の候補が在庫薄だけ
+# だとそれで決まり、在庫のある板を使う次の段まで進まない。
+# →「在庫考慮ONのときは、先に在庫薄の板を外して選ぶ」(現場で了承)。外して選べなかったときだけ
+#   在庫薄も入れて選ぶ(在庫のある板が先に並ぶ、前のやり方)。疲労度もONなら、外した板の中で
+#   疲労度の比べ(在庫薄の枚数 → 切る回数 → 合計点)をする。外すと切ることになっても外すほうを
+#   採る(「在庫がなければ切るしかないので仕方がない」)。
+@dataclass
+class BoardSelection:
+    result: AutoSelectResult
+    choice: Optional[FatigueChoice] = None    # 疲労度で比べたとき
+    low_sizes: frozenset = frozenset()        # 候補の中の在庫薄(在庫考慮ONのとき)
+    avoided_low: bool = False                 # 在庫薄を外して選べた
+    low_used: tuple[str, ...] = ()            # 使ってしまった在庫薄の板("1000×1500")
+
+
+def _low_sizes(available: list[BoardModel]) -> frozenset:
+    return frozenset((min(b.width, b.length), max(b.width, b.length))
+                     for b in available if getattr(b, "stock_low", False))
+
+
+def _low_used(result: AutoSelectResult, low: frozenset) -> tuple[str, ...]:
+    seen: list[str] = []
+    for b in list(result.lower) + list(result.upper):
+        if (min(b.width, b.length), max(b.width, b.length)) in low:
+            name = f"{b.width}×{b.length}"
+            if name not in seen:
+                seen.append(name)
+    return tuple(seen)
+
+
+def _usable_without_low(trial: AutoSelectResult, full: AutoSelectResult) -> bool:
+    """在庫薄を外して選んだ結果が使えるか。在庫薄も入れた選定に比べて、
+
+        - 下用・上用が空になっていない
+        - 幅が足りないまま採っていない(カット前提でも届かなかった)
+        - 狭幅パレットの選定(細い板を並べる最後の手段)に落ちていない
+          (在庫薄を外したせいで細板しか残らず、製品幅を覆えない並べ方になる)
+        - プロテックの確定値が取れている(プロテックのとき)
+
+    切ることになるのは構わない(在庫が無ければ切るしかない)。
+    """
+    if full.lower and not trial.lower:
+        return False
+    if full.upper and not trial.upper:
+        return False
+    full_short = full.lower_result.wide_fallback or full.upper_result.wide_fallback
+    trial_short = trial.lower_result.wide_fallback or trial.upper_result.wide_fallback
+    if trial_short and not full_short:
+        return False
+    full_narrow = full.lower_result.needs_narrow or full.upper_result.narrow_pallet
+    trial_narrow = trial.lower_result.needs_narrow or trial.upper_result.narrow_pallet
+    if trial_narrow and not full_narrow:
+        return False
+    if full.lower_result.protec_result.valid and not trial.lower_result.protec_result.valid:
+        return False
+    return True
+
+
+def select_boards(
+    available: list[BoardModel], palette: Palette, product: ProductSize,
+    *,
+    fatigue_map_lower: Optional[dict[str, FatigueEntry]] = None,
+    fatigue_map_upper: Optional[dict[str, FatigueEntry]] = None,
+    stock_aware: bool = False,
+    **flags,
+) -> BoardSelection:
+    """資材選択の「ボード選定」の入口。在庫考慮と疲労度優先の組み合わせをここで決める。
+
+        在庫考慮 … ONなら先に在庫薄の板を外して選ぶ。使えなければ在庫薄も入れて選ぶ
+        疲労度   … マップがあれば通常と疲労度の選定を比べる(在庫薄の枚数 → 切る回数 → 合計点)
+    """
+    low = _low_sizes(available) if stock_aware else frozenset()
+    use_fatigue = fatigue_map_lower is not None and fatigue_map_upper is not None
+
+    def once(boards: list[BoardModel]) -> tuple[AutoSelectResult, Optional[FatigueChoice]]:
+        if use_fatigue:
+            choice = auto_select_lowest_fatigue(
+                boards, palette, product, fatigue_map_lower=fatigue_map_lower,
+                fatigue_map_upper=fatigue_map_upper, stock_aware=stock_aware,
+                low_sizes=low, **flags)
+            return choice.result, choice
+        return auto_select_boards(boards, palette, product, fatigue_mode=False,
+                                  stock_aware=stock_aware, **flags), None
+
+    full, full_choice = once(available)
+    if low:
+        in_stock = [b for b in available if not getattr(b, "stock_low", False)]
+        if in_stock:
+            trial, trial_choice = once(in_stock)
+            if _usable_without_low(trial, full):
+                log.debug("在庫考慮: 在庫薄 %s 種を外して選べた", len(low))
+                return BoardSelection(trial, trial_choice, low, avoided_low=True)
+        log.debug("在庫考慮: 在庫薄を外すと選べないので、在庫薄も入れて選んだ")
+    return BoardSelection(full, full_choice, low, avoided_low=False,
+                          low_used=_low_used(full, low))

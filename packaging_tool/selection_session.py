@@ -837,31 +837,30 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                     ulog, "packaging_tool.board_selection_algorithm",
                     "packaging_tool.board_selection",
                     "packaging_tool.board_scoring"):
-                if fatigue_lower is not None:
-                    # **疲労度優先は、通常の選定と疲労度の選定を両方作り、できあがった
-                    # 選定を数えた本当の合計点(実際に切る箇所・補填板・枚数)で低いほうを
-                    # 採る**(VER4.8.65)。見込みで選ぶと、ONのほうが切る選定が多かった
-                    choice = alg.auto_select_lowest_fatigue(
-                        available, self.palette, self.product,
-                        fatigue_map_lower=fatigue_lower, fatigue_map_upper=fatigue_upper,
-                        stock_aware=self.stock_aware, **self.presenter.selection_flags())
-                    result = choice.result
-                else:
-                    # マップが無ければ疲労度モードで走らせない(VER4.8.62。「通常選定で
-                    # 実行しました」と言いながら疲労度モードの経路を点0で走らせていた)
-                    result = alg.auto_select_boards(
-                        available, self.palette, self.product,
-                        fatigue_mode=False, stock_aware=self.stock_aware,
-                        # 包装仕様NOで決まったモードを選定へ渡す。プロテックと
-                        # 上下共用は「上用=下用と同サイズ」を強制する分岐に効く。
-                        # どのモードを渡すかはプレゼンタが知っている
-                        **self.presenter.selection_flags())
+                # 在庫考慮(在庫薄を先に外す)と疲労度優先(通常と疲労度の選定を、
+                # 在庫薄の枚数 → 切る回数 → 合計点 で比べる)の組み合わせは選定側が決める
+                # (VER4.8.67)。マップが無ければ疲労度モードで走らせない(VER4.8.62)。
+                # 包装仕様NOで決まったモードを選定へ渡す。プロテックと上下共用は
+                # 「上用=下用と同サイズ」を強制する分岐に効く(プレゼンタが知っている)
+                picked = alg.select_boards(
+                    available, self.palette, self.product,
+                    fatigue_map_lower=fatigue_lower, fatigue_map_upper=fatigue_upper,
+                    stock_aware=self.stock_aware, **self.presenter.selection_flags())
+                result = picked.result
+                choice = picked.choice
         except Exception as exc:                      # noqa: BLE001 - 画面に出して継続
             log.exception("自動選定エラー")
             ulog.log(f"  → 自動選定エラー: {exc}", emphasis=True)
             return BoardOpResult(False, f"自動選定エラー: {exc}", REFUSE_FAILED)
 
-        if fatigue_lower is not None:
+        if picked.low_sizes:
+            # 在庫考慮: 在庫薄を外して選べたか。使ってしまったならどれか
+            if picked.avoided_low:
+                ulog.log(f"  在庫考慮: 在庫薄の板 {len(picked.low_sizes)}種を外して選びました", emphasis=True)
+            elif picked.low_used:
+                ulog.log("  在庫考慮: 在庫薄の板を外すと選べないため、在庫薄も入れて選びました"
+                         f"(使った在庫薄: {'・'.join(picked.low_used)})", emphasis=True)
+        if choice is not None:
             # どちらを採ったかと、その理由(本当の合計点)を残す
             if choice.compared:
                 ulog.log(f"  疲労度の比べ: 通常の選定 {choice.normal.text()}")
