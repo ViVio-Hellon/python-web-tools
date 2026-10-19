@@ -213,10 +213,24 @@ def _add_missing_rule_columns(path: Path, table: str) -> list[str]:
     added = _rule_added_columns(table)
     if not added:
         return []
+    notes: list[str] = []
+    from . import pallet_limit_rules
+    if table == pallet_limit_rules.TABLE:
+        # 納入先 → 納入先名称(VER4.8.74)。足す前にまとめる(現場が「列を足す」で足した 納入先名称 と2つ並ばないように)
+        have = set(source_db.columns(path, table))
+        if pallet_limit_rules.OLD_DELIVERY_COLUMN in have:
+            try:
+                with source_db.connect(path) as src:
+                    said = pallet_limit_rules.merge_delivery_columns(have, src.query, src.execute)
+            except (source_db.SourceError, sqlite3.Error) as exc:
+                log.warning("取り込み元の %s の納入先の列をまとめられませんでした: %s", table, exc)
+                said = f"{table} の納入先の列をまとめられませんでした({exc})"
+            if said:
+                notes.append(f"梱包資材マスタの {table}: {said}")
     have = set(source_db.columns(path, table))
     missing = [(c, kind) for c, kind in added if c not in have]
     if not have or not missing:
-        return []
+        return notes
     from . import kanban_shelves
     upgraded = 0
     try:
@@ -229,9 +243,9 @@ def _add_missing_rule_columns(path: Path, table: str) -> list[str]:
                 upgraded = kanban_shelves.upgrade_rows(src.query, src.execute)
     except (source_db.SourceError, sqlite3.Error) as exc:
         log.warning("取り込み元の %s に列を足せませんでした: %s", table, exc)
-        return [f"{table} に列を足せませんでした({exc})"]
+        return notes + [f"{table} に列を足せませんでした({exc})"]
     log.info("取り込み元の %s に列を足しました: %s", table, ", ".join(c for c, _ in missing))
-    notes = [f"梱包資材マスタの {table} に列を足しました({'・'.join(c for c, _ in missing)}。空 = 見ない)"]
+    notes.append(f"梱包資材マスタの {table} に列を足しました({'・'.join(c for c, _ in missing)}。空 = 見ない)")
     if upgraded:
         notes.append(f"梱包資材マスタの {table} に現場で了承した対応を足しました({upgraded}行)")
     return notes

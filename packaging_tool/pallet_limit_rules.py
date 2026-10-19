@@ -10,7 +10,7 @@
 
     包装仕様NO          … 受注の包装仕様NOと同じなら(必須)
     取引先名称          … 受注の取引先名称にこの文字を**含む**なら(空なら見ない)
-    納入先              … 受注の納入先名称にこの文字を**含む**なら(空なら見ない。VER4.8.71)
+    納入先名称          … 受注の納入先名称にこの文字を**含む**なら(空なら見ない。VER4.8.71。列名は VER4.8.74 から 納入先名称)
     製造板幅_最小/最大   … SIKALOT の製造板幅がこの範囲なら(空・0 なら見ない)
     製造板丈_最小/最大   … SIKALOT の製造板丈がこの範囲なら(空・0 なら見ない)
     オーダー板厚/幅/丈_最小/最大 … SIKALOT のｵｰﾀﾞｰ板厚・幅・丈がこの範囲なら(空・0 なら見ない。VER4.8.60〜)
@@ -41,6 +41,9 @@ from .protec_rules import _bound, normalize_spec
 log = get_logger("pallet_limit_rules")
 
 TABLE = "パレット限定条件"
+# 納入先の列(VER4.8.74 から 納入先名称。前の列名 納入先 は `merge_delivery_columns` がまとめる)
+DELIVERY_COLUMN = "納入先名称"
+OLD_DELIVERY_COLUMN = "納入先"
 
 RANGE_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("製造板幅_最小", "製造板幅_最大", "製造板幅"),
@@ -56,15 +59,17 @@ ORDER_RANGE_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # 取り込み元 `master_schema.ensure_rule_tables`)
 ADDED_COLUMNS: tuple[tuple[str, str], ...] = tuple(
     (c, "REAL") for lo, hi, _ in ORDER_RANGE_COLUMNS for c in (lo, hi)) + (
-    # 納入先(VER4.8.71。現場の声:「列 納入先 を追加。無いときは自動で追加」)
+    # 納入先名称(VER4.8.71。現場の声:「列 納入先 を追加。無いときは自動で追加」)。VER4.8.71〜73 は列名「納入先」で
+    # 足していたが、現場が「列を足す」で「納入先名称」を足していて2つ並んだ(「納入先 納入先名称 同じの作ってるよ」)。
+    # 取引先名称とそろえて「納入先名称」1つにする(`merge_delivery_columns`。VER4.8.74)
     # 空を許す列で足す(マスタ管理の「取り込み元に作る」と同じ)。VER4.8.71 は NOT NULL で足していて、
     # 空欄の行が足せなかった(VER4.8.72。マスタ管理は空の文字で書くよう直した)
-    ("納入先", "TEXT DEFAULT ''"),)
+    (DELIVERY_COLUMN, "TEXT DEFAULT ''"),)
 EPS = 1e-6
 
 # 初期値 = もとのプログラムの決め打ち(`special_packaging` の P1185_* と同じ値)
 SEED: tuple[dict[str, Any], ...] = (
-    {"包装仕様NO": "1P1185", "取引先名称": "ﾅﾒｶﾜｱﾙﾐ", "納入先": "",
+    {"包装仕様NO": "1P1185", "取引先名称": "ﾅﾒｶﾜｱﾙﾐ", DELIVERY_COLUMN: "",
      "製造板幅_最小": 1242.0, "製造板幅_最大": 1249.0,
      "製造板丈_最小": 1242.0, "製造板丈_最大": 1249.0,
      "オーダー板厚_最小": None, "オーダー板厚_最大": None,
@@ -117,7 +122,7 @@ class Rule:
                 order: tuple[Any, Any, Any] = (0, 0, 0), delivery: Any = "") -> bool:
         """`width`/`length` は製造板幅・丈、`order` は ｵｰﾀﾞｰ板厚・幅・丈、`delivery` は納入先名称。
 
-        取引先名称・納入先は**含む**(書いた文字が入っていれば当たる)。文字はそのまま比べる
+        取引先名称・納入先名称は**含む**(書いた文字が入っていれば当たる)。文字はそのまま比べる
         (半角カナ ﾅﾒｶﾜ と全角 ナメカワ は別の文字)。
         """
         if not self.spec or normalize_spec(spec) != self.spec:
@@ -174,7 +179,7 @@ class Rule:
 def _rule_of(row: dict[str, Any]) -> Rule:
     return Rule(spec=normalize_spec(row.get("包装仕様NO")),
                 customer=str(row.get("取引先名称") or "").strip(),
-                delivery=str(row.get("納入先") or "").strip(),
+                delivery=str(row.get(DELIVERY_COLUMN) or row.get(OLD_DELIVERY_COLUMN) or "").strip(),
                 ranges=tuple((_bound(row.get(lo)), _bound(row.get(hi)))
                              for lo, hi, _ in RANGE_COLUMNS),
                 order_ranges=tuple((_bound(row.get(lo)), _bound(row.get(hi)))
@@ -237,3 +242,37 @@ def seed(conn: sqlite3.Connection) -> int:
                          [tuple(row[c] for c in columns) for row in SEED])
     log.info("%s に初期値を%s件入れました", TABLE, len(SEED))
     return len(SEED)
+
+
+def merge_delivery_columns(columns: Iterable[str], query, execute) -> str:
+    """納入先の列を「納入先名称」1つにまとめる(VER4.8.74)。言うこと(なければ空)を返す。
+
+    - 「納入先」と「納入先名称」が両方ある: 納入先名称が空の行に 納入先 の値を写し、「納入先」列を消す。
+      両方に違う値が入っている行は 納入先名称 のほうを残す(現場が足した列)
+    - 「納入先」だけある: 列名を「納入先名称」に変える
+    - どちらも無い / 納入先名称 だけ: 何もしない(足すのは `ADDED_COLUMNS`)
+
+    `query(sql)` は行の dict の一覧、`execute(sql, params)` は書く(手元・梱包資材マスタの両方で使う)。
+    """
+    have = set(columns)
+    q = lambda name: '"' + name.replace('"', '""') + '"'           # noqa: E731
+    new, old, table = q(DELIVERY_COLUMN), q(OLD_DELIVERY_COLUMN), q(TABLE)
+    if OLD_DELIVERY_COLUMN not in have:
+        return ""
+    if DELIVERY_COLUMN not in have:
+        execute(f"ALTER TABLE {table} RENAME COLUMN {old} TO {new}", ())
+        log.info("%s: 列 納入先 を 納入先名称 に名前を変えました", TABLE)
+        return "列「納入先」を「納入先名称」に名前を変えました"
+    conflict = query(
+        f"SELECT COUNT(*) AS n FROM {table} WHERE COALESCE({new}, '') <> '' "
+        f"AND COALESCE({old}, '') <> '' AND {new} <> {old}")
+    conflicts = int((conflict[0].get("n") if conflict else 0) or 0)
+    moved = execute(
+        f"UPDATE {table} SET {new} = {old} WHERE COALESCE({new}, '') = '' AND COALESCE({old}, '') <> ''", ())
+    execute(f"ALTER TABLE {table} DROP COLUMN {old}", ())
+    log.info("%s: 納入先 → 納入先名称 へ%s行写して、列 納入先 を消しました(両方に違う値: %s行)",
+             TABLE, moved, conflicts)
+    said = f"列「納入先」と「納入先名称」を「納入先名称」1つにまとめました(写した行 {moved or 0}"
+    if conflicts:
+        said += f"。両方に違う値があった {conflicts}行 は 納入先名称 のほうを残しました"
+    return said + ")"

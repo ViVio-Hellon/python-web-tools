@@ -280,7 +280,7 @@ class OldTableColumnsTests(unittest.TestCase):
         self.assertEqual([r.spec for r in rules], ["1P9000"])                   # 足した行が取り込まれた
         self.assertTrue(spk.check_1p1185_mode("1P9000", "ｶ)ﾃｽﾄ", 0, 0, rules=rules))
         c = sqlite3.connect(src)
-        self.assertIn("納入先", {r[1] for r in c.execute(f'PRAGMA table_info("{TABLE}")')})   # VER4.8.71
+        self.assertIn("納入先名称", {r[1] for r in c.execute(f'PRAGMA table_info("{TABLE}")')})   # VER4.8.71/74
         c.close()
 
     def test_手元の古い表に納入先を足す(self) -> None:
@@ -289,7 +289,7 @@ class OldTableColumnsTests(unittest.TestCase):
         conn.execute(f'INSERT INTO "{TABLE}" (包装仕様NO, 取引先名称, パレット幅, パレット丈) VALUES (?,?,?,?)',
                      ("1P9000", "ﾃｽﾄ", 1000, 2000))
         db.apply_schema(conn)
-        self.assertEqual(conn.execute(f'SELECT 納入先 FROM "{TABLE}"').fetchone()[0], "")  # 空 = 見ない
+        self.assertEqual(conn.execute(f'SELECT 納入先名称 FROM "{TABLE}"').fetchone()[0], "")  # 空 = 見ない
         self.assertTrue(spk.check_1p1185_mode("1P9000", "ﾃｽﾄ", 0, 0, rules=pallet_limit_rules.load(conn)))
 
 
@@ -301,10 +301,10 @@ class DisplayOrderTests(unittest.TestCase):
         names = ["ID", "包装仕様NO", "取引先名称", "製造板幅_最小", "製造板幅_最大", "製造板丈_最小", "製造板丈_最大",
                  "業界", "パレット幅", "パレット丈", "有効", "並び順", "備考", "更新日時",
                  "オーダー板厚_最小", "オーダー板厚_最大", "オーダー板幅_最小", "オーダー板幅_最大",
-                 "オーダー板丈_最小", "オーダー板丈_最大", "納入先", "足した列"]
+                 "オーダー板丈_最小", "オーダー板丈_最大", "納入先名称", "足した列"]
         got = master_browse.display_order(TABLE, names)
         self.assertEqual(sorted(got), sorted(names))                  # 列は減らない・増えない
-        self.assertEqual(got[:4], ["ID", "包装仕様NO", "取引先名称", "納入先"])
+        self.assertEqual(got[:4], ["ID", "包装仕様NO", "取引先名称", "納入先名称"])
         pos = {n: i for i, n in enumerate(got)}
         self.assertLess(pos["製造板丈_最大"], pos["オーダー板厚_最小"])
         self.assertLess(pos["オーダー板丈_最大"], pos["業界"])
@@ -331,28 +331,98 @@ class NotNullSourceTests(unittest.TestCase):
         self.assertTrue(master_admin.create_table(self.conn, TABLE, path=self.src).ok)
         # 現場の梱包資材マスタと同じ形: 「取り込み元に作る」で作った表(空を許す)の、納入先だけ NOT NULL
         with sqlite3.connect(self.src) as raw:
-            raw.execute(f'ALTER TABLE "{TABLE}" DROP COLUMN "納入先"')
-            raw.execute(f'ALTER TABLE "{TABLE}" ADD COLUMN "納入先" TEXT NOT NULL DEFAULT \'\'')
+            raw.execute(f'ALTER TABLE "{TABLE}" DROP COLUMN "納入先名称"')
+            raw.execute(f'ALTER TABLE "{TABLE}" ADD COLUMN "納入先名称" TEXT NOT NULL DEFAULT \'\'')
         raw.close()
 
     def test_空欄で行を足せる_直せる(self) -> None:
         got = self.admin.add_row(self.conn, TABLE, {
-            "包装仕様NO": "1P2000", "取引先名称": "", "納入先": "", "業界": "",
+            "包装仕様NO": "1P2000", "取引先名称": "", "納入先名称": "", "業界": "",
             "パレット幅": "1100", "パレット丈": "1400"}, path=self.src)
         self.assertTrue(got.ok, got.message)
         rows = self.admin.page(self.src, TABLE).rows
         added = [r for r in rows if r["包装仕様NO"] == "1P2000"][0]
-        self.assertEqual(added["納入先"], "")
+        self.assertEqual(added["納入先名称"], "")
         self.assertEqual(added["有効"], 1)                    # 空欄の有効は 1(取り込みと同じ)
-        got = self.admin.save_row(self.conn, TABLE, added["__行"], {"納入先": "ﾏﾂｼﾀ"}, path=self.src)
+        got = self.admin.save_row(self.conn, TABLE, added["__行"], {"納入先名称": "ﾏﾂｼﾀ"}, path=self.src)
         self.assertTrue(got.ok, got.message)
-        got = self.admin.save_row(self.conn, TABLE, added["__行"], {"納入先": ""}, path=self.src)
+        got = self.admin.save_row(self.conn, TABLE, added["__行"], {"納入先名称": ""}, path=self.src)
         self.assertTrue(got.ok, got.message)                 # 空に戻せる
         rules = pallet_limit_rules.load(self.conn)
         self.assertTrue(spk.check_1p1185_mode("1P2000", "", 0, 0, rules=rules, delivery_name="どこでも"))
 
     def test_手元の古い表には空を許す列で足す(self) -> None:
-        self.assertIn(("納入先", "TEXT DEFAULT ''"), pallet_limit_rules.ADDED_COLUMNS)
+        self.assertIn(("納入先名称", "TEXT DEFAULT ''"), pallet_limit_rules.ADDED_COLUMNS)
+
+
+class MergeDeliveryColumnsTests(unittest.TestCase):
+    """「納入先」と「納入先名称」を「納入先名称」1つにまとめる(VER4.8.74)。
+    現場の声:「納入先 納入先名称 同じの作ってるよ」(VER4.8.71 が足した 納入先 と、現場が「列を足す」で足した 納入先名称)。"""
+
+    def make_source(self, *, both: bool) -> Path:
+        from packaging_tool import config
+        d = Path(tempfile.mkdtemp(prefix="merge_"))
+        src = d / config.MATERIAL_DB_NAME
+        with sqlite3.connect(src) as raw:
+            raw.execute("CREATE TABLE PalletMaster (管理番号 INTEGER)")
+            raw.execute(OldTableColumnsTests.OLD_DDL)
+            raw.execute(f'ALTER TABLE "{TABLE}" ADD COLUMN "納入先" TEXT NOT NULL DEFAULT \'\'')   # VER4.8.71
+            if both:
+                raw.execute(f'ALTER TABLE "{TABLE}" ADD COLUMN "納入先名称" TEXT')            # 現場が足した列
+            rows = [("1P9001", "ﾏﾂｼﾀ", None), ("1P9002", "", "ﾅﾒｶﾜ"), ("1P9003", "ｱ", "ｲ")] if both else \
+                   [("1P9001", "ﾏﾂｼﾀ", None)]
+            for spec, old, new in rows:
+                cols = "包装仕様NO, 納入先, パレット幅, パレット丈" + (", 納入先名称" if both else "")
+                vals = (spec, old, 1000, 2000) + ((new,) if both else ())
+                raw.execute(f'INSERT INTO "{TABLE}" ({cols}) VALUES ({",".join("?" for _ in vals)})', vals)
+        raw.close()
+        return src
+
+    def columns(self, src: Path) -> list[str]:
+        c = sqlite3.connect(src)
+        try:
+            return [r[1] for r in c.execute(f'PRAGMA table_info("{TABLE}")')]
+        finally:
+            c.close()
+
+    def test_両方あれば1つにまとめる_値は写す_違えば納入先名称を残す(self) -> None:
+        from packaging_tool import data_sync
+        src = self.make_source(both=True)
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        got = data_sync.import_master(conn, src)
+        self.assertTrue(any("1つにまとめました" in n for n in got.notes), got.notes)
+        cols = self.columns(src)
+        self.assertIn("納入先名称", cols)
+        self.assertNotIn("納入先", cols)
+        c = sqlite3.connect(src)
+        values = dict(c.execute(f'SELECT 包装仕様NO, 納入先名称 FROM "{TABLE}"').fetchall())
+        c.close()
+        self.assertEqual(values, {"1P9001": "ﾏﾂｼﾀ", "1P9002": "ﾅﾒｶﾜ", "1P9003": "ｲ"})
+        rules = {r.spec: r.delivery for r in pallet_limit_rules.load(conn)}
+        self.assertEqual(rules["1P9001"], "ﾏﾂｼﾀ")             # 取り込んで効く
+
+    def test_納入先だけなら名前を変える(self) -> None:
+        from packaging_tool import data_sync
+        src = self.make_source(both=False)
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        data_sync.import_master(conn, src)
+        cols = self.columns(src)
+        self.assertIn("納入先名称", cols)
+        self.assertNotIn("納入先", cols)
+
+    def test_手元の前の版の表も名前を変える(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(OldTableColumnsTests.OLD_DDL)
+        conn.execute(f'ALTER TABLE "{TABLE}" ADD COLUMN "納入先" TEXT NOT NULL DEFAULT \'\'')
+        conn.execute(f'INSERT INTO "{TABLE}" (包装仕様NO, 納入先, パレット幅, パレット丈) VALUES (?,?,?,?)',
+                     ("1P9001", "ﾏﾂｼﾀ", 1000, 2000))
+        db.apply_schema(conn)
+        cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{TABLE}")')]
+        self.assertIn("納入先名称", cols)
+        self.assertNotIn("納入先", cols)
+        self.assertEqual(conn.execute(f'SELECT 納入先名称 FROM "{TABLE}"').fetchone()[0], "ﾏﾂｼﾀ")
 
 
 class DeliveryTests(unittest.TestCase):
@@ -369,7 +439,7 @@ class DeliveryTests(unittest.TestCase):
         return pallet_limit_rules.load(conn)
 
     def test_納入先は含む(self) -> None:
-        rules = self.rules(納入先="ﾏﾂｼﾀ")
+        rules = self.rules(納入先名称="ﾏﾂｼﾀ")
         on = lambda d: bool(spk.check_1p1185_mode("1P2000", "", 0, 0, rules=rules, delivery_name=d))  # noqa: E731
         self.assertTrue(on("ｶ)ﾏﾂｼﾀｼﾖｳﾃﾝ"))
         self.assertFalse(on("ｶ)ﾃｽﾄ"))
@@ -380,7 +450,7 @@ class DeliveryTests(unittest.TestCase):
     def test_空欄なら見ない_取引先と納入先は両方かつ(self) -> None:
         self.assertTrue(spk.check_1p1185_mode("1P2000", "", 0, 0, rules=self.rules(),
                                               delivery_name="どこでも"))
-        both = self.rules(取引先名称="ﾃｽﾄ", 納入先="ﾏﾂｼﾀ")
+        both = self.rules(取引先名称="ﾃｽﾄ", 納入先名称="ﾏﾂｼﾀ")
         self.assertTrue(spk.check_1p1185_mode("1P2000", "ｶ)ﾃｽﾄ", 0, 0, rules=both, delivery_name="ﾏﾂｼﾀ"))
         self.assertFalse(spk.check_1p1185_mode("1P2000", "ｶ)ﾃｽﾄ", 0, 0, rules=both, delivery_name="ﾎｶ"))
         self.assertFalse(spk.check_1p1185_mode("1P2000", "ﾎｶ", 0, 0, rules=both, delivery_name="ﾏﾂｼﾀ"))
@@ -390,7 +460,7 @@ class DeliveryTests(unittest.TestCase):
         from packaging_tool.user_log import UserLog
         conn = make_conn()
         self.addCleanup(conn.close)
-        conn.execute(f'UPDATE "{TABLE}" SET 納入先 = ?', ("ﾏﾂｼﾀ",))
+        conn.execute(f'UPDATE "{TABLE}" SET 納入先名称 = ?', ("ﾏﾂｼﾀ",))
         conn.commit()
         log = UserLog()
         p = SelectionPresenter(conn, user_log=log)

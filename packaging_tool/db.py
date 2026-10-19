@@ -313,6 +313,15 @@ def _add_rule_columns(conn: sqlite3.Connection) -> None:
         have = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
         if not have:
             continue
+        if table == pallet_limit_rules.TABLE and pallet_limit_rules.OLD_DELIVERY_COLUMN in have:
+            # 納入先 → 納入先名称(VER4.8.74)。足す前にまとめる(2つ並ばないように)
+            def _query(sql: str) -> list[dict]:
+                cursor = conn.execute(sql)
+                names = [d[0] for d in cursor.description]
+                return [dict(zip(names, tuple(r))) for r in cursor.fetchall()]
+            pallet_limit_rules.merge_delivery_columns(
+                have, _query, lambda sql, params=(): conn.execute(sql, params).rowcount)
+            have = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
         missing = [(c, kind) for c, kind in added if c not in have]
         for column, kind in missing:
             conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {kind}')
