@@ -2702,6 +2702,30 @@ class SendTests(SelectionWebTestCase):
         self.assertIn("送る前に直した",
                       cut_requests.report_of(self.conn, req.request_id).sheets[0])
 
+    def test_ロットNOと1梱N枚も紙面で直せる(self) -> None:
+        """現場の声:「連続で同LOTNOだった時にLOTNOだけ変更」「ボードを手打ちで変更することにより
+        枚数が変化するので修正する」(VER4.8.77)。"""
+        html = self._cut_sheet()
+        self.assertIn('data-edit="lot_no" data-placeholder="ロットNO">1234567</span>', html)
+        self.assertRegex(html, r'data-edit="cut0_w_per"[^>]*>1梱\d+枚</span>')
+        self.assertIn('data-edit="cut0_b_per"', html)              # 空の行にも欄(紙には出ない)
+        self.post("/api/selection/report/cut-request/edits",
+                  {"edits": {"lot_no": "7654321", "cut0_w_per": "1梱5枚"}})
+        html = self.client.get("/report/cut-request", headers=self.auth()).get_data(as_text=True)
+        self.assertIn('data-edit="lot_no" data-placeholder="ロットNO">7654321</span>', html)
+        self.assertIn(">1梱5枚</span>", html)
+        self.assertIn("<title>切断依頼書 7654321", html)
+
+    def test_紙面でロットNOを直して送ると_そのロットで送る(self) -> None:
+        """倉庫の一覧も「もう送ってある」の確かめも紙面のロットで(元のロットで送ってあっても送れる)。"""
+        from packaging_tool import cut_requests
+        self._cut_sheet()
+        self._send_cut()                                             # 元のロット 1234567
+        body = self._send_cut({"edits": {"lot_no": "7654321"}})
+        self.assertIn("Lot 7654321", body["message"])
+        lots = sorted(r.lot_no for r in cut_requests.recent(self.conn))
+        self.assertEqual(lots, ["1234567", "7654321"])
+
     def test_共有が見えなければ送りましたと言わない(self) -> None:
         """発注と同じ。手元に預かっただけで、倉庫にはまだ届いていない(通し点検)。"""
         from unittest import mock

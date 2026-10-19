@@ -724,7 +724,10 @@ def send_cut_request():
         data_sync.refresh_orders(conn, only_if_changed=True)
     except Exception:                               # noqa: BLE001 - 送る操作は止めない
         log.exception("切断依頼を送る前の取り込み直しに失敗(手元の状態で続けます)")
-    lot_no = session.presenter.lot_result.lot.lot_no
+    # **紙面のロットNOで送る**(VER4.8.77)。紙面でロットNOを直したら(連続で同じ内容のロット)、
+    # 倉庫の一覧も「もう送ってある」の確かめも、紙面のロットで行う
+    lot_no = (session.edits_for(outputs.REPORT_CUT).get("lot_no") or "").strip() \
+        or session.presenter.lot_result.lot.lot_no
     result = cut_requests.send(
         conn, built, lot_no=lot_no, summary=outputs.cut_request_summary(session),
         terminal=warehouse_service.this_terminal(),

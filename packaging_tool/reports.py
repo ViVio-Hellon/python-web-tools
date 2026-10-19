@@ -721,7 +721,14 @@ def _cut_block(info: CutSizeInfo, total_packages: int, *, per_prefix: str = "",
             # 空の行。案内(「元のサイズ」)は画面だけに出て、紙には何も出ない
             orig_html = (f'<span class="orig">'
                          f'{ed(f"{prefix}{name}_orig", "", placeholder="元のサイズ")}</span>')
-        per = (f'<span class="per">{per_prefix}1梱{count}枚</span>' if count > 0 else "")
+        # 1梱あたりの枚数も紙面で直せる(VER4.8.77。現場の声:「ボードを手打ちで変更することにより
+        # 枚数が変化するので修正する」)。空の行には案内だけ(紙には出ない)
+        per_text = f"{per_prefix}1梱{count}枚" if count > 0 else ""
+        if ed is None:
+            per = f'<span class="per">{per_text}</span>' if per_text else ""
+        else:
+            per = (f'<span class="per">'
+                   f'{ed(f"{prefix}{name}_per", per_text, placeholder=f"{per_prefix}1梱N枚")}</span>')
         return (f'<div><span class="cutline">'
                 f'<span class="cutsize">{cell}</span>'
                 f"{orig_html}{per}</span></div>")
@@ -765,8 +772,9 @@ def build_cut_request_sheet(data: CutRequestData) -> str:
                 f'{esc(cut_request_title(data.board_type))}</td></tr>')
     rows.append('<tr><td class="head" colspan="3">ロットNO</td>'
                 '<td class="head center">担当者</td></tr>')
+    # ロットNOも紙面で直せる(VER4.8.77。現場の声:「連続で同LOTNOだった時にLOTNOだけ変更」)
     rows.append(f'<tr><td colspan="3" style="height:21.2mm">'
-                f'<span class="value28">{esc(data.lot_no)}</span></td>'
+                f'<span class="value28">{ed("lot_no", data.lot_no, placeholder="ロットNO")}</span></td>'
                 f'<td class="center">{ed("tantou", "", placeholder="—")}</td></tr>')
     rows.append('<tr><td class="head" colspan="4">製品サイズ</td></tr>')
     rows.append(f'<tr><td class="center" colspan="4" style="height:21.2mm">'
@@ -811,12 +819,17 @@ def build_cut_request_sheet(data: CutRequestData) -> str:
     return f'<table class="cut">{colgroup}{"".join(rows)}</table>'
 
 
+def cut_request_lot_no(data: CutRequestData) -> str:
+    """紙面のロットNO(紙面で直してあればそちら。VER4.8.77)。"""
+    return (data.edits.get("lot_no") or "").strip() or data.lot_no
+
+
 def build_cut_request_report(data: CutRequestData) -> printing.Report:
     """切断依頼書の帳票(A4縦・余白1cm)。VBA `PageSetup` と同じ設定。"""
     setup = printing.PageSetup(orientation=printing.PORTRAIT, margin_mm=10.0)
     # 中身は下に寄せ、余りは上に回す(上に余白があるほうがテープで現物に貼りやすい)
     setup.extra_css = CUT_CSS + setup.bottom_align_css()
-    report = printing.Report(title=f"切断依頼書 {data.lot_no}".strip(), setup=setup)
+    report = printing.Report(title=f"切断依頼書 {cut_request_lot_no(data)}".strip(), setup=setup)
     report.add_sheet(build_cut_request_sheet(data))
     return report
 

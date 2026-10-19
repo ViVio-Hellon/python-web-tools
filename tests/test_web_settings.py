@@ -1495,7 +1495,14 @@ class ImportDiagReportTests(DataWebTestCase):
     """
 
     def test_記録が無ければ案内を返す(self) -> None:
-        res = self.client.get("/report/import-diag", headers=self.auth())
+        # ログフォルダは試験の実行全体で1つ。先に走った試験(重複を消す → 取り込み直す)が
+        # 取り込みの記録を残すと「記録が無い」にならないので、空のフォルダを見せる
+        import tempfile
+        from unittest import mock
+        from packaging_tool import config
+        with tempfile.TemporaryDirectory() as empty, \
+                mock.patch.object(config, "log_dir", return_value=Path(empty)):
+            res = self.client.get("/report/import-diag", headers=self.auth())
         self.assertEqual(res.status_code, 200)
         self.assertIn("まだ取り込みの記録がありません", res.get_data(as_text=True))
 
