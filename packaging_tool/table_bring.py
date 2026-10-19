@@ -828,6 +828,11 @@ def _tool_owned() -> dict[str, str]:
                   config.TBL_PT_PLACE, config.TBL_PT_CUT):
         owned[table] = "このツールが書き込む表です(パレット実績)"
     owned[access_control.TABLE] = "マスタ管理で直す表です(書き間違えると誰も入れなくなるため)"
+    # 条件の表(プロテック条件・パレット限定条件・看板置き場)はこのツールが作ってマスタ管理で直す表。
+    # Access に同じ名前の表があると、入れ替えでマスタ管理の直しが消えていた(VER4.8.75)
+    from . import master_schema
+    for table in master_schema.AUTO_CREATE_TABLES:
+        owned[table] = "マスタ管理で直す条件の表です(このツールが作った表)"
     owned[REGISTRY] = "このツールの控えの表です"
     owned[ADDED_REGISTRY] = "このツールの控えの表です"
     return owned

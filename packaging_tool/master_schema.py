@@ -183,6 +183,14 @@ def ensure_rule_tables(conn: sqlite3.Connection, path: Optional[Path]) -> list[s
     for table in AUTO_CREATE_TABLES:
         if table in present:
             notes.extend(_add_missing_rule_columns(path, table))
+            try:
+                with source_db.connect(path) as src:
+                    filled = fill_missing_ids(src, table)
+            except (source_db.SourceError, sqlite3.Error) as exc:
+                log.warning("取り込み元の %s の ID を埋められませんでした: %s", table, exc)
+                filled = 0
+            if filled:
+                notes.append(f"梱包資材マスタの {table} の空の ID を {filled}行 埋めました")
             continue
         try:
             ddl = _ddl_for(conn, table)
@@ -198,6 +206,38 @@ def ensure_rule_tables(conn: sqlite3.Connection, path: Optional[Path]) -> list[s
         log.info("取り込み元に %s を作りました(初期値%s件): %s", table, seeded, path)
         notes.append(f"梱包資材マスタに {table} が無かったので作りました(初期値{seeded}件)")
     return notes
+
+
+def plain_id_column(rows: Iterable[dict]) -> bool:
+    """PRAGMA table_info の行から: 「ID」列があって、自動で番号が入らない(INTEGER PRIMARY KEY でない)か。"""
+    for row in rows:
+        if str(row.get("name") or "").upper() == "ID":
+            return not (row.get("pk") and "INT" in str(row.get("type") or "").upper())
+    return False
+
+
+def fill_missing_ids(src: source_db.SourceConnection, table: str) -> int:
+    """条件の表の空の ID を埋める(VER4.8.75)。埋めた行数を返す。
+
+    現場の声:「パレット限定条件: ID が直すに無いから空欄になってるけどいいの?」。このツールが作った表は
+    ID が自動で入る(INTEGER PRIMARY KEY)が、別の作り方(Access から写した等)の表は自動で入らず、
+    マスタ管理で足した行の ID が空になる。ID は判定には使わない(並びは 並び順)が、空だと紛らわしいので、
+    いちばん大きい ID の続きの番号を足した順(rowid)に入れる。
+    """
+    q = source_db.quote_identifier(table)
+    if not plain_id_column(src.query(f"PRAGMA table_info({q})")):
+        return 0
+    empty = src.query(f"SELECT rowid AS r FROM {q} WHERE ID IS NULL OR TRIM(CAST(ID AS TEXT)) = '' ORDER BY rowid")
+    if not empty:
+        return 0
+    top = src.query(f"SELECT COALESCE(MAX(CAST(ID AS INTEGER)), 0) AS n FROM {q} "
+                    f"WHERE ID IS NOT NULL AND TRIM(CAST(ID AS TEXT)) <> ''")
+    number = int((top[0].get("n") if top else 0) or 0)
+    for row in empty:
+        number += 1
+        src.execute(f"UPDATE {q} SET ID = ? WHERE rowid = ?", [number, row["r"]])
+    log.info("%s の空の ID を %s行 埋めました", table, len(empty))
+    return len(empty)
 
 
 def _rule_added_columns(table: str) -> tuple[tuple[str, str], ...]:

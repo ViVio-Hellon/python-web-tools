@@ -152,6 +152,9 @@ def add_row(conn: sqlite3.Connection, table: str, values: dict[str, Any], *,
     try:
         with source_db.connect(path) as src:
             src.insert(table, clean)
+            if table in master_columns.EMPTY_TEXT_TABLES:
+                # 条件の表は ID を空にしない(自動で番号が入らない作りの表でも。VER4.8.75)
+                master_schema.fill_missing_ids(src, table)
     except source_db.SourceError as exc:
         return _write_failed(table, exc)
 
