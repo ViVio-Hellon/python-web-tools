@@ -293,6 +293,26 @@ class OldTableColumnsTests(unittest.TestCase):
         self.assertTrue(spk.check_1p1185_mode("1P9000", "ﾃｽﾄ", 0, 0, rules=pallet_limit_rules.load(conn)))
 
 
+class DisplayOrderTests(unittest.TestCase):
+    """一覧の列の並び(VER4.8.73)。条件の表だけ、取引先 → 納入先 → 製造 → オーダー → 業界・パレット。"""
+
+    def test_条件の表は定義の順_ほかの表はそのまま(self) -> None:
+        from packaging_tool import master_browse
+        names = ["ID", "包装仕様NO", "取引先名称", "製造板幅_最小", "製造板幅_最大", "製造板丈_最小", "製造板丈_最大",
+                 "業界", "パレット幅", "パレット丈", "有効", "並び順", "備考", "更新日時",
+                 "オーダー板厚_最小", "オーダー板厚_最大", "オーダー板幅_最小", "オーダー板幅_最大",
+                 "オーダー板丈_最小", "オーダー板丈_最大", "納入先", "足した列"]
+        got = master_browse.display_order(TABLE, names)
+        self.assertEqual(sorted(got), sorted(names))                  # 列は減らない・増えない
+        self.assertEqual(got[:4], ["ID", "包装仕様NO", "取引先名称", "納入先"])
+        pos = {n: i for i, n in enumerate(got)}
+        self.assertLess(pos["製造板丈_最大"], pos["オーダー板厚_最小"])
+        self.assertLess(pos["オーダー板丈_最大"], pos["業界"])
+        self.assertLess(pos["業界"], pos["パレット幅"])
+        self.assertEqual(got[-1], "足した列")
+        self.assertEqual(master_browse.display_order("BoardMaster", ["b", "a"]), ["b", "a"])
+
+
 class NotNullSourceTests(unittest.TestCase):
     """VER4.8.71 が梱包資材マスタに `納入先 TEXT NOT NULL DEFAULT ''` で列を足した表に、空欄の行が足せない
     (「NOT NULL constraint failed: パレット限定条件.納入先」)。空欄は手元の既定値で書く(VER4.8.72)。"""

@@ -217,7 +217,8 @@ def _record_length_fill_overshoot(
     記録されず、疲労度の比べで「切らない」と数えていた。同じ並びでも主2枚なら記録される(経路で違った)。
 
     丈の合計は選定と同じ数え方(幅補填は数えない、丈補填は短辺×枚数、ほかは有効丈×枚数)。
-    **30/50/100mm の細板の丈補填は対象外**(「超過は許容」の決まり。`LENGTH_FILL_BOARD_W`)。
+    **30/50/100mm の細板の丈補填は対象外で、丈の合計にも入れない**(「超過は許容」の決まり。`LENGTH_FILL_BOARD_W`。
+    細板ではみ出すときは、その前の板は切らない。VER4.8.73)。
     カット前提の行がある区分は、選定側が丈カットを記録するので触らない。切るのは最後の1枚(枚数1)。
     切断線(値)は丈補填の板の幅方向の長さ = 長辺(短辺を丈に向けて置くため)。
     """
@@ -234,6 +235,10 @@ def _record_length_fill_overshoot(
         if b.tag == TAG_WIDTH_FILL:
             continue
         if b.tag == TAG_LENGTH_FILL:
+            if min(b.width, b.length) in (FILL_SIZE_30, FILL_SIZE_50, FILL_SIZE_100):
+                # 細板の丈補填は数えない(VER4.8.73)。細板ではみ出すのは「超過は許容」で、その前の板は切らない。
+                # 数えていたので、750x1130 x2 + 550x1130 + 100mm細板(2150 > 2100)で 550x1130 を「切る」と数えていた
+                continue
             total += min(b.width, b.length) * b.count
         else:
             total += _orient(b.width, b.length, target_width,

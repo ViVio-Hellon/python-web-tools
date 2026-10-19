@@ -156,6 +156,26 @@ class Page:
                           "text": self.dupes_text, "groups": self.dupes_groups}}
 
 
+def display_order(table: str, names: list[str]) -> list[str]:
+    """一覧に出す列の並び。**条件の表だけ**、取り込みの定義の順にそろえる(VER4.8.73)。
+
+    現場の声:「マスタの列の並び替え: 条件の表だけでよい。取引先、納入先、製造サイズ、オーダーサイズ、パレットサイズ」。
+    梱包資材マスタの表は、あとから足した列(納入先・オーダー寸法)が右端に付く(表の列の順は作り直さないと
+    変えられない)。画面に出す順だけ決め直す。表の中身は変えない。
+
+    並び: 定義に無い列(ID など)→ 定義の順(`import_specs.IMPORT_SPECS`)→ 定義に無い残り(マスタ管理で足した列)。
+    """
+    if table not in master_columns.EMPTY_TEXT_TABLES:
+        return list(names)
+    spec = [source for _local, source, _conv in import_specs.IMPORT_SPECS.get(table, [])]
+    present = set(names)
+    ordered = [n for n in spec if n in present]
+    known = set(ordered)
+    head = [n for n in names if n not in known and n.upper() == "ID"]
+    rest = [n for n in names if n not in known and n not in head]
+    return head + ordered + rest
+
+
 def page(path: Optional[Path], table: str, *, query: str = "",
          sort: str = "", sort_dir: str = "asc",
          limit: int = ROW_LIMIT, dupes: bool = False) -> Page:
@@ -191,7 +211,7 @@ def page(path: Optional[Path], table: str, *, query: str = "",
             return view
         view.error = f"{table} は取り込み元にありません。"
         return view
-    view.columns = names
+    view.columns = display_order(table, names)
     if not master_schema.drop_why(table, path):
         view.droppable = True
         view.drop_note = master_schema.drop_note(table, path)

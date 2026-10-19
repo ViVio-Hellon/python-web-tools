@@ -2039,6 +2039,20 @@ class RecalcLengthCutInfoTests(unittest.TestCase):
         info, _ = alg.recalc_length_cut_info(lower, [], self.palette, self.product)
         self.assertEqual(info, {})        # 600x3 + 100x3 = 2100 > 2000 でも細板は切らない
 
+    def test_strip_after_fill_overshoots_not_the_board(self):
+        """細板の丈補填ではみ出すときは、その前の丈補填の板は切らない(VER4.8.73)。
+        パレット丈2000: 600x3(1800) + 150x1000 の丈補填(1950)+ 100mm細板(2050)。はみ出すのは細板だけ。"""
+        lower = [
+            SelectedBoard(width=1000, length=600, count=3, tag=alg.TAG_MAIN),
+            SelectedBoard(width=150, length=1000, count=1, tag=alg.TAG_LENGTH_FILL),
+            SelectedBoard(width=100, length=2000, count=1, tag=alg.TAG_LENGTH_FILL),
+        ]
+        info, _ = alg.recalc_length_cut_info(lower, [], self.palette, self.product)
+        self.assertEqual(info, {})
+        lower[1] = SelectedBoard(width=250, length=1000, count=1, tag=alg.TAG_LENGTH_FILL)   # 1800+250 > 2000
+        info, _ = alg.recalc_length_cut_info(lower, [], self.palette, self.product)
+        self.assertEqual(info, {"L_250x1000": 1000})
+
     def test_length_fill_board_overshoot_is_a_cut(self):
         """主と同じサイズの丈補填が基準丈を超えたら丈カット(VER4.8.70。「350mmはみ出して使うロジックなんかねぇ」)。"""
         lower = [
