@@ -1112,6 +1112,46 @@ class CenterBoardsInWidthTests(unittest.TestCase):
                         and a.y < b.y + b.width and a.y + a.width > b.y)
 
 
+
+class ProtecCutPremiseLengthTests(unittest.TestCase):
+    """プロテックのカット前提: 丈方向は確定値の丈(VER4.8.76)。
+
+    現場の声:「ボード1枚足らないでしょ。製品丈2953にたいしてボード2060しか並べてないぞ」。
+    製品 963×2953・パレット 995×3050・1030×1520 を2枚。選定は 1030 を 953 に切り、1520 を丈に並べる(3040)。
+    配置は元の板の短い辺(1030)を丈にして 1030×2 = 2060 で描いていた。
+    """
+
+    def test_短い辺を幅にして切る向きでも_丈は確定値の丈で並べる(self) -> None:
+        from packaging_tool import board_selection_algorithm as alg
+        from packaging_tool import board_selection_service as svc
+        pal = svc.apply_pallet_size("995", "3050")[1]
+        prod = ProductSize(width=963, length=2953)
+        boards = [BoardModel(width=w, length=l) for w, l in ((1000, 2000), (1030, 1520), (1250, 1250))]
+        r = alg.auto_select_boards(boards, pal, prod, is_protec_mode=True)
+        pr = r.lower_result.protec_result
+        self.assertEqual((pr.cut_eff_width, pr.eff_length), (953, 1520))
+        ctx = pl.auto_place_boards(r.lower, r.upper, pal, prod, protec_result=pr, is_protec_mode=True)
+        for category in (LOWER, "上用"):
+            boards = [b for b in ctx.placed if b.board_category == category]
+            self.assertEqual([(b.width, b.length) for b in boards], [(953, 1520), (953, 1520)], category)
+            self.assertEqual([(b.original_width, b.original_length) for b in boards], [(1030, 1520)] * 2)
+            self.assertGreaterEqual(max(b.x + b.length for b in boards), prod.length, category)
+
+    def test_長い辺を幅にして切る向きは前と同じ(self) -> None:
+        """1250×2500 の 1250 では幅が足りず 2500 を切る向き: 丈は短い辺(1250)のまま(前と同じ)。"""
+        from packaging_tool import board_selection_algorithm as alg
+        from packaging_tool import board_selection_service as svc
+        pal = svc.apply_pallet_size("1500", "2700")[1]
+        prod = ProductSize(width=1450, length=2500)
+        r = alg.auto_select_boards([BoardModel(width=1250, length=2500)], pal, prod, is_protec_mode=True)
+        pr = r.lower_result.protec_result
+        if not pr.valid:
+            self.skipTest("この寸法ではプロテックの確定値が出ない")
+        ctx = pl.auto_place_boards(r.lower, r.upper, pal, prod, protec_result=pr, is_protec_mode=True)
+        lower = [b for b in ctx.placed if b.board_category == LOWER]
+        self.assertTrue(all(b.length == pr.eff_length for b in lower))
+
+
 if __name__ == "__main__":
     unittest.main()
 

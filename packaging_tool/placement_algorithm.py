@@ -135,7 +135,11 @@ def _place_cut_premise(
 
     pr = ctx.protec_result
     if pr.valid:
-        wc_short = min(pr.orig_width, pr.orig_length)
+        # 丈方向は**確定値の丈**(`eff_length` = 幅に切らなかったほうの辺)。以前は元の板の短い辺で
+        # 決め打ちしていて、短い辺を幅にして切る向き(例: 1030×1520 の 1030 を 953 に切る)のとき、
+        # 図では 1520 を幅に・1030 を丈に描いていた(製品丈 2953 に 1030×2 = 2060 しか並ばない。VER4.8.76)。
+        # 選定・切断依頼は確定値どおり(953×1520)だったので、配置だけが食い違っていた
+        wc_short = pr.eff_length or min(pr.orig_width, pr.orig_length)
         b_rot_cut = pr.is_rotated
         wc_target_w = pr.cut_eff_width
     else:
