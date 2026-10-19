@@ -57,7 +57,9 @@ ORDER_RANGE_COLUMNS: tuple[tuple[str, str, str], ...] = (
 ADDED_COLUMNS: tuple[tuple[str, str], ...] = tuple(
     (c, "REAL") for lo, hi, _ in ORDER_RANGE_COLUMNS for c in (lo, hi)) + (
     # 納入先(VER4.8.71。現場の声:「列 納入先 を追加。無いときは自動で追加」)
-    ("納入先", "TEXT NOT NULL DEFAULT ''"),)
+    # 空を許す列で足す(マスタ管理の「取り込み元に作る」と同じ)。VER4.8.71 は NOT NULL で足していて、
+    # 空欄の行が足せなかった(VER4.8.72。マスタ管理は空の文字で書くよう直した)
+    ("納入先", "TEXT DEFAULT ''"),)
 EPS = 1e-6
 
 # 初期値 = もとのプログラムの決め打ち(`special_packaging` の P1185_* と同じ値)

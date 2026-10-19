@@ -40,6 +40,8 @@ class Column:
     note: str = ""
     # 空欄を「空の文字」として書く列(`BLANK_TEXT`)。NULL にしない
     blank_text: bool = False
+    # 空欄のときに書く値(手元の既定値。`EMPTY_TEXT_TABLES` の表だけ)。None なら NULL で書く
+    blank_value: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "kind": self.kind,
@@ -56,6 +58,12 @@ BLANK_TEXT: dict[str, tuple[str, ...]] = {
 BLANK_TEXT_NOTE = {
     ("PalletMaster", "位置"): "空欄でよい(空 = 型録の行。在庫の棚の行だけ位置を入れる)",
 }
+# **このツールが作る条件の表**では、空欄を NULL ではなく**手元の既定値**で書く(空の文字・有効 1・並び順 0。
+# VER4.8.72)。前の版が梱包資材マスタに足した「納入先」は `NOT NULL DEFAULT ''` で、空欄を NULL で
+# 書くと「NOT NULL constraint failed: パレット限定条件.納入先」で行が足せなかった。意味は同じ(空 = 見ない、
+# 有効の空欄 = 1 は取り込みと同じ)
+EMPTY_TEXT_TABLES: frozenset[str] = frozenset({
+    import_specs.PROTEC_RULE_TABLE, import_specs.PALLET_LIMIT_TABLE, import_specs.KANBAN_SHELF_TABLE})
 
 # 列の横に出す案内(上の2つに当たらない列)
 _RANGE_NOTE = "空欄なら見ない。ちょうどの値は最小・最大に同じ値(例 12)"
@@ -182,12 +190,15 @@ def columns(conn: sqlite3.Connection, table: str,
         kind = _kind_of(str(row["type"]))
         stamp = local in STAMP_COLUMNS
         blank_text = local in BLANK_TEXT.get(table, ())
+        blank_value = (_default_value(row["dflt_value"])
+                       if table in EMPTY_TEXT_TABLES and not stamp else None)
         # 既定値のある列は空欄で通してよい。NULL も既定も無い列だけが必須
         # (空の文字に意味がある列 `BLANK_TEXT` は除く)
         required = (bool(row["notnull"]) and row["dflt_value"] is None
                     and not stamp and not blank_text)
         out.append(Column(
             name=local, kind=kind, required=required, stamp=stamp, blank_text=blank_text,
+            blank_value=blank_value,
             note=("空欄なら今の日時が入ります" if stamp
                   else BLANK_TEXT_NOTE.get((table, local), "")
                   or COLUMN_NOTE.get((table, local), ""))))
@@ -237,6 +248,20 @@ def column_mismatch_why(table: str, present: Iterable[str]) -> str:
            "と見比べて、列名を合わせてください。")
 
 
+
+
+def _default_value(declared: Any) -> Any:
+    """手元のスキーマの既定値(PRAGMA の dflt_value)を値に。`''` → 空の文字、`1` → 1。無ければ None。"""
+    if declared is None:
+        return None
+    text = str(declared).strip()
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1].replace("''", "'")
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return int(number) if number.is_integer() else number
 
 
 def _kind_of(declared: str) -> str:

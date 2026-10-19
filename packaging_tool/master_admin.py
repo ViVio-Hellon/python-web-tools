@@ -340,6 +340,10 @@ def _clean(conn: sqlite3.Connection, table: str, values: dict[str, Any],
                 # 空の文字として書く(型録の行の位置は空の文字。NULL と混ぜない)
                 out[column.name] = ""
                 continue
+            if column.blank_value is not None:
+                # 条件の表は手元の既定値で書く(取り込み元の列が NOT NULL でも足せる。VER4.8.72)
+                out[column.name] = column.blank_value
+                continue
             # 空欄は「無し」。取り込みのときに手元の既定値で埋まる
             out[column.name] = None
             continue

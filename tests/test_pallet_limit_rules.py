@@ -293,6 +293,48 @@ class OldTableColumnsTests(unittest.TestCase):
         self.assertTrue(spk.check_1p1185_mode("1P9000", "ﾃｽﾄ", 0, 0, rules=pallet_limit_rules.load(conn)))
 
 
+class NotNullSourceTests(unittest.TestCase):
+    """VER4.8.71 が梱包資材マスタに `納入先 TEXT NOT NULL DEFAULT ''` で列を足した表に、空欄の行が足せない
+    (「NOT NULL constraint failed: パレット限定条件.納入先」)。空欄は手元の既定値で書く(VER4.8.72)。"""
+
+    def setUp(self) -> None:
+        from packaging_tool import config, master_admin, selection_session
+        self.admin = master_admin
+        d = Path(tempfile.mkdtemp(prefix="notnull_"))
+        self.src = d / config.MATERIAL_DB_NAME
+        sqlite3.connect(self.src).execute("CREATE TABLE PalletMaster (管理番号 INTEGER)").connection.close()
+        self.conn = make_conn()
+        self.addCleanup(self.conn.close)
+        selection_session.reset_session()
+        self.addCleanup(selection_session.reset_session)
+        selection_session.get_session(self.conn).admin = True
+        self.assertTrue(master_admin.create_table(self.conn, TABLE, path=self.src).ok)
+        # 現場の梱包資材マスタと同じ形: 「取り込み元に作る」で作った表(空を許す)の、納入先だけ NOT NULL
+        with sqlite3.connect(self.src) as raw:
+            raw.execute(f'ALTER TABLE "{TABLE}" DROP COLUMN "納入先"')
+            raw.execute(f'ALTER TABLE "{TABLE}" ADD COLUMN "納入先" TEXT NOT NULL DEFAULT \'\'')
+        raw.close()
+
+    def test_空欄で行を足せる_直せる(self) -> None:
+        got = self.admin.add_row(self.conn, TABLE, {
+            "包装仕様NO": "1P2000", "取引先名称": "", "納入先": "", "業界": "",
+            "パレット幅": "1100", "パレット丈": "1400"}, path=self.src)
+        self.assertTrue(got.ok, got.message)
+        rows = self.admin.page(self.src, TABLE).rows
+        added = [r for r in rows if r["包装仕様NO"] == "1P2000"][0]
+        self.assertEqual(added["納入先"], "")
+        self.assertEqual(added["有効"], 1)                    # 空欄の有効は 1(取り込みと同じ)
+        got = self.admin.save_row(self.conn, TABLE, added["__行"], {"納入先": "ﾏﾂｼﾀ"}, path=self.src)
+        self.assertTrue(got.ok, got.message)
+        got = self.admin.save_row(self.conn, TABLE, added["__行"], {"納入先": ""}, path=self.src)
+        self.assertTrue(got.ok, got.message)                 # 空に戻せる
+        rules = pallet_limit_rules.load(self.conn)
+        self.assertTrue(spk.check_1p1185_mode("1P2000", "", 0, 0, rules=rules, delivery_name="どこでも"))
+
+    def test_手元の古い表には空を許す列で足す(self) -> None:
+        self.assertIn(("納入先", "TEXT DEFAULT ''"), pallet_limit_rules.ADDED_COLUMNS)
+
+
 class DeliveryTests(unittest.TestCase):
     """納入先(VER4.8.71)。取引先名称と同じく「含む」。空欄なら見ない。"""
 
