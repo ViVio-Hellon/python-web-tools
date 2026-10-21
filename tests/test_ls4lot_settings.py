@@ -165,5 +165,69 @@ class StatusTests(Ls4Base):
         self.assertIn("仕掛", check.value)
 
 
+class CopyOnlyTests(Ls4Base):
+    """仕掛台帳は**写せないなら読まない**(VER4.8.79。現場の決め)。マスタは前のまま。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        saved = user_settings.get(config.KEY_LOT_DB_DIR)
+        self.addCleanup(user_settings.save, config.KEY_LOT_DB_DIR, saved or "")
+        self.first = self.dir / "第1"
+        self.second = self.dir / "第2"
+        self.ls4 = self.dir / "LS4"
+        for d in (self.first, self.second, self.ls4):
+            d.mkdir()
+        user_settings.save(config.KEY_LOT_DB_DIR, str(self.first))
+        user_settings.save(config.KEY_LOT_DB_DIR2, str(self.second))
+        user_settings.save(config.KEY_LS4_DB_DIR, str(self.ls4))
+        user_settings.save(config.KEY_LS4_DB_NAME, "LS4_本番.sqlite3")
+        user_settings.save(config.KEY_LOT_DB2_FILES, {"仕掛ロット": "SIKALOT_圧縮.sqlite3",
+                                                      config.LS4_KEY: "LS4_予備.sqlite3"})
+
+    def broken_copy(self):
+        uri = mock.patch.object(source_db, "_try_uri", side_effect=AssertionError("共有を直接開いた"))
+        plain = mock.patch.object(source_db, "_try_plain", side_effect=AssertionError("共有を直接開いた"))
+        copy = mock.patch.object(source_db, "_try_copy", side_effect=OSError("写せません"))
+        return copy, uri, plain
+
+    def test_第1_第2パスの4つとも写せなければ読まない(self) -> None:
+        files = [make_ls4(self.first / "SIKALOT.sqlite3"),
+                 make_ls4(self.first / "SIKAHIKI.db"),          # 拡張子違いも同じ
+                 make_ls4(self.second / "SIKALOT_圧縮.sqlite3"),
+                 make_ls4(self.second / "SIKAODR.sqlite3"),
+                 make_ls4(self.ls4 / "LS4_本番.sqlite3"),
+                 make_ls4(self.second / "LS4_予備.sqlite3")]
+        copy, uri, plain = self.broken_copy()
+        for path in files:
+            with self.subTest(path=path.name), copy, uri, plain:
+                self.assertTrue(source_db.is_lot_ledger(Path(path)))
+                found = source_db.probe(path)
+                self.assertFalse(found.ok)
+                self.assertEqual([n for n, _ in found.attempts], [source_db.WAY_COPY])
+                self.assertIn("手元へ写せなかったので読みません", found.error)
+                with self.assertRaises(source_db.SourceError):
+                    source_db.read_table(path, "仕掛")
+
+    def test_写せればふだんどおり写しを読む(self) -> None:
+        path = make_ls4(self.first / "SIKALOT.sqlite3")
+        rows = source_db.read_table(path, "仕掛")
+        self.assertEqual(rows[0]["ﾛｯﾄ番号"], "A000001")
+        self.assertEqual(source_db.probe(path).opened_by, source_db.WAY_COPY)
+
+    def test_同じフォルダでも仕掛台帳でないファイルは前のまま(self) -> None:
+        """梱包資材マスタを仕掛台帳と同じフォルダに置いている端末でも、マスタは巻き込まない。"""
+        other = make_ls4(self.first / "梱包資材マスタ.sqlite3")
+        elsewhere = self.dir / "よそ"
+        elsewhere.mkdir()
+        same_name = make_ls4(elsewhere / "SIKALOT.sqlite3")      # 仕掛台帳の置き場所でない
+        for path in (other, same_name):
+            with self.subTest(path=str(path)), mock.patch.object(
+                    source_db, "_try_copy", side_effect=OSError("写せません")):
+                self.assertFalse(source_db.is_lot_ledger(Path(path)))
+                found = source_db.probe(path)
+                self.assertTrue(found.ok)
+                self.assertEqual(found.opened_by, source_db.WAY_URI)
+
+
 if __name__ == "__main__":
     unittest.main()

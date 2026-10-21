@@ -344,6 +344,7 @@ def _open(path: Path, *, read_only: bool,
     log_to = attempts if attempts is not None else []
 
     ways = []
+    copy_only = read_only and is_lot_ledger(resolved)
     if read_only:
         # **読むときは、まず手元へ写す。**
         #
@@ -360,8 +361,11 @@ def _open(path: Path, *, read_only: bool,
         # 写しは**読むときだけ**。書き戻しを写しへ向けたら、書いたものが
         # どこにも残らない ── 開けないなら開けないと言うほうがまし
         ways.append((WAY_COPY, lambda: _try_copy(resolved)))
-    ways += [(WAY_URI, lambda: _try_uri(resolved, read_only=read_only)),
-             (WAY_PLAIN, lambda: _try_plain(resolved, read_only=read_only))]
+    if not copy_only:
+        # 仕掛台帳は**写せないなら読まない**(下の `is_lot_ledger`)。それ以外は前のまま、写せなければ
+        # 共有の上で読み取り専用で開く
+        ways += [(WAY_URI, lambda: _try_uri(resolved, read_only=read_only)),
+                 (WAY_PLAIN, lambda: _try_plain(resolved, read_only=read_only))]
 
     for name, attempt in ways:
         try:
@@ -379,7 +383,40 @@ def _open(path: Path, *, read_only: bool,
         return conn, name
 
     reasons = " / ".join(f"{n}: {why}" for n, why in log_to if why)
+    if copy_only:
+        log.warning("%s は手元へ写せなかったので読みません(仕掛台帳は共有の上で直接読まない): %s",
+                    path, reasons)
+        raise SourceError(f"{path.name} を手元へ写せなかったので読みません"
+                          f"(仕掛台帳は共有の上で直接読みません): {reasons}")
     raise SourceError(f"{path.name} を開けませんでした: {reasons}")
+
+
+def is_lot_ledger(resolved: Path) -> bool:
+    """仕掛台帳(第1・第2パスの SIKALOT・SIKAHIKI・SIKAODR・LS4LOT)のファイルか。VER4.8.79
+
+    現場の決め:「(仕掛台帳は)写せないなら読まないでよい」。仕掛台帳は手元へ写してから写しを読み、
+    写せなければ**共有の上で直接開く手に移らない**。梱包資材マスタなどは前のまま(写せなければ読み取り専用で直接)。
+
+    **置き場所と名前の両方**で見る(同じフォルダに梱包資材マスタを置いている端末でも、マスタは巻き込まない)。
+    名前は拡張子違い(.sqlite3 / .db)も同じものとして見る(`find` と同じ)。
+    """
+    from . import config
+    try:
+        folders = list(config.lot_db_dirs())
+        stems = {Path(n).stem.lower() for n in config.LOT_DB_FILES.values()}
+        stems |= {Path(n).stem.lower() for n in config.lot_db2_files().values()}
+        stems.add(Path(config.ls4_db2_name()).stem.lower())
+        ls4 = config.ls4_db_dir()
+        if ls4 is not None:
+            folders.append(ls4)
+            stems.add(Path(config.ls4_db_name()).stem.lower())
+    except Exception as exc:                      # pragma: no cover - 設定が読めないときは前のまま
+        log.warning("仕掛台帳の置き場所を読めません(写せなければ直接開く前のままにします): %s", exc)
+        return False
+    here = os.path.normcase(os.path.abspath(resolved.parent))
+    if not any(here == os.path.normcase(os.path.abspath(d)) for d in folders):
+        return False
+    return resolved.stem.lower() in stems
 
 
 def _prepare(conn: sqlite3.Connection) -> sqlite3.Connection:
