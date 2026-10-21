@@ -345,6 +345,17 @@ def _open(path: Path, *, read_only: bool,
 
     ways = []
     copy_only = read_only and is_lot_ledger(resolved)
+    if has_stale_wal(resolved):
+        # **本体は WAL でないのに、隣に中身の入った -wal がある**(前の本体の残骸)。sqlite で開くと
+        # その古い中身を本体に当て、書く接続なら本体へ書き込んでしまう(VER4.8.81。all-tools と共通の不具合 ③)。
+        # 読むときは残骸を除いて写したものだけを読み、書くときは開かない
+        log.warning("%s の隣に古い -wal が残っています(本体は WAL ではありません)", path)
+        if not read_only:
+            raise SourceError(
+                f"{path.name} の隣に古い {path.name}-wal が残っています(本体は WAL 形式ではありません)。"
+                "このまま開くと古い中身が本体に書き込まれるので開きません。誰も開いていないことを確かめて、"
+                f"{path.name}-wal と {path.name}-shm を消してください")
+        copy_only = True
     if read_only:
         # **読むときは、まず手元へ写す。**
         #
@@ -387,7 +398,8 @@ def _open(path: Path, *, read_only: bool,
         log.warning("%s は手元へ写せなかったので読みません(仕掛台帳は共有の上で直接読まない): %s",
                     path, reasons)
         raise SourceError(f"{path.name} を手元へ写せなかったので読みません"
-                          f"(仕掛台帳は共有の上で直接読みません): {reasons}")
+                          f"({'仕掛台帳は' if is_lot_ledger(resolved) else '古い -wal が隣にあるので'}"
+                          f"共有の上で直接読みません): {reasons}")
     raise SourceError(f"{path.name} を開けませんでした: {reasons}")
 
 
@@ -434,7 +446,14 @@ def _prepare(conn: sqlite3.Connection) -> sqlite3.Connection:
 
 
 def _try_uri(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
-    """`file:...?mode=ro` で開く。ふだんはこれで通る。"""
+    """`file:...?mode=ro` で開く。ふだんはこれで通る。
+
+    **WAL のファイルは読み取り専用では開かない**(VER4.8.81)。読み取り専用の接続は閉じるときに
+    付き添いのファイル(-wal / -shm)を消せず、共有に残す。残った -wal の隣で本体を差し替えると、
+    新しい本体に古い中身が当たって壊れる(all-tools と共通の不具合 ③)
+    """
+    if read_only and is_wal_file(resolved):
+        raise sqlite3.OperationalError("WAL のファイルは共有の上で読み取り専用では開きません")
     uri = to_uri(resolved) + ("?mode=ro" if read_only else "")
     conn = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000)
     try:
@@ -589,6 +608,12 @@ def _snapshot(resolved: Path, copy: Path) -> bool:
     `Connection.backup()` は使わない。ほかの端末が鍵を持ち続けると
     **いつまでも待ち続けて戻らない**(待つ上限が無い)ため。
     """
+    if is_wal_file(resolved) or Path(str(resolved) + "-wal").exists():
+        # **WAL(か -wal が隣にある)なら共有の上では開かない**(VER4.8.81)。読み取り専用で開くと
+        # 付き添いのファイル(-wal / -shm)を消せずに共有へ残す(all-tools と共通の不具合 ③)。
+        # それに本体だけを写すと、まだ本体に入っていない -wal の中の行が写しから抜ける。
+        # ファイルのまま、要る付き添いごと写す(`_raw_copy`)
+        return False
     try:
         src = sqlite3.connect(to_uri(resolved) + "?mode=ro", uri=True,
                               timeout=BUSY_TIMEOUT_MS / 1000,
@@ -623,17 +648,39 @@ def _raw_copy(resolved: Path, copy: Path,
     """
     import time
 
+    # **写す付き添いを本体の形式で決める**(VER4.8.81)。
+    #   WAL の本体   … -wal を一緒に写す(まだ本体に入っていない行がある)。-shm は写さない
+    #                  (手元で開くと -wal から作り直される)
+    #   ふだんの本体 … -journal だけ。-wal があれば前の本体の残骸なので写さない
+    #                  (写すと古い中身が新しい本体に当たる。all-tools と共通の不具合 ③)
+    wal = is_wal_file(resolved)
+    extras = ("-wal",) if wal else ("-journal",)
+    if not wal and has_stale_wal(resolved):
+        log.warning("%s の隣の古い -wal は写しません(本体は WAL ではありません)", resolved.name)
+    wal_path = Path(str(resolved) + "-wal")
+
+    def wal_stamp() -> Optional[tuple[int, int]]:
+        try:
+            st = wal_path.stat()
+        except OSError:
+            return None
+        return (st.st_size, st.st_mtime_ns)
+
     for attempt in range(5):
-        for extra in _SIDECARS:
+        wal_before = wal_stamp() if wal else None
+        for extra in extras:
             side = Path(str(resolved) + extra)
             if side.exists():
                 shutil.copyfile(side, Path(str(copy) + extra))
         shutil.copyfile(resolved, copy)
         after = resolved.stat()
         now = (after.st_size, after.st_mtime_ns)
-        if now == stamp:
+        # WAL は本体より先に -wal が書き換わる。-wal が動いていても写し直す
+        if now == stamp and (not wal or wal_stamp() == wal_before):
             return stamp
         stamp = now
+        for extra in _SIDECARS:
+            Path(str(copy) + extra).unlink(missing_ok=True)
         time.sleep(0.2 * (attempt + 1))
     log.warning("%s は写しているあいだも書き換わり続けました", resolved.name)
     return stamp
@@ -711,6 +758,41 @@ def _looks_like_sqlite(path: Path) -> bool:
     try:
         with open(path, "rb") as handle:
             return handle.read(len(MAGIC)) == MAGIC
+    except OSError:
+        return False
+
+
+def _write_version(path: Path) -> Optional[int]:
+    """ヘッダの 18 バイト目(書く形式)。1 = ふだん(ロールバック)、2 = WAL。読めなければ None。
+
+    ファイルの先頭を読むだけ(sqlite では開かない = 共有に何も作らない)。
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(20)
+    except OSError:
+        return None
+    if len(head) < 20 or head[:len(MAGIC)] != MAGIC:
+        return None
+    return head[18]
+
+
+def is_wal_file(path: Path) -> bool:
+    """WAL 形式の sqlite3 か(VER4.8.81)。"""
+    return _write_version(Path(path)) == 2
+
+
+def has_stale_wal(path: Path) -> bool:
+    """本体は WAL 形式**でない**のに、隣に中身の入った -wal がある(前の本体の残骸。VER4.8.81)。
+
+    sqlite は -wal の中だけで整合を確かめ、本体との対応は見ない。残骸があると、差し替えた新しい本体に
+    古い中身を当てる(全体なら古いマスタに戻る、一部なら索引が壊れる。all-tools と共通の不具合 ③)。
+    """
+    path = Path(path)
+    if _write_version(path) != 1:
+        return False
+    try:
+        return Path(str(path) + "-wal").stat().st_size > 0
     except OSError:
         return False
 
