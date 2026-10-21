@@ -321,6 +321,95 @@ class ImportIsAtomicWithSentMarkTests(ImportDoesNotEchoBackTests):
         self.assertEqual(self.source_lots(), ["L0", "L1", "L2", "NEW"])
 
 
+    def test_確かめるあいだも錠は外れない_書いた行は残る(self) -> None:
+        """VER4.8.80(all-tools と共通の不具合 ①)。
+
+        未送信を確かめる途中(`pending_rows` → `ensure_sync_table`)で確定していたため、
+        `BEGIN IMMEDIATE` の錠が外れ、そのすきに画面で書いた行を入れ替えで消していた
+        (手元にも共有にも残らず、送り直しも起きない)。
+        """
+        import threading
+        data_sync.import_master(self.conn, self.src)
+        cols = ", ".join(f'"{c}"' for c in self.COLUMNS)
+        marks = ", ".join("?" for _ in self.COLUMNS)
+        real = imports._still_unsent
+        seen: dict[str, object] = {}
+
+        def write_from_screen() -> None:
+            other = sqlite3.connect(self.local, timeout=10)
+            try:
+                other.execute(f'INSERT INTO "{self.TABLE}" ({cols}) VALUES ({marks})',
+                              self._row("NEW"))
+                other.commit()
+            finally:
+                other.close()
+
+        def checking(conn, spec):
+            waiting = real(conn, spec)
+            if spec.sqlite_table == self.TABLE and "thread" not in seen:
+                seen["in_transaction"] = conn.in_transaction
+                # 錠が効いていれば、別の接続からはすぐには書けない
+                probe = sqlite3.connect(self.local, timeout=0.2)
+                try:
+                    probe.execute(f'INSERT INTO "{self.TABLE}" ({cols}) VALUES ({marks})',
+                                  self._row("PROBE"))
+                    seen["probe"] = "書けた"
+                    probe.rollback()
+                except sqlite3.OperationalError as exc:
+                    seen["probe"] = str(exc)
+                finally:
+                    probe.close()
+                thread = threading.Thread(target=write_from_screen)
+                thread.start()
+                seen["thread"] = thread
+            return waiting
+
+        with mock.patch.object(imports, "_still_unsent", side_effect=checking):
+            data_sync.import_master(self.conn, self.src)
+        seen["thread"].join(10)
+        self.assertTrue(seen["in_transaction"])
+        self.assertIn("locked", seen["probe"])
+        lots = [r[0] for r in self.conn.execute(f'SELECT LotNo FROM "{self.TABLE}"')]
+        self.assertIn("NEW", lots)
+        self.assertEqual(data_sync._unsent_writeback_tables(self.conn).get(self.TABLE), 1)
+        data_sync.write_back(self.conn, self.src)
+        self.assertEqual(self.source_lots(), ["L0", "L1", "L2", "NEW"])
+
+    def test_錠が外れていたら入れ替えない(self) -> None:
+        """守り: 確かめる途中で誰かが確定してしまっても、入れ替えは見送る(手元はそのまま)。"""
+        data_sync.import_master(self.conn, self.src)
+        before = [r[0] for r in self.conn.execute(f'SELECT LotNo FROM "{self.TABLE}"')]
+        real = imports._still_unsent
+
+        def commits(conn, spec):
+            waiting = real(conn, spec)
+            conn.commit()                       # 錠が外れた
+            return waiting
+
+        with mock.patch.object(imports, "_still_unsent", side_effect=commits):
+            result = data_sync.import_master(self.conn, self.src)
+        self.assertTrue(any(self.TABLE in e and "錠が途中で外れた" in e for e in result.errors),
+                        result.errors)
+        after = [r[0] for r in self.conn.execute(f'SELECT LotNo FROM "{self.TABLE}"')]
+        self.assertEqual(after, before)
+
+
+class CountWithoutCommitTests(unittest.TestCase):
+    """取り込みが錠を持ったまま数える `unsent_tables(..., ensure=False)` は確定しない(VER4.8.80)。"""
+
+    def test_数えても取引は続く(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+        db.apply_schema(conn)
+        outbox_sync.ensure_sync_table(conn)
+        spec = spec_for(config.TBL_WAREHOUSE_ORDER)
+        conn.execute("BEGIN IMMEDIATE")
+        self.assertEqual(outbox_sync.unsent_tables(conn, [spec], ensure=False), {})
+        self.assertTrue(conn.in_transaction)
+        outbox_sync.unsent_tables(conn, [spec])          # 既定は前のまま(用意して確定する)
+        self.assertFalse(conn.in_transaction)
+
+
 class OnlyLocalRowsAreSentTests(ImportDoesNotEchoBackTests):
     """**取り込んだ行は、何があっても送らない**(送るのは、この端末で作った行だけ)。
 

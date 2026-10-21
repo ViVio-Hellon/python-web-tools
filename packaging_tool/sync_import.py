@@ -107,10 +107,19 @@ class _UnsentRows(Exception):
         self.count = count
 
 
+class _LockLost(Exception):
+    """確かめるあいだに取り込みの錠(`BEGIN IMMEDIATE`)が外れた(入れ替えを見送る)。"""
+
+
 def _still_unsent(conn: sqlite3.Connection, spec: outbox_sync.WriteBackSpec) -> int:
-    """まだ送っていない行と印の数。数えられなければ「ある」(1)と答える(消さない側へ倒す)。"""
+    """まだ送っていない行と印の数。数えられなければ「ある」(1)と答える(消さない側へ倒す)。
+
+    **取り込みの錠を持ったまま数える。** 同期記録の表は取引の前に用意済み(`import_tables`)なので、
+    ここでは用意しない(`ensure=False`)。用意する `ensure_sync_table` は確定するので、ここで通ると
+    錠が外れ、そのすきに画面で書いたコメント・発注を入れ替えで消していた(VER4.8.80。all-tools と共通の不具合 ①)
+    """
     total = 0
-    for count in (outbox_sync.unsent_tables(conn, [spec]),
+    for count in (outbox_sync.unsent_tables(conn, [spec], ensure=False),
                   outbox_sync.unpushed_mark_tables(conn, [spec])):
         total += count.get(spec.sqlite_table, 0)
     return total
@@ -270,6 +279,10 @@ def import_tables(
                     waiting = _still_unsent(conn, outbox)
                     if waiting:
                         raise _UnsentRows(waiting)
+                    if not conn.in_transaction:
+                        # **錠が外れていたら入れ替えない**(VER4.8.80)。確かめた後に書かれた行を
+                        # 消すおそれがある。手元はそのまま、次の取り込みで入れ替える
+                        raise _LockLost()
                 conn.execute(f"DELETE FROM [{table}]")
                 for number, row in enumerate(rows, start=1):
                     values = {col: conv(row.get(src)) for col, src, conv in spec}
@@ -289,6 +302,14 @@ def import_tables(
                     imported += 1
                 if outbox is not None:
                     outbox_sync.record_all_sent(conn, outbox)
+        except _LockLost:
+            log.error("%s: 取り込みの錠が途中で外れたため総入れ替えを見送り", table)
+            result.errors.append(
+                f"{table}: 取り込みの錠が途中で外れたため入れ替えを見送りました"
+                "(手元はそのまま。次の取り込みで入れ替えます)")
+            report(imported=None, skipped={}, skipped_samples=[], after=before,
+                   error="取り込みの錠が外れた(手元はそのまま)")
+            continue
         except _UnsentRows as unsent:
             log.warning("%s: 未送信 %s件のため総入れ替えを見送り", table, unsent.count)
             result.errors.append(

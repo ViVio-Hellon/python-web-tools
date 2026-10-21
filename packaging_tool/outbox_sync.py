@@ -275,9 +275,15 @@ def _local_only(spec: WriteBackSpec) -> str:
     return f" AND COALESCE([{spec.origin_column}], '') <> '{ORIGIN_IMPORTED}'"
 
 
-def pending_rows(conn: sqlite3.Connection, spec: WriteBackSpec) -> list[sqlite3.Row]:
-    """まだ送れていない行を拾う(予約はしない)。件数確認用。"""
-    ensure_sync_table(conn)
+def pending_rows(conn: sqlite3.Connection, spec: WriteBackSpec, *,
+                 ensure: bool = True) -> list[sqlite3.Row]:
+    """まだ送れていない行を拾う(予約はしない)。件数確認用。
+
+    `ensure=False` は**同期記録の表を用意しない**(= 確定しない)。取り込みが錠(`BEGIN IMMEDIATE`)を
+    持ったまま数えるときに使う(VER4.8.80)。`ensure_sync_table` は確定するので、取引の中で呼ぶと錠が外れる
+    """
+    if ensure:
+        ensure_sync_table(conn)
     conn.row_factory = sqlite3.Row
     return conn.execute(
         f"SELECT * FROM [{spec.sqlite_table}] WHERE [{spec.key_column}] NOT IN"
@@ -571,7 +577,7 @@ def _target_rows(tx: "source_db.SourceTransaction", spec: WriteBackSpec,
 
 
 def unsent_tables(conn: sqlite3.Connection,
-                   specs: Iterable[WriteBackSpec]) -> dict[str, int]:
+                   specs: Iterable[WriteBackSpec], *, ensure: bool = True) -> dict[str, int]:
     """複数specの中で、まだ送っていない行が残っているものを返す。
 
     総入れ替え取り込みの前に「未送信を失わないか」を確認する用途。
@@ -579,7 +585,7 @@ def unsent_tables(conn: sqlite3.Connection,
     remaining: dict[str, int] = {}
     for spec in specs:
         try:
-            rows = pending_rows(conn, spec)
+            rows = pending_rows(conn, spec, ensure=ensure)
         except sqlite3.Error as exc:
             if not _not_unknown(spec, exc):
                 remaining[spec.sqlite_table] = 1     # 分からない = 送れていない分があるかも
