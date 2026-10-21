@@ -377,6 +377,25 @@
                {% if not state.lot_dir_real %}hidden{% endif %}
         >→ {{ state.lot_dir_real }}</small>
 
+        {# LS4LOT。仕掛台帳(SIKALOT・SIKAHIKI・SIKAODR)とは**別の置き場所**。名前も変えられる。
+           空なら見ない(`config.ls4_db_dir`)。2つ目は下の「仕掛台帳(2つ目)」と同じ置き場所で、名前だけ下で変える #}
+        <label for="ls4Dir">LS4LOT</label>
+        <span class="pathrow">
+          <input class="input" id="ls4Dir" value="{{ view.ls4_dir }}"
+                 spellcheck="false" autocomplete="off"
+                 placeholder="空なら見ません(仕掛台帳とは別の置き場所)">
+          <button class="btn btn--find" type="button" data-browse="ls4Dir">
+            <span class="gl">▸</span>参照…</button>
+        </span>
+        <small class="why real" id="ls4DirReal"
+               {% if not state.ls4_dir_real %}hidden{% endif %}
+        >→ {{ state.ls4_dir_real }}</small>
+        <label for="ls4Name">LS4LOT の名前</label>
+        <span class="pathrow">
+          <input class="input" id="ls4Name" value="{{ view.ls4_name }}"
+                 spellcheck="false" autocomplete="off" placeholder="空なら LS4LOT.sqlite3">
+        </span>
+
         {# 仕掛台帳の2つ目。1つ目にファイルが無い、ファイルに目当てのロットが無い、
            ロットはあるが BOX最終実績の寸法が空のとき(ロット情報の画面で2つ目の行の BOX設計寸法を選ぶ)に見る
            (`config.lot_db_dir2`)。空なら使わない #}
@@ -384,7 +403,7 @@
         <span class="pathrow">
           <input class="input" id="lotDir2" value="{{ view.lot_dir2 }}"
                  spellcheck="false" autocomplete="off"
-                 placeholder="空なら使いません(1つ目に無いときに見る場所)">
+                 placeholder="空なら使いません(1つ目に無いときに見る場所。LS4LOT の2つ目もここ)">
           <button class="btn btn--find" type="button" data-browse="lotDir2">
             <span class="gl">▸</span>参照…</button>
         </span>

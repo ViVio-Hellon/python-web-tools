@@ -241,6 +241,44 @@ def lot_db2_files() -> dict[str, str]:
     return names
 
 
+# LS4LOT(VER4.8.78)。仕掛台帳(SIKALOT・SIKAHIKI・SIKAODR)とは**別の置き場所**に置ける。
+# 中の表は「仕掛」(ロット番号・製造寸法・当工程設計 など 13列)。
+# **このツールはまだ中身を使っていない**(置き場所と名前を持ち、設定画面の「いまの状態」で
+# 写して読めるかを確かめるだけ)。2つ目は仕掛台帳の2つ目と同じフォルダで、名前だけ変えられる
+LS4_KEY = "LS4LOT"                  # 2つ目のファイル名の辞書(`KEY_LOT_DB2_FILES`)の鍵
+LS4_DB_NAME = "LS4LOT.sqlite3"
+LS4_TABLE = "仕掛"
+
+
+def ls4_db_dir() -> Optional[Path]:
+    """LS4LOT の1つ目のフォルダ。設定していなければ None(既定は無い = 見ない)。"""
+    from . import user_settings
+    configured = user_settings.get(KEY_LS4_DB_DIR)
+    if isinstance(configured, str) and configured.strip():
+        return resolve_dir(configured)
+    return None
+
+
+def ls4_db_name() -> str:
+    """LS4LOT の1つ目のファイル名。設定していなければ LS4LOT.sqlite3。"""
+    from . import user_settings
+    configured = user_settings.get(KEY_LS4_DB_NAME)
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    return LS4_DB_NAME
+
+
+def ls4_db2_name() -> str:
+    """LS4LOT の2つ目のファイル名(フォルダは仕掛台帳の2つ目)。設定していなければ LS4LOT.sqlite3。"""
+    from . import user_settings
+    configured = user_settings.get(KEY_LOT_DB2_FILES)
+    if isinstance(configured, dict):
+        value = configured.get(LS4_KEY)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return LS4_DB_NAME
+
+
 def lot_db_dirs() -> list[Path]:
     """仕掛台帳を探すフォルダ(1つ目 → 2つ目)。同じフォルダは2度並べない。"""
     first = lot_db_dir()
@@ -303,6 +341,9 @@ KEY_LOT_DB_DIR = "lot_db_dir"
 KEY_LOT_DB_DIR2 = "lot_db_dir2"
 # 仕掛台帳の2つ目のファイル名({手元のテーブル名: ファイル名}。`lot_db2_files`)
 KEY_LOT_DB2_FILES = "lot_db2_files"
+# LS4LOT の1つ目の置き場所・ファイル名(VER4.8.78。2つ目の名前は KEY_LOT_DB2_FILES の LS4_KEY)
+KEY_LS4_DB_DIR = "ls4_db_dir"
+KEY_LS4_DB_NAME = "ls4_db_name"
 KEY_KANBAN_DB_DIR = "kanban_db_dir"
 KEY_THRESHOLD_DB_DIR = "threshold_db_dir"
 KEY_EXPORT_DIR = "export_dir"

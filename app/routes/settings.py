@@ -144,6 +144,9 @@ def save():
         lot_dir2=pick("lot_dir2"),
         # 2つ目のファイル名 {表: 名前}。送られたときだけ触る
         lot_files2=body["lot_files2"] if "lot_files2" in body else None,
+        # LS4LOT の1つ目の置き場所・ファイル名(VER4.8.78。2つ目の名前は lot_files2 の中)
+        ls4_dir=pick("ls4_dir"),
+        ls4_name=pick("ls4_name"),
         kanban_dir=pick("kanban_dir"),
         threshold_dir=pick("threshold_dir"),
         # 倉庫連携の発注CSVの出力先(パスワードは要らない)

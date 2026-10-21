@@ -214,6 +214,8 @@ function renderStatus(state) {
   el.masterDir.value = state.master_dir;
   el.lotDir.value = state.lot_dir;
   el.lotDir2.value = state.lot_dir2 || "";
+  el.ls4Dir.value = state.ls4_dir || "";
+  el.ls4Name.value = state.ls4_name || "";
   // 2つ目のファイル名(表ごと)。空なら1つ目と同じ名前
   for (const f of state.lot_files2 || []) {
     const box = document.querySelector(`[data-lot-file2="${f.table}"]`);
@@ -227,6 +229,7 @@ function renderStatus(state) {
   showReal(el.masterDirReal, state.master_dir_real);
   showReal(el.lotDirReal, state.lot_dir_real);
   showReal(el.lotDir2Real, state.lot_dir2_real);
+  showReal(el.ls4DirReal, state.ls4_dir_real);
   showReal(el.kanbanDirReal, state.kanban_dir_real);
   showReal(el.thresholdDirReal, state.threshold_dir_real);
   showReal(el.exportDirReal, state.export_dir_real);
@@ -483,7 +486,8 @@ async function startJob(path, body) {
 
 // ------------------------------------------------------------------
 export function start(state, jobState, masterFrame) {
-  for (const id of ["statusGrid", "importWhy", "masterDir", "lotDir", "lotDir2", "kanbanDir", "thresholdDir",
+  for (const id of ["statusGrid", "importWhy", "masterDir", "lotDir", "lotDir2", "ls4Dir", "ls4Name", "ls4DirReal",
+                    "kanbanDir", "thresholdDir",
                     "exportDir", "exportDirReal", "exportUsage", "orderCsvDir", "orderCsvDirReal",
                     "masterDirReal", "lotDirReal", "lotDir2Real", "kanbanDirReal",
                     "thresholdDirReal", "autoImport",
@@ -577,6 +581,8 @@ export function start(state, jobState, masterFrame) {
       master_dir: el.masterDir.value,
       lot_dir: el.lotDir.value,
       lot_dir2: el.lotDir2.value,
+      ls4_dir: el.ls4Dir.value,
+      ls4_name: el.ls4Name.value,
       lot_files2: Object.fromEntries(
         [...document.querySelectorAll("[data-lot-file2]")].map((box) => [box.dataset.lotFile2, box.value])),
       kanban_dir: el.kanbanDir.value,

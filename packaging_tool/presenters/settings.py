@@ -176,8 +176,13 @@ class SettingsViewModel:
     master_dir: str = ""
     lot_dir: str = ""
     lot_dir2: str = ""             # 仕掛台帳の2つ目(空なら使わない)
-    # 仕掛台帳の2つ目のファイル名({表: 名前}。設定していなければ1つ目と同じ名前)
+    # 仕掛台帳の2つ目のファイル名({表: 名前}。設定していなければ1つ目と同じ名前)。
+    # LS4LOT の2つ目の名前も入る(鍵 `config.LS4_KEY`。VER4.8.78)
     lot_files2: dict = field(default_factory=dict)
+    # LS4LOT の1つ目(VER4.8.78)。仕掛台帳とは別の置き場所。空なら見ない
+    ls4_dir: str = ""
+    ls4_name: str = ""
+    ls4_dir_real: str = ""
     kanban_dir: str = ""
     threshold_dir: str = ""
     export_dir: str = ""
@@ -253,7 +258,10 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
                           config.KEY_ACCDB_DIR_LEGACY),
         lot_dir=_typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
         lot_dir2=_lot_dir2_typed(),
-        lot_files2=config.lot_db2_files(),
+        lot_files2=_second_names(),
+        ls4_dir=_ls4_dir_typed(),
+        ls4_name=_ls4_name_typed(),
+        ls4_dir_real=str(config.ls4_db_dir() or ""),
         kanban_dir=_typed(config.KEY_KANBAN_DB_DIR, config.kanban_db_dir()),
         threshold_dir=_typed(config.KEY_THRESHOLD_DB_DIR,
                              config.threshold_db_dir()),
@@ -309,18 +317,53 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
     return view
 
 
+# 2つ目の名前の欄に並ぶもの(鍵 → 1つ目の名前)。仕掛台帳の3つと LS4LOT(VER4.8.78)
+def _first_names() -> dict[str, str]:
+    return {**config.LOT_DB_FILES, config.LS4_KEY: config.LS4_DB_NAME}
+
+
+def _second_names() -> dict[str, str]:
+    """いまの2つ目の名前(仕掛台帳の3つ + LS4LOT)。"""
+    return {**config.lot_db2_files(), config.LS4_KEY: config.ls4_db2_name()}
+
+
+_BAD_NAME_CHARS = '\\/:*?"<>|'
+
+
 def _lot_files2_problem(sent: dict) -> str:
     """2つ目のファイル名の形の誤り。**名前だけ**を受ける(フォルダは「仕掛台帳(2つ目)」の欄で決める)。"""
     if not isinstance(sent, dict):
         return "仕掛台帳の2つ目のファイル名の送り方が正しくありません。"
+    firsts = _first_names()
     for table, value in sent.items():
-        if table not in config.LOT_DB_FILES:
+        if table not in firsts:
             return f"仕掛台帳の2つ目に、知らない表 {table} のファイル名が送られました。"
         text = str(value or "").strip()
-        if any(ch in text for ch in '\\/:*?"<>|'):
-            return (f"{config.LOT_DB_FILES[table]} の2つ目のファイル名「{text}」に、ファイル名に使えない"
+        if any(ch in text for ch in _BAD_NAME_CHARS):
+            return (f"{firsts[table]} の2つ目のファイル名「{text}」に、ファイル名に使えない"
                     "文字(\\ / : * ? \" < > |)があります。フォルダは「仕掛台帳(2つ目)」の欄に入れてください。")
     return ""
+
+
+def _ls4_name_problem(sent: str) -> str:
+    """LS4LOT(1つ目)のファイル名の形の誤り。**名前だけ**(フォルダは「LS4LOT」の欄)。"""
+    text = str(sent or "").strip()
+    if any(ch in text for ch in _BAD_NAME_CHARS):
+        return (f"LS4LOT のファイル名「{text}」に、ファイル名に使えない文字(\\ / : * ? \" < > |)が"
+                "あります。フォルダは「LS4LOT」の置き場所の欄に入れてください。")
+    return ""
+
+
+def _ls4_dir_typed() -> str:
+    """LS4LOT の1つ目の置き場所(打たれたまま)。**既定は無い**ので、未設定なら空。"""
+    value = user_settings.get(config.KEY_LS4_DB_DIR)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _ls4_name_typed() -> str:
+    """LS4LOT の1つ目のファイル名(打たれたまま)。未設定なら空(画面は LS4LOT.sqlite3 を薄く出す)。"""
+    value = user_settings.get(config.KEY_LS4_DB_NAME)
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _lot_dir2_typed() -> str:
@@ -899,9 +942,48 @@ def _lot_section(lots: dict[str, Path]) -> Section:
                  "(ファイル名は変えてよいが、中身の要る列はそろえる約束です)。"
                  + ("設計_設備ｺｰｽ が無いと、2つ目から出したロットは BOX かどうか分かりません"
                     if "設計_設備ｺｰｽ" in lacking else ""))))
+    _ls4_checks(section)
     if len(lots) < total:
         section.action = FIX_SOURCE
     return section
+
+
+def _ls4_checks(section: Section) -> None:
+    """LS4LOT(VER4.8.78)。**中身はまだ使っていない**ので、見つかるか・写して読めるかだけを出す。
+
+    1つ目は LS4LOT の欄の置き場所と名前、2つ目は仕掛台帳(2つ目)の置き場所と LS4LOT の2つ目の名前。
+    読むのは仕掛台帳と同じ `source_db.probe`(**手元へ写してから読む**)。
+    """
+    places = []
+    first = config.ls4_db_dir()
+    if first is None:
+        section.checks.append(Check(
+            "LS4LOT(1つ目)", "置き場所を設定していません", INFO,
+            "LS4LOT は仕掛台帳(SIKALOT・SIKAHIKI・SIKAODR)とは別の置き場所です。空なら見ません"))
+    else:
+        places.append(("LS4LOT(1つ目)", first, config.ls4_db_name()))
+    second = config.lot_db_dir2()
+    if second is not None:
+        places.append(("LS4LOT(2つ目)", second, config.ls4_db2_name()))
+    for label, folder, name in places:
+        path = source_db.find_named(folder, name)
+        if path is None:
+            section.checks.append(Check(label, "見つかりません", WARN, f"{folder} に {name} を探しました"))
+            continue
+        found = source_db.probe(path)
+        if not found.ok:
+            section.checks.append(Check(label, "読めません", WARN, f"{path}: {found.error}"))
+        elif config.LS4_TABLE not in found.tables:
+            section.checks.append(Check(
+                label, f"表「{config.LS4_TABLE}」がありません", WARN,
+                f"{path} にある表: {', '.join(found.tables) or 'なし'}"))
+        elif not found.normal:
+            section.checks.append(Check(label, str(path), WARN, _why_detoured(found)))
+        else:
+            section.checks.append(Check(
+                label, str(path), OK,
+                f"{found.opened_by}で読めました(表「{config.LS4_TABLE}」あり)。"
+                "このツールはまだ LS4LOT の中身を使っていません"))
 
 
 def _access_section(conn, startup_modes=None) -> Section:
@@ -1382,8 +1464,12 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         "lot_dir": view.lot_dir,
         "lot_dir2": view.lot_dir2,
         # 2つ目のファイル名。画面は表ごとに 1つ目の名前 → 2つ目の名前 の順で並べる
-        "lot_files2": [{"table": t, "first": config.LOT_DB_FILES[t], "name": n}
+        "lot_files2": [{"table": t, "first": _first_names()[t], "name": n}
                        for t, n in view.lot_files2.items()],
+        "ls4_dir": view.ls4_dir,
+        "ls4_name": view.ls4_name,
+        "ls4_dir_real": (view.ls4_dir_real
+                         if view.ls4_dir_real != view.ls4_dir else ""),
         "kanban_dir": view.kanban_dir,
         "threshold_dir": view.threshold_dir,
         "export_dir": view.export_dir,
@@ -1463,6 +1549,8 @@ PROTECTED_LABELS = {
     "lot_dir": "仕掛台帳の置き場所",
     "lot_dir2": "仕掛台帳の2つ目の置き場所",
     "lot_files2": "仕掛台帳の2つ目のファイル名",
+    "ls4_dir": "LS4LOT の置き場所",
+    "ls4_name": "LS4LOT のファイル名",
     "kanban_dir": "看板マスタの置き場所",
     "threshold_dir": "パレット閾値マスタの置き場所",
 }
@@ -1472,7 +1560,9 @@ def _protected_changes(master_dir: Optional[str], lot_dir: Optional[str],
                        kanban_dir: Optional[str],
                        threshold_dir: Optional[str] = None,
                        lot_dir2: Optional[str] = None,
-                       lot_files2: Optional[dict] = None) -> list[str]:
+                       lot_files2: Optional[dict] = None,
+                       ls4_dir: Optional[str] = None,
+                       ls4_name: Optional[str] = None) -> list[str]:
     """今回**本当に変わる**置き場所の名前。
 
     値が変わらない保存で聞かないのは、設定画面が置き場所を毎回
@@ -1485,15 +1575,18 @@ def _protected_changes(master_dir: Optional[str], lot_dir: Optional[str],
                              config.KEY_ACCDB_DIR_LEGACY),
         "lot_dir": _typed(config.KEY_LOT_DB_DIR, config.lot_db_dir()),
         "lot_dir2": _lot_dir2_typed(),
+        "ls4_dir": _ls4_dir_typed(),
+        "ls4_name": _ls4_name_typed(),
         "kanban_dir": _typed(config.KEY_KANBAN_DB_DIR, config.kanban_db_dir()),
         "threshold_dir": _typed(config.KEY_THRESHOLD_DB_DIR,
                                 config.threshold_db_dir()),
     }
     sent = {"master_dir": master_dir, "lot_dir": lot_dir, "lot_dir2": lot_dir2,
+            "ls4_dir": ls4_dir, "ls4_name": ls4_name,
             "kanban_dir": kanban_dir, "threshold_dir": threshold_dir}
     changed = [PROTECTED_LABELS[key] for key, value in sent.items()
                if value is not None and value.strip() != now[key]]
-    if lot_files2 is not None and _lot_files2_cleaned(lot_files2) != config.lot_db2_files():
+    if lot_files2 is not None and _lot_files2_cleaned(lot_files2) != _second_names():
         changed.append(PROTECTED_LABELS["lot_files2"])
     return changed
 
@@ -1505,9 +1598,14 @@ def _order_csv_typed() -> str:
 
 
 def _lot_files2_cleaned(sent: dict) -> dict[str, str]:
-    """送られた2つ目のファイル名を、保存する形にする。空・知らない表は1つ目の名前(今までどおり)。"""
-    names = dict(config.LOT_DB_FILES)
-    for table in config.LOT_DB_FILES:
+    """送られた2つ目のファイル名を、保存する形にする。空・知らない表は1つ目の名前(今までどおり)。
+
+    LS4LOT(VER4.8.78)は、**送られてこなければいまの名前のまま**(前の画面から保存しても消さない)。
+    """
+    names = _first_names()
+    if not (isinstance(sent, dict) and config.LS4_KEY in sent):
+        names[config.LS4_KEY] = config.ls4_db2_name()
+    for table in list(names):
         value = sent.get(table) if isinstance(sent, dict) else None
         if isinstance(value, str) and value.strip():
             names[table] = value.strip()
@@ -1523,6 +1621,8 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
          lot_dir2: Optional[str] = None,
          lot_files2: Optional[dict] = None,
          order_csv_dir: Optional[str] = None,
+         ls4_dir: Optional[str] = None,
+         ls4_name: Optional[str] = None,
          conn: Any = None) -> SaveResult:
     """設定を保存する。**渡されたものだけ**を触る。
 
@@ -1558,8 +1658,13 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
         problem = _lot_files2_problem(lot_files2)
         if problem:
             return SaveResult(False, problem, REFUSE_BAD_INPUT)
+    if ls4_name is not None:
+        problem = _ls4_name_problem(ls4_name)
+        if problem:
+            return SaveResult(False, problem, REFUSE_BAD_INPUT)
     changing = _protected_changes(master_dir, lot_dir, kanban_dir,
-                                  threshold_dir, lot_dir2, lot_files2)
+                                  threshold_dir, lot_dir2, lot_files2,
+                                  ls4_dir, ls4_name)
     if changing:
         if not admin_password.verify(str(password or "")):
             # 合っていないのか、そもそも送っていないのかは言い分けない
@@ -1582,6 +1687,12 @@ def save(master_dir: Optional[str] = None, lot_dir: Optional[str] = None,
         user_settings.save(config.KEY_LOT_DB_DIR2, lot_dir2.strip())
     if lot_files2 is not None:
         user_settings.save(config.KEY_LOT_DB2_FILES, _lot_files2_cleaned(lot_files2))
+    if ls4_dir is not None:
+        # 空にすると LS4LOT は見ない(既定は無い)
+        user_settings.save(config.KEY_LS4_DB_DIR, ls4_dir.strip())
+    if ls4_name is not None:
+        # 空なら LS4LOT.sqlite3
+        user_settings.save(config.KEY_LS4_DB_NAME, ls4_name.strip())
     if kanban_dir is not None:
         user_settings.save(config.KEY_KANBAN_DB_DIR, kanban_dir.strip())
     if threshold_dir is not None:

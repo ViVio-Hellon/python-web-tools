@@ -249,7 +249,8 @@ def describe_environment() -> str:
     for table, filename in config.LOT_DB_FILES.items():
         found = lots.get(table)
         lines.append(f"  {filename}: {found or '(見つかりません)'}")
-    lines.append(f"  探した場所: {config.lot_db_dir()} → {config.master_db_dir()}")
+    # 1つ目 → 2つ目(設定していれば)。前は2つ目に梱包資材マスタのフォルダを出していた(VER4.8.78 で直した)
+    lines.append(f"  探した場所: {' → '.join(str(d) for d in sync_sources.lot_search_dirs())}")
 
     lines.append(f"書き戻し先: {material or '(見つかりません)'}")
     return "\n".join(lines)
