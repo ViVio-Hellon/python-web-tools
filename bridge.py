@@ -260,6 +260,14 @@ def make_server_class():
                         break
                     pool.submit(answer, *frame)
             finally:
+                # **先に子(Access の変換)を止める**。止めないと、変換を待っている要求が終わらず、
+                # ここで待ったまま強制終了になり、子だけが残っていた(VER4.8.84。all-tools と共通の不具合 ⑤)
+                bring = sys.modules.get("packaging_tool.table_bring")
+                if bring is not None:
+                    try:
+                        bring.kill_children()
+                    except Exception:            # noqa: BLE001
+                        log.exception("子プロセスを止められませんでした")
                 pool.shutdown(wait=True, cancel_futures=False)
                 self._stop_requested = True
                 self._stopped.set()

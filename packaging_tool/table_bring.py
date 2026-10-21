@@ -349,6 +349,55 @@ _CONVERT_SCRIPT = (
 # 鍵はファイルの場所と姿(大きさ・更新時刻)。変わっていたら変換し直す
 _converted_cache: dict[str, tuple[tuple[int, int], Path, str]] = {}
 
+# 動いている変換の子プロセス(VER4.8.84)。**閉じるときに一緒に止める**ために覚えておく。
+# 前は `subprocess.run` で待つだけだったので、変換中にアプリを閉じると、親(このプロセス)だけが
+# 終わり、子の Python が残ってアプリのフォルダを掴み続けた(all-tools と共通の不具合 ⑤)
+_children: set[subprocess.Popen] = set()
+_children_lock = threading.Lock()
+
+
+def converting() -> bool:
+    """Access を変換している最中か(閉じる前の確認に使う。`health._running_jobs`)。"""
+    with _children_lock:
+        return any(child.poll() is None for child in _children)
+
+
+def kill_children() -> int:
+    """動いている変換の子プロセスを止める。止めた数を返す。終わるときに呼ぶ(`start_app._hard_exit` など)。"""
+    with _children_lock:
+        alive = [child for child in _children if child.poll() is None]
+    for child in alive:
+        try:
+            child.kill()
+        except OSError:
+            pass
+    if alive:
+        log.warning("終わるので、Access の変換を %s件 止めました", len(alive))
+    return len(alive)
+
+
+def _run_child(cmd: list[str], *, cwd: str, env: dict,
+               timeout: float) -> subprocess.CompletedProcess:
+    """`subprocess.run(capture_output=True)` と同じ。ただし動いているあいだは `_children` に載せる。"""
+    flags = 0
+    if os.name == "nt":
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)    # 窓なしで動いているので、子にも窓を出さない
+    child = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, creationflags=flags)
+    with _children_lock:
+        _children.add(child)
+    try:
+        try:
+            out, err = child.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.communicate()
+            raise
+        return subprocess.CompletedProcess(cmd, child.returncode, out, err)
+    finally:
+        with _children_lock:
+            _children.discard(child)
+
 
 def _pythons() -> list[list[str]]:
     """変換を動かす Python。まずこのツールと同じもの、だめなら PATH の py / python。
@@ -389,11 +438,10 @@ def _convert(src: Path) -> tuple[Path, str]:
     no_engine = False
     for python in _pythons():
         try:
-            done = subprocess.run(
+            done = _run_child(
                 [*python, "-c", _CONVERT_SCRIPT, str(folder), str(src), str(out),
                  str(BUNDLED_LIBS)],
-                cwd=str(folder), env=env, capture_output=True,
-                timeout=CONVERT_TIMEOUT_SEC)
+                cwd=str(folder), env=env, timeout=CONVERT_TIMEOUT_SEC)
         except (OSError, subprocess.TimeoutExpired) as exc:
             tried.append(f"{' '.join(python)}: {exc}")
             continue

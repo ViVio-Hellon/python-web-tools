@@ -392,8 +392,24 @@ def _hard_exit() -> None:
     """
     import logging
 
+    _stop_children()
     logging.shutdown()
     os._exit(0)
+
+
+def _stop_children() -> None:
+    """このプロセスが起こした子(Access の変換)を止める。**親だけ終わって子が残らないように**(VER4.8.84)。
+
+    `os._exit` は後始末をしないので、子は親を失ったまま走り続け、アプリのフォルダを掴む
+    (all-tools と共通の不具合 ⑤)。読み込んでいなければ子もいない。
+    """
+    bring = sys.modules.get("packaging_tool.table_bring")
+    if bring is None:
+        return
+    try:
+        bring.kill_children()
+    except Exception as exc:                      # noqa: BLE001 - 落とす前の後始末で止まらない
+        log().warning("子プロセスを止められませんでした: %s", exc)
 
 
 def start_bridge(mode: str, *, token: str = "", server_factory) -> int:

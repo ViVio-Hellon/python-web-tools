@@ -388,4 +388,10 @@ def _running_jobs() -> list[str]:
     止める前に必ずここを見る(基盤仕様書 2.8)。
     """
     from packaging_tool import jobs as job_registry
-    return job_registry.get_registry().busy_labels()
+    from packaging_tool import table_bring
+    labels = job_registry.get_registry().busy_labels()
+    if table_bring.converting():
+        # 「表を持ってくる」の Access の変換はジョブに載らない(画面の要求の中で待つ)。閉じる前に聞く
+        # (VER4.8.84。黙って閉じると変換の子プロセスが残っていた)
+        labels.append("Access の変換(表を持ってくる)")
+    return labels

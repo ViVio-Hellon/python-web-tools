@@ -240,6 +240,11 @@ impl Bridge {
             command.creation_flags(CREATE_NO_WINDOW);
         }
         let mut child = command.spawn()?;
+        // **Python とその子(Access の変換など)を、この exe の終わりと一緒に止める**(VER4.8.84)。
+        // 前は exe が止めるのは直接の子だけで、変換中に閉じると孫の Python が残り、
+        // アプリのフォルダを掴み続けた(all-tools と共通の不具合 ⑤)
+        #[cfg(windows)]
+        job::kill_with_this_exe(&child);
         let stdout = child.stdout.take().expect("stdout");
         let stderr = child.stderr.take().expect("stderr");
         *self.stdin.lock().unwrap() = child.stdin.take();
@@ -449,5 +454,109 @@ mod tests {
         std::env::set_var("PACKAGING_TOOL_PYTHON", "/opt/py/bin/python3");
         assert_eq!(python_candidates(), vec![("/opt/py/bin/python3".to_string(), vec![])]);
         std::env::remove_var("PACKAGING_TOOL_PYTHON");
+    }
+}
+
+/// Windows のジョブ(プロセスのまとまり)。**exe が終わると、まとまりの中のプロセスを全部止める**。
+///
+/// 子(Python)を入れると、子が起こした孫(Access の変換の Python・`py.exe` が起こす本物の Python)も
+/// 同じまとまりに入る。exe が × で閉じても、落ちても、タスクマネージャーで止められても、OS がジョブの
+/// 握りを閉じたときに残りを止める(`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`)。
+/// 追加の部品(crate)は使わず、kernel32 を直接呼ぶ。
+#[cfg(windows)]
+mod job {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Child;
+
+    type Handle = *mut c_void;
+
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+    /// `JobObjectExtendedLimitInformation`
+    const EXTENDED_LIMIT_INFORMATION: i32 = 9;
+
+    /// `JOBOBJECT_BASIC_LIMIT_INFORMATION`
+    #[repr(C)]
+    #[derive(Default)]
+    struct BasicLimit {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    /// `IO_COUNTERS`
+    #[repr(C)]
+    #[derive(Default)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    /// `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`
+    #[repr(C)]
+    #[derive(Default)]
+    struct ExtendedLimit {
+        basic: BasicLimit,
+        io: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateJobObjectW(attributes: *mut c_void, name: *const u16) -> Handle;
+        fn SetInformationJobObject(job: Handle, class: i32, info: *mut c_void, length: u32) -> i32;
+        fn AssignProcessToJobObject(job: Handle, process: Handle) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    /// 子をジョブに入れる。**ジョブの握りは閉じずに持ち続ける**(exe が終わるときに OS が閉じ、そこで止まる)。
+    /// 入れられなくても起動は止めない(前と同じ動きになるだけ)。
+    pub fn kill_with_this_exe(child: &Child) {
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+            if job.is_null() {
+                eprintln!("ジョブを作れませんでした(閉じたときに子が残ることがあります)");
+                return;
+            }
+            let mut info = ExtendedLimit::default();
+            info.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                EXTENDED_LIMIT_INFORMATION,
+                &mut info as *mut ExtendedLimit as *mut c_void,
+                std::mem::size_of::<ExtendedLimit>() as u32,
+            );
+            if ok == 0 || AssignProcessToJobObject(job, child.as_raw_handle() as Handle) == 0 {
+                eprintln!("子をジョブに入れられませんでした(閉じたときに子が残ることがあります)");
+                CloseHandle(job);
+            }
+            // 入れられたときは握りを閉じない(閉じると、その場で子が止まる)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn layout_matches_windows() {
+            // 64ビットの Windows での大きさ(winnt.h)。食い違うと SetInformationJobObject が断る
+            assert_eq!(std::mem::size_of::<BasicLimit>(), 64);
+            assert_eq!(std::mem::size_of::<IoCounters>(), 48);
+            assert_eq!(std::mem::size_of::<ExtendedLimit>(), 144);
+        }
     }
 }
