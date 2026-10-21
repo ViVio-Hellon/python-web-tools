@@ -176,6 +176,12 @@ fn handle(bridge: &Bridge, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
         .collect();
     headers.push(("Host".into(), host));
 
+    // **大きすぎる本文は送る前に断る**(VER4.8.82。all-tools と共通の不具合 ②)。
+    // 前は Python が受け付けごと止まり、アプリ全体が動かなくなっていた
+    if request.body().len() > bridge::MAX_BODY {
+        return json_error(413, "too_large", bridge::TOO_LARGE_MESSAGE);
+    }
+
     match bridge.call(request.method().as_str(), &path, uri.query().unwrap_or(""), headers, request.body()) {
         Ok(reply) if wants_page && (300..400).contains(&reply.status) => {
             // **画面の移り先(302 など)は、WebView が独自の宛先ではたどらない**

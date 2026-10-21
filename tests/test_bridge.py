@@ -64,6 +64,25 @@ class FrameTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bridge.read_frame(io.BytesIO(b'{"id": 1, "len": -1}\n'))
 
+    def test_大きすぎる1件は読み捨てて_次の1件から続けられる(self) -> None:
+        """VER4.8.82(all-tools と共通の不具合 ②)。前は ValueError で受け付けごと止まっていた。"""
+        out = io.BytesIO()
+        writer = bridge.FrameWriter(out)
+        writer.write({"id": 1, "path": "/big"}, b"x" * 50)
+        writer.write({"id": 2, "path": "/next"}, b"ok")
+        out.seek(0)
+        old = bridge.MAX_BODY
+        bridge.MAX_BODY = 10
+        try:
+            with self.assertRaises(bridge.FrameTooLarge) as caught:
+                bridge.read_frame(out)
+            self.assertEqual(caught.exception.head["id"], 1)
+            self.assertEqual(caught.exception.size, 50)
+            head, body = bridge.read_frame(out)
+        finally:
+            bridge.MAX_BODY = old
+        self.assertEqual((head["id"], body), (2, b"ok"))
+
 
 @unittest.skipUnless(HAS_WEB, "flask が無い")
 class CallWsgiTests(unittest.TestCase):
@@ -93,6 +112,7 @@ class BridgeProcessTests(unittest.TestCase):
     """本物の子プロセスとして起動し、外枠の代わりに要求を投げる。"""
 
     TOKEN = "desk-test-token"
+    MAX_BODY = 4 * 1024 * 1024
 
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -116,6 +136,8 @@ class BridgeProcessTests(unittest.TestCase):
                    PACKAGING_TOOL_LOCAL_DIR=str(root / "local"),
                    PACKAGING_TOOL_MODE="field",
                    PACKAGING_TOOL_TOKEN=self.TOKEN,
+                   # 大きすぎる本文の試し(512MB を流さずに済むよう小さくする)
+                   PACKAGING_TOOL_BRIDGE_MAX_BODY=str(self.MAX_BODY),
                    PYTHONPATH=str(root / "nosock"))
         self.proc = subprocess.Popen(
             [sys.executable, str(ROOT / "bridge.py")], env=env,
@@ -220,6 +242,20 @@ class BridgeProcessTests(unittest.TestCase):
         self.assertFalse([line for line in self.err if "ソケットを開こうとしました" in line],
                          self.err[-20:])
 
+    def test_大きすぎる要求はその1件だけ断り_動き続ける(self) -> None:
+        """VER4.8.82(all-tools と共通の不具合 ②)。前は Python が終わり、アプリ全体が動かなくなった。"""
+        deadline = time.monotonic() + 30
+        while not self.events and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.wait_ready()
+        head, body = self.request("POST", "/api/settings/table-bring/upload?name=a.accdb",
+                                  body=b"x" * (self.MAX_BODY + 1))
+        self.assertEqual(head["status"], 413, body)
+        self.assertEqual(json.loads(body)["error"]["code"], "too_large")
+        self.assertIn("参照", json.loads(body)["error"]["message"])
+        self.assertIsNone(self.proc.poll())
+        self.assertEqual(self.request("GET", "/api/health")[0]["status"], 200)
+
     def test_外枠が先に閉じたら終わる(self) -> None:
         deadline = time.monotonic() + 30
         while not self.events and time.monotonic() < deadline:
@@ -255,6 +291,18 @@ class VersionTests(unittest.TestCase):
         cargo = re.search(r'^version = "([^"]+)"', (ROOT / "src-tauri" / "Cargo.toml")
                           .read_text(encoding="utf-8"), re.M).group(1)
         self.assertEqual((conf["version"], cargo), (app, app))
+
+    def test_本文の上限と言い分は外枠と同じ(self) -> None:
+        """外枠は送る前に断り、Python は届いたものを断る。上限と文を食い違わせない(VER4.8.82)。"""
+        import re
+        rs = (ROOT / "src-tauri" / "src" / "bridge.rs").read_text(encoding="utf-8")
+        self.assertIn("pub const MAX_BODY: usize = 512 * 1024 * 1024;", rs)
+        if not os.environ.get("PACKAGING_TOOL_BRIDGE_MAX_BODY"):
+            self.assertEqual(bridge.MAX_BODY, 512 * 1024 * 1024)
+        message = re.search(r'TOO_LARGE_MESSAGE: &str =\s*"([^"]+)"', rs).group(1)
+        self.assertEqual(message, bridge.TOO_LARGE_MESSAGE)
+        main_rs = (ROOT / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
+        self.assertIn("request.body().len() > bridge::MAX_BODY", main_rs)
 
     def test_画面の宛先の名前は外枠と同じ(self) -> None:
         from packaging_tool import app_config

@@ -10,7 +10,7 @@
 */
 
 import * as authsync from "../authsync.js";
-import { openWindow } from "../desktop.js";
+import { openWindow, isDesktop } from "../desktop.js";
 import { api, tokenUrl } from "../api.js";
 import { confirmBox } from "../askbox.js";
 import { onLeave } from "../nav.js";
@@ -1292,8 +1292,19 @@ function acceptDrop(zone, before) {
   });
 }
 
+// デスクトップ版で落として渡せる大きさの上限(外枠と Python の受け渡しの上限。`bridge.py` の `MAX_BODY`)
+const DESKTOP_DROP_LIMIT = 512 * 1024 * 1024;
+
 async function uploadBring(file) {
   bring.note.hidden = false;
+  if (isDesktop && file.size > DESKTOP_DROP_LIMIT) {
+    // 読み込む前に断る(丸ごとメモリに読んでから断られると、待たされたうえに重くなる)
+    bring.note.className = "status status--ng";
+    bring.note.textContent =
+      `${file.name} は ${Math.round(file.size / 1024 / 1024)}MB あります。512MB を超えるファイルは、落として渡せません。` +
+      "「参照」でファイルの場所を選んでください";
+    return;
+  }
   bring.note.className = "status";
   bring.note.textContent = `${file.name} を受け取っています…`;
   try {

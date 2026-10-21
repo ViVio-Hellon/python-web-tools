@@ -26,6 +26,13 @@ use serde_json::{json, Value};
 /// 標準エラーの末尾を何行覚えておくか(起動に失敗したとき画面に出す)
 const STDERR_LINES: usize = 60;
 
+/// 1件の本文の上限。Python 側(`bridge.py` の `MAX_BODY`)と同じ値。
+/// 超えるものは送る前に断る(送ると Python が読み捨てるまで待たせるだけ。VER4.8.82)
+pub const MAX_BODY: usize = 512 * 1024 * 1024;
+/// 上限を超えたときの言い分(`bridge.py` の `TOO_LARGE_MESSAGE` と同じ文)
+pub const TOO_LARGE_MESSAGE: &str =
+    "512MB を超えるファイルは、落として渡せません。「参照」でファイルの場所を選んでください";
+
 /// 1件の応答を待つ上限。取り込みなどの長い処理は背景で走るので、
 /// 1件がこれほど掛かることは無い。止まったまま待たせきりにしないための上限
 const REPLY_TIMEOUT: Duration = Duration::from_secs(600);

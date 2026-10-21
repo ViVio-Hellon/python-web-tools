@@ -50,7 +50,11 @@ WORKERS = 8
 
 # 1件の本文の上限(壊れた見出しで巨大な読み込みをしないため)。
 # 「表を持ってくる」の Access ファイルが数十MBになることがある
-MAX_BODY = 512 * 1024 * 1024
+# 外枠(`src-tauri/src/bridge.rs` の `MAX_BODY`)と同じ値。試験だけ環境変数で小さくできる
+MAX_BODY = int(os.environ.get("PACKAGING_TOOL_BRIDGE_MAX_BODY", "") or 512 * 1024 * 1024)
+# 上限を超えたときの言い分(外枠 `src-tauri/src/bridge.rs` の `TOO_LARGE_MESSAGE` と同じ文)
+TOO_LARGE_MESSAGE = ("512MB を超えるファイルは、落として渡せません。"
+                     "「参照」でファイルの場所を選んでください")
 
 # 外枠がデスクトップ版の画面を読み込む宛先のホスト名(`app_config.BRIDGE_HOSTS`)
 DEFAULT_HOST = "app.localhost"
@@ -59,15 +63,41 @@ DEFAULT_HOST = "app.localhost"
 # ==================================================================
 # やりとりの形
 # ==================================================================
+class FrameTooLarge(Exception):
+    """本文が上限(`MAX_BODY`)を超えた1件。**本文は読み捨ててある**ので、次の1件から続けて読める。"""
+
+    def __init__(self, head: dict, size: int) -> None:
+        super().__init__(f"本文が大きすぎます: {size}")
+        self.head = head
+        self.size = size
+
+
+def _discard(stream: BinaryIO, size: int) -> None:
+    """本文を読み捨てる(区切りを保つ)。メモリには溜めない。"""
+    left = size
+    while left > 0:
+        chunk = stream.read(min(left, 1024 * 1024))
+        if not chunk:
+            raise EOFError("本文の途中で終わりました")
+        left -= len(chunk)
+
+
 def read_frame(stream: BinaryIO) -> Optional[tuple[dict, bytes]]:
-    """1件読む。終わり(相手が閉じた)なら `None`。"""
+    """1件読む。終わり(相手が閉じた)なら `None`。
+
+    本文が上限を超えたら `FrameTooLarge`(読み捨て済み。その1件だけ断れば続けられる。VER4.8.82)。
+    見出しが壊れている・本文の途中で終わったときは、区切りが分からないので続けられない(`ValueError` / `EOFError`)。
+    """
     line = stream.readline()
     if not line:
         return None
     head = json.loads(line.decode("utf-8"))
     size = int(head.get("len", 0) or 0)
-    if size < 0 or size > MAX_BODY:
+    if size < 0:
         raise ValueError(f"本文の長さが不正です: {size}")
+    if size > MAX_BODY:
+        _discard(stream, size)
+        raise FrameTooLarge(head, size)
     body = b""
     while len(body) < size:
         chunk = stream.read(size - len(body))
@@ -207,6 +237,21 @@ def make_server_class():
                 while not self._stop_requested:
                     try:
                         frame = read_frame(self.reader)
+                    except FrameTooLarge as big:
+                        # **その1件だけ断る。** 前は受け付けごと止まり、Python が終わってアプリ全体が
+                        # 動かなくなっていた(VER4.8.82。all-tools と共通の不具合 ②)
+                        log.warning("大きすぎる要求を断りました: %s(%s バイト)",
+                                    big.head.get("path"), big.size)
+                        try:
+                            self.writer.write(
+                                {"id": big.head.get("id"), "status": 413,
+                                 "headers": [["Content-Type", "application/json"]]},
+                                json.dumps({"error": {"code": "too_large",
+                                                      "message": TOO_LARGE_MESSAGE}},
+                                           ensure_ascii=False).encode("utf-8"))
+                        except (BrokenPipeError, OSError):
+                            pass
+                        continue
                     except (ValueError, EOFError) as exc:
                         log.error("要求を読めませんでした: %s", exc)
                         break
