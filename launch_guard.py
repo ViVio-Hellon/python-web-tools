@@ -108,14 +108,40 @@ def read_lock(mode: str) -> Optional[LockInfo]:
         return None
 
 
-def remove_lock(mode: str) -> None:
+def remove_lock(mode: str, *, owner_pid: Optional[int] = None,
+                expect: Optional["LockInfo"] = None) -> bool:
+    """ロックを消す。**自分の(または読んだときと同じ)ロックのときだけ**。消したら True。
+
+        owner_pid … 自分の後始末。中の pid がこれのときだけ消す
+        expect    … 他人の(死んだ・古い版の)ロックの掃除。読んだときと同じ pid・起動時刻のときだけ消す
+
+    前は中身を見ずに消していた。版の入れ替えで、終わりかけの古い版の後始末が、もう立ち上がった
+    **新しい版の錠**を消し、2つ目が立つ・stop.bat が「起動していません」と言うことがあった
+    (VER4.8.83。all-tools と共通の不具合 ④)。どちらも渡さなければ前のまま(中身を見ずに消す)。
+    """
+    path = lock_path(mode)
+    if owner_pid is not None or expect is not None:
+        now = read_lock(mode)
+        if now is None:
+            return False
+        if owner_pid is not None and int(now.pid) != int(owner_pid):
+            log.info("ロックは別のプロセスのものなので消しません: %s (中の pid=%s / 自分=%s)",
+                     mode, now.pid, owner_pid)
+            return False
+        if expect is not None and (int(now.pid) != int(expect.pid)
+                                   or float(now.started_at) != float(expect.started_at)):
+            log.info("ロックが読んだあとに替わったので消しません: %s (pid %s → %s)",
+                     mode, expect.pid, now.pid)
+            return False
     try:
-        lock_path(mode).unlink()
+        path.unlink()
         log.info("ロックを消しました: %s", mode)
+        return True
     except FileNotFoundError:
-        pass
+        return False
     except OSError as exc:                        # noqa: BLE001
         log.warning("ロックを消せませんでした: %s", exc)
+        return False
 
 
 # 起動中(まだポートが決まっていない)ロックの `port`
@@ -361,7 +387,7 @@ def check_existing(mode: str) -> GuardResult:
 
     if not is_process_alive(info.pid):
         log.info("死んだロックを掃除します (pid=%s は不在)", info.pid)
-        remove_lock(mode)
+        remove_lock(mode, expect=info)
         return GuardResult(True, reason=f"ロックは残っていたがpid {info.pid} は不在")
 
     if info.port == STARTING_PORT:
@@ -373,7 +399,7 @@ def check_existing(mode: str) -> GuardResult:
         # 起動途中で落ちた)。ロックを消して新しく起動する
         log.info("pid=%s は生きているが %s:%s は自分ではない",
                  info.pid, mode, info.port)
-        remove_lock(mode)
+        remove_lock(mode, expect=info)
         return GuardResult(True, reason="ロックのプロセスは別物だった")
 
     running = str((health or {}).get("version", ""))
@@ -400,6 +426,7 @@ def _wait_for_starting(mode: str, info: "LockInfo") -> GuardResult:
     """
     log.info("1つ目が起動中です (pid=%s)。ポートが決まるのを待ちます", info.pid)
     deadline = time.monotonic() + STARTING_WAIT_SEC
+    last = info
     while time.monotonic() < deadline:
         time.sleep(0.3)
         now = read_lock(mode)
@@ -409,13 +436,14 @@ def _wait_for_starting(mode: str, info: "LockInfo") -> GuardResult:
             log.info("1つ目が立ち上がりました。合流します: %s", now.url)
             return GuardResult(False, url=now.url, existing=now,
                                reason="起動中だった1つ目に合流します")
+        last = now
         if not is_process_alive(now.pid):
-            remove_lock(mode)
+            remove_lock(mode, expect=now)
             return GuardResult(True, reason="起動中のプロセスが居なくなりました")
 
     log.warning("1つ目が %.0f秒 で立ち上がりませんでした。掃除して起動します",
                 STARTING_WAIT_SEC)
-    remove_lock(mode)
+    remove_lock(mode, expect=last)
     return GuardResult(True, reason="起動中のまま応答がないので引き継ぎます")
 
 
@@ -437,7 +465,7 @@ def _replace_stale(mode: str, info: "LockInfo",
     deadline = time.monotonic() + REPLACE_WAIT_SEC
     while time.monotonic() < deadline:
         if probe_health(info.port, timeout=0.3) is None:
-            remove_lock(mode)
+            remove_lock(mode, expect=info)
             log.info("古い版(%s)を終わらせました。%s で立て直します", running, mine)
             return GuardResult(True, stale_version=running,
                                reason=f"別の版({running})を終わらせました")

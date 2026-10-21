@@ -112,7 +112,7 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
         # 応答しない、または別のアプリ。ロックだけ残っている状態
         if launch_guard.is_process_alive(info.pid):
             return _stop_by_pid(mode, info, result, force=force)
-        launch_guard.remove_lock(mode)
+        launch_guard.remove_lock(mode, expect=info)
         result.stopped = True
         result.method = "stale-lock"
         result.message = "動いていませんでした(残っていたロックを片付けました)"
@@ -131,7 +131,7 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
     # ── 残った Python はフォルダを掴んだままで、消せなくなる(all-tools で起きた形)
     if (asked.get("ok") and _wait_gone(info.port, GRACEFUL_WAIT_SEC)
             and _wait_pid_gone(info.pid, GRACEFUL_WAIT_SEC)):
-        launch_guard.remove_lock(mode)
+        launch_guard.remove_lock(mode, expect=info)
         result.stopped = True
         result.method = "graceful"
         result.message = "正常に終了しました"
@@ -182,7 +182,7 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopRes
     import launch_guard
 
     if not launch_guard.is_process_alive(info.pid):
-        launch_guard.remove_lock(mode)
+        launch_guard.remove_lock(mode, expect=info)
         result.stopped = True
         result.method = "already-gone"
         result.message = "すでに終了していました"
@@ -203,7 +203,7 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopRes
         return result
 
     if _wait_pid_gone(info.pid, FORCE_WAIT_SEC):
-        launch_guard.remove_lock(mode)
+        launch_guard.remove_lock(mode, expect=info)
         result.stopped = True
         result.method = "sigterm"
         result.message = "終了しました"
@@ -224,7 +224,7 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopRes
         result.message = (f"強制終了を頼みましたが、pid {info.pid} がまだ残っています。"
                           "タスクマネージャーで python / pythonw を確かめてください")
         return result
-    launch_guard.remove_lock(mode)
+    launch_guard.remove_lock(mode, expect=info)
     result.stopped = True
     result.method = "sigkill"
     result.message = "強制終了しました"

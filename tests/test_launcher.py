@@ -122,6 +122,39 @@ class LockFileTests(LocalAreaTestCase):
     def test_無いものを消しても壊れない(self) -> None:
         self.guard.remove_lock("field")           # 例外が出ないこと
 
+    def test_自分の後始末は自分の錠だけ消す(self) -> None:
+        """VER4.8.83(all-tools と共通の不具合 ④)。版の入れ替えで、終わりかけの古い版の後始末が
+        新しい版の錠を消していた(2つ目が立つ・stop.bat が「起動していません」と言う)。"""
+        newer = self.guard.build_lock_info("field", 8714)
+        newer.pid = os.getpid() + 1                # あとから立った新しい版
+        self.guard.write_lock(newer)
+        self.assertFalse(self.guard.remove_lock("field", owner_pid=os.getpid()))
+        self.assertEqual(self.guard.read_lock("field").pid, newer.pid)
+        mine = self.guard.build_lock_info("field", 8713)
+        self.guard.write_lock(mine)
+        self.assertTrue(self.guard.remove_lock("field", owner_pid=os.getpid()))
+        self.assertIsNone(self.guard.read_lock("field"))
+
+    def test_他人の錠の掃除は読んだときと同じときだけ(self) -> None:
+        old = self.guard.build_lock_info("field", 8713)
+        old.pid, old.started_at = 999_991, 100.0
+        self.guard.write_lock(old)
+        seen = self.guard.read_lock("field")
+        newer = self.guard.build_lock_info("field", 8714)
+        newer.pid, newer.started_at = 999_992, 200.0
+        self.guard.write_lock(newer)               # 読んだあとに入れ替わった
+        self.assertFalse(self.guard.remove_lock("field", expect=seen))
+        self.assertEqual(self.guard.read_lock("field").pid, 999_992)
+        self.assertTrue(self.guard.remove_lock("field", expect=self.guard.read_lock("field")))
+        self.assertIsNone(self.guard.read_lock("field"))
+
+    def test_起動の後始末は持ち主を確かめて消す(self) -> None:
+        source = (_ROOT / "start_app.py").read_text(encoding="utf-8")
+        self.assertNotIn("launch_guard.remove_lock(mode)", source)
+        self.assertEqual(source.count("launch_guard.remove_lock(mode, owner_pid=os.getpid())"), 2)
+        manager = (_ROOT / "process_manager.py").read_text(encoding="utf-8")
+        self.assertNotIn("launch_guard.remove_lock(mode)", manager)
+
 
 class ProcessAliveTests(unittest.TestCase):
     def setUp(self) -> None:

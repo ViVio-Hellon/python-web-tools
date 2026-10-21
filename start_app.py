@@ -310,7 +310,7 @@ def start(mode: str, *, open_browser: bool = True) -> int:
                 "サーバを起動できませんでした",
                 f"{check.hint}\n\nログ: {app_config.local_dir('logs')}")
     except BaseException:
-        launch_guard.remove_lock(mode)
+        launch_guard.remove_lock(mode, owner_pid=os.getpid())
         raise
     if not check.ok:
         log().warning("起動確認の応答を取れませんでしたが、待ち受けは"
@@ -350,7 +350,7 @@ def start(mode: str, *, open_browser: bool = True) -> int:
         _hold_until_stopped(srv, thread)
         return 0
     finally:
-        launch_guard.remove_lock(mode)
+        launch_guard.remove_lock(mode, owner_pid=os.getpid())
         log().info("終了しました: mode=%s", mode)
 
 
