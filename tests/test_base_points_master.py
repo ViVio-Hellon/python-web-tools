@@ -50,7 +50,7 @@ class NamesTests(_Case):
     def test_マスタの拠点が足される_図と同じものは図の名前で1つ(self):
         self.assertEqual(svc.master_base_points(self.conn), ["L-1", "LVC", "HVC", "大板"])
         names = svc.base_point_names(self.conn)
-        self.assertEqual(sorted(names), sorted(["LVC", "L1", "HVC", "大板"]))
+        self.assertEqual(sorted(names), sorted(["LVC", "L-1", "HVC", "大板"]))   # 表示は L-1(VER4.8.87)
         self.assertEqual(svc.unplaced_base_points(self.conn), ["大板"])
 
     def test_全角やハイフンが違っても同じ拠点(self):
@@ -84,8 +84,8 @@ class LayoutTests(_Case):
     def test_コンボボックスに出る(self):
         view = layout_presenter.build(self.conn, self.session)
         self.assertIn("大板", view.base_points)
-        self.assertIn("L1", view.base_points)
-        self.assertNotIn("L-1", view.base_points)
+        self.assertIn("L-1", view.base_points)                       # 表示は L-1(VER4.8.87)
+        self.assertNotIn("L1", view.base_points)
 
     def test_置く前でも選べるが_距離は測れないと言う(self):
         result = self.session.set_base_point("大板", self.conn)

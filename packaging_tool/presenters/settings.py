@@ -279,7 +279,8 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
                                            config.AUTO_IMPORT_DEFAULT)),
         # 未登録なら空(画面は「未登録」を出す)。既定の L1 を出すと、登録
         # していないのに L1 に決まっているように見える(配った直後の端末がこれ)
-        position=str(user_settings.get(user_settings.KEY_POSITION) or ""),
+        # 前の版で保存した「L1」は「L-1」として出す(選択肢と合うように。VER4.8.87)
+        position=user_settings.get_position(default=""),
         # 配置図の拠点 + マスタで足した拠点(BoardMaster のデータラベル「拠点〇〇」)
         positions=location_service.base_point_names(conn),
         spec_sheet_url=spec_sheet.url_template(),

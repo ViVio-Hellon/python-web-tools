@@ -70,6 +70,11 @@ class FloorPlan:
         for candidate in self.base_points:
             if candidate.name == name:
                 return candidate
+        # 名前の書き方違い(前の設定の「L1」と図の「L-1」など)。全角半角・ハイフンは見ない
+        key = _base_key(name)
+        for candidate in self.base_points:
+            if _base_key(candidate.name) == key:
+                return candidate
         return None
 
     @property
@@ -164,9 +169,20 @@ def load(path: Optional[Path] = None) -> FloorPlan:
             continue
         data = map_data.read_json(candidate)
         if data is not None:
-            return FloorPlan.from_dict(data)
+            return _canonical(FloorPlan.from_dict(data))
     log.warning("配置図のデータが見つかりません。空の配置図で続行します")
     return FloorPlan()
+
+
+def _canonical(plan: FloorPlan) -> FloorPlan:
+    """既定の拠点を正しい呼び名に直す(前に保存した図の「L1」→「L-1」。VER4.8.87)。座標はそのまま。"""
+    from dataclasses import replace
+    names = {_base_key(d): d for d in DEFAULT_BASE_POINTS}
+    for index, base in enumerate(plan.base_points):
+        right = names.get(_base_key(base.name))
+        if right and base.name != right:
+            plan.base_points[index] = replace(base, name=right)
+    return plan
 
 
 def save(plan: FloorPlan, path: Optional[Path] = None) -> bool:
@@ -185,8 +201,9 @@ def reset_to_default() -> FloorPlan:
 # ------------------------------------------------------------------
 # 既定の拠点(コードに持つ。VBA `frmLayout` の `POSITIONS = "L1,HVC,LVC"`)。現場の決め(VER4.8.85):
 # 「L-1、HVC、LVC はハードコードのデフォルト拠点として残してください」── マスタで足す拠点とは別に、
-# いつも使える。図(配置図)に無くても選択肢から消さない(`base_points`)
-DEFAULT_BASE_POINTS: tuple[str, ...] = ("L1", "HVC", "LVC")
+# いつも使える。図(配置図)に無くても選択肢から消さない(`base_points`)。
+# 表示は **L-1**(VER4.8.87。「拠点の表示も L-1 にそろえてください」。VBA の名残の L1 は読むときに L-1 に直す)
+DEFAULT_BASE_POINTS: tuple[str, ...] = ("L-1", "HVC", "LVC")
 
 
 def base_points() -> tuple[str, ...]:

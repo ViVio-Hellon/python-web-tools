@@ -402,9 +402,45 @@ class AddBaseTests(unittest.TestCase):
         self.assertFalse(self.session.add_base("大板", self.conn).ok)
 
     def test_既定の拠点はいつも選べる(self) -> None:
-        self.assertEqual(floor_plan.DEFAULT_BASE_POINTS, ("L1", "HVC", "LVC"))
+        self.assertEqual(floor_plan.DEFAULT_BASE_POINTS, ("L-1", "HVC", "LVC"))
         with mock.patch.object(floor_plan, "load", return_value=floor_plan.FloorPlan()):
-            self.assertEqual(set(floor_plan.base_points()), {"L1", "HVC", "LVC"})
+            self.assertEqual(set(floor_plan.base_points()), {"L-1", "HVC", "LVC"})
+
+
+class BaseL1RenameTests(unittest.TestCase):
+    """拠点の表示を L-1 にそろえた(VER4.8.87)。前の版で保存した図・設定の「L1」もそのまま使える。"""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        original = floor_plan.USER_PATH
+        floor_plan.USER_PATH = Path(tmp.name) / "floor_plan.json"
+        self.addCleanup(lambda: setattr(floor_plan, "USER_PATH", original))
+        before = user_settings.get(user_settings.KEY_POSITION)
+        self.addCleanup(lambda: user_settings.save(user_settings.KEY_POSITION, before or ""))
+
+    def test_前に保存した図のL1はL_1として読み_座標も距離も変わらない(self) -> None:
+        plan = floor_plan.load()
+        data = plan.to_dict()
+        for base in data["base_points"]:
+            if base["name"] == "L-1":
+                base["name"] = "L1"                                # 前の版で保存した図
+        from packaging_tool import map_data
+        map_data.write_json(floor_plan.USER_PATH, data)
+        loaded = floor_plan.load()
+        self.assertIn("L-1", loaded.base_point_names)
+        self.assertNotIn("L1", loaded.base_point_names)
+        self.assertEqual((loaded.base_point("L-1").x, loaded.base_point("L-1").y),
+                         (plan.base_point("L-1").x, plan.base_point("L-1").y))
+        item = loaded.item_names[0]
+        self.assertEqual(loaded.distance(item, "L1"), plan.distance(item, "L-1"))
+
+    def test_前に保存した設定のL1はL_1として読む(self) -> None:
+        user_settings.set_position("L1")
+        self.assertEqual(user_settings.get_position(), "L-1")
+        self.assertEqual(user_settings.get_position_label(), "L-1")
+        self.assertTrue(svc.current_base_point().known)
+        self.assertEqual(user_settings.DEFAULT_POSITION, "L-1")
 
     def test_画面に欄がある(self) -> None:
         root = Path(__file__).resolve().parent.parent

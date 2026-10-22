@@ -29,7 +29,8 @@ class FloorPlanDataTests(unittest.TestCase):
         self.assertTrue(floor_plan.DEFAULT_PATH.exists())
 
     def test_base_points_match_the_vba_form(self):
-        self.assertEqual(set(self.plan.base_point_names), {"L1", "HVC", "LVC"})
+        # 表示は L-1(VER4.8.87。VBA の名残の L1 は読むときに L-1 に直す)
+        self.assertEqual(set(self.plan.base_point_names), {"L-1", "HVC", "LVC"})
         # 座標は現場で配置編集した値(VER2.89.0 から出荷時の既定)。
         # 値そのものではなく、図の中にあることを確かめる
         for name in self.plan.base_point_names:

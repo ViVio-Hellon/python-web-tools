@@ -28,7 +28,7 @@ log = get_logger("user_settings")
 
 # 拠点(VBA `Config\Position`)。値は `floor_plan.BASE_POINTS` と揃える
 KEY_POSITION = "position"
-DEFAULT_POSITION = "L1"
+DEFAULT_POSITION = "L-1"
 
 # 拠点が未登録であることを表す表示用の文字列(VBA `GetSetting(..., "未登録")`)
 UNSET_LABEL = "未登録"
@@ -77,16 +77,23 @@ def save(key: str, value: Any) -> bool:
 # ------------------------------------------------------------------
 # 拠点 (VBA `Config\Position`)
 # ------------------------------------------------------------------
+def _canonical_position(value: str) -> str:
+    """前の版で保存した「L1」を「L-1」として読む(VER4.8.87。拠点の表示を L-1 にそろえた)。"""
+    from .floor_plan import DEFAULT_BASE_POINTS, _base_key
+    key = _base_key(value)
+    return next((d for d in DEFAULT_BASE_POINTS if _base_key(d) == key), value)
+
+
 def get_position(default: str = DEFAULT_POSITION) -> str:
     """登録済みの拠点を返す。未登録なら `default`。"""
     value = get(KEY_POSITION)
-    return value if isinstance(value, str) and value else default
+    return _canonical_position(value) if isinstance(value, str) and value else default
 
 
 def get_position_label() -> str:
     """画面に出す用。未登録なら「未登録」(VBA `btnPositionSetting_Click` 踏襲)。"""
     value = get(KEY_POSITION)
-    return value if isinstance(value, str) and value else UNSET_LABEL
+    return _canonical_position(value) if isinstance(value, str) and value else UNSET_LABEL
 
 
 # 画面の色(ライト / ダーク)。**空なら OS の設定に合わせる**(`tokens.css` の3つの状態)
