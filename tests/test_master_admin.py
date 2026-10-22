@@ -801,8 +801,7 @@ class RebuildTableTests(MasterTestCase):
             'PRAGMA table_info("アクセス権限")')]
         self.assertEqual(
             set(names),
-            # ライン名 は作業ライン(予定ロットの知らせ。VER4.8.85)
-            {"管理番号", "ログインID", "PC名", "権限", "有効", "備考", "ライン名"})
+            {"管理番号", "ログインID", "PC名", "権限", "有効", "備考"})
 
     def test_元の表は消さず退避する(self) -> None:
         """**中身を失わない。** 黙って消すと取り返しがつかない。"""

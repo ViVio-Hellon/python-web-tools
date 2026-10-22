@@ -179,9 +179,6 @@ def _same(a: str, b: str) -> bool:
 # 権限の欄の区切り。ほかのツールが1つの欄に複数書くことがある
 _CODE_SEPARATORS = re.compile(r"[\s,、;；|｜]+")
 
-# ライン名の欄の区切り(空白では分けない ── 拠点の名前に空白が入ることがある)
-_LINE_SEPARATORS = re.compile(r"[,、;；|｜]+")
-
 # 本ツールのコードの打ち間違いとみなす近さ(`difflib` の比)。
 # `mode:materia` → `mode:material` は 0.96。ほかのツールが `mode:admin` の
 # ような語を使っていても 0.6 程度なので、打ち間違いとは言わない
@@ -200,8 +197,6 @@ class Rule:
     permission: str = ""
     enabled: bool = True
     note: str = ""
-    # この端末の作業ライン(VER4.8.85。予定ロットの知らせを受けるライン)。空なら言っていない
-    line: str = ""
 
     def has_condition(self) -> bool:
         return bool(self.login_id or self.pc_name)
@@ -242,7 +237,7 @@ class Rule:
     def to_dict(self) -> dict[str, Any]:
         return {"login_id": self.login_id, "pc_name": self.pc_name,
                 "permission": self.permission, "enabled": self.enabled,
-                "note": self.note, "line": self.line, "condition": self.condition_label()}
+                "note": self.note, "condition": self.condition_label()}
 
 
 # ==================================================================
@@ -315,40 +310,32 @@ def _fallback_codes() -> frozenset[str]:
 def load_rules(conn: sqlite3.Connection) -> list[Rule]:
     """マスタを読む。テーブルが無ければ空を返す(まだ取り込んでいない)。"""
     try:
-        have = {r[1] for r in conn.execute(f'PRAGMA table_info("{TABLE}")')}
-        line = '"ライン名"' if "ライン名" in have else "''"
         rows = conn.execute(
-            f'SELECT "ログインID", "PC名", "権限", "有効", "備考", {line} '
+            f'SELECT "ログインID", "PC名", "権限", "有効", "備考" '
             f'FROM {TABLE} ORDER BY "管理番号"').fetchall()
     except sqlite3.Error as exc:
         log.info("%s を読めません(未取り込み): %s", TABLE, exc)
         return []
     return [Rule(login_id=_clean(r[0]), pc_name=_clean(r[1]),
                  permission=_clean(r[2]), enabled=bool(r[3]),
-                 note=_clean(r[4]), line=_clean(r[5]))
+                 note=_clean(r[4]))
             for r in rows]
 
 
 def lines(conn: Optional[sqlite3.Connection],
           identity: Optional[Identity] = None) -> list[str]:
-    """この端末(ログインID・PC名)の作業ライン(VER4.8.85)。登録が無ければ空。
+    """この端末(ログインID・PC名)の作業ライン(VER4.8.86)。登録が無ければ空。
 
-    アクセス権限の行のうち、この端末に当たる行(有効・条件あり)の **ライン名** を集める。
-    権限の列は問わない(ライン名だけを書いた行・ほかのツールの権限の行でもよい)。
-    1つの欄に「,」などで区切って複数書いてもよい。書かれた順、重複なし。
+    アクセス権限の行のうち、この端末に当たる行(有効・条件あり)の **権限** の列に書かれたライン
+    (正規の呼び名。L-1 / LVC / HVC / 機側 …)を集める。ほかのツール(看板・日報)と同じ読み方
+    (`line_names`)。L1・LS など古い書き方や、作業長・mode:field などライン以外の値は読まない。
     """
     if conn is None:
         return []
+    from . import line_names
     identity = identity or current_identity()
-    found: list[str] = []
-    for rule in load_rules(conn):
-        if not rule.line or not rule.matches(identity):
-            continue
-        for name in _LINE_SEPARATORS.split(rule.line):
-            name = name.strip()
-            if name and name not in found:
-                found.append(name)
-    return found
+    return line_names.lines_in(rule.permission for rule in load_rules(conn)
+                               if rule.matches(identity))
 
 
 def resolve(conn: sqlite3.Connection,

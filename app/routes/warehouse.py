@@ -886,26 +886,26 @@ def cut_request_view(request_id: str):
 # 作業予定ライン(VER4.8.85)── 長がロットを作業ラインに入れる(現場)
 #
 # 現場の声:「新規発注フレームの下余白に作業予定ライン選択を設けてください」
-# 入れたロットは、そのライン(アクセス権限のライン名)の端末のロット検索に知らせが出る(`lot_plans`)
+# 入れたロットは、そのライン(アクセス権限の権限の列に書いたライン)の端末のロット検索に知らせが出る(`lot_plans`)
 # ------------------------------------------------------------------
 def _lot_plan_state(conn, lot_no: str) -> dict:
-    """そのロットのいまの予定と、選べるライン(拠点。既定の L1 / HVC / LVC とマスタで足した拠点)。"""
-    from packaging_tool import location_service, lot_plans
+    """そのロットのいまの予定と、選べるライン(正規の呼び名。L-1 / LVC / HVC / 機側 …。`line_names`)。"""
+    from packaging_tool import line_names, lot_plans
     lot = lot_plans.normalize_lot(lot_no)
     plan = lot_plans.current(conn, lot) if lot else None
     unsent = lot_plans.unsent_ids(conn)
-    lines = location_service.base_point_names(conn)
+    lines = list(line_names.OFFICIAL)
     return {"lot_no": lot,
             "plan": plan.to_dict() if plan else None,
             "lines": lines,
-            # 選択肢のうち、いまの予定のライン(「L-1」で入っていても「L1」を選んだ形で出す)
+            # 選択肢のうち、いまの予定のライン(全角で入っていても選んだ形で出す)
             "selected_line": _choice_of(plan.line, lines) if plan else "",
             # この端末で入れた・外したが、まだ共有へ届いていない
             "unsent": bool(plan and plan.plan_id in unsent)}
 
 
 def _choice_of(line: str, choices: list) -> str:
-    """そのラインに当たる選択肢(全角半角・ハイフンは見ない)。無ければ空。"""
+    """そのラインに当たる選択肢(文字の幅と前後の空白だけ揃える)。無ければ空。"""
     from packaging_tool import lot_plans
     key = lot_plans.line_key(line)
     return next((c for c in choices if lot_plans.line_key(c) == key), "")
@@ -936,8 +936,8 @@ def lot_plan_send():
     lot_no = str(body.get("lot_no") or "") or work_context.get_context().lot_no
     line = str(body.get("line") or "")
     conn = get_db()
-    from packaging_tool import location_service
-    choices = location_service.base_point_names(conn)
+    from packaging_tool import line_names
+    choices = list(line_names.OFFICIAL)
     if line and not _choice_of(line, choices):
         return jsonify({"error": {"code": lot_plans.REFUSE_NO_LINE,
                                   "message": f"{line} は選べるラインにありません"

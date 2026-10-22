@@ -18,7 +18,7 @@
 新しい行が勝つ(前のラインの知らせは消える)。
 
 【知らせ ── 端末ごと】
-この端末のライン(アクセス権限の **ライン名**。`access_control.lines`)に入ったロットのうち、
+この端末のライン(アクセス権限の **権限** の列に書いたライン。`access_control.lines`)に入ったロットのうち、
 まだ「確認」していないものが知らせ。確認したかは**この端末だけ**に残す(予定ロット確認。共有へは
 送らない ── 同じラインの端末が何台あっても、それぞれに知らせる)。入れ直された予定は新しい行なので、
 もう一度知らせる。
@@ -102,9 +102,12 @@ def normalize_lot(text: Any) -> str:
 
 
 def line_key(name: Any) -> str:
-    """ラインの名前を突き合わせる形(`L-1` と `L1`、`ＨＶＣ` と `HVC` を同じに。拠点と同じ)。"""
-    from .location_service import base_key
-    return base_key("" if name is None else str(name))
+    """ラインの名前を突き合わせる形。**文字の幅と前後の空白だけ**を揃える(`ＨＶＣ` = `HVC`)。
+
+    ほかのツールと同じ読み方(`line_names`)。`L1` と `L-1` は別物(正規は L-1。VER4.8.86)。
+    """
+    from .line_names import same
+    return same(name)
 
 
 def short_time(at: str) -> str:

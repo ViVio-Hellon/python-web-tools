@@ -1017,13 +1017,14 @@ def _access_section(conn, startup_modes=None) -> Section:
         OK if grant.allowed_modes() else NG,
         "持っている権限: " + (", ".join(labels) if labels else "なし")))
 
-    # 作業ライン(VER4.8.85)。予定ロットの知らせは、このラインに入れたロットだけ届く
+    # 作業ライン(VER4.8.86)。アクセス権限の「権限」の列に書いたライン(ほかのツールと同じ読み方)
     mine = access_control.lines(conn, grant.identity)
     section.checks.append(Check(
         "作業ライン", " / ".join(mine) or "登録されていません", OK if mine else INFO,
         ("このラインに入れた予定ロットが、ロット検索に知らせとして届きます。" if mine else
-         f"{access_control.TABLE} の、この端末({grant.identity.label()})の行の「ライン名」に"
-         "ライン(拠点の名前。例 L1)を書くと、そのラインの予定ロットがロット検索に知らせとして届きます。")))
+         f"{access_control.TABLE} の、この端末({grant.identity.label()})の行の「権限」にラインを"
+         "正規の呼び名で書くと(L-1 / LVC / HVC / 機側 / AIM / コイル / トット / バランサー / NS1。"
+         "L1・LS は読みません)、そのラインの予定ロットがロット検索に知らせとして届きます。")))
 
     # マスタを直すには資材モードに加えて管理者パスワードも要る(VER2.17.0)。
     # 入力欄は以前は資材選択画面にあり、**いつもどこだっけと探すことになる**

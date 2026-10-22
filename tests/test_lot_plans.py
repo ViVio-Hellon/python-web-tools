@@ -22,7 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packaging_tool import (access_control, config, data_sync, db, floor_plan,  # noqa: E402
-                            import_specs, layout_session, location_service as svc, lot_plans,
+                            import_specs, layout_session, line_names, location_service as svc, lot_plans,
                             master_schema, modes, sync_writeback, user_settings)
 from tests import _web  # noqa: E402
 
@@ -31,9 +31,10 @@ ME = {access_control.ENV_LOGIN: "worker", access_control.ENV_HOST: PC}
 
 
 def access_row(conn, *, pc: str = PC, login: str = "", permission: str = "mode:field",
-               line: str = "", enabled: int = 1) -> None:
-    conn.execute('INSERT INTO "アクセス権限" (ログインID, PC名, 権限, 有効, ライン名)'
-                 " VALUES (?, ?, ?, ?, ?)", (login, pc, permission, enabled, line))
+               enabled: int = 1) -> None:
+    """アクセス権限の1行。ラインは「権限」の列に正規の呼び名で書く(ほかのツールと同じ)。"""
+    conn.execute('INSERT INTO "アクセス権限" (ログインID, PC名, 権限, 有効)'
+                 " VALUES (?, ?, ?, ?)", (login, pc, permission, enabled))
     conn.commit()
 
 
@@ -49,7 +50,7 @@ class PlanTests(unittest.TestCase):
         first = self.send(" n7120d0 ", "L-1")
         self.assertTrue(first.ok and first.changed)
         self.assertEqual(lot_plans.current(self.conn, "N7120D0").line, "L-1")
-        again = self.send("N7120D0", "L1")                 # L-1 と L1 は同じライン
+        again = self.send("N7120D0", "Ｌ－１")              # 全角でも同じライン
         self.assertTrue(again.ok)
         self.assertFalse(again.changed)
         moved = self.send("N7120D0", "HVC")
@@ -61,37 +62,37 @@ class PlanTests(unittest.TestCase):
         self.assertFalse(lot_plans.cancel(self.conn, "N7120D0", terminal="LEADER").ok)
 
     def test_ロットもラインも無ければ断る(self) -> None:
-        self.assertEqual(self.send("", "L1").reason, lot_plans.REFUSE_NO_LOT)
+        self.assertEqual(self.send("", "L-1").reason, lot_plans.REFUSE_NO_LOT)
         self.assertEqual(self.send("A1", " ").reason, lot_plans.REFUSE_NO_LINE)
 
     def test_この端末のラインの分だけ_未確認を先に(self) -> None:
-        self.send("A1", "L1")
+        self.send("A1", "L-1")
         self.send("A2", "HVC")
         self.send("A3", "Ｌ－１")                           # 全角でも同じライン
-        self.send("A4", "L1")
+        self.send("A4", "L-1")
         lot_plans.cancel(self.conn, "A4", terminal="LEADER")
         items = lot_plans.for_lines(self.conn, ["L-1"])
         self.assertEqual(sorted(p.lot_no for p in items), ["A1", "A3"])
-        self.assertEqual(lot_plans.unseen_count(self.conn, ["L1"]), 2)
+        self.assertEqual(lot_plans.unseen_count(self.conn, ["L-1"]), 2)
         self.assertEqual(lot_plans.for_lines(self.conn, []), [])
         first = lot_plans.current(self.conn, "A1")
         self.assertTrue(lot_plans.mark_seen(self.conn, first.plan_id))
-        items = lot_plans.for_lines(self.conn, ["L1"])
+        items = lot_plans.for_lines(self.conn, ["L-1"])
         self.assertEqual([p.lot_no for p in items], ["A3", "A1"])     # 未確認が先
-        self.assertEqual(lot_plans.unseen_count(self.conn, ["L1"]), 1)
+        self.assertEqual(lot_plans.unseen_count(self.conn, ["L-1"]), 1)
 
     def test_入れ直されたらもう一度知らせる(self) -> None:
-        self.send("A1", "L1")
+        self.send("A1", "L-1")
         lot_plans.mark_seen(self.conn, lot_plans.current(self.conn, "A1").plan_id, opened=True)
-        self.assertEqual(lot_plans.unseen_count(self.conn, ["L1"]), 0)
+        self.assertEqual(lot_plans.unseen_count(self.conn, ["L-1"]), 0)
         self.send("A1", "HVC")
-        self.send("A1", "L1")
-        self.assertEqual(lot_plans.unseen_count(self.conn, ["L1"]), 1)
+        self.send("A1", "L-1")
+        self.assertEqual(lot_plans.unseen_count(self.conn, ["L-1"]), 1)
 
     def test_古い予定は出さない(self) -> None:
-        self.send("A1", "L1")
+        self.send("A1", "L-1")
         later = lot_plans.datetime.now() + lot_plans.timedelta(days=lot_plans.LIST_DAYS + 1)
-        self.assertEqual(lot_plans.for_lines(self.conn, ["L1"], now=later), [])
+        self.assertEqual(lot_plans.for_lines(self.conn, ["L-1"], now=later), [])
 
     def test_無い予定は確認できない(self) -> None:
         self.assertFalse(lot_plans.mark_seen(self.conn, "nothing"))
@@ -100,61 +101,46 @@ class PlanTests(unittest.TestCase):
         conn = sqlite3.connect(":memory:")
         self.addCleanup(conn.close)
         self.assertIsNone(lot_plans.current(conn, "A1"))
-        self.assertEqual(lot_plans.for_lines(conn, ["L1"]), [])
+        self.assertEqual(lot_plans.for_lines(conn, ["L-1"]), [])
 
 
 class LineTests(unittest.TestCase):
-    """アクセス権限の「ライン名」がこの端末のライン。"""
+    """この端末のラインは、アクセス権限の「権限」の列に書いたライン(ほかのツールと同じ読み方)。"""
 
     def setUp(self) -> None:
         self.conn = _web.memory_db()
         self.addCleanup(self.conn.close)
         self.me = access_control.Identity(login_id="worker", pc_name=PC)
 
-    def test_この端末の行のライン名(self) -> None:
-        access_row(self.conn, line="L1")
-        access_row(self.conn, pc="OTHER-PC", line="HVC")
-        access_row(self.conn, login="WORKER", pc="", permission="other:tool", line="LVC, 大板")
-        access_row(self.conn, line="HVC", enabled=0)                  # 無効の行は見ない
-        access_row(self.conn, pc="", login="", line="HVC")           # 条件の無い行は誰にも効かない
-        self.assertEqual(access_control.lines(self.conn, self.me), ["L1", "LVC", "大板"])
+    def test_この端末の行の権限に書いたライン(self) -> None:
+        access_row(self.conn, permission="mode:field")
+        access_row(self.conn, permission="L-1")
+        access_row(self.conn, permission="作業長")                       # ラインではない
+        access_row(self.conn, pc="OTHER-PC", permission="HVC")         # ほかの端末
+        access_row(self.conn, login="WORKER", pc="", permission="ＬＶＣ、mode:field")
+        access_row(self.conn, permission="NS1", enabled=0)              # 無効の行は見ない
+        access_row(self.conn, pc="", login="", permission="HVC")       # 条件の無い行は誰にも効かない
+        self.assertEqual(access_control.lines(self.conn, self.me), ["L-1", "LVC"])
+
+    def test_古い書き方は読まない(self) -> None:
+        """「L1 やら LS やら当時の設定が生きてしまっていて申し訳ないが L1 ではなく L-1 なんです」。"""
+        for text in ("L1", "LS", "大板小板", "l-1", "L 1"):
+            access_row(self.conn, permission=text)
+        self.assertEqual(access_control.lines(self.conn, self.me), [])
+        self.assertEqual(line_names.OFFICIAL, ("L-1", "LVC", "HVC", "機側", "AIM", "コイル",
+                                               "トット", "バランサー", "NS1"))
 
     def test_登録が無ければ空(self) -> None:
         self.assertEqual(access_control.lines(self.conn, self.me), [])
         self.assertEqual(access_control.lines(None, self.me), [])
 
-    def test_前の版の手元DBにも列を足す(self) -> None:
-        conn = sqlite3.connect(":memory:")
-        self.addCleanup(conn.close)
-        conn.execute('CREATE TABLE "アクセス権限" (管理番号 INTEGER PRIMARY KEY AUTOINCREMENT,'
-                     " ログインID TEXT NOT NULL DEFAULT '', PC名 TEXT NOT NULL DEFAULT '',"
-                     " 権限 TEXT NOT NULL, 有効 INTEGER NOT NULL DEFAULT 1,"
-                     " 備考 TEXT NOT NULL DEFAULT '')")
-        conn.execute("INSERT INTO アクセス権限 (PC名, 権限) VALUES (?, 'mode:field')", (PC,))
-        self.assertEqual(access_control.lines(conn, self.me), [])     # 列が無くても落ちない
-        db.apply_schema(conn)
-        have = {r[1] for r in conn.execute('PRAGMA table_info("アクセス権限")')}
-        self.assertIn("ライン名", have)
-
-    def test_取り込みでは無くてよい列(self) -> None:
-        self.assertIn("ライン名", import_specs.OPTIONAL_COLUMNS["アクセス権限"])
-        self.assertIn(("ライン名", "ライン名"),
-                      [(c, s) for c, s, _ in import_specs.IMPORT_SPECS["アクセス権限"]])
-
-    def test_共有のアクセス権限に列を足す_あれば触らない(self) -> None:
-        folder = Path(tempfile.mkdtemp(prefix="plan_src_"))
-        path = folder / config.MATERIAL_DB_NAME
-        conn = sqlite3.connect(path)
-        conn.execute('CREATE TABLE "アクセス権限" (ログインID TEXT, PC名 TEXT, 権限 TEXT, 有効 INTEGER, 備考 TEXT)')
-        conn.commit()
-        conn.close()
-        notes = master_schema._add_access_line_column(path)
-        self.assertTrue(any("ライン名" in n for n in notes), notes)
-        conn = sqlite3.connect(path)
-        have = {r[1] for r in conn.execute('PRAGMA table_info("アクセス権限")')}
-        conn.close()
-        self.assertIn("ライン名", have)
-        self.assertEqual(master_schema._add_access_line_column(path), [])
+    def test_アクセス権限に列は足さない(self) -> None:
+        """「列足さなくてよくね? ほかのツールものこれで読んでるからいけるはず」(VER4.8.86)。"""
+        have = {r[1] for r in self.conn.execute('PRAGMA table_info("アクセス権限")')}
+        self.assertEqual(have, {"管理番号", "ログインID", "PC名", "権限", "有効", "備考"})
+        self.assertEqual([c for c, _s, _f in import_specs.IMPORT_SPECS["アクセス権限"]],
+                         ["ログインID", "PC名", "権限", "有効", "備考"])
+        self.assertFalse(hasattr(master_schema, "_add_access_line_column"))
 
 
 class SyncSpecTests(unittest.TestCase):
@@ -198,13 +184,13 @@ class HandoffTests(unittest.TestCase):
         self.addCleanup(lot_plans.forget_seen_stamp)
 
     def test_共有へ送り_ラインの端末が受け取る(self) -> None:
-        lot_plans.send(self.leader, "N7120D0", "L1", terminal="LEADER", sender="cho")
+        lot_plans.send(self.leader, "N7120D0", "L-1", terminal="LEADER", sender="cho")
         result = data_sync.write_back(self.leader, self.src)
         self.assertEqual(result.sent.get(config.TBL_LOT_PLAN), 1, result.errors)
         self.assertTrue(lot_plans.refresh_if_changed(self.line, self.src))
         items = lot_plans.for_lines(self.line, ["L-1"])
         self.assertEqual([(p.lot_no, p.line, p.terminal) for p in items],
-                         [("N7120D0", "L1", "LEADER")])
+                         [("N7120D0", "L-1", "LEADER")])
         # 変わっていなければ読みに行かない
         self.assertFalse(lot_plans.refresh_if_changed(self.line, self.src))
         # 2度送っても共有には1行
@@ -236,8 +222,9 @@ class WarehouseCardTests(unittest.TestCase):
         html = self.field.get("/warehouse").get_data(as_text=True)
         self.assertIn('id="lotPlanCard"', html)
         self.assertLess(html.index("新規発注"), html.index('id="lotPlanCard"'))
-        for name in floor_plan.DEFAULT_BASE_POINTS:
+        for name in line_names.OFFICIAL:                               # 選べるのは正規の呼び名
             self.assertIn(f'<option value="{name}"', html)
+        self.assertNotIn('<option value="L1"', html)
         self.assertNotIn('id="lotPlanCard"', self.material.get("/warehouse").get_data(as_text=True))
 
     def test_入れる_外す(self) -> None:
@@ -255,13 +242,16 @@ class WarehouseCardTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertIsNone(res.get_json()["plan"])
 
-    def test_ハイフンが違っても選択肢の名前で入れ_選んだ形で出す(self) -> None:
-        lot_plans.send(self.conn, "A9", "L-1", terminal="OTHER")       # 前に「L-1」で入った
+    def test_全角でも選択肢の名前で入れ_選んだ形で出す(self) -> None:
+        lot_plans.send(self.conn, "A9", "Ｌ-1", terminal="OTHER")       # 全角で入った
         got = self.field.get("/api/warehouse/lot-plan?lot_no=A9", headers=_web.auth()).get_json()
-        self.assertEqual(got["selected_line"], "L1")
-        body = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "A8", "line": "ｈｖｃ"},
+        self.assertEqual(got["selected_line"], "L-1")
+        body = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "A8", "line": "ＨＶＣ"},
                                headers=_web.auth()).get_json()
         self.assertEqual(body["plan"]["line"], "HVC")
+        res = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "A7", "line": "L1"},
+                              headers=_web.auth())
+        self.assertEqual(res.status_code, 400)                          # 古い書き方は選べない
 
     def test_選べないラインは断る(self) -> None:
         res = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "A1", "line": "どこか"},
@@ -270,7 +260,7 @@ class WarehouseCardTests(unittest.TestCase):
         self.assertIsNone(lot_plans.current(self.conn, "A1"))
 
     def test_資材モードからは入れられない(self) -> None:
-        res = self.material.post("/api/warehouse/lot-plan", json={"lot_no": "A1", "line": "L1"},
+        res = self.material.post("/api/warehouse/lot-plan", json={"lot_no": "A1", "line": "L-1"},
                                  headers=_web.auth())
         self.assertIn(res.status_code, (403, 404))
 
@@ -298,17 +288,18 @@ class LotPanelTests(unittest.TestCase):
     def test_ラインが無ければどこに書けばよいかを言う(self) -> None:
         body = self.client.get("/api/lot/plans", headers=_web.auth()).get_json()
         self.assertEqual(body["lines"], [])
-        self.assertIn("ライン名", body["why"])
+        self.assertIn("権限", body["why"])
+        self.assertIn("L-1", body["why"])
         self.assertIn(PC, body["why"])
 
     def test_知らせ_開いて確認_確認だけ(self) -> None:
-        access_row(self.conn, line="L1")
+        access_row(self.conn, permission="L-1")
         lot_plans.send(self.conn, "A1", "L-1", terminal="LEADER")
-        lot_plans.send(self.conn, "A2", "L1", terminal="LEADER")
+        lot_plans.send(self.conn, "A2", "Ｌ-1", terminal="LEADER")
         lot_plans.send(self.conn, "A3", "HVC", terminal="LEADER")
         html = self.client.get("/lot").get_data(as_text=True)
         self.assertIn('id="planCard"', html)
-        self.assertIn("この端末のライン: L1", html)
+        self.assertIn("この端末のライン: L-1", html)
         self.assertIn("予2", html)                                   # レールの印
         body = self.client.get("/api/lot/plans?refresh=1", headers=_web.auth()).get_json()
         self.assertEqual(body["unseen"], 2)

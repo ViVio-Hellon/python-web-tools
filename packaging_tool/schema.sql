@@ -379,7 +379,7 @@ CREATE INDEX IF NOT EXISTS idx_cut_request_event ON 切断依頼状態(依頼ID)
 -- 予定ロット: 長がロットを作業ラインに入れた(予定)/ 外した(取り消し)記録(`lot_plans.py`。VER4.8.85)。
 -- **押すたびに1行足す**(書き直さない)。ロットごとに、いちばん新しい行がいまの予定。
 -- `予定ID` は送った端末が振る世界で1つの番号(手元の管理番号は取り込みで振り直される)。
--- `ライン` は拠点の名前(L1 / HVC / LVC / マスタで足した拠点)。アクセス権限の ライン名 と突き合わせる
+-- `ライン` はラインの正規の呼び名(L-1 / LVC / HVC / 機側 …。`line_names`)。アクセス権限の 権限 の列と突き合わせる
 CREATE TABLE IF NOT EXISTS 予定ロット (
     管理番号    INTEGER PRIMARY KEY AUTOINCREMENT,
     予定ID      TEXT NOT NULL DEFAULT '',
@@ -552,10 +552,7 @@ CREATE TABLE IF NOT EXISTS アクセス権限 (
     PC名        TEXT NOT NULL DEFAULT '',
     権限        TEXT NOT NULL,
     有効        INTEGER NOT NULL DEFAULT 1,
-    備考        TEXT NOT NULL DEFAULT '',
-    -- この端末(ログインID・PC名)の作業ライン(VER4.8.85)。予定ロットの知らせを受けるライン。
-    -- 拠点の名前で書く(L1 / HVC / LVC / マスタで足した拠点。全角半角・ハイフンは見ない)
-    ライン名    TEXT NOT NULL DEFAULT ''
+    備考        TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_アクセス権限_ログインID ON アクセス権限(ログインID);
