@@ -98,19 +98,31 @@ def _plans_state(conn, *, refresh: bool = False) -> dict:
         except Exception as exc:                  # noqa: BLE001 - 見張りで画面を落とさない
             log.warning("予定ロットを取り込み直せませんでした: %s", exc)
     identity = access_control.current_identity()
-    lines = access_control.lines(conn, identity)
+    state = access_control.line_state(conn, identity)
+    lines = list(state.lines)
     items = [p.to_dict() for p in lot_plans.for_lines(conn, lines)]
+    if lines:
+        why = ""
+    elif state.leader:
+        # 作業長の端末(ラインなし)。「未登録」と出すと、読んでいないように見える(VER4.8.90)
+        why = ("作業長の端末です(ラインは持っていません)。作業予定ラインで入れたロットは、"
+               "そのラインの端末に届きます。この端末にも届けたいときは、この端末の行の「権限」に"
+               "ラインを書きます(すべてなら Administrator)。")
+    else:
+        why = (f"この端末({identity.label()})の作業ラインが登録されていません。"
+               f"{access_control.TABLE} のこの端末の行の「権限」にラインを正規の呼び名で書くと"
+               "(L-1 / LVC / HVC / 機側 / AIM / コイル / トット / バランサー / NS1。L1・LS は読みません)、"
+               "そのラインに入った予定ロットがここに届きます。" + state.near_text())
     return {
         "lines": lines,
+        # いまの状態(強いもの優先: Administrator > 作業長 > ライン > 未登録。VER4.8.90)
+        "label": state.label(),
+        "role": state.role,
         "items": items,
         "unseen": sum(1 for i in items if not i["seen"]),
         "days": lot_plans.LIST_DAYS,
-        # ラインが無いときに出す一文(どこに何を書けば届くか)
-        "why": "" if lines else (
-            f"この端末({identity.label()})の作業ラインが登録されていません。"
-            f"{access_control.TABLE} のこの端末の行の「権限」にラインを正規の呼び名で書くと"
-            "(L-1 / LVC / HVC / 機側 / AIM / コイル / トット / バランサー / NS1。L1・LS は読みません)、"
-            "そのラインに入った予定ロットがここに届きます。"),
+        # ラインが無いときに出す一文(どこに何を書けば届くか・当たっていない似た行)
+        "why": why,
     }
 
 

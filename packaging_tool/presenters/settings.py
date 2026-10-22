@@ -1019,15 +1019,28 @@ def _access_section(conn, startup_modes=None) -> Section:
         "持っている権限: " + (", ".join(labels) if labels else "なし")))
 
     # 作業ライン(VER4.8.86)。アクセス権限の「権限」の列に書いたライン(ほかのツールと同じ読み方)
-    mine = access_control.lines(conn, grant.identity)
-    admin = access_control.is_administrator(conn, grant.identity)
+    state = access_control.line_state(conn, grant.identity)
+    mine, admin = list(state.lines), state.admin
     section.checks.append(Check(
         "作業ライン", ("すべて(Administrator)" if admin else " / ".join(mine)) or "登録されていません",
         OK if mine else INFO,
         ("このラインに入れた予定ロットが、ロット検索に知らせとして届きます。" if mine else
-         f"{access_control.TABLE} の、この端末({grant.identity.label()})の行の「権限」にラインを"
-         "正規の呼び名で書くと(L-1 / LVC / HVC / 機側 / AIM / コイル / トット / バランサー / NS1。"
-         "L1・LS は読みません)、そのラインの予定ロットがロット検索に知らせとして届きます。")))
+         (f"{access_control.TABLE} の、この端末({grant.identity.label()})の行の「権限」にラインを"
+          "正規の呼び名で書くと(L-1 / LVC / HVC / 機側 / AIM / コイル / トット / バランサー / NS1。"
+          "L1・LS は読みません)、そのラインの予定ロットがロット検索に知らせとして届きます。"
+          + state.near_text()))))
+    # 表ぜんたいの登録ライン(VER4.8.90。「いまの状態: 登録ラインを出してください」)。
+    # どのラインがどの端末に届くか・**どの端末にも届かないライン**が見える
+    table = access_control.registered_lines(conn)
+    from packaging_tool import line_names as _ln
+    used = [n for n in _ln.OFFICIAL if table[n]]
+    section.checks.append(Check(
+        "登録ライン", f"{len(used)} / {len(_ln.OFFICIAL)} ライン", INFO,
+        f"{access_control.TABLE} の「権限」に書いてあるライン(どの端末に知らせが届くか): "
+        + " / ".join(f"{n}: {', '.join(table[n]) or 'なし'}" for n in _ln.OFFICIAL)
+        + f" / 作業長: {', '.join(table[_ln.LEADER]) or 'なし'}"
+        + f" / Administrator(すべてのライン): {', '.join(table[_ln.ADMINISTRATOR]) or 'なし'}"
+        + "。「なし」のラインに入れた予定ロットは、Administrator の端末にしか届きません。"))
     # 作業長(VER4.8.88)。作業予定ラインを送れるのは作業長の端末だけ。Administrator も作業長(VER4.8.89)
     leader = access_control.is_leader(conn, grant.identity)
     section.checks.append(Check(

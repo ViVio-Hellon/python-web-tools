@@ -279,14 +279,14 @@ class Grant:
         開くモードは端末そのものが決められる ── それを決めているのが
         このマスタだから。
 
-        許されているものが1つならそれ。複数あるなら既定(現場)から
-        始める ── 帯の切替でいつでも移れるので、**狭いほうから**開く。
+        許されているものが1つならそれ。**複数あるなら強いほう**(資材)から開く(VER4.8.90。
+        現場の声:「アクセス権限を2つ以上付与していたら強いもの優先にしてください」)。
+        前は狭いほう(現場)から開いていた。帯の切替でいつでも移れるのは同じ。
+        強さは `modes.ALL` の並び(後ろほど強い: 現場 → 資材)。
         """
         from . import modes
         allowed = self.allowed_modes()
-        if modes.DEFAULT in allowed:
-            return modes.DEFAULT
-        return allowed[0] if allowed else modes.DEFAULT
+        return allowed[-1] if allowed else modes.DEFAULT
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -350,6 +350,106 @@ def is_leader(conn: Optional[sqlite3.Connection],
     identity = identity or current_identity()
     return line_names.has_leader(rule.permission for rule in load_rules(conn)
                                  if rule.matches(identity))
+
+
+@dataclass(frozen=True)
+class LineState:
+    """この端末の作業ラインの立場(VER4.8.90)。**強いもの優先**で1つの言葉にする:
+    Administrator(作業長 + すべてのライン)> 作業長 > ライン > 未登録。
+
+    `near` は**この端末に効いていない、よく似た行**(PC名は合うがログインIDが違う)。
+    現場の声:「この端末のライン: 未登録になる。読んでいないのでは?」── 読んではいるが、
+    行が当たっていないときに、どの行がなぜ当たらないかを言う。
+    """
+
+    identity: Identity
+    lines: tuple[str, ...] = ()
+    leader: bool = False
+    admin: bool = False
+    near: tuple[Rule, ...] = ()
+
+    @property
+    def role(self) -> str:
+        if self.admin:
+            return "admin"
+        if self.leader:
+            return "leader"
+        return "line" if self.lines else "none"
+
+    def label(self) -> str:
+        """予定ロットの欄の見出し(いまの状態)。"""
+        if self.admin:
+            return "この端末: Administrator(作業長・すべてのライン)"
+        if self.leader:
+            return ("この端末: 作業長 / ライン " + " / ".join(self.lines) if self.lines
+                    else "この端末: 作業長(ラインなし)")
+        if self.lines:
+            return "この端末のライン: " + " / ".join(self.lines)
+        return "この端末のライン: 未登録"
+
+    def near_text(self) -> str:
+        """当たっていない似た行の説明(無ければ空)。"""
+        if not self.near:
+            return ""
+        parts = [f"「{r.permission}」(ログインID {r.login_id})" for r in self.near]
+        return (f"PC名 {self.identity.pc_name} の行は {'、'.join(parts)} がありますが、"
+                f"いまのログインID {self.identity.login_id or '(不明)'} と違うので効いていません"
+                "(ログインIDを空にすると、この PC なら誰でも効きます)。")
+
+
+def _line_like(permission: str) -> bool:
+    """ライン・作業長・Administrator のどれかが書いてある欄か。"""
+    from . import line_names
+    return (bool(line_names.lines_in([permission])) or line_names.has_leader([permission]))
+
+
+def line_state(conn: Optional[sqlite3.Connection],
+               identity: Optional[Identity] = None) -> LineState:
+    """この端末の作業ラインの立場(ライン・作業長・Administrator と、当たっていない似た行)。"""
+    identity = identity or current_identity()
+    if conn is None:
+        return LineState(identity=identity)
+    from . import line_names
+    rules = load_rules(conn)
+    mine = [r.permission for r in rules if r.matches(identity)]
+    near = tuple(r for r in rules
+                 if r.enabled and r.pc_name and r.login_id and not r.matches(identity)
+                 and _same(r.pc_name, identity.pc_name) and _line_like(r.permission))
+    return LineState(identity=identity, lines=tuple(line_names.lines_in(mine)),
+                     leader=line_names.has_leader(mine), admin=line_names.has_administrator(mine),
+                     near=near)
+
+
+def registered_lines(conn: Optional[sqlite3.Connection]) -> dict[str, list[str]]:
+    """表ぜんたいで、どのラインがどの端末に登録されているか(VER4.8.90。いまの状態に出す)。
+
+    キーは正規の呼び名の並び + 「作業長」「Administrator」。値は端末(PC名。無ければ ID)。
+    有効・条件ありの行だけ(効かない行は数えない)。Administrator の端末はラインには並べない
+    (すべてのラインを持つので、別に並べる)。
+    """
+    from . import line_names
+    out: dict[str, list[str]] = {name: [] for name in line_names.OFFICIAL}
+    out[line_names.LEADER] = []
+    out[line_names.ADMINISTRATOR] = []
+    if conn is None:
+        return out
+
+    def put(key: str, who: str) -> None:
+        if who not in out[key]:
+            out[key].append(who)
+
+    for rule in load_rules(conn):
+        if not rule.enabled or not rule.has_condition():
+            continue
+        who = rule.pc_name or f"ID {rule.login_id}"
+        if line_names.has_administrator([rule.permission]):
+            put(line_names.ADMINISTRATOR, who)
+            continue
+        if line_names.has_leader([rule.permission]):
+            put(line_names.LEADER, who)
+        for name in line_names.lines_in([rule.permission]):
+            put(name, who)
+    return out
 
 
 def is_administrator(conn: Optional[sqlite3.Connection],

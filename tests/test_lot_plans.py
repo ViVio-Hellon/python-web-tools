@@ -152,6 +152,26 @@ class LineTests(unittest.TestCase):
         access_row(self.conn, permission="AIM")
         self.assertEqual(access_control.lines(self.conn, self.me), list(line_names.OFFICIAL))
 
+    def test_表ぜんたいの登録ライン(self) -> None:
+        """「いまの状態: 登録ラインを出してください」(VER4.8.90)。"""
+        access_row(self.conn, pc="PC-A", permission="L-1")
+        access_row(self.conn, pc="PC-B", permission="L-1、HVC")
+        access_row(self.conn, pc="PC-C", permission="作業長")
+        access_row(self.conn, pc="PC-D", permission="Administrator")
+        access_row(self.conn, pc="PC-E", permission="NS1", enabled=0)       # 無効は数えない
+        table = access_control.registered_lines(self.conn)
+        self.assertEqual(table["L-1"], ["PC-A", "PC-B"])
+        self.assertEqual(table["HVC"], ["PC-B"])
+        self.assertEqual(table["NS1"], [])
+        self.assertEqual(table["作業長"], ["PC-C"])
+        self.assertEqual(table["Administrator"], ["PC-D"])
+        from packaging_tool.presenters import settings as presenter
+        with mock.patch.dict(os.environ, ME):
+            checks = {c.label: c for c in presenter._access_section(self.conn).checks}
+        self.assertEqual(checks["登録ライン"].value, "2 / 9 ライン")
+        self.assertIn("L-1: PC-A, PC-B", checks["登録ライン"].detail)
+        self.assertIn("NS1: なし", checks["登録ライン"].detail)
+
     def test_ほかの端末のAdministratorは効かない(self) -> None:
         access_row(self.conn, pc="OTHER-PC", permission="Administrator")
         access_row(self.conn, permission="Administrator", enabled=0)
@@ -374,6 +394,37 @@ class LotPanelTests(unittest.TestCase):
         self.assertEqual(body["lines"], list(line_names.OFFICIAL))
         self.assertEqual(sorted(i["lot_no"] for i in body["items"]), ["B1", "B2", "B3"])
         self.assertEqual(body["unseen"], 3)
+
+    def test_いまの状態は強いもの優先(self) -> None:
+        """「未登録になる。読んでいないのでは?」「2つ以上付与していたら強いもの優先」(VER4.8.90)。"""
+        def label():
+            return self.client.get("/api/lot/plans", headers=_web.auth()).get_json()
+        self.assertEqual(label()["label"], "この端末のライン: 未登録")
+        access_row(self.conn, permission="L-1")
+        self.assertEqual(label()["label"], "この端末のライン: L-1")
+        access_row(self.conn, permission="作業長")
+        self.assertEqual(label()["label"], "この端末: 作業長 / ライン L-1")
+        access_row(self.conn, permission="Administrator")
+        body = label()
+        self.assertEqual(body["label"], "この端末: Administrator(作業長・すべてのライン)")
+        self.assertEqual(body["role"], "admin")
+        # 作業長だけ(ラインなし)は「未登録」と言わない
+        self.conn.execute('DELETE FROM "アクセス権限"')
+        access_row(self.conn, permission="作業長")
+        body = label()
+        self.assertEqual(body["label"], "この端末: 作業長(ラインなし)")
+        self.assertIn("作業長の端末です", body["why"])
+        html = self.client.get("/lot").get_data(as_text=True)
+        self.assertIn("この端末: 作業長(ラインなし)", html)
+
+    def test_ログインIDが違う行はなぜ効かないかを言う(self) -> None:
+        """実データ: どの行にもログインID(Xfa-Ngykonpo)が入っている。別のIDでログインすると当たらない。"""
+        access_row(self.conn, login="Xfa-Ngykonpo", permission="L-1")
+        body = self.client.get("/api/lot/plans", headers=_web.auth()).get_json()
+        self.assertEqual(body["label"], "この端末のライン: 未登録")
+        self.assertIn("Xfa-Ngykonpo", body["why"])
+        self.assertIn("worker", body["why"])
+        self.assertIn("「L-1」", body["why"])
 
     def test_ラインが無ければどこに書けばよいかを言う(self) -> None:
         body = self.client.get("/api/lot/plans", headers=_web.auth()).get_json()

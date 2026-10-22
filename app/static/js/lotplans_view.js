@@ -61,8 +61,9 @@ export function render(state) {
   if (!el.planCard || !state) return;
   const items = state.items || [];
   const unseen = items.filter((i) => !i.seen).length;
-  el.planLines.textContent = state.lines && state.lines.length
-    ? `この端末のライン: ${state.lines.join(" / ")}` : "この端末のライン: 未登録";
+  // いまの状態はサーバが言葉にする(強いもの優先: Administrator > 作業長 > ライン)
+  el.planLines.textContent = state.label || (state.lines && state.lines.length
+    ? `この端末のライン: ${state.lines.join(" / ")}` : "この端末のライン: 未登録");
   el.planUnseen.hidden = !unseen;
   el.planUnseen.textContent = `未確認 ${unseen}件`;
   el.planNews.hidden = !unseen;

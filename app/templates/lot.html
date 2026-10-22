@@ -61,7 +61,7 @@
   <section class="card plans" id="planCard">
     <header>
       <i class="ib ib--sm ib--accent" aria-hidden="true">予</i><h3>予定ロット</h3>
-      <span class="eyebrow" id="planLines">{% if plans.lines %}この端末のライン: {{ plans.lines | join(' / ') }}{% else %}この端末のライン: 未登録{% endif %}</span>
+      <span class="eyebrow" id="planLines">{{ plans.label }}</span>
       <span class="badge badge--todo" id="planUnseen"{% if not plans.unseen %} hidden{% endif %}>未確認 {{ plans.unseen }}件</span>
       <button class="btn plans__all" type="button" id="planSeenAll" hidden>すべて確認</button>
     </header>
