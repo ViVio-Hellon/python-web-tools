@@ -338,6 +338,20 @@ def lines(conn: Optional[sqlite3.Connection],
                                if rule.matches(identity))
 
 
+def is_leader(conn: Optional[sqlite3.Connection],
+               identity: Optional[Identity] = None) -> bool:
+    """この端末(ログインID・PC名)が **作業長** か(VER4.8.88。作業予定ラインを送れるのは作業長だけ)。
+
+    この端末に当たる行(有効・条件あり)の **権限** の列に「作業長」があるか。ほかのツールと同じ表・同じ書き方。
+    """
+    if conn is None:
+        return False
+    from . import line_names
+    identity = identity or current_identity()
+    return line_names.has_leader(rule.permission for rule in load_rules(conn)
+                                 if rule.matches(identity))
+
+
 def resolve(conn: sqlite3.Connection,
             identity: Optional[Identity] = None) -> Grant:
     """この端末が持っている権限。

@@ -217,6 +217,42 @@ class WarehouseCardTests(unittest.TestCase):
         patcher = mock.patch("packaging_tool.data_sync.write_back_in_background")
         patcher.start()
         self.addCleanup(patcher.stop)
+        env = mock.patch.dict(os.environ, ME)
+        env.start()
+        self.addCleanup(env.stop)
+        # 送れるのは作業長の端末だけ(VER4.8.88)
+        access_row(self.conn, permission="作業長")
+
+    def test_作業長でなければ送れない_カードは見るだけ(self) -> None:
+        """「作業長だけが作業予定ラインを送れるようにしてください」(VER4.8.88)。"""
+        self.conn.execute('DELETE FROM "アクセス権限"')
+        access_row(self.conn, permission="L-1")                       # ラインの端末(作業長ではない)
+        lot_plans.send(self.conn, "A5", "HVC", terminal="LEADER")
+        res = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "A6", "line": "HVC"},
+                              headers=_web.auth())
+        self.assertEqual(res.status_code, 403)
+        self.assertIn("作業長", res.get_json()["error"]["message"])
+        self.assertIsNone(lot_plans.current(self.conn, "A6"))
+        res = self.field.post("/api/warehouse/lot-plan/cancel", json={"lot_no": "A5"}, headers=_web.auth())
+        self.assertEqual(res.status_code, 403)
+        self.assertIsNotNone(lot_plans.current(self.conn, "A5"))
+        got = self.field.get("/api/warehouse/lot-plan?lot_no=A5", headers=_web.auth()).get_json()
+        self.assertFalse(got["can_send"])
+        self.assertEqual(got["plan"]["line"], "HVC")                   # 見ることはできる
+        html = self.field.get("/warehouse").get_data(as_text=True)
+        self.assertIn('id="lotPlanSend" disabled', html)
+
+    def test_作業長の書き方(self) -> None:
+        me = access_control.Identity(login_id="worker", pc_name=PC)
+        self.assertTrue(access_control.is_leader(self.conn, me))
+        self.conn.execute('DELETE FROM "アクセス権限"')
+        access_row(self.conn, permission="L-1、作業長")                 # 並べて書いてもよい
+        self.assertTrue(access_control.is_leader(self.conn, me))
+        self.conn.execute('DELETE FROM "アクセス権限"')
+        access_row(self.conn, pc="OTHER-PC", permission="作業長")       # ほかの端末の作業長
+        access_row(self.conn, permission="作業長", enabled=0)           # 無効
+        self.assertFalse(access_control.is_leader(self.conn, me))
+        self.assertFalse(access_control.is_leader(None, me))
 
     def test_新規発注の下にカードがある_資材モードには無い(self) -> None:
         html = self.field.get("/warehouse").get_data(as_text=True)

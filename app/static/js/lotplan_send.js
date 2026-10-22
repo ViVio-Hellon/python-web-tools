@@ -16,7 +16,7 @@ let timer = 0;
 
 /** カードを動かす。`lotInput` は新規発注の LotNo の欄(無ければ、いま開いているロットを使う)。 */
 export function startLotPlanCard(lotInput) {
-  for (const id of ["lotPlanCard", "lotPlanNow", "lotPlanLine", "lotPlanSend", "lotPlanCancel"]) {
+  for (const id of ["lotPlanCard", "lotPlanNow", "lotPlanLine", "lotPlanSend", "lotPlanCancel", "lotPlanWhy"]) {
     el[id] = document.getElementById(id);
   }
   el.lotInput = lotInput || null;
@@ -65,7 +65,15 @@ export function render(state) {
     now.append("ロットがまだありません。ロット検索でロットを開いてから入れてください");
   }
   now.className = plan ? "status status--ok" : "status";
-  el.lotPlanCancel.hidden = !plan;
+  // 送れるのは作業長の端末だけ(サーバが決める)
+  const can = state.can_send !== false;
+  el.lotPlanLine.disabled = !can;
+  el.lotPlanSend.disabled = !can;
+  el.lotPlanCancel.hidden = !plan || !can;
+  if (el.lotPlanWhy) {
+    el.lotPlanWhy.hidden = can;
+    el.lotPlanWhy.textContent = state.send_why || "";
+  }
 }
 
 async function send() {
@@ -83,7 +91,7 @@ async function send() {
   } catch (err) {
     toastError(err);
   } finally {
-    el.lotPlanSend.disabled = false;
+    el.lotPlanSend.disabled = el.lotPlanLine.disabled;
   }
 }
 

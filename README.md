@@ -1,4 +1,4 @@
-# 梱包資材総合ツール (Python / SQLite版) — VER4.8.87
+# 梱包資材総合ツール (Python / SQLite版) — VER4.8.88
 
 Excel VBA + Access で作られていた梱包資材管理ツールの Python 移植版です。
 画面は **Flask + HTML/CSS/JS**、業務ロジックは Python、データは SQLite。

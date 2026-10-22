@@ -895,13 +895,31 @@ def _lot_plan_state(conn, lot_no: str) -> dict:
     plan = lot_plans.current(conn, lot) if lot else None
     unsent = lot_plans.unsent_ids(conn)
     lines = list(line_names.OFFICIAL)
+    identity = access_control.current_identity()
+    leader = access_control.is_leader(conn, identity)
     return {"lot_no": lot,
+            # 送れるのは作業長の端末だけ(VER4.8.88)。送れないときの一文
+            "can_send": leader,
+            "send_why": "" if leader else _NOT_LEADER_WHY.format(who=identity.label()),
             "plan": plan.to_dict() if plan else None,
             "lines": lines,
             # 選択肢のうち、いまの予定のライン(全角で入っていても選んだ形で出す)
             "selected_line": _choice_of(plan.line, lines) if plan else "",
             # この端末で入れた・外したが、まだ共有へ届いていない
             "unsent": bool(plan and plan.plan_id in unsent)}
+
+
+_NOT_LEADER_WHY = ("作業予定ラインを送れるのは作業長の端末だけです。{who} を作業長にするには、"
+                   "アクセス権限のこの端末の行の「権限」に「作業長」と書きます。")
+
+
+def _refuse_not_leader(conn):
+    """作業長でなければ断る応答(作業長なら None)。"""
+    identity = access_control.current_identity()
+    if access_control.is_leader(conn, identity):
+        return None
+    return jsonify({"error": {"code": "not_leader",
+                              "message": _NOT_LEADER_WHY.format(who=identity.label())}}), 403
 
 
 def _choice_of(line: str, choices: list) -> str:
@@ -936,6 +954,9 @@ def lot_plan_send():
     lot_no = str(body.get("lot_no") or "") or work_context.get_context().lot_no
     line = str(body.get("line") or "")
     conn = get_db()
+    refused = _refuse_not_leader(conn)
+    if refused:
+        return refused
     from packaging_tool import line_names
     choices = list(line_names.OFFICIAL)
     if line and not _choice_of(line, choices):
@@ -960,6 +981,9 @@ def lot_plan_cancel():
     body = request.get_json(silent=True) or {}
     lot_no = str(body.get("lot_no") or "") or work_context.get_context().lot_no
     conn = get_db()
+    refused = _refuse_not_leader(conn)
+    if refused:
+        return refused
     result = lot_plans.cancel(conn, lot_no, terminal=svc.this_terminal(),
                               sender=access_control.current_identity().login_id)
     if not result.ok:

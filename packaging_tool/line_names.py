@@ -46,6 +46,15 @@ def official(text: Any) -> str:
     return _BY_SAME.get(same(text), "")
 
 
+#: 作業予定ラインを送れる役(アクセス権限の「権限」の列に書く。VER4.8.88)
+LEADER = "作業長"
+
+
+def has_leader(values: Iterable[Any]) -> bool:
+    """欄の値に「作業長」があるか(幅と前後の空白だけ揃える。「作業長、L-1」のように並べてもよい)。"""
+    return any(same(token) == LEADER for value in values for token in tokens(value))
+
+
 def lines_in(values: Iterable[Any]) -> list[str]:
     """欄の値の中のライン(正規の呼び名)。書かれた順、重複なし。"""
     found: list[str] = []

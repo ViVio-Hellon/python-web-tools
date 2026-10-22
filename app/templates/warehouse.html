@@ -140,7 +140,7 @@
       </p>
       <div class="field" style="margin-top:8px">
         <label for="lotPlanLine">作業ライン</label>
-        <select class="input" id="lotPlanLine">
+        <select class="input" id="lotPlanLine"{% if not lot_plan.can_send %} disabled{% endif %}>
           <option value="">選んでください</option>
           {% for name in lot_plan.lines %}
           <option value="{{ name }}"{% if lot_plan.selected_line == name %} selected{% endif %}>{{ name }}</option>
@@ -148,11 +148,12 @@
         </select>
       </div>
       <div class="btn-row" style="margin-top:10px">
-        <button class="btn btn--commit" type="button" id="lotPlanSend">予定に入れる</button>
-        <button class="btn" type="button" id="lotPlanCancel"{% if not lot_plan.plan %} hidden{% endif %}>
+        <button class="btn btn--commit" type="button" id="lotPlanSend"{% if not lot_plan.can_send %} disabled{% endif %}>予定に入れる</button>
+        <button class="btn" type="button" id="lotPlanCancel"{% if not lot_plan.plan or not lot_plan.can_send %} hidden{% endif %}>
           <span class="gl">×</span>予定から外す</button>
       </div>
-      <p class="why">入れるのは<b>上の新規発注のロット</b>(無ければいま開いているロット)です。
+      <p class="status status--ng" id="lotPlanWhy"{% if lot_plan.can_send %} hidden{% endif %}>{{ lot_plan.send_why }}</p>
+      <p class="why">送れるのは<b>作業長の端末</b>だけです。入れるのは<b>上の新規発注のロット</b>(無ければいま開いているロット)です。
         入れたラインの端末(アクセス権限の「権限」にそのラインが書いてある端末)のロット検索に知らせが出ます。
         別のラインに入れ直すこともできます。</p>
     </div>
