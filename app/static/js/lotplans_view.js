@@ -1,0 +1,165 @@
+/*
+  lotplans_view.js — ロット検索「予定ロット」
+
+  長が作業ラインに入れたロットのうち、この端末のライン(アクセス権限のライン名)のもの。
+  まだ確認していないものが知らせ。
+
+    開く … そのロットのロット情報を開く(検索して開くのと同じ)。知らせも消える
+    確認 … 開かずに知らせだけ消す
+
+  開いているあいだは見張る(`WATCH_MS` ごと。共有が変わっていれば予定ロットだけ取り込み直す)。
+  新しく届いたらトーストでも知らせる。レールの「ロット検索」の印(予N)も合わせる。
+*/
+import { api } from "./api.js";
+import * as nav from "./nav.js";
+import { toast, toastError } from "./toast.js";
+
+export const WATCH_MS = 15_000;
+
+const el = {};
+let onOpen = null;
+let known = new Set();        // 知らせ済み(トーストを2度出さない)の予定ID
+let watch = 0;
+
+/** 動かす。`initial` はサーバが埋めた状態、`open(lotNo)` はロット情報を開く関数。 */
+export function startPlans(initial, open) {
+  for (const id of ["planCard", "planLines", "planUnseen", "planNews", "planWhy",
+                    "planList", "planEmpty", "planSeenAll"]) {
+    el[id] = document.getElementById(id);
+  }
+  onOpen = open;
+  if (!el.planCard) return;
+  known = new Set((initial?.items || []).filter((i) => !i.seen).map((i) => i.plan_id));
+  if (el.planSeenAll) el.planSeenAll.addEventListener("click", () => seenAll());
+  render(initial);
+  window.clearInterval(watch);
+  watch = window.setInterval(() => pull(), WATCH_MS);
+  nav.onLeave(() => window.clearInterval(watch));
+  // 開いた直後にも一度見に行く(起動直後は共有の分がまだ入っていないことがある)
+  pull();
+}
+
+/** 共有を見て(変わっていれば取り込み直して)出し直す。新しく届いたものはトーストでも知らせる。 */
+export async function pull() {
+  let state;
+  try {
+    state = await api.get("/api/lot/plans?refresh=1");
+  } catch (err) {
+    return;                    // 見張りの失敗は黙る(次の回でまた見る)
+  }
+  const fresh = (state.items || []).filter((i) => !i.seen && !known.has(i.plan_id));
+  for (const item of fresh) {
+    known.add(item.plan_id);
+    toast(`予定ロット ${item.lot_no}(${item.line})が届きました`, "info",
+          { label: "開く", onClick: () => openPlan(item) });
+  }
+  render(state);
+}
+
+/** 出す。 */
+export function render(state) {
+  if (!el.planCard || !state) return;
+  const items = state.items || [];
+  const unseen = items.filter((i) => !i.seen).length;
+  el.planLines.textContent = state.lines && state.lines.length
+    ? `この端末のライン: ${state.lines.join(" / ")}` : "この端末のライン: 未登録";
+  el.planUnseen.hidden = !unseen;
+  el.planUnseen.textContent = `未確認 ${unseen}件`;
+  el.planNews.hidden = !unseen;
+  el.planNews.textContent = unseen
+    ? `新しい予定ロットが ${unseen}件 届いています。「開く」でロット情報を開きます(開かずに消すなら「確認」)`
+    : "";
+  if (el.planSeenAll) el.planSeenAll.hidden = unseen < 2;
+  el.planWhy.hidden = !state.why;
+  el.planWhy.textContent = state.why || "";
+  el.planEmpty.hidden = items.length > 0 || !!state.why;
+  el.planEmpty.textContent = `予定ロットはありません(${state.days || 7}日以内に入ったもの)`;
+  el.planList.replaceChildren(...items.map(row));
+  railBadge(unseen);
+}
+
+function row(item) {
+  const li = document.createElement("li");
+  li.className = `plans__row${item.seen ? "" : " is-new"}`;
+  li.dataset.plan = item.plan_id;
+  const lot = document.createElement("b");
+  lot.className = "plans__lot";
+  lot.textContent = item.lot_no;
+  const line = document.createElement("span");
+  line.className = "badge badge--todo";
+  line.textContent = item.line;
+  const meta = document.createElement("span");
+  meta.className = "plans__meta";
+  meta.textContent = [item.sent_label, item.terminal, item.summary].filter(Boolean).join(" ・ ");
+  const actions = document.createElement("span");
+  actions.className = "plans__actions";
+  const openBtn = document.createElement("button");
+  openBtn.type = "button";
+  openBtn.className = item.seen ? "btn" : "btn btn--commit";
+  openBtn.textContent = "開く";
+  openBtn.addEventListener("click", () => openPlan(item));
+  actions.append(openBtn);
+  if (item.seen) {
+    const done = document.createElement("span");
+    done.className = "plans__seen";
+    done.textContent = item.opened ? "開いた" : "確認済み";
+    actions.append(done);
+  } else {
+    const seenBtn = document.createElement("button");
+    seenBtn.type = "button";
+    seenBtn.className = "btn";
+    seenBtn.textContent = "確認";
+    seenBtn.title = "開かずに知らせを消します";
+    seenBtn.addEventListener("click", () => markSeen(item, false));
+    actions.append(seenBtn);
+  }
+  li.append(lot, line, meta, actions);
+  return li;
+}
+
+/** 開く(ロット情報を出す)。知らせも消す。 */
+export async function openPlan(item) {
+  if (onOpen) await onOpen(item.lot_no);
+  if (!item.seen || !item.opened) await markSeen(item, true);
+}
+
+async function markSeen(item, opened) {
+  try {
+    render(await api.post(`/api/lot/plans/${encodeURIComponent(item.plan_id)}/seen`, { opened }));
+  } catch (err) {
+    toastError(err);
+  }
+}
+
+async function seenAll() {
+  const items = [...(el.planList?.querySelectorAll(".plans__row.is-new") || [])];
+  let state = null;
+  for (const node of items) {
+    try {
+      state = await api.post(`/api/lot/plans/${encodeURIComponent(node.dataset.plan)}/seen`,
+                             { opened: false });
+    } catch (err) {
+      toastError(err);
+      break;
+    }
+  }
+  if (state) render(state);
+}
+
+/** レールの「ロット検索」の印(予N)。0 なら消す。 */
+function railBadge(count) {
+  const link = document.querySelector('.rail a[href="/lot"]');
+  if (!link) return;
+  let node = link.querySelector(".badge");
+  if (!count) {
+    if (node) node.remove();
+    return;
+  }
+  if (!node) {
+    node = document.createElement("span");
+    link.append(node);
+  }
+  node.className = "badge badge--todo";
+  node.textContent = `予${count}`;
+  node.title = `まだ確認していない予定ロットが ${count}件 あります`;
+}

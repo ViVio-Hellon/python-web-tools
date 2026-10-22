@@ -77,8 +77,58 @@ def page():
         lot_url=lot_presenter.URL_LOT_DISPLAY,
         # 図面が取れないときに、いままでどおり閲覧システムを開けるように
         url_hoso=lot_presenter.URL_HOSO_SHIYOSHO,
+        # 予定ロット(この端末のラインに入ったロット。VER4.8.85)。初回はサーバが埋める
+        plans=_plans_state(conn),
         **shell_context("lot"),
     )
+
+
+# ==================================================================
+# 予定ロット(VER4.8.85)── 長が作業ラインに入れたロットの知らせ
+# ==================================================================
+def _plans_state(conn, *, refresh: bool = False) -> dict:
+    """この端末のライン(アクセス権限のライン名)に入った予定ロット。未確認を先に。
+
+    `refresh` なら、共有が変わっていれば予定ロットだけ取り込み直してから出す(見張り)。
+    """
+    from packaging_tool import access_control, lot_plans
+    if refresh:
+        try:
+            lot_plans.refresh_if_changed(conn)
+        except Exception as exc:                  # noqa: BLE001 - 見張りで画面を落とさない
+            log.warning("予定ロットを取り込み直せませんでした: %s", exc)
+    identity = access_control.current_identity()
+    lines = access_control.lines(conn, identity)
+    items = [p.to_dict() for p in lot_plans.for_lines(conn, lines)]
+    return {
+        "lines": lines,
+        "items": items,
+        "unseen": sum(1 for i in items if not i["seen"]),
+        "days": lot_plans.LIST_DAYS,
+        # ラインが無いときに出す一文(どこに何を書けば届くか)
+        "why": "" if lines else (
+            f"この端末({identity.label()})の作業ラインが登録されていません。"
+            f"{access_control.TABLE} のこの端末の行の「ライン名」にライン(例 L1)を書くと、"
+            "そのラインに入った予定ロットがここに届きます。"),
+    }
+
+
+@bp.get("/api/lot/plans")
+def plans():
+    """予定ロット。`?refresh=1` なら共有が変わっていれば取り込み直す(ロット検索の見張り)。"""
+    return jsonify(_plans_state(get_db(), refresh=request.args.get("refresh") == "1"))
+
+
+@bp.post("/api/lot/plans/<plan_id>/seen")
+def plan_seen(plan_id: str):
+    """知らせを確認した(消す)。`{"opened": true}` なら開いて確認した。"""
+    from packaging_tool import lot_plans
+    body = request.get_json(silent=True) or {}
+    conn = get_db()
+    if not lot_plans.mark_seen(conn, plan_id, opened=bool(body.get("opened"))):
+        return jsonify({"error": {"code": "not_found",
+                                  "message": "その予定ロットは見つかりません。画面を更新してください。"}}), 404
+    return jsonify(_plans_state(conn))
 
 
 # ==================================================================

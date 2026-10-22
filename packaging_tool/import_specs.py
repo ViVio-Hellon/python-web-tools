@@ -210,6 +210,17 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("側", "側", to_text),
         ("日時", "日時", to_text),
     ],
+    # 予定ロット(長がロットを作業ラインに入れた / 外した。VER4.8.85)。全端末が書き戻しで足していく
+    config.TBL_LOT_PLAN: [
+        ("予定ID", "予定ID", to_text),
+        ("LotNo", "LotNo", to_text),
+        ("ライン", "ライン", to_text),
+        ("状態", "状態", to_text),
+        ("送った端末", "送った端末", to_text),
+        ("送った人", "送った人", to_text),
+        ("送った日時", "送った日時", to_text),
+        ("要約", "要約", to_text),
+    ],
     # 発注に在庫を充てた記録(引当・持出)。全端末が書き戻しで足していく
     config.TBL_STOCK_RESERVE: [
         ("引当ID", "引当ID", to_text),
@@ -348,6 +359,8 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("権限", "権限", to_text),
         ("有効", "有効", to_flag),
         ("備考", "備考", to_text),
+        # この端末の作業ライン(VER4.8.85。予定ロットの知らせを受けるライン)
+        ("ライン名", "ライン名", to_text),
     ],
 }
 
@@ -519,6 +532,7 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
                                                config.TBL_CUT_REQUEST,
                                                config.TBL_CUT_REQUEST_EVENT,
                                                config.TBL_STOCK_RESERVE,
+                                               config.TBL_LOT_PLAN,
                                                PROTEC_RULE_TABLE,
                                                PALLET_LIMIT_TABLE,
                                                KANBAN_SHELF_TABLE})
@@ -538,6 +552,8 @@ OPTIONAL_COLUMNS: dict[str, frozenset[str]] = {
     "仕掛ロット": frozenset({"BOX実績_枚本数", "前々工程実績_枚本数", "前工程実績_枚本数"}),
     # 最初に送った端末が共有に足す列(`sync_writeback.SHARED_ADDED_COLUMNS`)
     config.TBL_WAREHOUSE_ORDER: frozenset({"送信端末", "発注キー", "受注番号", "ロットの受注"}),
+    # 作業ライン(VER4.8.85)。前の版で作った共有の表には無い(取り込みのときに足す `master_schema`)
+    "アクセス権限": frozenset({"ライン名"}),
 }
 
 # 梱包資材マスタ.sqlite3 ではなく、**看板マスタ.sqlite3(別ファイル)** から

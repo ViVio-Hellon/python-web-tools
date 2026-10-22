@@ -207,6 +207,14 @@ def add():
     return _apply(session, session.add(str(body.get("name", ""))))
 
 
+@bp.post("/api/layout/base/add")
+def add_base():
+    """拠点を足す(マスタに足して図の中央に置く。VER4.8.85)。"""
+    body = request.get_json(silent=True) or {}
+    session = _session()
+    return _apply(session, session.add_base(str(body.get("name", "")), get_db()))
+
+
 @bp.post("/api/layout/remove")
 def remove():
     body = request.get_json(silent=True) or {}
@@ -289,6 +297,8 @@ _STATUS_BY_REASON = {
     layout_session.REFUSE_NOT_FOUND: 422,
     layout_session.REFUSE_NO_HANDOFF: 422,
     layout_session.REFUSE_FAILED: 500,
+    # マスタに書けない(資材モードの権限・管理者パスワード)。画面ぜんぶを返す
+    layout_session.REFUSE_NOT_ALLOWED: 403,
 }
 
 

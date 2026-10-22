@@ -180,6 +180,20 @@ def _shared_name() -> str:
         return ""
 
 
+def _lot_plan_badge(grant) -> Optional[tuple[str, str, str]]:
+    """レールの「ロット検索」に出す、まだ確認していない予定ロットの数(VER4.8.85)。どの画面でも出す。"""
+    from packaging_tool import lot_plans
+    from . import get_db
+    try:
+        conn = get_db()
+        count = lot_plans.unseen_count(conn, access_control.lines(conn, grant.identity))
+    except Exception:                         # noqa: BLE001 - 印が出せなくても画面は出す
+        return None
+    if not count:
+        return None
+    return (f"予{count}", "todo", f"まだ確認していない予定ロットが {count}件 あります")
+
+
 def shell_context(active: str, *,
                   badges: Optional[dict[str, tuple[str, str]]] = None) -> dict[str, Any]:
     """`base.html` が必要とする値一式。
@@ -193,6 +207,11 @@ def shell_context(active: str, *,
     mode = config["MODE"]
     grant = current_grant()
     allowed = grant.allowed_modes()
+    badges = dict(badges or {})
+    if "lot" not in badges:
+        plan_badge = _lot_plan_badge(grant)
+        if plan_badge:
+            badges["lot"] = plan_badge
     return {
         "active": active,
         "nav": nav_items(mode, badges),

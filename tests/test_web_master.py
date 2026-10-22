@@ -468,7 +468,8 @@ class RebuildTableApiTests(MasterApiTests):
         self.assertFalse(page["rebuildable"])
         self.assertTrue(page["editable"])
         self.assertEqual(page["total"], 0)
-        self.assertEqual(len(res.get_json()["columns"]), 5)
+        # ログインID・PC名・権限・有効・備考・ライン名(作業ライン。VER4.8.85)
+        self.assertEqual(len(res.get_json()["columns"]), 6)
 
     def test_元の表は消さず退避する(self) -> None:
         """**中身を失わない。**"""

@@ -138,10 +138,24 @@ function renderMap(next) {
   }));
 }
 
+/** 拠点の選択肢を出し直す(配置編集で拠点を足したとき。前は開き直すまで増えなかった)。 */
+function renderBaseOptions(names) {
+  if (!el.basePoint || !Array.isArray(names)) return;
+  const now = [...el.basePoint.options].map((o) => o.value);
+  if (now.length === names.length && now.every((v, i) => v === names[i])) return;
+  el.basePoint.replaceChildren(...names.map((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    return option;
+  }));
+}
+
 function render(next) {
   state = next;
 
   renderMap(next);
+  renderBaseOptions(next.base_points);
   el.basePoint.value = next.base_point;
   el.searchWidth.value = next.width_text;
   el.searchLength.value = next.length_text;
@@ -288,7 +302,7 @@ export function start(initial) {
                     "searchLength", "search", "result",
                     "fromSelection", "handoffLabel",
                     "editToggle", "editState", "editBox", "dirtyWhy", "multiNote",
-                    "newLabel", "addLabel", "removeLabel", "bgFile", "clearBg",
+                    "newLabel", "addLabel", "removeLabel", "newBase", "addBase", "bgFile", "clearBg",
                     "bgX", "bgY", "bgScale", "bgFit", "bgPlaceBox",
                     "mapWrap", "zoomIn", "zoomOut", "zoomNow",
                     "save", "reset",
@@ -334,6 +348,11 @@ export function start(initial) {
   el.addLabel.addEventListener("click", () => {
     send("/api/layout/add", { name: el.newLabel.value }).then((next) => {
       if (next) el.newLabel.value = "";
+    });
+  });
+  el.addBase.addEventListener("click", () => {
+    send("/api/layout/base/add", { name: el.newBase.value }).then((next) => {
+      if (next) el.newBase.value = "";
     });
   });
   el.removeLabel.addEventListener("click", () => {

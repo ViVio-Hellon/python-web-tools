@@ -171,6 +171,10 @@ def page():
         lot_peek_why=LOT_PEEK_WHY,
         expand_absent_why=LOT_PEEK_WHY,
         cut_state=_cut_list(get_db()),
+        # 作業予定ライン(新規発注の下。VER4.8.85)。いまのロット(下書きのロットが先)の予定と、選べるライン
+        lot_plan=(_lot_plan_state(get_db(), (drafts[0].get("lot_no") if drafts else "")
+                                  or work_context.get_context().lot_no)
+                  if mode == modes.FIELD else None),
         # CSVで出す: 期間の初めの値(今月の1日〜今日)と出る場所(設定タブで変えられる)
         export_start=date.today().replace(day=1).isoformat(),
         export_end=date.today().isoformat(),
@@ -876,3 +880,90 @@ def cut_request_view(request_id: str):
     elif req.replaced_by:
         note = "⚠ この切断依頼は送り直されています(新しいほうを使ってください)。" + note
     return Response(printing.render_html(report, note=note), mimetype="text/html")
+
+
+# ------------------------------------------------------------------
+# 作業予定ライン(VER4.8.85)── 長がロットを作業ラインに入れる(現場)
+#
+# 現場の声:「新規発注フレームの下余白に作業予定ライン選択を設けてください」
+# 入れたロットは、そのライン(アクセス権限のライン名)の端末のロット検索に知らせが出る(`lot_plans`)
+# ------------------------------------------------------------------
+def _lot_plan_state(conn, lot_no: str) -> dict:
+    """そのロットのいまの予定と、選べるライン(拠点。既定の L1 / HVC / LVC とマスタで足した拠点)。"""
+    from packaging_tool import location_service, lot_plans
+    lot = lot_plans.normalize_lot(lot_no)
+    plan = lot_plans.current(conn, lot) if lot else None
+    unsent = lot_plans.unsent_ids(conn)
+    lines = location_service.base_point_names(conn)
+    return {"lot_no": lot,
+            "plan": plan.to_dict() if plan else None,
+            "lines": lines,
+            # 選択肢のうち、いまの予定のライン(「L-1」で入っていても「L1」を選んだ形で出す)
+            "selected_line": _choice_of(plan.line, lines) if plan else "",
+            # この端末で入れた・外したが、まだ共有へ届いていない
+            "unsent": bool(plan and plan.plan_id in unsent)}
+
+
+def _choice_of(line: str, choices: list) -> str:
+    """そのラインに当たる選択肢(全角半角・ハイフンは見ない)。無ければ空。"""
+    from packaging_tool import lot_plans
+    key = lot_plans.line_key(line)
+    return next((c for c in choices if lot_plans.line_key(c) == key), "")
+
+
+def _lot_plan_summary(lot_no: str) -> str:
+    """予定に添える一言(いま開いているロットなら製品寸法)。"""
+    from packaging_tool import lot_plans
+    context = work_context.get_context()
+    if lot_plans.normalize_lot(context.lot_no) != lot_plans.normalize_lot(lot_no):
+        return ""
+    product = context.ribbon().get("product", "")
+    return f"製品 {product}" if product and product != work_context.UNSET else ""
+
+
+@field_only.get("/api/warehouse/lot-plan")
+def lot_plan_get():
+    """そのロット(`?lot_no=`。無ければいまのロット)の予定。"""
+    lot_no = request.args.get("lot_no", "") or work_context.get_context().lot_no
+    return jsonify(_lot_plan_state(get_db(), lot_no))
+
+
+@field_only.post("/api/warehouse/lot-plan")
+def lot_plan_send():
+    """ロットを作業ラインに入れる(手元に足し、共有へ送る)。"""
+    from packaging_tool import lot_plans
+    body = request.get_json(silent=True) or {}
+    lot_no = str(body.get("lot_no") or "") or work_context.get_context().lot_no
+    line = str(body.get("line") or "")
+    conn = get_db()
+    from packaging_tool import location_service
+    choices = location_service.base_point_names(conn)
+    if line and not _choice_of(line, choices):
+        return jsonify({"error": {"code": lot_plans.REFUSE_NO_LINE,
+                                  "message": f"{line} は選べるラインにありません"
+                                             f"({' / '.join(choices)})。"}}), 400
+    line = _choice_of(line, choices) if line else line      # 選択肢の名前で残す
+    result = lot_plans.send(conn, lot_no, line, terminal=svc.this_terminal(),
+                            sender=access_control.current_identity().login_id,
+                            summary=_lot_plan_summary(lot_no))
+    if not result.ok:
+        return jsonify({"error": {"code": result.reason, "message": result.message}}), 400
+    if result.changed:
+        data_sync.write_back_in_background()
+    return jsonify({**_lot_plan_state(conn, lot_no), "message": result.message})
+
+
+@field_only.post("/api/warehouse/lot-plan/cancel")
+def lot_plan_cancel():
+    """ロットを予定から外す。"""
+    from packaging_tool import lot_plans
+    body = request.get_json(silent=True) or {}
+    lot_no = str(body.get("lot_no") or "") or work_context.get_context().lot_no
+    conn = get_db()
+    result = lot_plans.cancel(conn, lot_no, terminal=svc.this_terminal(),
+                              sender=access_control.current_identity().login_id)
+    if not result.ok:
+        return jsonify({"error": {"code": result.reason, "message": result.message}}), 409
+    data_sync.write_back_in_background()
+    return jsonify({**_lot_plan_state(conn, lot_no), "message": result.message})
+

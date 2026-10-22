@@ -125,6 +125,39 @@
       </p>
     </div>
   </section>
+
+  {# 作業予定ライン。ロットを作業ラインに入れると、そのライン(アクセス権限のライン名)の端末の
+     ロット検索に知らせが出る(`lot_plans`)。発注とは別に送る(発注の無いロットも入れられる) #}
+  {% if lot_plan %}
+  <section class="card" id="lotPlanCard">
+    <header><i class="ib ib--sm ib--accent" aria-hidden="true">線</i><h3>作業予定ライン</h3>
+      <span class="eyebrow">ラインの端末に知らせます</span></header>
+    <div class="pad">
+      <p class="status" id="lotPlanNow" role="status">
+        {% if lot_plan.plan %}ロット <b>{{ lot_plan.plan.lot_no }}</b> は <b>{{ lot_plan.plan.line }}</b> の予定です({{ lot_plan.plan.sent_label }} {{ lot_plan.plan.terminal }})
+        {% elif lot_plan.lot_no %}ロット <b>{{ lot_plan.lot_no }}</b> はまだどのラインの予定にも入っていません
+        {% else %}ロットがまだありません。ロット検索でロットを開いてから入れてください{% endif %}
+      </p>
+      <div class="field" style="margin-top:8px">
+        <label for="lotPlanLine">作業ライン</label>
+        <select class="input" id="lotPlanLine">
+          <option value="">選んでください</option>
+          {% for name in lot_plan.lines %}
+          <option value="{{ name }}"{% if lot_plan.selected_line == name %} selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn btn--commit" type="button" id="lotPlanSend">予定に入れる</button>
+        <button class="btn" type="button" id="lotPlanCancel"{% if not lot_plan.plan %} hidden{% endif %}>
+          <span class="gl">×</span>予定から外す</button>
+      </div>
+      <p class="why">入れるのは<b>上の新規発注のロット</b>(無ければいま開いているロット)です。
+        入れたラインの端末(アクセス権限の「ライン名」がそのライン)のロット検索に知らせが出ます。
+        別のラインに入れ直すこともできます。</p>
+    </div>
+  </section>
+  {% endif %}
   </div>
   {% endif %}
 

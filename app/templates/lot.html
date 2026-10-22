@@ -54,6 +54,24 @@
      ================================================================ #}
   {# 未取り込みのときは、探す欄も一覧もまとめて隠す。片方だけ残ると
      「打てるのに何も出ない」状態になる #}
+  {# 0. 予定ロット ── 長がこの端末のライン(アクセス権限のライン名)に入れたロット。
+     まだ確認していないものが知らせ。「開く」でロット情報を開き、「確認」で開かずに知らせを消す。
+     中身は `lotplans_view.js` が描く(見張りで届いたものも同じ形で出す)。
+     仕掛台帳が未取り込みで一覧を隠すときも、知らせは出す(一覧の外に置く) #}
+  <section class="card plans" id="planCard">
+    <header>
+      <i class="ib ib--sm ib--accent" aria-hidden="true">予</i><h3>予定ロット</h3>
+      <span class="eyebrow" id="planLines">{% if plans.lines %}この端末のライン: {{ plans.lines | join(' / ') }}{% else %}この端末のライン: 未登録{% endif %}</span>
+      <span class="badge badge--todo" id="planUnseen"{% if not plans.unseen %} hidden{% endif %}>未確認 {{ plans.unseen }}件</span>
+      <button class="btn plans__all" type="button" id="planSeenAll" hidden>すべて確認</button>
+    </header>
+    <div class="pad plans__body">
+      <p class="status status--ng" id="planNews" role="status"{% if not plans.unseen %} hidden{% endif %}></p>
+      <p class="why" id="planWhy"{% if not plans.why %} hidden{% endif %}>{{ plans.why }}</p>
+      <ul class="plans__list" id="planList"></ul>
+      <p class="why" id="planEmpty" hidden></p>
+    </div>
+  </section>
   <div class="lotwork" id="listCard">
   <section class="card seek">
     <div class="pad">
@@ -166,6 +184,22 @@
   .listcard .listwrap { flex: 1; min-height: 0; max-height: none; margin: 0; }
   .listcard__hint { margin: 0 0 0 auto; }
 
+  /* ---- 予定ロット。並びすぎても一覧を押し出さないよう高さを切る ---- */
+  .plans { flex: none; }
+  .plans__all { margin-left: auto; }
+  .plans__body { display: flex; flex-direction: column; gap: 6px; }
+  .plans__body > p { margin: 0; }
+  .plans__list { list-style: none; margin: 0; padding: 0; max-height: 13em; overflow-y: auto;
+                 display: flex; flex-direction: column; gap: 4px; }
+  .plans__row { display: flex; align-items: center; gap: 10px; padding: 4px 8px;
+                border-radius: 6px; border: 1px solid var(--rule); }
+  .plans__row.is-new { border-color: var(--state-error); background: var(--warn-bg); }
+  .plans__lot { font-family: var(--mono); font-size: var(--fs-md); }
+  .plans__meta { color: var(--muted); font-size: var(--fs-sm); flex: 1; min-width: 0;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .plans__actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .plans__seen { color: var(--muted); font-size: var(--fs-sm); }
+
   /* ---- 主入力。画面でいちばん大きい入力欄はこれ1つ ---- */
   .seek__main { display: flex; align-items: center; gap: 10px; }
   .seek__label {
@@ -189,6 +223,7 @@
   start({ available: {{ available | tojson }},
           list: {{ list_view | tojson }},
           openLot: {{ open_lot | tojson }},
+          plans: {{ plans | tojson }},
           expandAbsentWhy: {{ expand_absent_why | tojson }} });
 </script>
 {% endblock %}

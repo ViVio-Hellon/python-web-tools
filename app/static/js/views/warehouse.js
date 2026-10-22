@@ -16,6 +16,7 @@ import * as draftStore from "../drafts.js";
 import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
+import * as lotPlan from "../lotplan_send.js";
 import * as toggles from "../toggles.js";
 // ロットの詳細はロット検索と同じものを出す(`../lotdetail.js`)。
 // 動的に読むのは版クエリを合わせるため(`views/lot.js` と同じ理由)
@@ -1079,6 +1080,7 @@ function showDraft() {
   el.draftPrev.disabled = draftAt === 0;
   el.draftNext.disabled = draftAt === drafts.length - 1;
   checkSameLot(0);
+  lotPlan.reload();
 }
 
 // ------------------------------------------------------------------
@@ -1145,6 +1147,8 @@ export function start(state, material, lotPeekWhy) {
     el.fields[node.id.slice(2)] = node;
   }
   if (el.fields.lot_no) el.fields.lot_no.addEventListener("input", () => checkSameLot());
+  // 作業予定ライン(新規発注の下)。新規発注のロットについて出す
+  lotPlan.startLotPlanCard(el.fields.lot_no || null);
 
   // **絞り込みの道具は取りに行く前に揃える。** `query()` が期間の
   // セグメントを見るので、`load()` より後に拾うと1回目が投げる

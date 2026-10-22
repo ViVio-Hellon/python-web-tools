@@ -130,7 +130,7 @@ def refresh_orders(conn: sqlite3.Connection,
         comments = seen
     # 切断依頼とその状態・在庫の引当も同じ(発注の件数には数えないが、届いたら画面を出し直す)
     for table in (config.TBL_CUT_REQUEST, config.TBL_CUT_REQUEST_EVENT,
-                  config.TBL_STOCK_RESERVE):
+                  config.TBL_STOCK_RESERVE, config.TBL_LOT_PLAN):
         got = imported.imported.pop(table, None)
         if comments is None and got is not None:
             comments = got

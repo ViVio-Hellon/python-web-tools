@@ -180,6 +180,8 @@ def ensure_rule_tables(conn: sqlite3.Connection, path: Optional[Path]) -> list[s
     if not present:
         return []                                 # 読めない・空のファイル。取り込み側が言う
     notes: list[str] = []
+    if ACCESS_TABLE in present:
+        notes.extend(_add_access_line_column(path))
     for table in AUTO_CREATE_TABLES:
         if table in present:
             notes.extend(_add_missing_rule_columns(path, table))
@@ -206,6 +208,30 @@ def ensure_rule_tables(conn: sqlite3.Connection, path: Optional[Path]) -> list[s
         log.info("取り込み元に %s を作りました(初期値%s件): %s", table, seeded, path)
         notes.append(f"梱包資材マスタに {table} が無かったので作りました(初期値{seeded}件)")
     return notes
+
+
+ACCESS_TABLE = "アクセス権限"
+ACCESS_LINE_COLUMN = "ライン名"
+
+
+def _add_access_line_column(path: Path) -> list[str]:
+    """取り込み元のアクセス権限に ライン名 が無ければ足す(VER4.8.85)。中身は空(= ラインを言っていない)。
+
+    予定ロットの知らせを受けるライン。マスタ管理で書けるように、取り込み元にも列を持たせる。
+    **無いときだけ1回**書く(共有は全員のファイル。用も無いのに書き換えない)。
+    """
+    have = set(source_db.columns(path, ACCESS_TABLE))
+    if not have or ACCESS_LINE_COLUMN in have:
+        return []
+    try:
+        with source_db.connect(path) as src:
+            src.execute(f"ALTER TABLE {source_db.quote_identifier(ACCESS_TABLE)} "
+                        f"ADD COLUMN {source_db.quote_identifier(ACCESS_LINE_COLUMN)} TEXT")
+    except (source_db.SourceError, sqlite3.Error) as exc:
+        log.warning("取り込み元の %s に %s を足せませんでした: %s", ACCESS_TABLE, ACCESS_LINE_COLUMN, exc)
+        return [f"梱包資材マスタの {ACCESS_TABLE} に {ACCESS_LINE_COLUMN} の列を足せませんでした({exc})"]
+    log.info("取り込み元の %s に %s を足しました: %s", ACCESS_TABLE, ACCESS_LINE_COLUMN, path)
+    return [f"梱包資材マスタの {ACCESS_TABLE} に {ACCESS_LINE_COLUMN} の列を足しました(作業ラインを書く欄)"]
 
 
 def plain_id_column(rows: Iterable[dict]) -> bool:

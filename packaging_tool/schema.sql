@@ -376,6 +376,32 @@ CREATE TABLE IF NOT EXISTS 切断依頼状態 (
 );
 CREATE INDEX IF NOT EXISTS idx_cut_request_event ON 切断依頼状態(依頼ID);
 
+-- 予定ロット: 長がロットを作業ラインに入れた(予定)/ 外した(取り消し)記録(`lot_plans.py`。VER4.8.85)。
+-- **押すたびに1行足す**(書き直さない)。ロットごとに、いちばん新しい行がいまの予定。
+-- `予定ID` は送った端末が振る世界で1つの番号(手元の管理番号は取り込みで振り直される)。
+-- `ライン` は拠点の名前(L1 / HVC / LVC / マスタで足した拠点)。アクセス権限の ライン名 と突き合わせる
+CREATE TABLE IF NOT EXISTS 予定ロット (
+    管理番号    INTEGER PRIMARY KEY AUTOINCREMENT,
+    予定ID      TEXT NOT NULL DEFAULT '',
+    LotNo       TEXT NOT NULL DEFAULT '',
+    ライン      TEXT NOT NULL DEFAULT '',
+    状態        TEXT NOT NULL DEFAULT '',
+    送った端末  TEXT NOT NULL DEFAULT '',
+    送った人    TEXT NOT NULL DEFAULT '',
+    送った日時  TEXT NOT NULL DEFAULT '',
+    要約        TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_lot_plan_id ON 予定ロット(予定ID);
+CREATE INDEX IF NOT EXISTS idx_lot_plan_lot ON 予定ロット(LotNo);
+
+-- 予定ロット確認: この端末で予定ロットの知らせを確認した(消した)。**端末ごと**で、共有へは送らない
+-- (同じラインの端末が何台あっても、それぞれに知らせる)。`開いた` は開いて確認したら 1
+CREATE TABLE IF NOT EXISTS 予定ロット確認 (
+    予定ID      TEXT PRIMARY KEY,
+    確認日時    TEXT NOT NULL DEFAULT '',
+    開いた      INTEGER NOT NULL DEFAULT 0
+);
+
 -- パレット在庫引当: 発注に在庫を充てた記録(`stock_reserve.py`)。**足すだけ**(書き直さない)。
 --   引当 … 倉庫連携で「在庫分を引く」を押して送ったとき。置き場ごとに1行
 --   持出 … その置き場でそのサイズを払い出したとき。古い引当から順に充てる
@@ -526,7 +552,10 @@ CREATE TABLE IF NOT EXISTS アクセス権限 (
     PC名        TEXT NOT NULL DEFAULT '',
     権限        TEXT NOT NULL,
     有効        INTEGER NOT NULL DEFAULT 1,
-    備考        TEXT NOT NULL DEFAULT ''
+    備考        TEXT NOT NULL DEFAULT '',
+    -- この端末(ログインID・PC名)の作業ライン(VER4.8.85)。予定ロットの知らせを受けるライン。
+    -- 拠点の名前で書く(L1 / HVC / LVC / マスタで足した拠点。全角半角・ハイフンは見ない)
+    ライン名    TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_アクセス権限_ログインID ON アクセス権限(ログインID);

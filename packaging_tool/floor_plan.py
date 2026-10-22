@@ -183,9 +183,27 @@ def reset_to_default() -> FloorPlan:
 # ------------------------------------------------------------------
 # 既存コードとの互換(以前は座標をこのモジュールに直書きしていた)
 # ------------------------------------------------------------------
+# 既定の拠点(コードに持つ。VBA `frmLayout` の `POSITIONS = "L1,HVC,LVC"`)。現場の決め(VER4.8.85):
+# 「L-1、HVC、LVC はハードコードのデフォルト拠点として残してください」── マスタで足す拠点とは別に、
+# いつも使える。図(配置図)に無くても選択肢から消さない(`base_points`)
+DEFAULT_BASE_POINTS: tuple[str, ...] = ("L1", "HVC", "LVC")
+
+
 def base_points() -> tuple[str, ...]:
-    """拠点名(VBA `frmLayout` の `POSITIONS = "L1,HVC,LVC"` に相当)。"""
-    return load().base_point_names or ("L1", "HVC", "LVC")
+    """拠点名。図の拠点 + 図に無い既定の拠点(L1 / HVC / LVC は必ず入る)。"""
+    names = list(load().base_point_names)
+    keys = {_base_key(n) for n in names}
+    names += [d for d in DEFAULT_BASE_POINTS if _base_key(d) not in keys]
+    return tuple(names)
+
+
+def _base_key(name: str) -> str:
+    """`location_service.base_key` と同じ突き合わせ(ここで読み込むと循環するので同じ手順を持つ)。"""
+    import unicodedata
+    text = unicodedata.normalize("NFKC", name or "")
+    for ch in ("-", "ー", "‐", "−", "_", " ", "\u3000"):
+        text = text.replace(ch, "")
+    return text.upper()
 
 
 # 画面の初期化時に一度だけ読む用途のために、モジュール読込時の値も出しておく

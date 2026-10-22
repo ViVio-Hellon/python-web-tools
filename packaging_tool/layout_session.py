@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import threading
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -36,6 +37,8 @@ REFUSE_FAILED = "failed"
 # 資材選択から何も渡ってきていない。**入力の形の誤りではない**ので 422。
 # 押した拍子に図が消えないよう、画面ぜんぶを返す側に載せる(§6.1)
 REFUSE_NO_HANDOFF = "no_handoff"
+# マスタに書けない(権限・管理者パスワード。VER4.8.85 拠点を追加)
+REFUSE_NOT_ALLOWED = "not_allowed"
 
 
 @dataclass
@@ -487,6 +490,59 @@ class LayoutSession:
         self.selected = name
         log.info("置き場を追加しました: %s", name)
         return LayoutOpResult(True, f"{name} を図の中央に置きました。動かしてください")
+
+    def add_base(self, name: str, conn: Any) -> LayoutOpResult:
+        """拠点を足す(VER4.8.85)。**マスタに足して**、図の中央に置く。
+
+        現場の声:「マスタに拠点を追加して、配置編集で拠点追加できるようにしてください。
+        現在の L-1、HVC、LVC はハードコードのデフォルト拠点として残してください」
+
+        マスタ(BoardMaster)に「拠点〇〇」の行(ボード幅・丈 0、ボードタイプ 拠点)を足す
+        (`location_service.master_base_points` が読む形。マスタ管理で手で足すのと同じ)。マスタに
+        あるので、ほかの端末にも次の取り込みで拠点の選択肢・作業ラインの選択肢に出る。図の位置は
+        この端末の配置図(保存は編集を終えたとき。ほかの端末へは配布設定で配る)。
+        既定の拠点(L1 / HVC / LVC)と、もうある拠点は足さない。
+        """
+        if not self.editing:
+            return LayoutOpResult(False, "先に「配置編集」をONにしてください。",
+                                  REFUSE_BAD_INPUT)
+        text = unicodedata.normalize("NFKC", name or "").strip()
+        if text.startswith(svc.BASE_PREFIX):
+            text = text[len(svc.BASE_PREFIX):].strip()   # 「拠点大板」と打っても「大板」
+        if not text:
+            return LayoutOpResult(False, "拠点の名前を入力してください(例 大板)。",
+                                  REFUSE_BAD_INPUT)
+        if "," in text or "、" in text:
+            return LayoutOpResult(False, "拠点の名前に「,」は使えません(マスタのデータラベルの区切りです)。",
+                                  REFUSE_BAD_INPUT)
+        key = svc.base_key(text)
+        for default in floor_plan.DEFAULT_BASE_POINTS:
+            if svc.base_key(default) == key:
+                return LayoutOpResult(False, f"{default} は既定の拠点です(足さなくても使えます)。",
+                                      REFUSE_BAD_INPUT)
+        for existing in self.plan.base_point_names:
+            if svc.base_key(existing) == key:
+                return LayoutOpResult(False, f"拠点 {existing} はもう図にあります。",
+                                      REFUSE_BAD_INPUT)
+        in_master = any(svc.base_key(n) == key for n in svc.master_base_points(conn))
+        said = ""
+        if not in_master:
+            from . import master_admin
+            written = master_admin.add_row(conn, "BoardMaster", {
+                "ボード幅": "0", "ボード丈": "0", "ボードタイプ": svc.BASE_PREFIX,
+                "データラベル": f"{svc.BASE_PREFIX}{text}"})
+            if not written.ok:
+                reason = (REFUSE_NOT_ALLOWED if written.reason == "not_allowed" else REFUSE_FAILED)
+                return LayoutOpResult(False, f"拠点 {text} をマスタに足せませんでした: {written.message}",
+                                      reason)
+            said = "マスタ(BoardMaster)に足し、"
+        self.plan.base_points.append(floor_plan.MapItem(
+            name=text, x=self.plan.width / 2, y=self.plan.height / 2, w=66.0, h=12.0))
+        self.dirty = True
+        log.info("拠点を足しました: %s(マスタ%s)", text, "に足した" if said else "にあった")
+        return LayoutOpResult(
+            True, f"拠点 {text} を{said}図の中央に置きました。動かして置いてください"
+                  "(編集を終えると保存します)。ほかの端末には次の取り込みで選択肢に出ます")
 
     def remove(self, name: str) -> LayoutOpResult:
         """置き場を消す(VBA `do_remove_label`)。"""

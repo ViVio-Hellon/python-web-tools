@@ -11,6 +11,7 @@
 import { api } from "../api.js";
 import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
+import { startPlans } from "../lotplans_view.js";
 // `lotlist.js` と `lotdetail.js` は動的に読み込む。理由は `settings.js` が
 // `master.js` を動的に読み込んでいるのと同じ(このファイル自身と版クエリを
 // 合わせ、入れ替えたときに中身も必ず一緒に入れ替わるようにするため)
@@ -73,6 +74,9 @@ export function start(options) {
   // 発注一覧から「このLotを開く」で来たとき。**番号を打ち直させない**
   // ── 7桁の打ち間違いは、そのまま別のロットを開いてしまう
   if (options.openLot) openLot(options.openLot);
+
+  // 予定ロット(この端末のラインに入ったロットの知らせ)。「開く」は行を開くのと同じ
+  startPlans(options.plans, openLot);
 
   // 画面を出たら図面の見張りを打ち切る
   nav.onLeave(detail.stop);

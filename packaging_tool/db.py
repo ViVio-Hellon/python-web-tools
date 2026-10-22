@@ -295,10 +295,19 @@ def _migrate_after_schema(conn: sqlite3.Connection) -> None:
     _add_order_mark_columns(conn)
     _add_origin_columns(conn)
     _add_rule_columns(conn)
+    _add_access_line_column(conn)
     # 実績(スナップショット)の表。名前が `config.TBL_PT_*` の仮の値なので、
     # schema.sql に書かずに定数から作る(名前を直すのが1か所で済む)
     from . import pattern_store
     pattern_store.ensure_tables(conn)
+
+
+def _add_access_line_column(conn: sqlite3.Connection) -> None:
+    """アクセス権限に ライン名 を足す(VER4.8.85。前の版の手元DB)。"""
+    have = {r[1] for r in conn.execute('PRAGMA table_info("アクセス権限")')}
+    if have and "ライン名" not in have:
+        conn.execute("ALTER TABLE \"アクセス権限\" ADD COLUMN \"ライン名\" TEXT NOT NULL DEFAULT ''")
+        log.info("アクセス権限 に ライン名 列を足しました")
 
 
 def _add_rule_columns(conn: sqlite3.Connection) -> None:

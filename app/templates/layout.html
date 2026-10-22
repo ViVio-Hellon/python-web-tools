@@ -75,6 +75,16 @@
           <button class="btn btn--danger" type="button" id="removeLabel">
             <span class="gl">×</span>選んだ置き場を消す</button>
         </div>
+        {# 拠点を足す。**マスタ(BoardMaster)に足して**図の中央に置く(ほかの端末にも選択肢として出る)。
+           既定の L1 / HVC / LVC はコードに持つので足さない #}
+        <div class="field">
+          <label for="newBase">拠点を追加</label>
+          <input class="input" id="newBase" style="width:10em" autocomplete="off"
+                 placeholder="大板">
+          <button class="btn" type="button" id="addBase">追加</button>
+          <span class="why">マスタに足します(資材モードの権限と管理者パスワードが要ります)。
+            既定の L1 / HVC / LVC はいつも使えます</span>
+        </div>
         <div class="field">
           <label for="bgFile">背景画像</label>
           {# `tk.PhotoImage` の PNG/GIF 制約が無くなったので JPEG も使える #}
