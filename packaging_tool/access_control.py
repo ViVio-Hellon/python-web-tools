@@ -352,6 +352,20 @@ def is_leader(conn: Optional[sqlite3.Connection],
                                  if rule.matches(identity))
 
 
+def is_administrator(conn: Optional[sqlite3.Connection],
+                     identity: Optional[Identity] = None) -> bool:
+    """この端末(ログインID・PC名)の行の **権限** に ``Administrator`` があるか(VER4.8.89)。
+
+    Administrator は作業長 + すべてのライン(`line_names.lines_in` / `has_leader` がそう読む)。
+    """
+    if conn is None:
+        return False
+    from . import line_names
+    identity = identity or current_identity()
+    return line_names.has_administrator(rule.permission for rule in load_rules(conn)
+                                        if rule.matches(identity))
+
+
 def resolve(conn: sqlite3.Connection,
             identity: Optional[Identity] = None) -> Grant:
     """この端末が持っている権限。
@@ -546,7 +560,18 @@ def foreign_codes(conn: sqlite3.Connection) -> list[str]:
     """
     rules = load_rules(conn)
     typos = typo_codes(rules)
-    return sorted({c for r in rules for c in r.other_codes() if c not in typos})
+    return sorted({c for r in rules for c in r.other_codes()
+                   if c not in typos and not _read_by_line_names(c)})
+
+
+def _read_by_line_names(code: str) -> bool:
+    """モードではないが本ツールが**読んでいる**値(ライン・作業長・Administrator)。
+
+    「読み飛ばしています」に出すと、効いているのに効いていないように読める(VER4.8.89)。
+    """
+    from . import line_names
+    return bool(line_names.official(code) or line_names.same(code) == line_names.LEADER
+                or line_names.is_administrator(code))
 
 
 def grant_of(*codes: str, identity: Optional[Identity] = None) -> Grant:

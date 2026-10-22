@@ -910,7 +910,7 @@ def _lot_plan_state(conn, lot_no: str) -> dict:
 
 
 _NOT_LEADER_WHY = ("作業予定ラインを送れるのは作業長の端末だけです。{who} を作業長にするには、"
-                   "アクセス権限のこの端末の行の「権限」に「作業長」と書きます。")
+                   "アクセス権限のこの端末の行の「権限」に「作業長」(または Administrator)と書きます。")
 
 
 def _refuse_not_leader(conn):

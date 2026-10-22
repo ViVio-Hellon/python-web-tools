@@ -251,6 +251,13 @@ class ForeignToolTests(unittest.TestCase):
         self.assertEqual(ac.foreign_codes(self.conn),
                          sorted(["kensa:admin", "出荷担当", "ADMIN", "mode:admin", "view"]))
 
+    def test_本ツールが読む値は読み飛ばしに出さない(self) -> None:
+        """ライン・作業長・Administrator は読んでいる(VER4.8.86 / 4.8.88 / 4.8.89)。"""
+        grant_row(self.conn, login="yamada", permission="mode:material")
+        for value in ("L-1", "ＬＶＣ", "作業長", "Administrator", "L1", "kensa:admin"):
+            grant_row(self.conn, pc="NLM-PC-099", permission=value)
+        self.assertEqual(ac.foreign_codes(self.conn), ["L1", "kensa:admin"])
+
     def test_ほかのツールの条件の無い行は警告にしない(self) -> None:
         """ほかのツールには「全員に効く行」という書き方があるかもしれない。"""
         grant_row(self.conn, login="yamada", permission="mode:material")

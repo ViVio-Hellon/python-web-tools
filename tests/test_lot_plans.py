@@ -134,6 +134,41 @@ class LineTests(unittest.TestCase):
         self.assertEqual(access_control.lines(self.conn, self.me), [])
         self.assertEqual(access_control.lines(None, self.me), [])
 
+    def test_Administratorは作業長とすべてのライン(self) -> None:
+        """「Administrator は作業長権限とラインの権限を併せ持たせてください(テスト用を兼ねてます)」(VER4.8.89)。"""
+        access_row(self.conn, permission="Administrator")
+        self.assertEqual(access_control.lines(self.conn, self.me), list(line_names.OFFICIAL))
+        self.assertTrue(access_control.is_leader(self.conn, self.me))
+        self.assertTrue(access_control.is_administrator(self.conn, self.me))
+        # 書き方はほかのツールと同じ(全角半角・大文字小文字・前後の空白は問わない。並べてもよい)
+        for text in ("administrator", " ＡＤＭＩＮＩＳＴＲＡＴＯＲ ", "AIM、Administrator"):
+            self.conn.execute('DELETE FROM "アクセス権限"')
+            access_row(self.conn, permission=text)
+            self.assertEqual(access_control.lines(self.conn, self.me), list(line_names.OFFICIAL), text)
+            self.assertTrue(access_control.is_leader(self.conn, self.me), text)
+        # 同じ端末に AIM の行があっても、すべてのライン(重ならない)
+        self.conn.execute('DELETE FROM "アクセス権限"')
+        access_row(self.conn, permission="Administrator")
+        access_row(self.conn, permission="AIM")
+        self.assertEqual(access_control.lines(self.conn, self.me), list(line_names.OFFICIAL))
+
+    def test_ほかの端末のAdministratorは効かない(self) -> None:
+        access_row(self.conn, pc="OTHER-PC", permission="Administrator")
+        access_row(self.conn, permission="Administrator", enabled=0)
+        access_row(self.conn, permission="Admin")                       # 似ているだけ
+        access_row(self.conn, permission="L-1")
+        self.assertEqual(access_control.lines(self.conn, self.me), ["L-1"])
+        self.assertFalse(access_control.is_leader(self.conn, self.me))
+        self.assertFalse(access_control.is_administrator(self.conn, self.me))
+        self.assertFalse(access_control.is_administrator(None, self.me))
+
+    def test_Administratorでもモードは変わらない(self) -> None:
+        """モード(mode:field / mode:material)は今までどおり。Administrator はモードを足さない。"""
+        access_row(self.conn, permission="Administrator")
+        access_row(self.conn, permission="mode:field")
+        grant = access_control.resolve(self.conn, self.me)
+        self.assertEqual(grant.allowed_modes(), (modes.FIELD,))
+
     def test_アクセス権限に列は足さない(self) -> None:
         """「列足さなくてよくね? ほかのツールものこれで読んでるからいけるはず」(VER4.8.86)。"""
         have = {r[1] for r in self.conn.execute('PRAGMA table_info("アクセス権限")')}
@@ -242,6 +277,16 @@ class WarehouseCardTests(unittest.TestCase):
         html = self.field.get("/warehouse").get_data(as_text=True)
         self.assertIn('id="lotPlanSend" disabled', html)
 
+    def test_Administratorは送れる(self) -> None:
+        self.conn.execute('DELETE FROM "アクセス権限"')
+        access_row(self.conn, permission="Administrator")
+        res = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "A7", "line": "NS1"},
+                              headers=_web.auth())
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        self.assertEqual(lot_plans.current(self.conn, "A7").line, "NS1")
+        self.assertTrue(self.field.get("/api/warehouse/lot-plan?lot_no=A7",
+                                       headers=_web.auth()).get_json()["can_send"])
+
     def test_作業長の書き方(self) -> None:
         me = access_control.Identity(login_id="worker", pc_name=PC)
         self.assertTrue(access_control.is_leader(self.conn, me))
@@ -320,6 +365,15 @@ class LotPanelTests(unittest.TestCase):
         self.addCleanup(env.stop)
         lot_plans.forget_seen_stamp()
         self.client = _web.make_client(modes.FIELD, ready=False)
+
+    def test_Administratorにはどのラインの知らせも届く(self) -> None:
+        access_row(self.conn, permission="Administrator")
+        for lot, line in (("B1", "L-1"), ("B2", "NS1"), ("B3", "バランサー")):
+            lot_plans.send(self.conn, lot, line, terminal="LEADER")
+        body = self.client.get("/api/lot/plans", headers=_web.auth()).get_json()
+        self.assertEqual(body["lines"], list(line_names.OFFICIAL))
+        self.assertEqual(sorted(i["lot_no"] for i in body["items"]), ["B1", "B2", "B3"])
+        self.assertEqual(body["unseen"], 3)
 
     def test_ラインが無ければどこに書けばよいかを言う(self) -> None:
         body = self.client.get("/api/lot/plans", headers=_web.auth()).get_json()
