@@ -40,7 +40,13 @@ from packaging_tool.logging_utils import get_logger
 # (`warehouse.material_only` の `before_request`)、**開き直しは要らない**。
 # 設定画面の案内もこの表を見る ── 2か所で持つと、直したのに案内だけが
 # 残って「面倒ですよ」と言われる(実際に言われた)
-GATED_MODES: tuple[str, ...] = (modes.FIELD,)
+#
+# VER4.8.108 で現場の画面も起動時の権限によらず登録し、要求のたびに断る形にしたので(`_guard_field_screens`)、
+# 開き直しが要るモードは無くなった(マスタ反映もれ #15)
+GATED_MODES: tuple[str, ...] = ()
+
+# 現場モードの画面(ブループリント名)。現場モードの権限が無ければ、要求のたびに 404 で断る
+FIELD_SCREEN_BLUEPRINTS = frozenset({"log", "selection", "layout"})
 
 log = get_logger("app")
 
@@ -125,6 +131,9 @@ def create_app(mode: str = modes.FIELD, *,
 
     app.config.update(
         MODE=requested,
+        # `MODE_NOTE` が言っているモード。**このモードの権限が戻ったら一言は出さない**(`shell`。VER4.8.108〜。
+        # 以前は起動し直すまで「…の権限が無いため…で開いています」が残っていた)
+        NOTE_MODE=modes.normalize(mode) if mode_note else "",
         # 起動時に引いた権限。マスタを取り込み直すと変わるので、
         # 画面を出すたびに引き直す(`current_grant()`)。ここに持つのは
         # **エンドポイントを登録するかどうか**を決めた時点の写し
@@ -158,6 +167,7 @@ def create_app(mode: str = modes.FIELD, *,
     _register_trace(app)
     _register_security(app)
     _register_db(app)
+    _register_mode_follow(app)
     _register_static_version(app)
     _register_routes(app)
 
@@ -244,6 +254,88 @@ def set_mode(mode: str) -> bool:
         from packaging_tool import pallet_map_session
         pallet_map_session.stop_editing()
     return True
+
+
+def grant_allows(mode: str) -> bool:
+    """いまの権限でそのモードが使えるか。**断る前に一度だけ**取り込み元からアクセス権限を読み直す
+    (手元が遅れているだけのことがある。`warehouse.material_only` と同じ考え方)。"""
+    from flask import current_app
+    if current_grant().allows_mode(mode):
+        return True
+    if current_app.config.get("GIVEN_GRANT") is None and access_control.resync(get_db()):
+        g.pop("grant", None)                  # 読み直した内容で引き直す
+        return current_grant().allows_mode(mode)
+    return False
+
+
+def follow_grant() -> Optional[str]:
+    """**いま開いているモードの権限が外れたら、その場で使えるモードへ切り替える**(マスタ反映もれ #14)。
+
+    以前は、アクセス権限からいまのモードを消しても、モードを切り替えるか起動し直すまで
+    そのモードのまま使えた(資材モードの発注一覧・受け入れ、現場モードの払い出しなど)。
+    切り替えたら新しいモードを返す(変わらなければ None)。使えるモードが1つも無ければ動かさない。
+    """
+    from flask import current_app
+    mode = current_app.config["MODE"]
+    try:
+        if grant_allows(mode):
+            return None
+        grant = current_grant()
+    except Exception:                         # noqa: BLE001 - 権限を引けなければ動かさない
+        log.debug("権限を引けませんでした(次の要求で試します)", exc_info=True)
+        return None
+    if not grant.allowed_modes():
+        return None
+    new = grant.startup_mode()
+    current_app.config.update(
+        MODE=new, NOTE_MODE=mode,
+        MODE_NOTE=f"{modes.label(mode)}モードの権限が外れたため、{modes.label(new)}モードに切り替えました")
+    log.warning("%sモードの権限が外れたため、%sモードに切り替えました (%s)",
+                modes.label(mode), modes.label(new), grant.identity.label())
+    if new != modes.FIELD:
+        # `set_mode` と同じ。保存していない図の変更は残す
+        from packaging_tool import pallet_map_session
+        pallet_map_session.stop_editing()
+    return new
+
+
+def _register_mode_follow(app: Flask) -> None:
+    @app.before_request
+    def _follow_grant():                        # noqa: ANN202 - Flaskのフック
+        """要求のたびに、いまのモードの権限がまだあるかを見る(外れていれば切り替える)。
+
+        準備中・静的ファイル・心拍の生存連絡には触らない。`/api/health` は画面からの
+        問い合わせ(番号付き)だけ ── 起動の判定は権限を要らないので DB を開かせない。
+        """
+        if not app.config.get("READY"):
+            return None
+        path = request.path
+        if path.startswith("/static/") or path == "/api/alive":
+            return None
+        if path == "/api/health" and not request.headers.get(screen_lock.HEADER):
+            return None
+        follow_grant()
+        return None
+
+    @app.before_request
+    def _guard_field_screens():                 # noqa: ANN202 - Flaskのフック
+        """**現場の画面は起動時の権限によらず登録し、要求のたびに断る**(マスタ反映もれ #15)。
+
+        以前は起動時の権限で登録するかを決めていたので、資材モードだけで起動した端末に
+        現場モードを足すと、切替は出るのに資材選択などの画面が 404 のままだった(開き直すまで)。
+        権限が無いときは今までどおり 404(画面そのものが無い扱い)。
+        """
+        if request.blueprint not in FIELD_SCREEN_BLUEPRINTS:
+            return None
+        try:
+            allowed = grant_allows(modes.FIELD)
+        except Exception:                       # noqa: BLE001 - 引けなければ起動時の権限で決める
+            allowed = app.config["STARTUP_GRANT"].allows_mode(modes.FIELD)
+        if allowed:
+            return None
+        log.info("現場モードの権限が無いため断りました: %s", request.path)
+        from flask import abort
+        abort(404)
 
 
 # ------------------------------------------------------------------
@@ -662,15 +754,15 @@ def _register_routes(app: Flask) -> None:
 
     grant: access_control.Grant = app.config["STARTUP_GRANT"]
 
-    # 現場の画面は、現場モードを持っていれば登録する。**モードを
-    # 切り替えられる**ので、いま資材モードで開いていても URL は要る
-    # (レールに出すかどうかは `shell.nav_items` がモードで決める)
-    if grant.allows_mode(modes.FIELD):
-        app.register_blueprint(log_routes.bp)
-        app.register_blueprint(selection.bp)
-        app.register_blueprint(layout.bp)
-    else:
-        log.info("現場モードの権限が無いため、現場の画面は登録しません")
+    # 現場の画面。**起動時の権限によらず登録する**(VER4.8.108〜)。権限が無ければ
+    # `_guard_field_screens` が要求のたびに 404 で断る ── 起動時に決めると、あとから
+    # 現場モードを足しても開き直すまで画面が出なかった。**モードを切り替えられる**ので、
+    # いま資材モードで開いていても URL は要る(レールに出すかは `shell.nav_items` がモードで決める)
+    app.register_blueprint(log_routes.bp)
+    app.register_blueprint(selection.bp)
+    app.register_blueprint(layout.bp)
+    if not grant.allows_mode(modes.FIELD):
+        log.info("現場モードの権限が無い状態で起動しています(現場の画面は権限を足せばその場で使えます)")
     # ロット検索は**どちらのモードにもある**(資材モードは届いた発注の
     # Lotを確かめる)。以前は現場の画面と一緒に現場モードの権限でだけ
     # 登録していたので、資材の権限しか無い端末では、レールに出ている

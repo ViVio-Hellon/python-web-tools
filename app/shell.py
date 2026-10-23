@@ -225,7 +225,10 @@ def shell_context(active: str, *,
         # 権限で開けないモードがあることを、押す前に伝えるための一言。
         # **理由の有無によらず**、誰が・どこで・何を足せば増えるかまで
         # 具体的に出す(帯を見るだけで済ませたい、という現場の声への対応)
-        "mode_note": (f"{config['MODE_NOTE']} " if config.get("MODE_NOTE") else "")
+        # 一言が言っているモードの権限が戻ったら出さない(VER4.8.108〜。起動し直すまで残っていた)
+        "mode_note": (f"{config['MODE_NOTE']} "
+                      if config.get("MODE_NOTE") and not grant.allows_mode(config.get("NOTE_MODE") or "")
+                      else "")
                      + access_control.explain_grant(grant),
         "display_name": config["DISPLAY_NAME"],
         # 帯に常時出す版。**どれが入っている端末か**を聞かれたときに、

@@ -73,6 +73,14 @@ async function beat() {
     if (body && body.screen_ok === false) screen.showTaken();
     else if (body && body.screen_ok === true) screen.clearTaken();
     if (body && Array.isArray(body.modes)) followModes(body.modes);
+    // **このモードの権限が外れて、サーバが使えるモードへ切り替えた**(マスタ反映もれ #14)。
+    // 出している画面は前のモードのものなので、切り替えた先の最初の画面へ移る
+    // (帯の一言が「…の権限が外れたため…に切り替えました」と言う)。図の編集はサーバが持っているので消えない
+    if (body && body.mode && window.APP.mode && body.mode !== window.APP.mode) {
+      unsaved.allowLeave();
+      location.href = "/";
+      return;
+    }
     // 管理者認証が変わっていたら、認証に関わるところを描き直させる
     if (body && body.auth) authsync.announce(body.auth);
     if (body && typeof body.data_epoch === "number") datasync.announce(body.data_epoch);

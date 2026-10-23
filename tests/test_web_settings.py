@@ -1270,7 +1270,8 @@ class SectionHeadlineTests(unittest.TestCase):
     def test_開き直しが要るモードの表は1か所(self) -> None:
         """案内と実装が別々に持つと、直したのに案内だけ残る。"""
         from app import GATED_MODES
-        self.assertEqual(GATED_MODES, (modes.FIELD,))
+        # VER4.8.108〜 現場の画面も要求のたびに権限を見るので、開き直しが要るモードは無い
+        self.assertEqual(GATED_MODES, ())
 
     def test_開き直しが要らなければ差し替えない(self) -> None:
         conn = sqlite3.connect(":memory:")

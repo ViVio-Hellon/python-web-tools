@@ -86,10 +86,23 @@ class RegistrationTests(ModeTestCase):
         return {r.rule for r in app.url_map.iter_rules()}
 
     def test_現場の権限が無ければ現場の画面は無い(self) -> None:
-        rules = self.rules(self.make("material", *MATERIAL_ONLY))
-        for path in ("/selection", "/layout", "/log"):
+        """登録はする(あとから権限を足せばその場で使える。VER4.8.108〜)が、権限が無いあいだは 404。"""
+        client = self.make("material", *MATERIAL_ONLY).test_client()
+        for path in ("/selection", "/layout", "/log", "/api/selection/state", "/api/layout/state"):
             with self.subTest(path=path):
-                self.assertNotIn(path, rules)
+                self.assertEqual(client.get(path, headers=self.auth()).status_code, 404)
+
+    def test_現場をあとから足せば開き直さずに開ける(self) -> None:
+        """マスタ反映もれ #15: 資材だけで起動した端末に現場モードを足すと、切替は出るのに
+        資材選択などの画面が開き直すまで 404 だった(起動時の権限で登録を決めていた)。"""
+        app = self.make("material", *MATERIAL_ONLY)
+        client = app.test_client()
+        self.assertEqual(client.get("/layout").status_code, 404)
+        app.config["GIVEN_GRANT"] = ac.grant_of(*BOTH)                 # アクセス権限に足した
+        self.assertEqual(client.get("/layout").status_code, 200)
+        self.assertEqual(client.get("/api/layout/state", headers=self.auth()).status_code, 200)
+        from app import GATED_MODES
+        self.assertEqual(GATED_MODES, ())                              # 開き直しが要るモードは無い
 
     def test_資材のレールにある画面は資材だけの端末にもある(self) -> None:
         """**レールに出ている画面は必ず開ける。** 以前は資材だけの端末で
@@ -457,6 +470,43 @@ class MaterialOnlyWithoutRestartTests(unittest.TestCase):
         self.assertNotEqual(res2.status_code, 404,
                             res2.get_data(as_text=True))
 
+
+
+class FollowGrantTests(ModeTestCase):
+    """マスタ反映もれ #14: 開いているモードの権限を消したら、その場で使えるモードへ切り替える。"""
+
+    def test_資材の権限を消したら現場へ切り替えて一言を出す(self) -> None:
+        app = self.make("material", *BOTH)
+        client = app.test_client()
+        app.config["GIVEN_GRANT"] = ac.grant_of(*FIELD_ONLY)           # 資材の権限を消した
+        html = client.get("/settings").get_data(as_text=True)
+        self.assertEqual(app.config["MODE"], modes.FIELD)
+        self.assertIn("資材モードの権限が外れたため、現場モードに切り替えました", html)
+        # 資材の操作(受け側)はもう通らない
+        self.assertIn(client.post("/api/warehouse/confirm", json={}, headers=self.auth()).status_code,
+                      (403, 404))
+        # 権限が戻れば一言は消える(切替で資材へ戻れる)
+        app.config["GIVEN_GRANT"] = ac.grant_of(*BOTH)
+        html = client.get("/settings").get_data(as_text=True)
+        self.assertNotIn("権限が外れたため", html)
+
+    def test_権限があれば動かさない(self) -> None:
+        app = self.make("material", *BOTH)
+        app.test_client().get("/settings")
+        self.assertEqual(app.config["MODE"], modes.MATERIAL)
+        self.assertEqual(app.config["MODE_NOTE"], "")
+
+    def test_起動時の一言も権限が戻れば消える(self) -> None:
+        app = self.make("material", *FIELD_ONLY)
+        client = app.test_client()
+        self.assertIn("資材モードの権限が無いため", client.get("/settings").get_data(as_text=True))
+        app.config["GIVEN_GRANT"] = ac.grant_of(*BOTH)
+        self.assertNotIn("資材モードの権限が無いため", client.get("/settings").get_data(as_text=True))
+
+    def test_画面が切り替わったモードの最初の画面へ移る(self) -> None:
+        js = (_ROOT / "app" / "static" / "js" / "health.js").read_text(encoding="utf-8")
+        self.assertIn("body.mode !== window.APP.mode", js)
+        self.assertIn('location.href = "/";', js)
 
 if __name__ == "__main__":
     unittest.main()
