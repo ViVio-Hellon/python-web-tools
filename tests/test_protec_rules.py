@@ -332,7 +332,8 @@ class ReflectTests(unittest.TestCase):
     def test_列と列はかつ(self) -> None:
         got = self.add(包装仕様NO="1P7777", オーダー厚_最小=4, オーダー厚_最大=6,
                        オーダー幅_最小=1000, オーダー幅_最大=1100)
-        self.assertIn("次にロットを開いたときから効きます", got.message)
+        # 開いているロットにもすぐ効く(VER4.8.98。前は「次にロットを開いたときから」)
+        self.assertIn("開いているロットにもすぐ効きます", got.message)
         self.assertTrue(self.on("1P7777", 5, 1050))
         self.assertFalse(self.on("1P7777", 5, 1200))           # 幅が外れる
         self.assertFalse(self.on("1P7777", 7, 1050))           # 厚が外れる

@@ -242,11 +242,47 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             notes += self._follow_pallet_master()
         if self._master_changed(config.TBL_MATSUZAI_KAKUZAI):
             notes += self._follow_1p0113_master()
+        from . import import_specs
+        if self._master_changed(import_specs.PROTEC_RULE_TABLE):
+            notes += self._follow_protec_master()
         if not notes:
             return
         self.master_note = " / ".join(notes)
         self.presenter.user_log.log("[マスタ] " + self.master_note, emphasis=True)
         self._rebuild_pending_orders()
+
+    def _follow_protec_master(self) -> list[str]:
+        """プロテック条件が変わったら、開いているロットでプロテックかを判定し直す(マスタ反映もれ #4。VER4.8.98)。
+
+        判定はロットを開いたときだけで、条件を足しても直しても開き直すまで古い判定のまま、ボード種別・
+        ボード選定・配置・切断依頼が動いていた。判定が変わったら、ボード種別を切り替え、前の判定で選んだ
+        ボード・配置を外す(プロテック強制を押したときと同じ)。
+        """
+        presenter = self.presenter
+        result = presenter.lot_result
+        if result is None or not getattr(result, "found", False):
+            return []
+        was = presenter.protec.is_protec
+        outcome = presenter.check_and_set_protec_mode(
+            result.odr.packaging_spec, order_size=presenter.order_size(),
+            available_board_types=self.board_types(), current_board_type=self.board_type)
+        if presenter.protec.is_protec == was:
+            return []
+        if outcome.should_switch:
+            self.board_type = outcome.target_board_type
+        note = ("プロテック条件が変わったので、このロットは"
+                + ("プロテックになりました" if presenter.protec.is_protec else "プロテックではなくなりました")
+                + f"(ボード種別 {self.board_type})")
+        if self._drop_boards_for_mode():
+            note += "。前の判定で選んだボード・配置を外しました。選定し直してください"
+        return [note]
+
+    def _drop_boards_for_mode(self) -> bool:
+        """モード(プロテック・上下共用など)が変わったので、前のモードで選んだボード・配置を外す。外したら True。"""
+        if not (self.selected.lower or self.selected.upper):
+            return False
+        self.clear_boards()
+        return True
 
     def _follow_1p0113_master(self) -> list[str]:
         """松板角材が変わったら、1P0113 の角材・松板を引き直す(マスタ反映もれ #3。VER4.8.97)。
@@ -1279,12 +1315,17 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         self._refresh_stock_map()
 
         types = self.board_types()
+        was_protec = self.presenter.protec.is_protec
         outcome = self.presenter.apply_lot(
             result, product_width=product_width, product_length=product_length,
             available_board_types=types, current_board_type=self.board_type)
         if outcome["protec"].should_switch:
             self.board_type = outcome["protec"].target_board_type
             log.info("プロテックのためボード種別を切り替えました: %s", self.board_type)
+        # 同じロットを開き直してプロテックの判定が変わったら(条件を直した等)、前の判定で選んだボードは外す
+        # (プロテック強制を押したときと同じ。VER4.8.98)
+        if self.presenter.protec.is_protec != was_protec and self._drop_boards_for_mode():
+            self.presenter.user_log.log("[プロテック] 判定が変わったので、選定したボード・配置を外しました(選定し直してください)")
         # EX受注ならEXオンリーを自動ON、非EXなら自動OFF
         # (VBA は `chkExOnly` を表示して自動でONにしていた。
         #  tkinter版 `_render_ex_order` も同じ)
