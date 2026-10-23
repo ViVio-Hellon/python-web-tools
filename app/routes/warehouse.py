@@ -171,6 +171,8 @@ def page():
         lot_peek_why=LOT_PEEK_WHY,
         expand_absent_why=LOT_PEEK_WHY,
         cut_state=_cut_list(get_db()),
+        # 倉庫送信は作業長の端末だけ(VER4.8.93。表に作業長がいなければ誰でも)
+        order_why=_order_why() if mode == modes.FIELD else "",
         # 作業予定ライン(新規発注の下。VER4.8.85)。いまのロット(下書きのロットが先)の予定と、選べるライン
         lot_plan=(_lot_plan_state(get_db(), (drafts[0].get("lot_no") if drafts else "")
                                   or work_context.get_context().lot_no)
@@ -181,6 +183,14 @@ def page():
         export_dir=str(config.order_csv_dir()),
         **shell_context("warehouse", badges=_rail_badge(view, _cut_unread(mode))),
     )
+
+
+def _order_why() -> str:
+    """この端末が倉庫送信できない理由(できれば空)。"""
+    from packaging_tool import access_control
+    if access_control.can_order(get_db()):
+        return ""
+    return access_control.NOT_ORDERER_WHY.format(who=access_control.current_identity().label())
 
 
 def _order_choice(lot_no: str):
@@ -329,6 +339,11 @@ def send():
     `confirm_duplicate` が無ければ 409 と、送信済みの一覧を返す。警告であって止めはしない
     (追加の注文もある)。ほかの端末の発注も数えるよう、確かめる前に共有から取り込み直す。
     """
+    # **倉庫送信は作業長の端末だけ**(VER4.8.93)。画面で押せなくするだけにしない。中身を見る前に断る
+    from packaging_tool import access_control
+    if not access_control.can_order(get_db()):
+        return jsonify({"error": {"code": "not_orderer", "message": access_control.NOT_ORDERER_WHY.format(
+            who=access_control.current_identity().label())}}), 403
     body = request.get_json(silent=True) or {}
     raw_rows = body.get("rows")
     if not isinstance(raw_rows, list) or not raw_rows:

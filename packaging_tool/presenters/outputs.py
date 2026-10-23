@@ -44,6 +44,8 @@ class Refusal:
 NEEDS_LOT = "needs_lot"
 NEEDS_SIZES = "needs_sizes"
 NEEDS_BOARDS = "no_candidates"
+# 作業長の端末ではない(倉庫送信。VER4.8.93)
+NOT_ORDERER = "not_orderer"
 NOT_FOUND = "not_found"
 
 
@@ -197,6 +199,11 @@ def send_refusal(session: Any) -> Optional[Refusal]:
     **ロット検索なしでも、パレットを一覧から選んでいれば送れる**(`no_lot_draft`)。
     品名・発注コード・単位だけを入れた下書きにし、残りの必須欄は倉庫連携で打つ。
     """
+    # **倉庫送信は作業長の端末だけ**(VER4.8.93)。表に作業長が1人もいなければ誰でも
+    from packaging_tool import access_control
+    if not access_control.can_order(session.presenter.conn):
+        return Refusal(access_control.NOT_ORDERER_WHY.format(
+            who=access_control.current_identity().label()), NOT_ORDERER)
     if session.presenter.lot_result is None:
         if no_lot_draft(session):
             return None

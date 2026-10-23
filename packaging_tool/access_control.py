@@ -452,6 +452,29 @@ def registered_lines(conn: Optional[sqlite3.Connection]) -> dict[str, list[str]]
     return out
 
 
+#: 倉庫送信を断るときの一文(VER4.8.93)
+NOT_ORDERER_WHY = ("倉庫送信は作業長の端末だけです。{who} を作業長にするには、"
+                   "アクセス権限のこの端末の行の「権限」に「作業長」(または Administrator)と書きます。")
+
+
+def can_order(conn: Optional[sqlite3.Connection],
+              identity: Optional[Identity] = None) -> bool:
+    """倉庫送信(発注)してよい端末か(VER4.8.93)。**作業長(Administrator)だけ。**
+
+    現場の声:「作業長以外の 倉庫連携 倉庫送信をできないようにしてください」
+    **表に作業長(Administrator)が1人もいなければ誰でも**(締め出さない。アクセス権限を
+    まだ取り込んでいない端末・作業長を使わない職場で、発注が止まらないように)。
+    """
+    if conn is None:
+        return True
+    from . import line_names
+    identity = identity or current_identity()
+    rules = [r for r in load_rules(conn) if r.enabled and r.has_condition()]
+    if not any(line_names.has_leader([r.permission]) for r in rules):
+        return True
+    return line_names.has_leader(r.permission for r in rules if r.matches(identity))
+
+
 def is_administrator(conn: Optional[sqlite3.Connection],
                      identity: Optional[Identity] = None) -> bool:
     """この端末(ログインID・PC名)の行の **権限** に ``Administrator`` があるか(VER4.8.89)。

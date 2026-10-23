@@ -1090,6 +1090,8 @@ class SelectionViewModel:
     # 蓋(枚)の案内(EX・上下共用)(`_lid_note`)。空なら出さない
     lid_note: str = ""
     lid_set: bool = False
+    # 倉庫送信してよい端末か(作業長。表に作業長がいなければ誰でも。VER4.8.93)。蓋を待つのも発注する人だけ
+    can_order: bool = True
     # 畳んだ段の要約に載せる蓋(「1100×2000」)。蓋を選んでいなければ空
     lid_label: str = ""
     # 「蓋選択」「蓋を外す」を出すか(EX受注・上下共用で 1P0113 でないとき。`lid_mode`)
@@ -1259,6 +1261,8 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
     view.lid_only = out.lid_only(session)
     view.ex_signal_only = (presenter.is_ex_order and not presenter.mode_1p0113
                            and not out.ex_pallet_chosen(session) and not view.lid_only)
+    from packaging_tool import access_control
+    view.can_order = access_control.can_order(presenter.conn)
     _apply_steps(view)
     return view
 
@@ -1290,8 +1294,12 @@ def _apply_steps(view: SelectionViewModel) -> None:
     # EX・上下共用は パレット(台)と蓋(枚)の**2つ**を選ぶ。パレット決定で段が畳まれると、
     # 蓋選択をしないまま先へ進んでしまう(現場の声)。2つ決まるまで開いておく。
     # 片方だけ発注するときは、開いたまま 人が「出す」へ進む
+    # **蓋を待つのは発注する人(作業長)だけ**(VER4.8.93)。作業者は蓋を選ばずにボードへ進む
+    # (現場の声:「上下共用ボードオーダー選択中にて作業長以外は蓋の選定なしでボード選定できるように。
+    # 発注がらみは枚・台セットになってしまいますが、作業者には関係ないです」)
     lid_pending = (view.lid_enabled and not view.mode_1p0113
-                   and not (view.pallet_set and view.lid_set))
+                   and not (view.pallet_set and view.lid_set)
+                   and view.can_order)
     steps = [
         Step(key="size",
              number=1,

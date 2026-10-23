@@ -142,10 +142,36 @@ function row(item) {
   return li;
 }
 
+let opening = false;          // 「開く」の途中(続けて押しても2度開かない)
+
 /** 開く。知らせを先に消してから開く(開くと資材選択へ移ることがあるので、移る前に消す)。 */
 export async function openPlan(item) {
-  if (!item.seen || !item.opened) await markSeen(item, true);
-  if (onOpen) await onOpen(item.lot_no);
+  if (opening) return;
+  opening = true;
+  try {
+    if (!item.seen || !item.opened) await markSeen(item, true);
+    if (onOpen) await onOpen(item.lot_no);
+  } finally {
+    opening = false;
+  }
+}
+
+/** 「開く」の進み具合を出す(`done` / `total`)。`done` が null なら消す。 */
+export function progress(done, total, text) {
+  const box = document.getElementById("planProgress");
+  if (!box) return;
+  if (done === null) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const bar = document.getElementById("planProgressBar");
+  if (bar) {
+    bar.max = total;
+    bar.value = done;
+  }
+  const label = document.getElementById("planProgressText");
+  if (label) label.textContent = text;
 }
 
 async function markSeen(item, opened) {

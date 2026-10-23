@@ -25,6 +25,8 @@
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from flask import Blueprint, jsonify, render_template, request
 
 from packaging_tool import (lot_browse_session, lot_query, lot_service, modes,
@@ -144,6 +146,10 @@ def plan_seen(plan_id: str):
     return jsonify(_plans_state(conn))
 
 
+#: 予定ロットを開く手順(画面は1つずつ呼んで進み具合を出す。VER4.8.93)
+PLAN_STEPS = ("open", "orders", "pallet")
+
+
 @bp.post("/api/lot/plans/start")
 def plan_start():
     """予定ロットを「開く」(VER4.8.92)。**発注したパレットを決めて、ボード選定へ**。
@@ -151,48 +157,86 @@ def plan_start():
     現場の声:「予定に届いたロットを開いた場合に、倉庫連携で発注したパレットサイズを検索して
     パレットが決定した状態でボード選定まで移行させてください」
 
-    1. ロットを開く(行を開くのと同じ。作業中のロットになる)
-    2. 資材展開(製造板幅・板丈 → 製品サイズ)
-    3. 共有から発注を取り込み直し、このロットに発注したパレットを引く(`lot_plans.ordered_pallet`)
-    4. パレット決定と同じ手順で決める(`selection.decide_pallet`。載るか確かめて製品サイズも確定)
-    5. 資材選択へ移る(パレットと製品サイズが決まっていれば、ボードの段が開く)
+    `step` で1つずつ進める(画面が進み具合を出すため。VER4.8.93)。省くと全部を1回で。
+
+        open   … ロットを開く(作業中のロットになる)・資材展開(製造板幅・板丈 → 製品サイズ)
+        orders … 共有から発注を取り込み直す(作業長の発注を見るため)
+        pallet … このロットに発注したパレットを引き(`lot_plans.ordered_pallet`)、パレット決定と
+                 同じ手順で決める(`selection.decide_pallet`)→ 資材選択へ(ボードの段が開く)
 
     移れないとき(ロットが無い・資材モード・板の寸法が無い・発注したパレットが無い)は、
-    今までどおり**ロット情報を開く**(`next` が空)。理由は `message` に出す。
+    今までどおり**ロット情報を開く**(`next` が空。ロット情報を返す)。理由は `message` に出す。
+    途中の手順は `{"next_step": 次の手順}` を返す。
     """
-    from packaging_tool import data_sync, lot_plans
-    from . import selection as selection_routes
     body = request.get_json(silent=True) or {}
     lot_no = lot_presenter.normalize(str(body.get("lot_no", "")))
+    step = str(body.get("step") or "all")
+    if step not in PLAN_STEPS and step != "all":
+        return jsonify({"error": {"code": "bad_step", "message": f"知らない手順です: {step}"}}), 400
     conn = get_db()
-    detail = _select(conn, lot_no)
+    if step in ("all", "open"):
+        done = _plan_open(conn, lot_no)
+        if done is not None:
+            return done
+        if step == "open":
+            return jsonify({"ok": True, "next_step": "orders"})
+    if step in ("all", "orders"):
+        _plan_refresh_orders(conn)
+        if step == "orders":
+            return jsonify({"ok": True, "next_step": "pallet"})
+    # 手順を分けて呼ばれたときは、作業中のロットが違っていれば開き直す(ほかの画面で別のロットを開いた等)
+    if work_context.get_context().lot_no != lot_no or not work_context.get_context().expanded:
+        done = _plan_open(conn, lot_no)
+        if done is not None:
+            return done
+    return _plan_pallet(conn, lot_no)
+
+
+def _plan_stay(conn, lot_no: str, message: str = "", detail: Optional[dict] = None):
+    """移らずにロット情報を開く応答(今までの「開く」と同じ中身)。引いてあればそれを使う。"""
+    detail = detail if detail is not None else _select(conn, lot_no)
     detail["ribbon"] = work_context.get_context().ribbon()
     detail["list"] = _list_view(conn, True)
+    return jsonify({**detail, "next": "", "message": message})
 
-    def stay(message: str = ""):
-        return jsonify({**detail, "next": "", "message": message})
 
+def _plan_open(conn, lot_no: str):
+    """ロットを開いて資材展開する。ここで終わるとき(移らない・1P0113)は応答、続けるなら None。"""
+    detail = _select(conn, lot_no)
     if current_mode() != modes.FIELD or not detail.get("found"):
-        return stay()
+        return _plan_stay(conn, lot_no, detail=detail)
     context = work_context.get_context()
     if not context.expand_materials():
-        return stay("製造板幅・板丈が取得できていないので、資材選択へは移りません(ロット情報を開きました)。")
+        return _plan_stay(conn, lot_no, "製造板幅・板丈が取得できていないので、資材選択へは移りません"
+                                        "(ロット情報を開きました)。", detail=detail)
     session = selection_session.get_session(conn)
     if session.presenter.mode_1p0113:
         # 裸梱包はパレットを使わない(展開したら資材を引き直す。資材展開と同じ)
         session.reload_1p0113_materials()
         return _go(f"資材展開: Lot {context.lot_no}(裸梱包 1P0113 なのでパレットは使いません)", context)
+    return None
 
-    # ほかの端末(作業長)の発注を見るので、先に共有から取り込み直す。読めなくても手元の分で続ける
+
+def _plan_refresh_orders(conn) -> None:
+    """ほかの端末(作業長)の発注を見るので、共有から取り込み直す。読めなくても手元の分で続ける。"""
+    from packaging_tool import data_sync
     try:
         got = data_sync.refresh_orders(conn)
         for message in got.errors:
             log.warning("予定ロットを開く前の発注の取り込み直し: %s", message)
     except Exception as exc:                      # noqa: BLE001 - 手元の分で続ける
         log.warning("予定ロットを開く前に発注を取り込み直せませんでした: %s", exc)
+
+
+def _plan_pallet(conn, lot_no: str):
+    """発注したパレットで決めて資材選択へ。無ければロット情報を開く。"""
+    from packaging_tool import lot_plans
+    from . import selection as selection_routes
+    context = work_context.get_context()
+    session = selection_session.get_session(conn)
     pallet, why = lot_plans.ordered_pallet(conn, lot_no)
     if pallet is None:
-        return stay(f"{why} ロット情報を開きました(資材展開してパレットを選んでください)。")
+        return _plan_stay(conn, lot_no, f"{why} ロット情報を開きました(資材展開してパレットを選んでください)。")
 
     if pallet.size_only:
         decided = selection_routes.decide_pallet_size(session, pallet.width, pallet.length, {})

@@ -11,7 +11,7 @@
 import { api } from "../api.js";
 import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
-import { startPlans } from "../lotplans_view.js";
+import { startPlans, progress as planProgress } from "../lotplans_view.js";
 // `lotlist.js` と `lotdetail.js` は動的に読み込む。理由は `settings.js` が
 // `master.js` を動的に読み込んでいるのと同じ(このファイル自身と版クエリを
 // 合わせ、入れ替えたときに中身も必ず一緒に入れ替わるようにするため)
@@ -47,10 +47,24 @@ async function openLot(lotNo) {
   }
 }
 
+// 予定ロットを開く手順(サーバの `PLAN_STEPS`)。1つずつ呼んで進み具合を出す
+const PLAN_STEPS = [
+  ["open", "ロットを開いて資材展開しています"],
+  ["orders", "共有から発注を取り込んでいます"],
+  ["pallet", "発注したパレットで決めています"],
+];
+
 /** 予定ロットを開く。発注したパレットを決めて、ボード選定へ移る(移れなければロット情報を開く)。 */
 async function openPlanned(lotNo) {
+  const total = PLAN_STEPS.length;
   try {
-    const body = await api.post("/api/lot/plans/start", { lot_no: lotNo });
+    let body = null;
+    for (const [index, [step, label]] of PLAN_STEPS.entries()) {
+      planProgress(index, total, `${index + 1}/${total} ${label}…`);
+      body = await api.post("/api/lot/plans/start", { lot_no: lotNo, step });
+      if (!body.next_step) break;            // ここで終わり(移る / ロット情報を開く)
+    }
+    planProgress(total, total, body.next ? "資材選択へ移ります" : "ロット情報を開きます");
     applyRibbon(body.ribbon);
     if (body.next) {
       if (body.message) toast(body.message, body.warn ? "warn" : "ok");
@@ -62,6 +76,8 @@ async function openPlanned(lotNo) {
     if (body.message) toast(body.message, "warn");
   } catch (err) {
     toastError(err);
+  } finally {
+    planProgress(null);
   }
 }
 

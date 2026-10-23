@@ -68,6 +68,11 @@
     <div class="pad plans__body">
       <p class="status status--ng" id="planNews" role="status"{% if not plans.unseen %} hidden{% endif %}></p>
       <p class="why" id="planWhy"{% if not plans.why %} hidden{% endif %}>{{ plans.why }}</p>
+      {# 「開く」の進み具合(ロットを開く → 発注を取り込む → パレットを決める)。ボタンの秒数より大きく出す #}
+      <div class="plans__progress" id="planProgress" role="status" hidden>
+        <progress id="planProgressBar" max="3" value="0"></progress>
+        <span id="planProgressText"></span>
+      </div>
       <ul class="plans__list" id="planList"></ul>
       <p class="why" id="planEmpty" hidden></p>
       {# 確認済みは畳む(押したときだけ出す)。知らせを見たあとも作業の順番は決まっていないので、
@@ -205,6 +210,9 @@
   .plans__actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
   .plans__seen { color: var(--muted); font-size: var(--fs-sm); }
   .plans__fold { align-self: flex-start; }
+  .plans__progress { display: flex; align-items: center; gap: 10px; font-size: var(--fs-md); font-weight: 700; }
+  .plans__progress[hidden] { display: none; }
+  .plans__progress progress { flex: 1; min-width: 8em; height: 16px; }
 
   /* ---- 主入力。画面でいちばん大きい入力欄はこれ1つ ---- */
   .seek__main { display: flex; align-items: center; gap: 10px; }
