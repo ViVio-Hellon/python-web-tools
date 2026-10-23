@@ -176,7 +176,7 @@ def second_launch_exits(exe: str, env: dict, first: subprocess.Popen) -> bool:
 
 
 def latest_log(work: Path) -> str:
-    logs = sorted((work / "logs").glob("packaging_tool_*.log"))
+    logs = sorted((work / "logs").glob("packaging_tool_[0-9]*.log"))
     return logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
 
 
@@ -208,7 +208,7 @@ def main() -> int:
             print(f"[NG] exe が先に終わりました(終了コード {app.returncode})")
             ok = False
             break
-        logs = sorted((work / "logs").glob("packaging_tool_*.log"))
+        logs = sorted((work / "logs").glob("packaging_tool_[0-9]*.log"))
         text = logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
         match = footprint.search(text)
         if match:

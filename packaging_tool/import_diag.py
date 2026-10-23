@@ -1,4 +1,4 @@
-"""取り込みの診断記録(取り込み診断_YYYYMMDD.log)。
+"""取り込みの診断記録(packaging_tool_取り込み診断_YYYYMMDD.log)。
 
 【なぜ別のファイルか】
 「読まなくなった」と言われたとき、ふだんのログからは**何を読んで何を
@@ -44,7 +44,9 @@ SAMPLE = 10
 
 
 def path_for(day: Optional[date] = None) -> Path:
-    return config.log_dir() / f"取り込み診断_{(day or date.today()):%Y%m%d}.log"
+    from .logging_utils import TOOL_NAME
+    # 頭にツール名(VER4.8.107〜。どのツールのログか、取り出しても分かるように)
+    return config.log_dir() / f"{TOOL_NAME}_取り込み診断_{(day or date.today()):%Y%m%d}.log"
 
 
 def latest_path() -> Optional[Path]:
@@ -58,7 +60,8 @@ def latest_path() -> Optional[Path]:
     if today.exists():
         return today
     try:
-        found = sorted(today.parent.glob("取り込み診断*.log"),
+        # 前の版の名前(頭にツール名が無い)も見る
+        found = sorted([*today.parent.glob("*取り込み診断_*.log")],
                        key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:
         return None

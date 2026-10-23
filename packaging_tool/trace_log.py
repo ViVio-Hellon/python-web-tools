@@ -82,8 +82,12 @@ def configured_text() -> str:
 
 
 def folder_for(text: str) -> Path:
-    """指定したフォルダの下の、この端末の書き先。"""
-    return config.resolve_dir(text) / _pc_name()
+    """指定したフォルダの下の、この端末の書き先: `<指定>/packaging_tool/<端末名>`。
+
+    指定先はほかのツールとも共用するので、**ツール名のフォルダを作ってその下に**書く(VER4.8.107〜。
+    以前は `<指定>/<端末名>` で、ほかのツールのログと並んでどれのものか分からなかった)。
+    """
+    return config.resolve_dir(text) / logging_utils.TOOL_NAME / _pc_name()
 
 
 def _writable(folder: Path) -> str:
@@ -188,8 +192,9 @@ def set_log_dir(text: str, password: str) -> Result:
 # ==================================================================
 # 片付け
 # ==================================================================
-_DAY_FILE = re.compile(r"^(?:packaging_tool|取り込み診断)_(\d{8})\.log$")
-_MONTH_FILE = re.compile(r"^エラー記録_(\d{6})\.jsonl$")
+# 前の版の名前(頭にツール名が無い 取り込み診断_ / エラー記録_)も消す対象・読む対象にする
+_DAY_FILE = re.compile(r"^(?:packaging_tool_取り込み診断|packaging_tool|取り込み診断)_(\d{8})\.log$")
+_MONTH_FILE = re.compile(r"^(?:packaging_tool_)?エラー記録_(\d{6})\.jsonl$")
 
 
 def prune(today: Optional[date] = None) -> list[str]:
@@ -261,7 +266,8 @@ def _read_records(everyone: bool) -> list[dict]:
     seq = 0
     for folder in _folders(everyone):
         try:
-            files = sorted(folder.glob("エラー記録_*.jsonl"), reverse=True)
+            files = sorted((p for p in folder.glob("*エラー記録_*.jsonl") if _MONTH_FILE.match(p.name)),
+                           key=lambda p: _MONTH_FILE.match(p.name).group(1), reverse=True)
         except OSError:
             continue
         for path in files[:3]:                      # 直近3か月ぶん
@@ -338,7 +344,7 @@ def operation_lines(row: dict, *, limit: int = OP_LINES_LIMIT) -> list[str]:
     except ValueError:
         return []
     mark = f"[{op_id}]"
-    name = f"packaging_tool_{day:%Y%m%d}.log"
+    name = logging_utils.log_path_for(day).name
     lines: list[str] = []
     folders = [Path(row["_folder"])] if row.get("_folder") else _folders(True)
     for folder in folders:
@@ -481,7 +487,7 @@ def slow_operations(day: Optional[date] = None, *, threshold_ms: int = SLOW_MS,
                     limit: int = 200) -> dict[str, Any]:
     """その日の、時間のかかった操作と、画面ごとのまとめ。"""
     day = day or date.today()
-    path = config.log_dir() / f"packaging_tool_{day:%Y%m%d}.log"
+    path = logging_utils.log_path_for(day)
     items: list[dict[str, Any]] = []
     totals: dict[str, dict[str, Any]] = {}
     started: Optional[datetime] = None

@@ -76,7 +76,7 @@ class TraceTestCase(unittest.TestCase):
     def records(self, folder: Path | None = None) -> list[dict]:
         folder = folder or config.log_dir()
         rows = []
-        for path in folder.glob("エラー記録_*.jsonl"):
+        for path in folder.glob("*エラー記録_*.jsonl"):
             rows += [json.loads(line) for line in path.read_text("utf-8").splitlines()]
         return rows
 
@@ -148,16 +148,21 @@ class LogDirTests(TraceTestCase):
         shared = self.root / "共有"
         result = trace_log.set_log_dir(str(shared), PW)
         self.assertTrue(result.ok, result.message)
-        self.assertEqual(config.log_dir(), shared / "LINE-3")
+        # ほかのツールと共用する出力先なので、ツール名のフォルダの下に端末名(VER4.8.107〜)
+        self.assertEqual(config.log_dir(), shared / "packaging_tool" / "LINE-3")
         log.error("共有へ")
-        self.assertEqual(len(self.records(shared / "LINE-3")), 1)
+        self.assertEqual(len(self.records(shared / "packaging_tool" / "LINE-3")), 1)
+        # ファイル名の頭にもツール名
+        self.assertEqual(sorted(p.name[:15] for p in (shared / "packaging_tool" / "LINE-3").iterdir()),
+                         ["packaging_tool_", "packaging_tool_"])
+        self.assertTrue(next((shared / "packaging_tool" / "LINE-3").glob("packaging_tool_エラー記録_*.jsonl")))
         self.assertEqual(trace_log.state()["source"], trace_log.SOURCE_SETTING)
 
     def test_出力先を変えたら次の行から新しい場所へ(self) -> None:
         log.info("前の場所")
         trace_log.set_log_dir(str(self.root / "共有"), PW)
         log.info("新しい場所")
-        new = (self.root / "共有" / "LINE-3"
+        new = (self.root / "共有" / "packaging_tool" / "LINE-3"
                / f"packaging_tool_{date.today():%Y%m%d}.log").read_text("utf-8")
         old = (self.default / f"packaging_tool_{date.today():%Y%m%d}.log").read_text("utf-8")
         self.assertIn("新しい場所", new)
@@ -230,12 +235,17 @@ class PruneTests(TraceTestCase):
         today = date(2026, 10, 1)
         for name in ("packaging_tool_20260101.log", "packaging_tool_20260920.log",
                      "取り込み診断_20260101.log", "エラー記録_202401.jsonl",
-                     "エラー記録_202609.jsonl", "メモ.txt"):
+                     "エラー記録_202609.jsonl", "メモ.txt",
+                     # 頭にツール名の付いた名前(VER4.8.107〜)
+                     "packaging_tool_取り込み診断_20260101.log", "packaging_tool_取り込み診断_20260920.log",
+                     "packaging_tool_エラー記録_202401.jsonl", "packaging_tool_エラー記録_202609.jsonl"):
             (self.default / name).write_text("x", encoding="utf-8")
         removed = trace_log.prune(today)
         self.assertEqual(set(removed), {"エラー記録_202401.jsonl",
                                         "取り込み診断_20260101.log",
-                                        "packaging_tool_20260101.log"})
+                                        "packaging_tool_20260101.log",
+                                        "packaging_tool_取り込み診断_20260101.log",
+                                        "packaging_tool_エラー記録_202401.jsonl"})
         self.assertTrue((self.default / "メモ.txt").exists())
         self.assertTrue((self.default / "エラー記録_202609.jsonl").exists())
 
@@ -276,8 +286,9 @@ class ReadTests(TraceTestCase):
         shared = self.root / "共有"
         trace_log.set_log_dir(str(shared), PW)
         log.error("この端末")
-        other = shared / "LINE-1"
+        other = shared / "packaging_tool" / "LINE-1"
         other.mkdir()
+        # 前の版の名前(頭にツール名が無い)も読む
         (other / "エラー記録_202610.jsonl").write_text(json.dumps(
             {"ref": "E261001-090000-aa", "at": "2026/10/01 09:00:00",
              "message": "あちらの端末", "pc": "LINE-1"}, ensure_ascii=False) + "\n",
@@ -317,7 +328,7 @@ class ReadTests(TraceTestCase):
 
     def test_壊れた行は飛ばす(self) -> None:
         log.error("ちゃんとした行")
-        path = next(config.log_dir().glob("エラー記録_*.jsonl"))
+        path = next(config.log_dir().glob("*エラー記録_*.jsonl"))
         with path.open("a", encoding="utf-8") as fh:
             fh.write('{"ref": "書きかけ\n')
         self.assertEqual(len(trace_log.list_errors()), 1)
