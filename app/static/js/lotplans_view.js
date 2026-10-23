@@ -7,6 +7,8 @@
     開く … そのロットのロット情報を開く(検索して開くのと同じ)。知らせも消える
     確認 … 開かずに知らせだけ消す
 
+  確認済みは畳む(「確認済み N件」を押したときだけ出す)。開け閉めは見張りで出し直しても保つ。
+
   開いているあいだは見張る(`WATCH_MS` ごと。共有が変わっていれば予定ロットだけ取り込み直す)。
   新しく届いたらトーストでも知らせる。レールの「ロット検索」の印(予N)も合わせる。
 */
@@ -20,15 +22,22 @@ const el = {};
 let onOpen = null;
 let known = new Set();        // 知らせ済み(トーストを2度出さない)の予定ID
 let watch = 0;
+let foldOpen = false;         // 確認済みを出しているか(見張りで出し直しても保つ)
+let last = null;              // いちばん新しい状態(開け閉めで出し直す)
 
 /** 動かす。`initial` はサーバが埋めた状態、`open(lotNo)` はロット情報を開く関数。 */
 export function startPlans(initial, open) {
   for (const id of ["planCard", "planLines", "planUnseen", "planNews", "planWhy",
-                    "planList", "planEmpty", "planSeenAll"]) {
+                    "planList", "planEmpty", "planSeenAll", "planFold", "planSeenList"]) {
     el[id] = document.getElementById(id);
   }
   onOpen = open;
   if (!el.planCard) return;
+  foldOpen = false;
+  if (el.planFold) el.planFold.addEventListener("click", () => {
+    foldOpen = !foldOpen;
+    render(last);
+  });
   known = new Set((initial?.items || []).filter((i) => !i.seen).map((i) => i.plan_id));
   if (el.planSeenAll) el.planSeenAll.addEventListener("click", () => seenAll());
   render(initial);
@@ -59,8 +68,11 @@ export async function pull() {
 /** 出す。 */
 export function render(state) {
   if (!el.planCard || !state) return;
+  last = state;
   const items = state.items || [];
-  const unseen = items.filter((i) => !i.seen).length;
+  const fresh = items.filter((i) => !i.seen);
+  const seen = items.filter((i) => i.seen);
+  const unseen = fresh.length;
   // いまの状態はサーバが言葉にする(強いもの優先: Administrator > 作業長 > ライン)
   el.planLines.textContent = state.label || (state.lines && state.lines.length
     ? `この端末のライン: ${state.lines.join(" / ")}` : "この端末のライン: 未登録");
@@ -73,9 +85,21 @@ export function render(state) {
   if (el.planSeenAll) el.planSeenAll.hidden = unseen < 2;
   el.planWhy.hidden = !state.why;
   el.planWhy.textContent = state.why || "";
-  el.planEmpty.hidden = items.length > 0 || !!state.why;
-  el.planEmpty.textContent = `予定ロットはありません(${state.days || 7}日以内に入ったもの)`;
-  el.planList.replaceChildren(...items.map(row));
+  el.planEmpty.hidden = unseen > 0 || !!state.why;
+  el.planEmpty.textContent = seen.length
+    ? "新しい予定ロットはありません"
+    : `予定ロットはありません(${state.days || 7}日以内に入ったもの)`;
+  el.planList.hidden = !unseen;
+  el.planList.replaceChildren(...fresh.map(row));
+  // 確認済みは畳む。押したときだけ出す(作業の順番は決まっていないので、消さずに残す)
+  if (el.planFold && el.planSeenList) {
+    const open = foldOpen && seen.length > 0;
+    el.planFold.hidden = !seen.length;
+    el.planFold.textContent = `確認済み ${seen.length}件 ${open ? "▾ 畳む" : "▸ 出す"}`;
+    el.planFold.setAttribute("aria-expanded", open ? "true" : "false");
+    el.planSeenList.hidden = !open;
+    el.planSeenList.replaceChildren(...(open ? seen.map(row) : []));
+  }
   railBadge(unseen);
 }
 

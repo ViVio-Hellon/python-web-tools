@@ -70,6 +70,11 @@
       <p class="why" id="planWhy"{% if not plans.why %} hidden{% endif %}>{{ plans.why }}</p>
       <ul class="plans__list" id="planList"></ul>
       <p class="why" id="planEmpty" hidden></p>
+      {# 確認済みは畳む(押したときだけ出す)。知らせを見たあとも作業の順番は決まっていないので、
+         消さずに残す(7日・外せば消える) #}
+      <button class="btn plans__fold" type="button" id="planFold"
+              aria-expanded="false" aria-controls="planSeenList" hidden>確認済み 0件</button>
+      <ul class="plans__list" id="planSeenList" hidden></ul>
     </div>
   </section>
   <div class="lotwork" id="listCard">
@@ -199,6 +204,7 @@
                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .plans__actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
   .plans__seen { color: var(--muted); font-size: var(--fs-sm); }
+  .plans__fold { align-self: flex-start; }
 
   /* ---- 主入力。画面でいちばん大きい入力欄はこれ1つ ---- */
   .seek__main { display: flex; align-items: center; gap: 10px; }

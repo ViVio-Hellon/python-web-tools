@@ -469,6 +469,11 @@ class LotPanelTests(unittest.TestCase):
         self.assertIn("確認", view)
         lot_js = (root / "app/static/js/views/lot.js").read_text(encoding="utf-8")
         self.assertIn("startPlans(options.plans, openLot)", lot_js)
+        # 確認済みは畳む(VER4.8.91)。最初は閉じている
+        html = self.client.get("/lot").get_data(as_text=True)
+        self.assertIn('id="planFold"', html)
+        self.assertRegex(html, r'id="planFold"\s+aria-expanded="false"')
+        self.assertIn('id="planSeenList" hidden', html)
 
 
 class AddBaseTests(unittest.TestCase):
