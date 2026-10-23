@@ -357,10 +357,11 @@ class WarehouseCardTests(unittest.TestCase):
     def test_Administratorは送れる(self) -> None:
         self.conn.execute('DELETE FROM "アクセス権限"')
         access_row(self.conn, permission="Administrator")
-        res = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "A7", "line": "NS1"},
+        # 選べるのは拠点に登録してあるライン(VER4.8.110。既定の拠点 L-1 / HVC / LVC)
+        res = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "A7", "line": "HVC"},
                               headers=_web.auth())
         self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
-        self.assertEqual(lot_plans.current(self.conn, "A7").line, "NS1")
+        self.assertEqual(lot_plans.current(self.conn, "A7").line, "HVC")
         self.assertTrue(self.field.get("/api/warehouse/lot-plan?lot_no=A7",
                                        headers=_web.auth()).get_json()["can_send"])
 
@@ -380,10 +381,35 @@ class WarehouseCardTests(unittest.TestCase):
         html = self.field.get("/warehouse").get_data(as_text=True)
         self.assertIn('id="lotPlanCard"', html)
         self.assertLess(html.index("新規発注"), html.index('id="lotPlanCard"'))
-        for name in line_names.OFFICIAL:                               # 選べるのは正規の呼び名
+        # 選べるのは拠点に登録してあるライン名だけ(VER4.8.110。既定の拠点は L-1 / HVC / LVC)
+        for name in ("L-1", "HVC", "LVC"):
             self.assertIn(f'<option value="{name}"', html)
+        self.assertNotIn('<option value="機側"', html)
         self.assertNotIn('<option value="L1"', html)
         self.assertNotIn('id="lotPlanCard"', self.material.get("/warehouse").get_data(as_text=True))
+
+    def test_拠点に足したラインだけ選べる_呼び名でない拠点は出さない(self) -> None:
+        """「予定ラインの登録に出るリストは拠点登録にあるライン名だけにしてください」(VER4.8.110)。"""
+        def state():
+            return self.field.get("/api/warehouse/lot-plan?lot_no=N7120D0", headers=_web.auth()).get_json()
+        self.assertEqual(state()["lines"], ["L-1", "LVC", "HVC"])          # 並びはラインの並び
+        self.assertEqual(state()["lines_note"], "")
+        res = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "N7120D0", "line": "機側"},
+                              headers=_web.auth())
+        self.assertEqual(res.status_code, 400)                              # 拠点に無いラインは入れられない
+        for label in ("拠点機側", "拠点大板"):
+            self.conn.execute("INSERT INTO BoardMaster (ボード幅, ボード丈, ボードタイプ, データラベル)"
+                              " VALUES (0, 0, '拠点', ?)", (label,))
+        self.conn.commit()
+        body = state()
+        self.assertEqual(body["lines"], ["L-1", "LVC", "HVC", "機側"])
+        self.assertIn("大板", body["lines_note"])
+        self.assertNotIn("大板", body["lines"])
+        res = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "N7120D0", "line": "機側"},
+                              headers=_web.auth())
+        self.assertEqual(res.status_code, 200, res.get_json())
+        js = (Path(__file__).resolve().parent.parent / "app/static/js/lotplan_send.js").read_text(encoding="utf-8")
+        self.assertIn("drawLines(state.lines", js)
 
     def test_入れる_外す(self) -> None:
         res = self.field.post("/api/warehouse/lot-plan", json={"lot_no": "N7120D0", "line": "HVC"},

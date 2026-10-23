@@ -16,7 +16,8 @@ let timer = 0;
 
 /** カードを動かす。`lotInput` は新規発注の LotNo の欄(無ければ、いま開いているロットを使う)。 */
 export function startLotPlanCard(lotInput) {
-  for (const id of ["lotPlanCard", "lotPlanNow", "lotPlanLine", "lotPlanSend", "lotPlanCancel", "lotPlanWhy"]) {
+  for (const id of ["lotPlanCard", "lotPlanNow", "lotPlanLine", "lotPlanSend", "lotPlanCancel", "lotPlanWhy",
+                    "lotPlanLinesNote"]) {
     el[id] = document.getElementById(id);
   }
   el.lotInput = lotInput || null;
@@ -47,10 +48,30 @@ export function reload(delay = 0) {
   }, delay);
 }
 
+/** ラインの選択肢を描き直す。選んでいたものが残っていれば選んだまま。 */
+function drawLines(lines, selected) {
+  const head = document.createElement("option");
+  head.value = "";
+  head.textContent = "選んでください";
+  el.lotPlanLine.replaceChildren(head, ...lines.map((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    return option;
+  }));
+  el.lotPlanLine.value = lines.includes(selected) ? selected : "";
+}
+
 /** いまの予定を出す。 */
 export function render(state) {
   if (!el.lotPlanCard || !state) return;
   const plan = state.plan;
+  // 選べるラインは拠点に登録してあるライン名(サーバが決める)。拠点を足した・消したら選択肢も変わる
+  if (Array.isArray(state.lines)) drawLines(state.lines, plan ? state.selected_line : el.lotPlanLine.value);
+  if (el.lotPlanLinesNote) {
+    el.lotPlanLinesNote.hidden = !state.lines_note;
+    el.lotPlanLinesNote.textContent = state.lines_note || "";
+  }
   const now = el.lotPlanNow;
   now.textContent = "";
   const bold = (text) => { const b = document.createElement("b"); b.textContent = text; return b; };

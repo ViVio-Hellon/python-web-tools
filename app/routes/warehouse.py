@@ -943,14 +943,47 @@ def cut_request_view(request_id: str):
 # 現場の声:「新規発注フレームの下余白に作業予定ライン選択を設けてください」
 # 入れたロットは、そのライン(アクセス権限の権限の列に書いたライン)の端末のロット検索に知らせが出る(`lot_plans`)
 # ------------------------------------------------------------------
+def plan_lines(conn) -> tuple[list[str], list[str]]:
+    """作業予定ラインに出すライン = **拠点に登録してあるライン名だけ**(VER4.8.110)。
+
+    現場の声:「予定ラインの登録に出るリストは拠点登録にあるライン名だけにしてください」。
+    拠点は 既定の L-1 / HVC / LVC + BoardMaster のデータラベル「拠点〇〇」+ 配置図の拠点
+    (`location_service.base_point_names`)。そのうち**アクセス権限で読むラインの呼び名**
+    (`line_names.OFFICIAL`)に当たるものだけを出す ── 当たらない拠点(「大板」など)に入れても、
+    どの端末にも届かない(アクセス権限はラインを正規の呼び名でしか読まない)。
+    突き合わせは拠点と同じく全角半角・ハイフン・空白・大小文字を見ない(拠点「L1」= ライン「L-1」)。
+    並びはラインの並び。戻り値は (出すライン, ラインの呼び名に当たらず出さない拠点)。
+    """
+    from packaging_tool import line_names, location_service
+    bases = location_service.base_point_names(conn)
+    keys = {location_service.base_key(b) for b in bases}
+    lines = [name for name in line_names.OFFICIAL if location_service.base_key(name) in keys]
+    line_keys = {location_service.base_key(n) for n in line_names.OFFICIAL}
+    others = [b for b in bases if location_service.base_key(b) not in line_keys]
+    return lines, others
+
+
+def _plan_lines_note(lines: list[str], others: list[str]) -> str:
+    """選択肢の下の一言(出していない拠点・1つも無いとき)。"""
+    from packaging_tool import line_names
+    official = " / ".join(line_names.OFFICIAL)
+    if not lines:
+        return ("拠点にラインの呼び名(" + official + ")がありません。BoardMaster のデータラベルに"
+                "「拠点L-1」のように書くと選べます。")
+    if others:
+        return (f"拠点 {'・'.join(others)} はアクセス権限のラインの呼び名({official})ではないので出していません"
+                "(入れてもどの端末にも届きません)。")
+    return ""
+
+
 def _lot_plan_state(conn, lot_no: str) -> dict:
-    """そのロットのいまの予定と、選べるライン(正規の呼び名。L-1 / LVC / HVC / 機側 …。`line_names`)。"""
-    from packaging_tool import line_names, lot_plans
+    """そのロットのいまの予定と、選べるライン(拠点に登録してあるライン名。`plan_lines`)。"""
+    from packaging_tool import lot_plans
     lot = lot_plans.normalize_lot(lot_no)
     plan = lot_plans.current(conn, lot) if lot else None
     done = lot_plans.last_done(conn, lot) if lot and plan is None else None
     unsent = lot_plans.unsent_ids(conn)
-    lines = list(line_names.OFFICIAL)
+    lines, others = plan_lines(conn)
     identity = access_control.current_identity()
     leader = access_control.is_leader(conn, identity)
     return {"lot_no": lot,
@@ -961,6 +994,7 @@ def _lot_plan_state(conn, lot_no: str) -> dict:
             # ラインの端末で「作業済み」にした(VER4.8.109)。予定ではないが、いつ・どこで終えたかを出す
             "done": done.to_dict() if done else None,
             "lines": lines,
+            "lines_note": _plan_lines_note(lines, others),
             # 選択肢のうち、いまの予定のライン(全角で入っていても選んだ形で出す)
             "selected_line": _choice_of(plan.line, lines) if plan else "",
             # この端末で入れた・外したが、まだ共有へ届いていない
@@ -1015,8 +1049,7 @@ def lot_plan_send():
     refused = _refuse_not_leader(conn)
     if refused:
         return refused
-    from packaging_tool import line_names
-    choices = list(line_names.OFFICIAL)
+    choices, _others = plan_lines(conn)
     if line and not _choice_of(line, choices):
         return jsonify({"error": {"code": lot_plans.REFUSE_NO_LINE,
                                   "message": f"{line} は選べるラインにありません"

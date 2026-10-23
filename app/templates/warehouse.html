@@ -148,6 +148,8 @@
           {% endfor %}
         </select>
       </div>
+      {# 選べるのは拠点に登録してあるライン名だけ。出していない拠点・1つも無いときの一言 #}
+      <p class="why" id="lotPlanLinesNote"{% if not lot_plan.lines_note %} hidden{% endif %}>{{ lot_plan.lines_note }}</p>
       <div class="btn-row" style="margin-top:10px">
         <button class="btn btn--commit" type="button" id="lotPlanSend"{% if not lot_plan.can_send %} disabled{% endif %}>予定に入れる</button>
         <button class="btn" type="button" id="lotPlanCancel"{% if not lot_plan.plan or not lot_plan.can_send %} hidden{% endif %}>
