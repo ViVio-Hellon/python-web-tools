@@ -129,3 +129,35 @@ class WarehouseDraftTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RenumberTests(SelectionWebTestCase):
+    """マスタ反映もれ #2: 取り込みで管理番号が振り直されても「パレット決定」「蓋選択」が通る(VER4.8.96)。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        insert_pallet(self.conn, width=1100, length=2000, code="P1", unit="台", industry="タイト")
+
+    def renumber(self) -> None:
+        """取り込み直し(DELETE して入れ直す)と同じく、番号が変わる。"""
+        self.conn.execute("UPDATE PalletMaster SET 管理番号 = 管理番号 + 50")
+
+    def test_古い番号でも発注コードで引き直して決まる(self) -> None:
+        self.renumber()
+        state = self.post("/api/selection/pallet/pick",
+                          {"width": 1100, "length": 2000, "symbol": "", "id": 1, "code": "P1"})
+        self.assertTrue(state["pallet_set"])
+        self.assertEqual((self.session().pallet_row.id, self.session().pallet_row.code), (51, "P1"))
+
+    def test_コードが無ければ今までどおり断る(self) -> None:
+        self.renumber()
+        self.post("/api/selection/pallet/pick", {"width": 1100, "length": 2000, "symbol": "", "id": 1}, expect=400)
+
+    def test_一覧の行に発注コードが載る_画面が付け直す(self) -> None:
+        from pathlib import Path
+        rows = self.get()["rows"]
+        self.assertEqual(rows[0]["code"], "P1")
+        js = (Path(__file__).resolve().parent.parent / "app/static/js/views/selection.js").read_text(encoding="utf-8")
+        self.assertIn("tr.dataset.code = item.code", js)
+        self.assertIn('id: pickedPalletRow.id, code: pickedPalletRow.code || ""', js)
+        self.assertIn("(r.code || \"\") === (pickedPalletRow.code || \"\")", js)

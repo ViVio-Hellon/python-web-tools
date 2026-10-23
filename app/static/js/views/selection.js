@@ -205,6 +205,8 @@ function row(item) {
   tr.dataset.id = item.id || "";
   tr.dataset.key = rowKey(item);
   tr.dataset.unit = item.unit || "";
+  // 発注コード。取り込みで管理番号が振り直されても、選んでいる行を見失わない手がかり
+  tr.dataset.code = item.code || "";
   // マウスを乗せたときだけ、そのパレットの単位・コードを見せる
   // (VBA `DynamicTip` に相当)。押さなくても分かるようにする
   tr.title = item.note;
@@ -248,6 +250,18 @@ function render(next) {
   // どの行が最終確定しているかはサーバが `picked` で返す。まだ
   // クリックで選んでいる途中(`pickedPalletRow`)なら、そちらを優先する
   el.palletRows.replaceChildren(...next.rows.map(row));
+  // **パレットマスタを取り込むと管理番号が振り直される**(マスタ管理で直す・倉庫連携の見張り)。
+  // 選んでいた行の番号が一覧に無くなっていたら、同じ発注コード(と寸法・記号・単位)の行に付け直す。
+  // 付け直さないと選択が外れ、覚えていた番号で「パレット決定」を押すと断られていた
+  if (pickedPalletRow && !next.rows.some((r) => rowKey(r) === pickedPalletRow.key)) {
+    const same = next.rows.find((r) => String(r.width) === pickedPalletRow.width
+      && String(r.length) === pickedPalletRow.length && (r.symbol || "") === pickedPalletRow.symbol
+      && (r.unit || "") === (pickedPalletRow.unit || "")
+      && (r.code || "") === (pickedPalletRow.code || ""));
+    if (same) {
+      pickedPalletRow = { ...pickedPalletRow, id: String(same.id || ""), key: rowKey(same) };
+    }
+  }
   // 「蓋選択」を押したら、それは蓋(`lid_note`)。選んでいる行はパレット(台)のまま
   if (pickedPalletRow && next.rows.some((r) => r.paired && rowKey(r) === pickedPalletRow.key)) {
     pickedPalletRow = null;
@@ -264,7 +278,7 @@ function render(next) {
       pickedPalletRow = {
         width: String(pickedItem.width), length: String(pickedItem.length),
         symbol: pickedItem.symbol || "", id: String(pickedItem.id || ""),
-        unit: pickedItem.unit || "", key: rowKey(pickedItem),
+        unit: pickedItem.unit || "", code: pickedItem.code || "", key: rowKey(pickedItem),
       };
     }
   }
@@ -275,7 +289,7 @@ function render(next) {
       pickedPalletRow = {
         width: String(suggested.width), length: String(suggested.length),
         symbol: suggested.symbol || "", id: String(suggested.id || ""),
-        unit: suggested.unit || "", key: rowKey(suggested), auto: true,
+        unit: suggested.unit || "", code: suggested.code || "", key: rowKey(suggested), auto: true,
       };
       el.rowNote.textContent = suggested.note || "";
     }
@@ -852,7 +866,7 @@ export function start(initial) {
     pickedPalletRow = {
       width: tr.dataset.width, length: tr.dataset.length,
       symbol: tr.dataset.symbol || "", key: tr.dataset.key, id: tr.dataset.id || "",
-      unit: tr.dataset.unit || "",
+      unit: tr.dataset.unit || "", code: tr.dataset.code || "",
     };
     el.rowNote.textContent = tr.dataset.note || "";
     applySelection();
@@ -877,7 +891,7 @@ export function start(initial) {
     if (!pickedPalletRow) return;
     send("/api/selection/pallet/pick", {
       width: pickedPalletRow.width, length: pickedPalletRow.length,
-      symbol: pickedPalletRow.symbol, id: pickedPalletRow.id,
+      symbol: pickedPalletRow.symbol, id: pickedPalletRow.id, code: pickedPalletRow.code || "",
       product_width: el.prodWidth.value,
       product_length: el.prodLength.value,
     });
@@ -889,7 +903,7 @@ export function start(initial) {
       if (!pickedPalletRow) return;
       send("/api/selection/lid/pick", {
         width: pickedPalletRow.width, length: pickedPalletRow.length,
-        symbol: pickedPalletRow.symbol, id: pickedPalletRow.id,
+        symbol: pickedPalletRow.symbol, id: pickedPalletRow.id, code: pickedPalletRow.code || "",
       });
     });
   }

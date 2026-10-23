@@ -121,12 +121,44 @@ def pick_pallet():
     if width is None or length is None:
         return jsonify(_error("bad_size", "一覧から行を選んでください。")), 400
     got = decide_pallet(session, width, length, str(body.get("symbol", "")),
-                        _parse_int(body.get("id")), body)
+                        _row_id(body, width, length), body)
     if got.refused is not None:
         return _apply(session, got.refused)
     if got.bad_size:
         return jsonify(_error("bad_size", got.bad_size)), 400
     return _state(session, message=got.message)
+
+
+def _row_id(body: dict, width: int, length: int) -> Optional[int]:
+    """画面が送ってきた行の管理番号。**取り込みで番号が振り直されていたら、発注コードで引き直す**(VER4.8.96)。
+
+    パレットマスタを取り込むたび(マスタ管理で直す・倉庫連携の見張り)に手元の管理番号は振り直される。
+    画面が覚えていた番号のまま「パレット決定」「蓋選択」を押すと「一覧にありません」で断られていた
+    (マスタ反映もれ #2)。番号の行が寸法・記号・発注コードとも合えばそのまま、合わなければ
+    同じ発注コード(と寸法・記号)の行の番号にする。
+    """
+    row_id = _parse_int(body.get("id"))
+    code = str(body.get("code") or "").strip()
+    symbol = str(body.get("symbol") or "").strip()
+    if not code:
+        return row_id
+    conn = get_db()
+
+    def same(row) -> bool:
+        return (row is not None and row["幅"] == width and row["丈"] == length
+                and (row["記号"] or "").strip() == symbol and (row["コード"] or "").strip() == code)
+
+    if row_id:
+        hit = conn.execute("SELECT 管理番号, 幅, 丈, 記号, コード FROM PalletMaster WHERE 管理番号 = ?",
+                           (row_id,)).fetchone()
+        if same(hit):
+            return row_id
+    hits = [h for h in conn.execute("SELECT 管理番号, 幅, 丈, 記号, コード FROM PalletMaster WHERE TRIM(コード) = ?",
+                                    (code,)).fetchall() if same(h)]
+    if len(hits) == 1:
+        log.info("画面の行の番号 %s が古かったので、発注コード %s で引き直しました(%s)", row_id, code, hits[0]["管理番号"])
+        return int(hits[0]["管理番号"])
+    return row_id
 
 
 @dataclass
@@ -196,7 +228,7 @@ def pick_lid():
     if width is None or length is None:
         return jsonify(_error("bad_size", "一覧から蓋(単位が枚の行)を選んでください。")), 400
     picked = session.pick_lid(width, length, str(body.get("symbol", "")),
-                                 row_id=_parse_int(body.get("id")))
+                                 row_id=_row_id(body, width, length))
     if not picked.ok:
         return _apply(session, picked)
     _prepare_warehouse_draft(session)

@@ -783,6 +783,9 @@ class PalletRow:
     id: int = 0
     # クリックしたときだけ出す情報(VBA `DynamicTip`)。列には無い
     note: str = ""
+    # 発注コード。管理番号は取り込みのたびに振り直されるので、画面が選んでいる行を
+    # 描き直しのあとも見失わない手がかりにする(VER4.8.96)
+    code: str = ""
     # **サーバが覚えている行かどうか。** 発注コードと単位の出どころは
     # `session.pallet_row` ただ1つで、寸法が食い違えば server 側が外す。
     # ここに出さないと画面が「どれを選んだか」を独自に覚えることになり、
@@ -2055,6 +2058,7 @@ def _pallet_row(row: Any, picked: Any = None, sheet: Any = None) -> PalletRow:
         picked=(picked is not None and picked.id == row.id),
         paired=(sheet is not None and sheet.id == row.id),
         unit=(row.unit or "").strip(),
+        code=(row.code or "").strip(),
     )
 
 
@@ -2105,7 +2109,7 @@ def to_dict(view: SelectionViewModel) -> dict[str, Any]:
                    "visible": view.banner.visible},
         "rows": [{"values": r.values, "width": r.width, "length": r.length,
                   "symbol": r.symbol, "is_ex": r.is_ex, "note": r.note, "id": r.id,
-                  "picked": r.picked, "paired": r.paired, "unit": r.unit,
+                  "picked": r.picked, "paired": r.paired, "unit": r.unit, "code": r.code,
                   "suggested": r.suggested}
                  for r in view.rows],
         "list_mode": view.list_mode,
