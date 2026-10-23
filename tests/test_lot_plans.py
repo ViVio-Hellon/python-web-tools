@@ -97,6 +97,39 @@ class PlanTests(unittest.TestCase):
     def test_無い予定は確認できない(self) -> None:
         self.assertFalse(lot_plans.mark_seen(self.conn, "nothing"))
 
+    def test_作業済みにすると予定欄から消え_入れ直せばまた出る(self) -> None:
+        """予定ロットの残し方 A(VER4.8.109): 終わったら本人が「作業済み」で消す。"""
+        self.send("A1", "L-1")
+        self.send("A2", "L-1")
+        pid = lot_plans.current(self.conn, "A1").plan_id
+        done = lot_plans.finish(self.conn, pid, lines=["L-1"], terminal="LINE1")
+        self.assertTrue(done.ok and done.changed, done.message)
+        self.assertEqual([p.lot_no for p in lot_plans.for_lines(self.conn, ["L-1"])], ["A2"])
+        self.assertIsNone(lot_plans.current(self.conn, "A1"))
+        self.assertEqual(lot_plans.last_done(self.conn, "A1").terminal, "LINE1")
+        again = lot_plans.finish(self.conn, pid, lines=["L-1"], terminal="LINE1")   # 2度押し
+        self.assertTrue(again.ok)
+        self.assertFalse(again.changed)
+        self.send("A1", "L-1")                                      # 長が入れ直した
+        self.assertIsNone(lot_plans.last_done(self.conn, "A1"))
+        self.assertEqual(sorted(p.lot_no for p in lot_plans.for_lines(self.conn, ["L-1"])), ["A1", "A2"])
+
+    def test_ほかのラインの端末は作業済みにできない_作業長はできる(self) -> None:
+        self.send("A1", "L-1")
+        pid = lot_plans.current(self.conn, "A1").plan_id
+        other = lot_plans.finish(self.conn, pid, lines=["HVC"], terminal="HVC1")
+        self.assertEqual(other.reason, lot_plans.REFUSE_NOT_MINE)
+        self.assertTrue(lot_plans.finish(self.conn, pid, lines=[], leader=True, terminal="LEADER").ok)
+
+    def test_入れ直された古い予定は作業済みにできない(self) -> None:
+        self.send("A1", "L-1")
+        old = lot_plans.current(self.conn, "A1").plan_id
+        self.send("A1", "HVC")
+        result = lot_plans.finish(self.conn, old, lines=["L-1"], terminal="LINE1")
+        self.assertEqual(result.reason, lot_plans.REFUSE_NOT_PLANNED)
+        self.assertEqual(lot_plans.current(self.conn, "A1").line, "HVC")
+        self.assertFalse(lot_plans.finish(self.conn, "nothing", lines=["L-1"], terminal="x").ok)
+
     def test_表が無い古い手元DBでも落ちない(self) -> None:
         conn = sqlite3.connect(":memory:")
         self.addCleanup(conn.close)
@@ -255,6 +288,20 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(conn.execute(f'SELECT COUNT(*) FROM "{config.TBL_LOT_PLAN}"').fetchone()[0], 1)
 
 
+    def test_作業済みは共有へ送り_同じラインのほかの端末からも消える(self) -> None:
+        lot_plans.send(self.leader, "N7120D0", "L-1", terminal="LEADER", sender="cho")
+        data_sync.write_back(self.leader, self.src)
+        lot_plans.refresh_if_changed(self.line, self.src)
+        pid = lot_plans.current(self.line, "N7120D0").plan_id
+        self.assertTrue(lot_plans.finish(self.line, pid, lines=["L-1"], terminal="LINE1").ok)
+        result = data_sync.write_back(self.line, self.src)
+        self.assertEqual(result.sent.get(config.TBL_LOT_PLAN), 1, result.errors)
+        lot_plans.forget_seen_stamp()
+        self.assertTrue(lot_plans.refresh_if_changed(self.leader, self.src))
+        self.assertIsNone(lot_plans.current(self.leader, "N7120D0"))
+        self.assertEqual(lot_plans.last_done(self.leader, "N7120D0").terminal, "LINE1")
+
+
 # ======================================================================
 # 画面
 # ======================================================================
@@ -277,6 +324,16 @@ class WarehouseCardTests(unittest.TestCase):
         self.addCleanup(env.stop)
         # 送れるのは作業長の端末だけ(VER4.8.88)
         access_row(self.conn, permission="作業長")
+
+    def test_作業済みならいつどこで終えたかを出す(self) -> None:
+        lot_plans.send(self.conn, "A1", "L-1", terminal="LEADER")
+        lot_plans.finish(self.conn, lot_plans.current(self.conn, "A1").plan_id, lines=["L-1"],
+                         terminal="LINE1")
+        body = self.field.get("/api/warehouse/lot-plan?lot_no=A1", headers=_web.auth()).get_json()
+        self.assertIsNone(body["plan"])
+        self.assertEqual((body["done"]["line"], body["done"]["terminal"]), ("L-1", "LINE1"))
+        js = (Path(__file__).resolve().parent.parent / "app/static/js/lotplan_send.js").read_text(encoding="utf-8")
+        self.assertIn("で作業済みです", js)
 
     def test_作業長でなければ送れない_カードは見るだけ(self) -> None:
         """「作業長だけが作業予定ラインを送れるようにしてください」(VER4.8.88)。"""
@@ -460,6 +517,26 @@ class LotPanelTests(unittest.TestCase):
                          .split("</nav>")[0].replace("予定", ""))
         res = self.client.post("/api/lot/plans/nothing/seen", json={}, headers=_web.auth())
         self.assertEqual(res.status_code, 404)
+
+    def test_作業済みを押すと消え_ほかのラインは断る(self) -> None:
+        access_row(self.conn, permission="L-1")
+        lot_plans.send(self.conn, "A1", "L-1", terminal="LEADER")
+        lot_plans.send(self.conn, "A3", "HVC", terminal="LEADER")
+        items = self.client.get("/api/lot/plans", headers=_web.auth()).get_json()["items"]
+        with mock.patch("packaging_tool.data_sync.write_back_in_background") as sent:
+            res = self.client.post(f"/api/lot/plans/{items[0]['plan_id']}/done", json={},
+                                   headers=_web.auth())
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertEqual(body["items"], [])
+        self.assertIn("作業済みにしました", body["message"])
+        sent.assert_called_once()                                   # 共有へ送る
+        other = lot_plans.current(self.conn, "A3").plan_id
+        res = self.client.post(f"/api/lot/plans/{other}/done", json={}, headers=_web.auth())
+        self.assertEqual(res.status_code, 403)
+        view = (Path(__file__).resolve().parent.parent / "app/static/js/lotplans_view.js").read_text(encoding="utf-8")
+        self.assertIn('doneBtn.textContent = "作業済み";', view)
+        self.assertIn("/done`", view)
 
     def test_画面の作り(self) -> None:
         root = Path(__file__).resolve().parent.parent

@@ -50,6 +50,8 @@ SEEN_TABLE = config.TBL_LOT_PLAN_SEEN
 # 状態。**言葉は1か所に**
 PLANNED = "予定"
 CANCELLED = "取り消し"
+# ラインの端末で「作業済み」を押した(VER4.8.109)。そのラインのどの端末の予定欄からも消える
+DONE = "作業済み"
 
 # 一覧に出す日数と件数
 LIST_DAYS = 7
@@ -59,6 +61,7 @@ LIST_LIMIT = 50
 REFUSE_NO_LOT = "no_lot"
 REFUSE_NO_LINE = "no_line"
 REFUSE_NOT_PLANNED = "not_planned"
+REFUSE_NOT_MINE = "not_mine"
 
 
 @dataclass
@@ -234,6 +237,52 @@ def cancel(conn: sqlite3.Connection, lot_no: str, *, terminal: str,
     pid = _insert(conn, lot, now_plan.line, CANCELLED, terminal=terminal, sender=sender,
                   summary=now_plan.summary)
     return Result(True, f"ロット {lot} を {now_plan.line} の予定から外しました。", plan_id=pid)
+
+
+def finish(conn: sqlite3.Connection, plan_id: str, *, lines: Iterable[str], leader: bool = False,
+           terminal: str, sender: str = "") -> Result:
+    """**作業済みにする**(作業済みの行を足す。VER4.8.109)。
+
+    現場の声:「どれから作業するかは不明確で、予定に入れられた順に作業するとも限りません。残し方に困っています」
+    → 確認済みは畳んで残し、終わったものは本人が「作業済み」で消す。共有へ送るので、そのラインの
+    ほかの端末の予定欄からも消える(押し忘れても、送ってから `LIST_DAYS` 日で出なくなる)。
+
+    押せるのは、その予定のラインを持つ端末と作業長。予定が入れ直された・外された・もう作業済みなら断る
+    (古い画面から押した)。
+    """
+    pid = str(plan_id or "").strip()
+    found = next((e for e in _events(conn, " AND 予定ID = ?", (pid,))), None) if pid else None
+    if found is None:
+        return Result(False, "その予定ロットは見つかりません。画面を更新してください。",
+                      REFUSE_NOT_PLANNED, changed=False)
+    now_plan = current(conn, found.lot_no)
+    if now_plan is None or now_plan.plan_id != pid:
+        latest = _latest_by_lot(_events(conn, " AND LotNo = ?", (normalize_lot(found.lot_no),))).get(
+            normalize_lot(found.lot_no))
+        if latest is not None and latest.state == DONE:
+            return Result(True, f"ロット {found.lot_no} はもう作業済みです"
+                                f"({short_time(latest.sent_at)} {latest.terminal})。",
+                          plan_id=latest.plan_id, changed=False)
+        return Result(False, f"ロット {found.lot_no} の予定は入れ直されたか外されています。画面を更新してください。",
+                      REFUSE_NOT_PLANNED, changed=False)
+    keys = {line_key(n) for n in lines if line_key(n)}
+    if not leader and line_key(now_plan.line) not in keys:
+        return Result(False, f"ロット {now_plan.lot_no} は {now_plan.line} の予定です。"
+                             f"作業済みにできるのは {now_plan.line} の端末と作業長です。",
+                      REFUSE_NOT_MINE, changed=False)
+    new_id = _insert(conn, now_plan.lot_no, now_plan.line, DONE, terminal=terminal, sender=sender,
+                     summary=now_plan.summary)
+    return Result(True, f"ロット {now_plan.lot_no} を作業済みにしました({now_plan.line} の予定欄から消えます)。",
+                  plan_id=new_id)
+
+
+def last_done(conn: sqlite3.Connection, lot_no: str) -> Optional[Plan]:
+    """そのロットのいちばん新しい行が「作業済み」なら、その行(倉庫連携の作業予定ラインのカードに出す)。"""
+    lot = normalize_lot(lot_no)
+    if not lot:
+        return None
+    latest = _latest_by_lot(_events(conn, " AND LotNo = ?", (lot,))).get(lot)
+    return latest if latest is not None and latest.state == DONE else None
 
 
 def _insert(conn: sqlite3.Connection, lot: str, line: str, state: str, *,

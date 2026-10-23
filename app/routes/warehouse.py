@@ -948,6 +948,7 @@ def _lot_plan_state(conn, lot_no: str) -> dict:
     from packaging_tool import line_names, lot_plans
     lot = lot_plans.normalize_lot(lot_no)
     plan = lot_plans.current(conn, lot) if lot else None
+    done = lot_plans.last_done(conn, lot) if lot and plan is None else None
     unsent = lot_plans.unsent_ids(conn)
     lines = list(line_names.OFFICIAL)
     identity = access_control.current_identity()
@@ -957,6 +958,8 @@ def _lot_plan_state(conn, lot_no: str) -> dict:
             "can_send": leader,
             "send_why": "" if leader else _NOT_LEADER_WHY.format(who=identity.label()),
             "plan": plan.to_dict() if plan else None,
+            # ラインの端末で「作業済み」にした(VER4.8.109)。予定ではないが、いつ・どこで終えたかを出す
+            "done": done.to_dict() if done else None,
             "lines": lines,
             # 選択肢のうち、いまの予定のライン(全角で入っていても選んだ形で出す)
             "selected_line": _choice_of(plan.line, lines) if plan else "",

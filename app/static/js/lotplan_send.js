@@ -59,6 +59,10 @@ export function render(state) {
                ` の予定です(${plan.sent_label} ${plan.terminal})`);
     if (state.unsent) now.append("。まだ共有へ届いていません(届きしだい知らせが出ます)");
     el.lotPlanLine.value = state.selected_line || "";
+  } else if (state.done) {
+    // ラインの端末で「作業済み」にした。入れ直せば、また予定に入る
+    now.append("ロット ", bold(state.done.lot_no), " は ", bold(state.done.line),
+               ` で作業済みです(${state.done.sent_label} ${state.done.terminal})`);
   } else if (state.lot_no) {
     now.append("ロット ", bold(state.lot_no), " はまだどのラインの予定にも入っていません");
   } else {

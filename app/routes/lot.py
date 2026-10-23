@@ -146,6 +146,23 @@ def plan_seen(plan_id: str):
     return jsonify(_plans_state(conn))
 
 
+@bp.post("/api/lot/plans/<plan_id>/done")
+def plan_done(plan_id: str):
+    """作業済みにする(VER4.8.109)。共有へ送るので、そのラインのほかの端末の予定欄からも消える。"""
+    from packaging_tool import access_control, data_sync, lot_plans, warehouse_service
+    conn = get_db()
+    identity = access_control.current_identity()
+    state = access_control.line_state(conn, identity)
+    result = lot_plans.finish(conn, plan_id, lines=state.lines, leader=state.leader,
+                              terminal=warehouse_service.this_terminal(), sender=identity.login_id)
+    if not result.ok:
+        code = 403 if result.reason == lot_plans.REFUSE_NOT_MINE else 409
+        return jsonify({"error": {"code": result.reason, "message": result.message}}), code
+    if result.changed:
+        data_sync.write_back_in_background()
+    return jsonify({**_plans_state(conn), "message": result.message})
+
+
 #: 予定ロットを開く手順(画面は1つずつ呼んで進み具合を出す。VER4.8.93)
 PLAN_STEPS = ("open", "orders", "pallet")
 

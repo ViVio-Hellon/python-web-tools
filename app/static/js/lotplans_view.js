@@ -94,7 +94,8 @@ export function render(state) {
     : `予定ロットはありません(${state.days || 7}日以内に入ったもの)`;
   el.planList.hidden = !unseen;
   el.planList.replaceChildren(...fresh.map(row));
-  // 確認済みは畳む。押したときだけ出す(作業の順番は決まっていないので、消さずに残す)
+  // 確認済みは畳む。押したときだけ出す(作業の順番は決まっていないので、消さずに残す。
+  // 終わったものは「作業済み」で消す。押し忘れても送ってから日数が過ぎれば出なくなる)
   if (el.planFold && el.planSeenList) {
     const open = foldOpen && seen.length > 0;
     el.planFold.hidden = !seen.length;
@@ -141,8 +142,28 @@ function row(item) {
     seenBtn.addEventListener("click", () => markSeen(item, false));
     actions.append(seenBtn);
   }
+  // 終わったら本人が消す。共有へ送るので、同じラインのほかの端末からも消える
+  const doneBtn = document.createElement("button");
+  doneBtn.type = "button";
+  doneBtn.className = "btn";
+  doneBtn.textContent = "作業済み";
+  doneBtn.title = "作業が終わったら押します。このラインの予定欄から消えます";
+  doneBtn.addEventListener("click", () => markDone(item, doneBtn));
+  actions.append(doneBtn);
   li.append(lot, line, meta, actions);
   return li;
+}
+
+async function markDone(item, button) {
+  button.disabled = true;
+  try {
+    const state = await api.post(`/api/lot/plans/${encodeURIComponent(item.plan_id)}/done`, {});
+    render(state);
+    if (state.message) toast(state.message, "ok");
+  } catch (err) {
+    button.disabled = false;
+    toastError(err);
+  }
 }
 
 let opening = false;          // 「開く」の途中(続けて押しても2度開かない)
