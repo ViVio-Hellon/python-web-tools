@@ -151,6 +151,9 @@ def health():
         # (倉庫送信・作業長・作業ライン・蓋を待つか)を引き直す(`master_state`。
         # 現場の声:「マスタ編集したらリアルタイムで読み直してください」)
         "data_epoch": _screen_data_epoch(),
+        # **まだ確認していない予定ロットの数**(VER4.8.106)。レールの「予N」を、ロット検索の画面に
+        # いなくても合わせる(心拍のときだけ数え、共有は背景で見に行く)
+        "lot_plans_unseen": _screen_plan_unseen(),
         # いま走っているものの一言。**起動待機画面はこれを読む** ──
         # 取り込みが終わるまで待たせるので、何をどこまでやっているかを
         # 出さないと「止まっている」と受け取られる
@@ -204,6 +207,27 @@ def _screen_auth() -> Optional[dict]:
         return None
     from packaging_tool import auth_state
     return auth_state.snapshot()
+
+
+def _screen_plan_unseen() -> Optional[int]:
+    """画面の心拍なら、この端末のラインに届いてまだ確認していない予定ロットの数。それ以外は `None`。
+
+    共有の予定ロットは背景で取り込み直す(`lot_plans.refresh_in_background`)ので、届いた予定は
+    次の心拍で印に出る。数えられなければ `None`(画面は印を触らない)。
+    """
+    if not request.headers.get(screen_lock.HEADER) or request.args.get("beat") != "1":
+        return None
+    if not current_app.config.get("READY"):
+        return None
+    try:
+        from packaging_tool import access_control, lot_plans
+        from .. import current_grant, get_db
+        lot_plans.refresh_in_background()
+        conn = get_db()
+        return lot_plans.unseen_count(conn, access_control.lines(conn, current_grant().identity))
+    except Exception:                       # noqa: BLE001 - 見張りは止めない
+        log.debug("予定ロットを数えられませんでした(次の心拍で試します)", exc_info=True)
+        return None
 
 
 def _screen_data_epoch() -> Optional[int]:

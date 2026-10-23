@@ -18,7 +18,7 @@ copyFileSync(join(ROOT, "app", "static", "js", "datasync.js"), join(work, "datas
 writeFileSync(join(work, "api.js"), `
 export const api = { get(path) { globalThis.gets.push(path); return new Promise(() => {}); },
                      post() { return new Promise(() => {}); } };`);
-writeFileSync(join(work, "nav.js"), "export function onLeave() {}");
+writeFileSync(join(work, "nav.js"), "export function onLeave() {}\nexport function planBadge() {}");
 writeFileSync(join(work, "toast.js"), "export function toast() {}\nexport function toastError() {}");
 
 function makeEl() {

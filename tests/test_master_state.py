@@ -115,3 +115,52 @@ class WiringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RailAndRibbonTests(unittest.TestCase):
+    """マスタ反映もれ #13(VER4.8.106): レールの「予N」と帯を、どの画面でも合わせる。
+
+    「予N」はロット検索の画面でしか変わらず、帯は使えるモードが変わったときしか描き直さなかった。
+    """
+
+    def setUp(self) -> None:
+        from app.routes import settings as routes
+        _web.bind_db(self, routes)
+        self.client = _web.make_client()
+        html = self.client.get("/settings").get_data(as_text=True)
+        self.screen = {**_web.auth(),
+                       "X-Screen-Id": re.search(r'screenId: "([^"]+)"', html).group(1)}
+
+    def test_心拍で予定ロットを数え_共有は背景で見に行く(self) -> None:
+        from unittest import mock
+        from packaging_tool import lot_plans
+        with mock.patch.object(lot_plans, "unseen_count", return_value=3), \
+             mock.patch.object(lot_plans, "refresh_in_background") as background:
+            beat = self.client.get("/api/health?beat=1", headers=self.screen).get_json()
+            plain = self.client.get("/api/health", headers=self.screen).get_json()
+        self.assertEqual(beat["lot_plans_unseen"], 3)
+        background.assert_called_once()
+        self.assertIsNone(plain["lot_plans_unseen"])                 # 心拍のときだけ数える
+        self.assertIsNone(self.client.get("/api/health?beat=1").get_json()["lot_plans_unseen"])
+
+    def test_背景の取り込みは間を空け_重ねない(self) -> None:
+        from unittest import mock
+        from packaging_tool import lot_plans
+        self.addCleanup(setattr, lot_plans, "_background_at", lot_plans._background_at)
+        lot_plans._background_at = float("-inf")
+        with mock.patch.object(lot_plans.threading, "Thread") as thread:
+            self.assertTrue(lot_plans.refresh_in_background(now=1000.0))
+            self.assertFalse(lot_plans.refresh_in_background(now=1005.0))       # 15秒たっていない
+            with lot_plans._refresh_lock:                                       # 取り込み直しの最中
+                self.assertFalse(lot_plans.refresh_in_background(now=2000.0))
+                self.assertFalse(lot_plans.refresh_if_changed(None))
+        self.assertEqual(thread.call_count, 1)
+
+    def test_画面が印と帯を描き直す(self) -> None:
+        health = (JS / "health.js").read_text(encoding="utf-8")
+        self.assertIn("nav.planBadge(body.lot_plans_unseen)", health)
+        self.assertIn("datasync.always(() => { nav.refreshShell(); });", health)
+        nav = (JS / "nav.js").read_text(encoding="utf-8")
+        self.assertIn("export function planBadge(count)", nav)
+        self.assertIn("if (shellBusy) return shellBusy;", nav)      # 同時に来た描き直しは1回にまとめる
+        self.assertIn("nav.planBadge(unseen)", (JS / "lotplans_view.js").read_text(encoding="utf-8"))

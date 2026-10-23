@@ -76,6 +76,8 @@ async function beat() {
     // 管理者認証が変わっていたら、認証に関わるところを描き直させる
     if (body && body.auth) authsync.announce(body.auth);
     if (body && typeof body.data_epoch === "number") datasync.announce(body.data_epoch);
+    // レールの「予N」。ロット検索の画面にいなくても、届いた予定を出す
+    if (body && typeof body.lot_plans_unseen === "number") nav.planBadge(body.lot_plans_unseen);
     // 保存していない図。タブを閉じるときに聞くため(`unsaved.js`)
     if (body && body.unsaved && typeof body.unsaved === "object") {
       unsaved.fromServer(body.unsaved);
@@ -204,6 +206,10 @@ export function startHeartbeat() {
   beat();
   setInterval(beat, period);
   startAlive();
+  // **マスタが変わったら帯とレールも描き直す**(マスタ反映もれ #13)。帯の「…を足せば
+  // 使えます」の一言・レールの印はアクセス権限で決まるのに、使えるモードが変わったときしか描き直して
+  // いなかった。画面の中身と打ちかけの入力は触らない(`nav.refreshShell`)
+  datasync.always(() => { nav.refreshShell(); });
 
   const reconnect = document.getElementById("reconnect");
   if (reconnect) reconnect.addEventListener("click", () => { misses = 0; beat(); });

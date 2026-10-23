@@ -103,7 +103,7 @@ export function render(state) {
     el.planSeenList.hidden = !open;
     el.planSeenList.replaceChildren(...(open ? seen.map(row) : []));
   }
-  railBadge(unseen);
+  nav.planBadge(unseen);
 }
 
 function row(item) {
@@ -200,20 +200,3 @@ async function seenAll() {
   if (state) render(state);
 }
 
-/** レールの「ロット検索」の印(予N)。0 なら消す。 */
-function railBadge(count) {
-  const link = document.querySelector('.rail a[href="/lot"]');
-  if (!link) return;
-  let node = link.querySelector(".badge");
-  if (!count) {
-    if (node) node.remove();
-    return;
-  }
-  if (!node) {
-    node = document.createElement("span");
-    link.append(node);
-  }
-  node.className = "badge badge--todo";
-  node.textContent = `予${count}`;
-  node.title = `まだ確認していない予定ロットが ${count}件 あります`;
-}

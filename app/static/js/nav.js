@@ -242,25 +242,53 @@ export function start(hooks = {}) {
  * 取りに行けなかったときは黙って諦める ── 帯が少し古いだけで、
  * 次の移動で直る。
  */
+let shellBusy = null;    // 描き直しの最中(同時に来た描き直しは同じものを待つ)
+
 export async function refreshShell() {
-  let next;
+  if (shellBusy) return shellBusy;
+  shellBusy = (async () => {
+    let next;
+    try {
+      // **このタブの番号を付ける。** `go()` と同じ理由で、付けないと
+      // サーバは「新しいタブが開いた」と読み、新しい番号を振ってそちらを
+      // 「いま使っている画面」にする ── **描き直したこのタブ自身が締め
+      // 出され**、次の操作で「このタブは操作できません」が出ていた
+      // (マスタ管理でアクセス権限を保存した直後に踏む)
+      const res = await fetch(location.href, {
+        cache: "no-store",
+        headers: { [screen.HEADER]: screen.id() },
+      });
+      if (!res.ok) return false;
+      next = new DOMParser().parseFromString(await res.text(), "text/html");
+    } catch {
+      return false;
+    }
+    if (!next.querySelector("header.ribbon")) return false;
+    for (const sel of ["header.ribbon", "nav.rail"]) swap(sel, next);
+    afterSwap();
+    return true;
+  })();
   try {
-    // **このタブの番号を付ける。** `go()` と同じ理由で、付けないと
-    // サーバは「新しいタブが開いた」と読み、新しい番号を振ってそちらを
-    // 「いま使っている画面」にする ── **描き直したこのタブ自身が締め
-    // 出され**、次の操作で「このタブは操作できません」が出ていた
-    // (マスタ管理でアクセス権限を保存した直後に踏む)
-    const res = await fetch(location.href, {
-      cache: "no-store",
-      headers: { [screen.HEADER]: screen.id() },
-    });
-    if (!res.ok) return false;
-    next = new DOMParser().parseFromString(await res.text(), "text/html");
-  } catch {
-    return false;
+    return await shellBusy;
+  } finally {
+    shellBusy = null;
   }
-  if (!next.querySelector("header.ribbon")) return false;
-  for (const sel of ["header.ribbon", "nav.rail"]) swap(sel, next);
-  afterSwap();
-  return true;
+}
+
+/** レールの「ロット検索」の印(予N)。0 なら消す(ロット検索の予定欄と、見張りの心拍から)。 */
+export function planBadge(count) {
+  const link = document.querySelector('.rail a[href="/lot"]');
+  if (!link) return;
+  let node = link.querySelector(".badge");
+  if (!count) {
+    if (node) node.remove();
+    return;
+  }
+  if (!node) {
+    node = document.createElement("span");
+    link.append(node);
+  }
+  node.className = "badge badge--todo";
+  node.textContent = `予${count}`;
+  node.title = `まだ確認していない予定ロットが ${count}件 あります`;
 }

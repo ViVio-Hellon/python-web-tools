@@ -52,6 +52,11 @@ export function tellOthers() {
   }
 }
 
+/** マスタが変わったら `fn()` を呼ぶ。画面を移っても外さない(帯・レールのように、どの画面にもあるもの)。 */
+export function always(fn) {
+  window.addEventListener(EVENT, () => fn());
+}
+
 /** マスタが変わったら `fn()` を呼ぶ。**この画面を出ていくときに外す**(`authsync.onChange` と同じ)。 */
 export function onChange(fn) {
   const listener = () => fn();

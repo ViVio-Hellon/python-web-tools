@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 import unicodedata
 import uuid
 from dataclasses import dataclass
@@ -283,6 +284,11 @@ def unsent_ids(conn: sqlite3.Connection) -> set[str]:
 # ------------------------------------------------------------------
 # 予定ロットだけを取り込み直したときの、取り込み元の姿(`refresh_if_changed`)
 _seen_stamp: dict[str, tuple[int, int]] = {}
+# 取り込み直しは1つずつ(ロット検索の見張りと、心拍の背景の取り込みが同時に走らない)
+_refresh_lock = threading.Lock()
+# 心拍からの背景の取り込みの間隔(秒)。ロット検索の見張り(15秒)と同じ
+BACKGROUND_MIN_SEC = 15.0
+_background_at = float("-inf")
 
 
 def refresh_if_changed(conn: sqlite3.Connection, path: Optional[Path] = None) -> bool:
@@ -293,6 +299,15 @@ def refresh_if_changed(conn: sqlite3.Connection, path: Optional[Path] = None) ->
     変わっていなければファイルの姿(大きさ・更新時刻)を見るだけで帰る。**この端末でまだ送っていない
     分があれば入れ替えない**(総入れ替えなので消えてしまう)。
     """
+    if not _refresh_lock.acquire(blocking=False):
+        return False                                 # ほかで取り込み直している最中
+    try:
+        return _refresh_if_changed(conn, path)
+    finally:
+        _refresh_lock.release()
+
+
+def _refresh_if_changed(conn: sqlite3.Connection, path: Optional[Path]) -> bool:
     from . import import_specs, sync_import, sync_sources, sync_writeback
     path = path or sync_sources.find_material_db()
     if path is None:
@@ -313,6 +328,32 @@ def refresh_if_changed(conn: sqlite3.Connection, path: Optional[Path] = None) ->
     if TABLE not in result.imported:
         return False
     log.info("予定ロットを取り込み直しました: %s件", result.imported[TABLE])
+    return True
+
+
+def refresh_in_background(*, now: Optional[float] = None) -> bool:
+    """**心拍から、予定ロットの取り込み直しを背景で走らせる**(マスタ反映もれ #13。VER4.8.106)。走らせたら True。
+
+    レールの「予N」は、ロット検索の画面でしか共有を見に行かなかったので、ほかの画面にいると
+    届いた予定が印に出なかった。心拍(15秒ごと)のついでに見に行く。変わっていなければ
+    ファイルの姿を見るだけで帰る(`refresh_if_changed`)。間を空け、同時に2つは走らせない。
+    """
+    import time as _time
+    global _background_at
+    moment = _time.monotonic() if now is None else now
+    if moment - _background_at < BACKGROUND_MIN_SEC or _refresh_lock.locked():
+        return False
+    _background_at = moment
+
+    def runner() -> None:
+        from . import db
+        try:
+            with db.connect() as conn:
+                refresh_if_changed(conn)
+        except Exception:                            # noqa: BLE001 - 背景処理なので握る
+            log.exception("予定ロットの取り込み直しで例外(手元の予定で続けます)")
+
+    threading.Thread(target=runner, daemon=True, name="lot-plans-refresh").start()
     return True
 
 
