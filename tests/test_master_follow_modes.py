@@ -92,3 +92,41 @@ class HosozaiTests(_LotCase):
         from packaging_tool import selection_session
         session = selection_session.get_session(self.conn)
         self.assertEqual(session.master_note, "")
+
+
+class LimitTests(_LotCase):
+    """#6 パレット限定条件(1P1185 モード)。"""
+
+    def add(self, width: int, length: int) -> None:
+        from packaging_tool import pallet_limit_rules
+        self.conn.execute(f'INSERT INTO "{pallet_limit_rules.TABLE}" (包装仕様NO, 業界, パレット幅, パレット丈)'
+                          " VALUES (?,?,?,?)", (self.spec, "", width, length))
+        self.conn.commit()
+
+    def touch(self) -> None:
+        from packaging_tool import pallet_limit_rules
+        master_state.touch([pallet_limit_rules.TABLE])
+
+    def test_条件を足したら限定が効く_合わないパレットは外す(self) -> None:
+        from tests.test_web_selection import insert_pallet
+        insert_pallet(self.conn, width=1100, length=2000, code="P1")
+        self.post("/api/selection/pallet/pick", {"width": 1100, "length": 2000, "symbol": ""})
+        session = self.session()
+        self.assertTrue(session.palette.is_set)
+        self.add(1300, 1300)
+        self.touch()
+        state = self.get()
+        self.assertTrue(session.presenter.mode_1p1185.is_1p1185)
+        self.assertFalse(session.palette.is_set)                     # 1100×2000 は限定に合わない
+        self.assertIn("1300×1300", state["master_note"])
+        self.assertIn("選び直してください", state["master_note"])
+
+    def test_合うパレットは残す(self) -> None:
+        from tests.test_web_selection import insert_pallet
+        insert_pallet(self.conn, width=1300, length=1300, code="P13")
+        self.post("/api/selection/pallet/pick", {"width": 1300, "length": 1300, "symbol": ""})
+        self.add(1300, 1300)
+        self.touch()
+        state = self.get()
+        self.assertTrue(self.session().palette.is_set)
+        self.assertNotIn("外しました", state["master_note"])

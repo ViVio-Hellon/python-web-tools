@@ -369,9 +369,8 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
         notes.append("この端末では開いているロットにもすぐ効きます(上下共用が変わったら選んだボードを外します)。"
                      "ほかの端末は、次の取り込みのあとから効きます")
     if table == import_specs.PALLET_LIMIT_TABLE:
-        # **条件はロットを開いたときに当てる。** いま開いているロットには、開き直すまで効かない。
-        # ほかの端末は、取り込み(起動時・まとめて取り込み)で手元に入ってから
-        notes.append("この端末では次にロットを開いたときから効きます(いま開いているロットは開き直してください)。"
+        # 開いているロットも判定し直す(VER4.8.100。`SelectionSession._follow_limit_master`)
+        notes.append("この端末では開いているロットにもすぐ効きます(限定に合わないパレットは外します)。"
                      "ほかの端末は、次の取り込みのあとから効きます")
     if table == import_specs.KANBAN_SHELF_TABLE:
         # 在庫の地図はロットを引き直すたびに作り直す(`selection_session._refresh_stock_map`)

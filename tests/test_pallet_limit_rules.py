@@ -133,7 +133,8 @@ class MasterTests(unittest.TestCase):
             "包装仕様NO": "1P2000", "取引先名称": "ﾃｽﾄ", "製造板幅_最小": "900", "製造板幅_最大": "1000",
             "業界": "タイト", "パレット幅": "1100", "パレット丈": "1400"}, path=self.src)
         self.assertTrue(got.ok, got.message)
-        self.assertIn("次にロットを開いたときから効きます", got.message)
+        # 開いているロットにもすぐ効く(VER4.8.100。前は「次にロットを開いたときから」)
+        self.assertIn("開いているロットにもすぐ効きます", got.message)
         state = spk.check_1p1185_mode("1P2000", "ｶ)ﾃｽﾄ商事", 950, 0,
                                       rules=pallet_limit_rules.load(self.conn))
         self.assertEqual(state.pallet_text(), "タイト 1100×1400")

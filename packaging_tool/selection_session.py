@@ -247,6 +247,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             notes += self._follow_protec_master()
         if self._master_changed(config.TBL_HOGOZAI):
             notes += self._follow_hosozai_master()
+        if self._master_changed(import_specs.PALLET_LIMIT_TABLE):
+            notes += self._follow_limit_master()
         if not notes:
             return
         self.master_note = " / ".join(notes)
@@ -295,6 +297,33 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             return []
         note = (f"梱包保護材が変わったので、このロットの使用保護材を {before or 'なし'} → {after or 'なし'} にしました")
         note += self._apply_hosozai_change(after)
+        return [note]
+
+    def _follow_limit_master(self) -> list[str]:
+        """パレット限定条件が変わったら、開いているロットで 1P1185 を判定し直す(マスタ反映もれ #6。VER4.8.100)。
+
+        判定はロットを開いたときだけで、条件を直しても開き直すまで、パレット一覧の絞り・自動選定・帯が
+        古い条件のままだった。決めていたパレットが新しい限定に合わなければ外す(選び直させる)。
+        """
+        presenter = self.presenter
+        result = presenter.lot_result
+        if result is None or not getattr(result, "found", False):
+            return []
+        before = presenter.mode_1p1185
+        presenter.check_and_set_1p1185_mode(
+            result.odr.packaging_spec, result.odr.customer_name, result.lot.width, result.lot.length,
+            delivery_name=getattr(result.odr, "delivery_name", "") or "")
+        after = presenter.mode_1p1185
+        key = lambda m: (m.is_1p1185, m.industry, m.pallet_width, m.pallet_length)  # noqa: E731
+        if key(before) == key(after):
+            return []
+        note = ("パレット限定条件が変わったので、このロットのパレット限定を"
+                + (f"「{after.pallet_text()}」にしました" if after.is_1p1185 else "外しました"))
+        if after.is_1p1185 and self.palette.is_set and (self.palette.width, self.palette.length) not in (
+                (after.pallet_width, after.pallet_length), (after.pallet_length, after.pallet_width)):
+            self.forget_pallet("パレット限定が変わった")
+            note += "。決めていたパレットは限定に合わないので外しました(選び直してください)"
+        self._sync_ribbon()
         return [note]
 
     def _apply_hosozai_change(self, hosozai: str) -> str:
