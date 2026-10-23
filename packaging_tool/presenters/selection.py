@@ -1092,6 +1092,8 @@ class SelectionViewModel:
     lid_set: bool = False
     # 倉庫送信してよい端末か(作業長。表に作業長がいなければ誰でも。VER4.8.93)。蓋を待つのも発注する人だけ
     can_order: bool = True
+    # マスタが変わって選んだパレット・蓋を引き直した/外したときの一言(VER4.8.95。画面がトーストで出す)
+    master_note: str = ""
     # 畳んだ段の要約に載せる蓋(「1100×2000」)。蓋を選んでいなければ空
     lid_label: str = ""
     # 「蓋選択」「蓋を外す」を出すか(EX受注・上下共用で 1P0113 でないとき。`lid_mode`)
@@ -1263,6 +1265,7 @@ def build_view(session: Any, *, available: bool = True) -> SelectionViewModel:
                            and not out.ex_pallet_chosen(session) and not view.lid_only)
     from packaging_tool import access_control
     view.can_order = access_control.can_order(presenter.conn)
+    view.master_note = session.master_note
     _apply_steps(view)
     return view
 
@@ -2109,6 +2112,7 @@ def to_dict(view: SelectionViewModel) -> dict[str, Any]:
         "list_note": view.list_note,
         "lid_note": view.lid_note,
         "lid_set": view.lid_set,
+        "master_note": view.master_note,
         "lid_enabled": view.lid_enabled,
         "pallet_width": view.pallet_width,
         "pallet_length": view.pallet_length,

@@ -158,7 +158,7 @@ def page():
             get_db(), drafts[0], drafts[0].get("hatchu_suu"))
     return render_template(
         "warehouse.html",
-        state=presenter.to_dict(view),
+        state={**presenter.to_dict(view), "drafts_sig": _drafts_sig()},
         columns=presenter.ORDER_VIEW,
         action_width=presenter.ORDER_ACTION_WIDTH,
         fields=presenter.ORDER_FIELDS,
@@ -183,6 +183,34 @@ def page():
         export_dir=str(config.order_csv_dir()),
         **shell_context("warehouse", badges=_rail_badge(view, _cut_unread(mode))),
     )
+
+
+def _drafts_sig() -> str:
+    """預かっている下書きの「マスタから来た欄」(発注コード・単位・品名)。画面が開いたときと比べる。"""
+    held = work_context.get_context().peek_pending_orders()
+    return "\n".join("|".join(str(o.get(k) or "").strip() for k in ("hatchu_code", "tani", "hinmei"))
+                     for o in held)
+
+
+def _stale_draft(body: dict, orders: list[dict]) -> str:
+    """画面の下書きが、サーバの預かっている下書き(いまのマスタで作り直したもの)と違えば、その一言。
+
+    画面は開いたときの下書きを出している。マスタで発注コード・単位を直したあとに送ると、
+    古いコードで倉庫に届いていた(VER4.8.95)。違えば送らずに、画面を読み直させる。
+    """
+    if not body.get("from_draft"):
+        return ""
+    held = work_context.get_context().peek_pending_orders()
+    if not held:
+        return ""
+    for index, (sent, now) in enumerate(zip(orders, held)):
+        for key, label in (("hatchu_code", "発注コード"), ("tani", "単位"), ("hinmei", "品名")):
+            a, b = str(sent.get(key) or "").strip(), str(now.get(key) or "").strip()
+            if a != b:
+                where = f"{index + 1}行目の" if len(orders) > 1 else ""
+                return (f"マスタが変わったので、下書きを作り直しました({where}{label} {a or '---'} → {b or '---'})。"
+                        "画面を読み直したので、確かめてから送ってください。")
+    return ""
 
 
 def _order_why() -> str:
@@ -277,7 +305,8 @@ def orders():
         include_cancelled=request.args.get("cancelled") == "1")
     # 倉庫へ送信できるか(作業長の端末だけ)。マスタを直したら画面がこれで描き直す(VER4.8.94)
     return jsonify({**presenter.to_dict(view),
-                    "order_why": _order_why() if _mode() == modes.FIELD else ""})
+                    "order_why": _order_why() if _mode() == modes.FIELD else "",
+                    "drafts_sig": _drafts_sig()})
 
 
 @bp.post("/api/warehouse/refresh")
@@ -310,6 +339,7 @@ def refresh():
         include_cancelled=request.args.get("cancelled") == "1")
     return jsonify({**presenter.to_dict(view),
                     "order_why": _order_why() if _mode() == modes.FIELD else "",
+                    "drafts_sig": _drafts_sig(),
                     "refresh": {"updated": got.updated,
                                 "looked": got.looked,
                                 # 取り込めなかった表と理由(送れていない分があって見送った等)。
@@ -361,6 +391,13 @@ def send():
                                       "field": field, "row": index}}), 400
         orders.append(values)
 
+    # **マスタが変わっていたら下書きを作り直してから照らす**(VER4.8.95)。資材選択のセッションに触れると、
+    # パレットマスタが変わっていれば選んだ行をいまのマスタで引き直し、下書きも作り直す
+    from packaging_tool import selection_session
+    selection_session.get_session(get_db())
+    stale = _stale_draft(body, orders)
+    if stale:
+        return jsonify({"error": {"code": "draft_changed", "message": stale}}), 409
     # ロット検索なしの下書き(`outputs.no_lot_draft`)は LotNo を打ち込むので、作業中のロットと照らさない。
     # **どちらの下書きかは、サーバが預かっている下書きで決める**(画面から届いた印は信じない)
     held = work_context.get_context().peek_pending_orders()

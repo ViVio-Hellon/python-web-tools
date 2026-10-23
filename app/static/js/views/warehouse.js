@@ -55,8 +55,20 @@ function applyOrderWhy(why) {
   }
 }
 
+let draftsSig = null;          // 画面に出している下書きの「マスタから来た欄」(サーバの `drafts_sig`)
+
 function render(view) {
   applyOrderWhy(view.order_why);
+  // マスタが変わって下書きが作り直された(発注コード・単位・品名)。打ちかけは欄ごとに残る(`drafts.js`)
+  if (typeof view.drafts_sig === "string") {
+    if (draftsSig !== null && view.drafts_sig !== draftsSig && drafts.length) {
+      draftsSig = view.drafts_sig;
+      toast("マスタが変わったので、下書きを作り直しました。確かめてから送ってください", "warn");
+      nav.go("/warehouse", false);
+      return;
+    }
+    draftsSig = view.drafts_sig;
+  }
   columns = view.columns;
   if (view.detail_fields) detailFields = view.detail_fields;
   if (view.copy_column) copyColumn = view.copy_column;
@@ -817,6 +829,12 @@ async function send(confirmDuplicate = false) {
     if (values.rows) { drafts = []; showDraft(); } else dropDraft();
     await load();
   } catch (err) {
+    // マスタが変わって下書きを作り直した(発注コード・単位が変わった)。画面を読み直して確かめさせる
+    if (err.code === "draft_changed") {
+      toast(err.message, "warn");
+      nav.go("/warehouse", false);
+      return;
+    }
     // 送る直前に在庫が減っていた(ほかの端末が先に使った・払い出した)。
     // 発注数を引く前に戻し、いまの在庫で出し直す
     if (err.code === "stock_changed" && err.body) {

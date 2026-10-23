@@ -19,11 +19,43 @@ import threading
 
 _lock = threading.Lock()
 _epoch = 0
+# 表ごとの変わった回数(VER4.8.95)。**手元の表が入れ替わった・書き換わった**ときに進める
+# (取り込み・適合範囲の計算し直し)。覚えている行の写しを持つところ(資材選択の選んだパレット)が、
+# 自分の表が変わったときだけ引き直すのに使う
+_table_rev: dict[str, int] = {}
 
 
 def epoch() -> int:
     with _lock:
         return _epoch
+
+
+def table_rev(table: str) -> int:
+    """その表が変わった回数(まだ変わっていなければ 0)。"""
+    with _lock:
+        return _table_rev.get(table, 0)
+
+
+def touch(tables) -> None:
+    """手元の表が入れ替わった・書き換わった(取り込み・計算し直し)。表ごとの回数を進める。
+
+    マスタ管理で直せる表(`master_common.MANAGED`)なら、画面へ知らせる世代も進める ──
+    倉庫連携の見張りがパレットを取り込み直したときにも、開いている画面が読み直すように。
+    """
+    global _epoch
+    names = [t for t in tables if t]
+    if not names:
+        return
+    try:
+        from .master_common import MANAGED
+        masters = {m.table for m in MANAGED}
+    except Exception:                         # noqa: BLE001 - 数えるのを止めない
+        masters = set()
+    with _lock:
+        for table in names:
+            _table_rev[table] = _table_rev.get(table, 0) + 1
+        if any(t in masters for t in names):
+            _epoch += 1
 
 
 def changed() -> int:

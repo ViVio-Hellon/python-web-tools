@@ -336,6 +336,9 @@ def import_tables(
                            if lots_before is not None else None))
         log.info("%s: %s件取り込み(%s件スキップ)", table, imported, skipped)
     notify(end_pct, "")
+    # 手元の表が入れ替わった。写しを持つところ・開いている画面が読み直す(VER4.8.95)
+    from . import master_state
+    master_state.touch(result.imported.keys())
     return result
 
 

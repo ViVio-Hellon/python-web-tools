@@ -119,6 +119,12 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
     # 「蓋選択」(EX・上下共用のとき)で選んだ蓋(単位が枚の行)。**倉庫連携にしか効かない**(ボード選定は台で決まる)。
     # パレット(台)と蓋の両方があれば、1P0113 の角材と松板のように2行まとめて倉庫へ送る
     lid_row: Optional[svc.PalletSizeRow] = None
+    # パレットマスタの変わった回数を、上の2行を引き直したときに覚えておく(VER4.8.95)。
+    # 変わっていれば `bind` でいまのマスタから引き直す(`_follow_pallet_master`)
+    pallet_rev_seen: Optional[int] = None
+    # マスタが変わって選んだパレット・蓋を引き直した/外したときの一言(画面がトーストで出す)。
+    # 選び直したら消える
+    master_note: str = ""
 
     # --- ボード (VBA `cboBoardType` / `lstSelectedBoards*`) ---
     board_type: str = ""
@@ -213,6 +219,60 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         セッションに持たせたままにはできない。要求ごとに差し替える。
         """
         self.presenter.conn = conn
+        self._follow_pallet_master()
+
+    # --- マスタが変わったら(VER4.8.95) ----------------------------------------
+    def _follow_pallet_master(self) -> None:
+        """パレットマスタが変わっていたら、選んだパレット・蓋を**いまのマスタで**引き直す。
+
+        現場の声:「マスタを変更後にその内容が反映されていない動作描写をするのはおかしい」。
+        選んだ行は選んだときの写しで、マスタで発注コード・単位・脚数を直しても、倉庫送信・
+        Lot印刷・アングル本数が古いままだった(選び直すまで)。行が無くなっていれば外して
+        そう言う(倉庫送信は「一覧から選んでください」で止まる)。倉庫連携の下書きも作り直す。
+        """
+        from . import config, master_state
+        from .pallet_list import refind_pallet_row
+        rev = master_state.table_rev(config.TBL_PALLET_MASTER)
+        if self.pallet_rev_seen is None or rev == self.pallet_rev_seen:
+            self.pallet_rev_seen = rev
+            return
+        self.pallet_rev_seen = rev
+        notes: list[str] = []
+        changed = False
+        for attr, label in (("pallet_row", "パレット"), ("lid_row", "蓋")):
+            old = getattr(self, attr)
+            if old is None:
+                continue
+            try:
+                fresh = refind_pallet_row(self.presenter.conn, old)
+            except sqlite3.Error as exc:
+                log.warning("選んだ%sをマスタから引き直せませんでした: %s", label, exc)
+                continue
+            setattr(self, attr, fresh)
+            if fresh is None:
+                changed = True
+                notes.append(f"選んでいた{label}({old.width}×{old.length} {old.symbol} コード {old.code or '---'})が"
+                             "パレットマスタに見つからなくなったので外しました。一覧から選び直してください")
+            elif _row_differs(old, fresh):
+                changed = True
+                notes.append(f"選んでいた{label}をパレットマスタのいまの中身にしました"
+                             f"({_row_diff_text(old, fresh)})")
+        if not changed:
+            return
+        self.master_note = " / ".join(notes)
+        self.presenter.user_log.log("[マスタ] " + self.master_note, emphasis=True)
+        self._rebuild_pending_orders()
+
+    def _rebuild_pending_orders(self) -> None:
+        """倉庫連携の下書き(パレットを決めたときに作ったもの)を、いまの行で作り直す。送れなければ捨てる。"""
+        from .presenters import outputs
+        context = work_context.get_context()
+        if not context.peek_pending_orders():
+            return
+        if outputs.send_refusal(self) is None:
+            context.set_pending_orders(outputs.build_orders(self))
+        else:
+            context.drop_pending_orders()
 
     # ------------------------------------------------------------------
     def invalidate_placement(self) -> None:
@@ -397,6 +457,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                 False, f"{width}×{length} {symbol} は一覧にありません。",
                 REFUSE_NOT_LISTED)
         self.pallet_row = row
+        self.master_note = ""
         return BoardOpResult(True, "")
 
     # --- EX: パレット(台)と蓋(枚) ------------------------------------
@@ -442,6 +503,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                 False, f"「蓋選択」は単位が枚の行だけです(選んだ行は {row.unit or '---'})。"
                        "台の行は「パレット決定」で選んでください。", REFUSE_NOT_LISTED)
         self.lid_row = row
+        self.master_note = ""
         self.presenter.user_log.log(
             f"[{self._lid_mode_name()}] 蓋: {row.width} x {row.length} {row.symbol} コード {row.code}",
             emphasis=True)
@@ -1290,6 +1352,20 @@ _session: Optional[SelectionSession] = None
 _lock = threading.Lock()
 
 
+
+
+# マスタを引き直したときに比べる欄(発注・帳票・アングル本数に効くもの)
+_ROW_FIELDS = (("code", "コード"), ("unit", "単位"), ("industry", "業界"), ("symbol", "記号"),
+               ("leg_count", "脚数"), ("keta", "桁数"), ("remark", "備考"))
+
+
+def _row_differs(old: Any, new: Any) -> bool:
+    return any(getattr(old, name) != getattr(new, name) for name, _ in _ROW_FIELDS)
+
+
+def _row_diff_text(old: Any, new: Any) -> str:
+    return "・".join(f"{label} {getattr(old, name) or '---'}→{getattr(new, name) or '---'}"
+                    for name, label in _ROW_FIELDS if getattr(old, name) != getattr(new, name))
 
 
 def get_session(conn: sqlite3.Connection) -> SelectionSession:

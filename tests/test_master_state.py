@@ -28,7 +28,8 @@ class EpochTests(MasterTestCase):
             {"幅": "1150", "丈": "2650", "位置": "", "業界": "タイト", "単位": "台", "コード": "099999"},
             path=self.src)
         self.assertTrue(result.ok, result.message)
-        self.assertEqual(master_state.epoch(), before + 1)
+        # 取り込み直しでも進む(VER4.8.95 `touch`)ので、進んだことだけを見る
+        self.assertGreater(master_state.epoch(), before)
 
     def test_断られたら進まない(self) -> None:
         from packaging_tool import selection_session

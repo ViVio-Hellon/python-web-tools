@@ -229,8 +229,15 @@ function row(item) {
 // 右寄せにする列。サーバが返す並びと1対1で対応する
 let NUMERIC = [];
 
+let shownMasterNote = "";     // 出したマスタの一言(同じものを何度も出さない)
+
 function render(next) {
   state = next;
+  // マスタが変わって、選んだパレット・蓋を引き直した/外した(サーバが言う)
+  if (next.master_note && next.master_note !== shownMasterNote) {
+    toast(next.master_note, "warn");
+  }
+  shownMasterNote = next.master_note || "";
 
   el.lotCaption.textContent = next.lot_caption;
   el.banner.hidden = !next.banner.visible;

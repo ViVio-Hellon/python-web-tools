@@ -578,6 +578,9 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
     if got.band_miss:
         log.warning("帯に当たらなかった行 %s件:\n  %s", len(got.band_miss),
                     "\n  ".join(got.band_miss))
+    # 脚数・桁数・適合範囲を書き換えた。選んだパレットの写しを持つところが読み直す(VER4.8.95)
+    from . import master_state
+    master_state.touch(["PalletMaster"])
     return got
 
 

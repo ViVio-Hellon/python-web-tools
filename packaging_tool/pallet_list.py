@@ -19,7 +19,7 @@ from typing import Optional
 from . import config, db, material_service
 from . import special_packaging as spk
 from .logging_utils import get_logger
-from .pallet_common import (KIND_LEN2, KIND_WIDTH2, MAX_NEAR_MISS_LOGS,
+from .pallet_common import (CODE_MATRIX, KIND_LEN2, KIND_WIDTH2, MAX_NEAR_MISS_LOGS,
                             PASS_LOOSE_TOLERANCE,
                             UNITS_DEFAULT, UNITS_WITH_HOSOZAI,
                             AutoSelectPalletResult, allowed_units,
@@ -66,6 +66,43 @@ def find_pallet_row(conn: sqlite3.Connection, width: int, length: int, symbol: s
         return None
     listed = [r for r in rows if unit_allowed(r["単位"], last_hosozai, is_ex_order)]
     return _row_to_pallet_size_row((listed or rows)[0])
+
+def refind_pallet_row(conn: sqlite3.Connection, row: PalletSizeRow) -> Optional[PalletSizeRow]:
+    """覚えている行を、**いまのマスタで**引き直す(VER4.8.95)。無くなっていれば None。
+
+    現場の声:「マスタを変更後にその内容が反映されていない動作描写をするのはおかしい」。
+    選んだパレットの行は選んだときの写しで、マスタで発注コード・単位を直しても倉庫送信・
+    Lot印刷は古いままだった。管理番号は取り込むたびに振り直されるので手がかりにならない。
+
+    引く順:
+      1. 発注コード(PalletMaster のコードは1行に1つ。コードを変えていなければ同じ行)
+      2. 幅・丈・記号・業界・単位がそろう行(コードを直したときはこちらで当たる)
+    どちらでも当たらなければ None(行を消した・寸法や単位まで変えた)。
+    当たり方の情報(回転・許容差)は覚えていたものを残す。
+    """
+    from dataclasses import replace
+    code = (row.code or "").strip()
+    found = None
+    if code and code != CODE_MATRIX:
+        hits = db.fetch_all(conn, "SELECT * FROM PalletMaster WHERE TRIM(コード) = ? ORDER BY 管理番号",
+                            (code,), caller_name="refind_pallet_row") or []
+        if len(hits) == 1:
+            found = hits[0]
+    if found is None:
+        hits = db.fetch_all(conn, "SELECT * FROM PalletMaster WHERE 幅 = ? AND 丈 = ? ORDER BY 管理番号",
+                            (row.width, row.length), caller_name="refind_pallet_row") or []
+        same = [h for h in hits
+                if (h["記号"] or "").strip() == (row.symbol or "").strip()
+                and (h["業界"] or "").strip() == (row.industry or "").strip()
+                and (h["単位"] or "").strip() == (row.unit or "").strip()]
+        exact = [h for h in same if (h["コード"] or "").strip() == code]
+        found = (exact or same or [None])[0]
+    if found is None:
+        return None
+    fresh = _row_to_pallet_size_row(found)
+    return replace(fresh, rotated=row.rotated, exact=row.exact, tolerance=row.tolerance,
+                   two_stack=row.two_stack)
+
 
 def list_pallet_sizes(
     conn: sqlite3.Connection,
