@@ -373,8 +373,8 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
         notes.append("この端末では開いているロットにもすぐ効きます(限定に合わないパレットは外します)。"
                      "ほかの端末は、次の取り込みのあとから効きます")
     if table == import_specs.KANBAN_SHELF_TABLE:
-        # 在庫の地図はロットを引き直すたびに作り直す(`selection_session._refresh_stock_map`)
-        notes.append("この端末では次にロットを開いたときから効きます。"
+        # 在庫考慮の地図もすぐ作り直す(VER4.8.101。`SelectionSession._follow_stock_master`)
+        notes.append("この端末では在庫考慮の地図にもすぐ効きます。"
                      "ほかの端末は、次の取り込みのあとから効きます")
     if table == "アクセス権限":
         # **足した権限は、開き直すまで全部は効かない。** 使える画面は

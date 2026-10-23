@@ -249,6 +249,11 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             notes += self._follow_hosozai_master()
         if self._master_changed(import_specs.PALLET_LIMIT_TABLE):
             notes += self._follow_limit_master()
+        # 在庫考慮の地図(置き場はボードマスタのデータラベル、看板は看板置き場)。両方見る(片方だけで終わらない)
+        board_changed = self._master_changed(config.TBL_BOARD_MASTER)
+        kanban_changed = self._master_changed(import_specs.KANBAN_SHELF_TABLE)
+        if board_changed or kanban_changed:
+            notes += self._follow_stock_master()
         if not notes:
             return
         self.master_note = " / ".join(notes)
@@ -298,6 +303,26 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         note = (f"梱包保護材が変わったので、このロットの使用保護材を {before or 'なし'} → {after or 'なし'} にしました")
         note += self._apply_hosozai_change(after)
         return [note]
+
+    def _follow_stock_master(self) -> list[str]:
+        """ボードの置き場・看板置き場が変わったら、在庫考慮の地図を作り直す(マスタ反映もれ #7。VER4.8.101)。
+
+        地図はロットを開いた・在庫考慮を入れたときだけ作っていたので、置き場を直しても、▲薄の印・在庫の加点・
+        疲労度の切れた棚よけが古い置き場のままだった。在庫考慮が切れていれば何もしない(使ったときに作る)。
+        """
+        if self.stock_map is None:
+            return []
+        before = self.stock_map
+        try:
+            self._refresh_stock_map()
+        except sqlite3.Error as exc:
+            log.warning("在庫考慮の地図を作り直せませんでした: %s", exc)
+            return []
+        if (self.stock_map == before
+                and getattr(self.stock_map, "out_shelves", None) == getattr(before, "out_shelves", None)):
+            return []
+        return ["置き場(ボードマスタのデータラベル・看板置き場)が変わったので、在庫考慮の地図を作り直しました"
+                "(▲薄の印・在庫の加点が変わることがあります)"]
 
     def _follow_limit_master(self) -> list[str]:
         """パレット限定条件が変わったら、開いているロットで 1P1185 を判定し直す(マスタ反映もれ #6。VER4.8.100)。

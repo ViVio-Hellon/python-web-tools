@@ -130,3 +130,29 @@ class LimitTests(_LotCase):
         state = self.get()
         self.assertTrue(self.session().palette.is_set)
         self.assertNotIn("外しました", state["master_note"])
+
+
+class StockMapTests(_LotCase):
+    """#7 在庫考慮の地図(ボードマスタのデータラベル・看板置き場)。"""
+
+    def test_置き場が変わったら作り直す_変わらなければ黙る(self) -> None:
+        from unittest import mock
+        from packaging_tool import config, kanban_shelves, material_service
+        self.post("/api/selection/toggle/stock_aware")
+        session = self.session()
+        self.assertIsNotNone(session.stock_map)
+        master_state.touch([kanban_shelves.TABLE])                   # 中身は同じ
+        self.assertEqual(self.get()["master_note"], "")
+        moved = material_service.BoardStockMap()
+        moved.out_shelves = {"ハードボード|900|1800": frozenset({"lblItem9"})}
+        with mock.patch.object(material_service, "build_board_stock_map", return_value=moved):
+            master_state.touch([config.TBL_BOARD_MASTER])
+            state = self.get()
+        self.assertIs(session.stock_map, moved)
+        self.assertIn("在庫考慮の地図を作り直しました", state["master_note"])
+
+    def test_在庫考慮が切れていれば作らない(self) -> None:
+        from packaging_tool import config
+        master_state.touch([config.TBL_BOARD_MASTER])
+        self.get()
+        self.assertIsNone(self.session().stock_map)
