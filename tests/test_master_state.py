@@ -59,6 +59,31 @@ class HealthTests(unittest.TestCase):
         self.assertIsNone(self.client.get("/api/health").get_json()["data_epoch"])
 
 
+class SettingsTests(unittest.TestCase):
+    """マスタ反映もれ #8・#9: 設定画面(拠点の選択肢・いまの状態)も引き直す(VER4.8.102)。"""
+
+    def setUp(self) -> None:
+        from app.routes import settings as routes
+        self.conn = _web.bind_db(self, routes)
+        self.client = _web.make_client()
+
+    def test_マスタで足した拠点が状態の選択肢に出る(self) -> None:
+        before = self.client.get("/api/settings/state", headers=_web.auth()).get_json()["positions"]
+        self.assertNotIn("大板", before)
+        self.conn.execute("INSERT INTO BoardMaster (ボード幅, ボード丈, ボードタイプ, データラベル)"
+                          " VALUES (0, 0, '拠点', '拠点大板')")
+        self.conn.commit()
+        after = self.client.get("/api/settings/state", headers=_web.auth()).get_json()["positions"]
+        self.assertIn("大板", after)
+
+    def test_画面が選択肢を描き直し_マスタの変化で引き直す(self) -> None:
+        js = (JS / "views" / "settings.js").read_text(encoding="utf-8")
+        self.assertIn("renderPositions(state.positions || [], state.position)", js)
+        self.assertIn("datasync.onChange(() => refreshStatus())", js)
+        # 同じ設定画面のマスタ管理で直したときも、その場で知らせる
+        self.assertIn("datasync.changedHere()", (JS / "views" / "master.js").read_text(encoding="utf-8"))
+
+
 class WiringTests(unittest.TestCase):
     """画面の側の配線。世代が変わったら引き直す(打ちかけの入力は触らない)。"""
 
@@ -67,7 +92,7 @@ class WiringTests(unittest.TestCase):
 
     def test_見張りが伝え_マスタ管理がほかの窓へ知らせる(self) -> None:
         self.assertIn("datasync.announce(body.data_epoch)", self.read("health.js"))
-        self.assertIn("datasync.tellOthers()", self.read("views", "master.js"))
+        self.assertIn("datasync.changedHere()", self.read("views", "master.js"))
         self.assertIn("BroadcastChannel", self.read("datasync.js"))
 
     def test_資材選択_倉庫連携_ロット検索が引き直す(self) -> None:

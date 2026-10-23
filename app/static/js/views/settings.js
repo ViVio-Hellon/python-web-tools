@@ -10,6 +10,7 @@
 */
 
 import * as authsync from "../authsync.js";
+import * as datasync from "../datasync.js";
 import { openWindow, isDesktop } from "../desktop.js";
 import { api, tokenUrl } from "../api.js";
 import { confirmBox } from "../askbox.js";
@@ -205,6 +206,29 @@ function sectionCard(section, labels) {
   return card;
 }
 
+/**
+ * 拠点の選択肢を描き直す(VER4.8.102)。マスタ(BoardMaster の「拠点〇〇」)で足した・消した拠点を、画面を移らずに出す。
+ * 以前は画面を出したときの選択肢のまま、値だけ合わせていた(足した拠点が出ない・消した拠点を選べて保存で断られる)。
+ */
+function renderPositions(names, current) {
+  if (!el.position) return;
+  const options = [];
+  if (!current) {
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "未登録";
+    options.push(none);
+  }
+  for (const name of names) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    options.push(option);
+  }
+  el.position.replaceChildren(...options);
+  el.position.value = current || "";
+}
+
 function renderStatus(state) {
   renderDistribution(state.distribution);
   el.statusGrid.replaceChildren(
@@ -235,7 +259,7 @@ function renderStatus(state) {
   showReal(el.exportDirReal, state.export_dir_real);
   showReal(el.orderCsvDirReal, state.order_csv_dir_real);
   el.autoImport.checked = state.auto_import;
-  el.position.value = state.position;
+  renderPositions(state.positions || [], state.position);
   el.specUrl.value = state.spec_sheet_url;
   // 不備があるときだけ言う。無いときにも出すと読まれなくなる
   el.specUrlProblem.hidden = !state.spec_sheet_problem;
@@ -523,6 +547,8 @@ export function start(state, jobState, masterFrame) {
     refreshStatus();
     master.authChanged();
   });
+  // マスタが変わったら(この画面のマスタ管理で直した・ほかの窓で直した)、いまの状態・拠点の選択肢・印を引き直す
+  datasync.onChange(() => refreshStatus());
 
   for (const btn of document.querySelectorAll("[data-import]")) {
     btn.addEventListener("click", () =>

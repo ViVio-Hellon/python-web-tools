@@ -37,6 +37,12 @@ try {
   channel = null;
 }
 
+/** マスタを直した。**この画面にも**すぐ知らせる(同じ設定画面のマスタ管理で直したとき)。ほかのタブ・窓へも。 */
+export function changedHere() {
+  window.dispatchEvent(new CustomEvent(EVENT, { detail: {} }));
+  tellOthers();
+}
+
 /** マスタを直した。ほかのタブ・窓へすぐ知らせる(世代は次の見張りでそろう)。 */
 export function tellOthers() {
   try {

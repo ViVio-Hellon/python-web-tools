@@ -513,8 +513,8 @@ async function send(path, body) {
     // 切り替えられない**ように見える(現場の声)。
     // 中身(`<main>`)は差し替えないので、開いている面も入力も残る
     if (table === ACCESS_TABLE) nav.refreshShell();
-    // ほかのタブ・窓(資材選択・倉庫連携など)へすぐ知らせる。倉庫送信・作業長などを引き直す
-    datasync.tellOthers();
+    // この画面(設定の「いまの状態」「動作」の拠点)と、ほかのタブ・窓(資材選択・倉庫連携など)へすぐ知らせる
+    datasync.changedHere();
     return true;
   } catch (err) {
     // 断られても本文には**いまの状態**が入っている。理由を出したうえで
