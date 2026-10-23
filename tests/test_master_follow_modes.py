@@ -63,3 +63,32 @@ class ProtecTests(_LotCase):
         self.client.get("/api/lot/1234567", headers=self.auth())
         self.assertTrue(session.presenter.protec.is_protec)
         self.assertEqual(session.selected.lower, [])
+
+
+class HosozaiTests(_LotCase):
+    """#5 梱包保護材(使用保護材 → アングル要否・上下共用・蓋)。"""
+
+    def add(self, material: str) -> None:
+        self.conn.execute("INSERT INTO 梱包保護材 (包装仕様書, 材質, 調質, 用途コード, 使用保護材)"
+                          " VALUES (?,?,?,?,?)", (self.spec, "A5052", "H32", "", material))
+        self.conn.commit()
+
+    def test_保護材を足したら開いているロットが上下共用になる_ボードは外す(self) -> None:
+        session = self.session()
+        self.assertFalse(session.presenter.is_shared_board_mode)
+        session.selected.lower.append(object())
+        self.add("上蓋")
+        master_state.touch(["梱包保護材"])
+        state = self.get()
+        self.assertEqual(session.presenter.last_hosozai, "上蓋")
+        self.assertTrue(session.presenter.is_shared_board_mode)
+        self.assertTrue(session.presenter.lid_mode)                  # 蓋を選べる
+        self.assertEqual(session.selected.lower, [])
+        self.assertIn("なし → 上蓋", state["master_note"])
+        self.assertIn("選定し直してください", state["master_note"])
+
+    def test_変わらなければ何もしない(self) -> None:
+        master_state.touch(["梱包保護材"])
+        from packaging_tool import selection_session
+        session = selection_session.get_session(self.conn)
+        self.assertEqual(session.master_note, "")

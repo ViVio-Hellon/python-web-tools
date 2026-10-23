@@ -245,6 +245,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         from . import import_specs
         if self._master_changed(import_specs.PROTEC_RULE_TABLE):
             notes += self._follow_protec_master()
+        if self._master_changed(config.TBL_HOGOZAI):
+            notes += self._follow_hosozai_master()
         if not notes:
             return
         self.master_note = " / ".join(notes)
@@ -276,6 +278,44 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         if self._drop_boards_for_mode():
             note += "。前の判定で選んだボード・配置を外しました。選定し直してください"
         return [note]
+
+    def _follow_hosozai_master(self) -> list[str]:
+        """梱包保護材が変わったら、開いているロットの使用保護材を引き直す(マスタ反映もれ #5。VER4.8.99)。
+
+        使用保護材はロットを開いたときだけ引いていたので、梱包保護材を直しても開き直すまで、アングルの
+        出す/出さない・上下共用・パレット一覧の台/枚・蓋選択が古いままだった。
+        """
+        presenter = self.presenter
+        result = presenter.lot_result
+        if result is None or not getattr(result, "found", False):
+            return []
+        before = presenter.last_hosozai
+        after = presenter.lookup_hosozai(result)
+        if after == before:
+            return []
+        note = (f"梱包保護材が変わったので、このロットの使用保護材を {before or 'なし'} → {after or 'なし'} にしました")
+        note += self._apply_hosozai_change(after)
+        return [note]
+
+    def _apply_hosozai_change(self, hosozai: str) -> str:
+        """使用保護材を入れ替え、それで前提が変わったものを外す。外したことの一言を返す。"""
+        presenter = self.presenter
+        was_shared, was_angle = presenter.is_shared_board_mode, presenter.show_angle
+        presenter.apply_hosozai(hosozai)
+        extra = ""
+        # 上下共用かどうかが変わると、上用の選び方が変わる(前の前提で選んだボード・配置は使えない)
+        if presenter.is_shared_board_mode != was_shared and self._drop_boards_for_mode():
+            extra += "。上下共用が変わったので、選んだボード・配置を外しました(選定し直してください)"
+        # アングルを使わなくなったら、選んだアングルは外す
+        if was_angle and not presenter.show_angle and self.selected_angles:
+            self.selected_angles = []
+            self.invalidate_angle_plan()
+            extra += "。アングルを使わなくなったので、選んだアングルを外しました"
+        # 蓋は蓋を選べるモード(EX・上下共用)のときだけ
+        if not presenter.lid_mode and self.lid_row is not None:
+            self.lid_row = None
+            extra += "。蓋を選べなくなったので、選んだ蓋を外しました"
+        return extra
 
     def _drop_boards_for_mode(self) -> bool:
         """モード(プロテック・上下共用など)が変わったので、前のモードで選んだボード・配置を外す。外したら True。"""
@@ -1316,6 +1356,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
 
         types = self.board_types()
         was_protec = self.presenter.protec.is_protec
+        was_shared = self.presenter.is_shared_board_mode
         outcome = self.presenter.apply_lot(
             result, product_width=product_width, product_length=product_length,
             available_board_types=types, current_board_type=self.board_type)
@@ -1326,6 +1367,9 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         # (プロテック強制を押したときと同じ。VER4.8.98)
         if self.presenter.protec.is_protec != was_protec and self._drop_boards_for_mode():
             self.presenter.user_log.log("[プロテック] 判定が変わったので、選定したボード・配置を外しました(選定し直してください)")
+        # 上下共用かどうかが変わったとき(保護材を直した等)も同じ(VER4.8.99)
+        if self.presenter.is_shared_board_mode != was_shared and self._drop_boards_for_mode():
+            self.presenter.user_log.log("[上下共用] 変わったので、選定したボード・配置を外しました(選定し直してください)")
         # EX受注ならEXオンリーを自動ON、非EXなら自動OFF
         # (VBA は `chkExOnly` を表示して自動でONにしていた。
         #  tkinter版 `_render_ex_order` も同じ)
