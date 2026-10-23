@@ -841,8 +841,13 @@ def _with_diag(label: str, work: Callable[[], ImportResult]) -> ImportResult:
 def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
                   **kw: Any) -> ImportResult:
     """梱包資材マスタを取り込む(本体は `_import_master`。説明もそちら)。"""
-    return _with_diag("マスタの取り込み",
-                      lambda: _import_master(conn, source_path, **kw))
+    result = _with_diag("マスタの取り込み",
+                        lambda: _import_master(conn, source_path, **kw))
+    if getattr(result, "imported", None):
+        # 開いている画面へ「マスタが変わった」を知らせる(VER4.8.94)
+        from . import master_state
+        master_state.changed()
+    return result
 
 
 def import_lot_ledger(conn: sqlite3.Connection, directory: Optional[Path] = None,

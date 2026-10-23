@@ -792,7 +792,12 @@ def resync(conn: sqlite3.Connection, *, path: Optional[Path] = None) -> bool:
     except sqlite3.Error as exc:
         log.warning("%s の読み直しに失敗しました: %s", TABLE, exc)
         return False
-    return TABLE in result.imported
+    if TABLE not in result.imported:
+        return False
+    # 開いている画面へ知らせる(作業長・倉庫送信の可否が変わりうる。VER4.8.94)
+    from . import master_state
+    master_state.changed()
+    return True
 
 
 def startup_grant() -> Grant:

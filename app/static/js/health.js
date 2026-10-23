@@ -7,6 +7,7 @@
 */
 
 import * as authsync from "./authsync.js";
+import * as datasync from "./datasync.js";
 import { api } from "./api.js";
 import * as nav from "./nav.js";
 import * as screen from "./screen.js";
@@ -74,6 +75,7 @@ async function beat() {
     if (body && Array.isArray(body.modes)) followModes(body.modes);
     // 管理者認証が変わっていたら、認証に関わるところを描き直させる
     if (body && body.auth) authsync.announce(body.auth);
+    if (body && typeof body.data_epoch === "number") datasync.announce(body.data_epoch);
     // 保存していない図。タブを閉じるときに聞くため(`unsaved.js`)
     if (body && body.unsaved && typeof body.unsaved === "object") {
       unsaved.fromServer(body.unsaved);

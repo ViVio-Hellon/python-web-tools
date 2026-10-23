@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from flask import current_app, request
 
-from packaging_tool import (access_control, app_config, auth_state, idle_exit, modes,
+from packaging_tool import (access_control, app_config, auth_state, master_state, idle_exit, modes,
                             screen_lock, user_settings, work_context)
 
 
@@ -237,6 +237,8 @@ def shell_context(active: str, *,
         "favicon": favicon(mode),
         # 管理者認証の世代(`auth_state`)。画面は違う世代を見たら描き直す
         "auth_epoch": auth_state.epoch(),
+        # マスタの世代(`master_state`)。画面は違う世代を見たら、マスタで決まるところを引き直す
+        "data_epoch": master_state.epoch(),
         "token": config["TOKEN"],
         # このタブの番号。**開いた時点で「いま使っている画面」になる**
         # (`packaging_tool/screen_lock.py`)。同じアドレスを2枚開くと

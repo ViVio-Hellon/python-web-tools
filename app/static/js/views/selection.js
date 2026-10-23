@@ -12,6 +12,7 @@
 */
 
 import * as authsync from "../authsync.js";
+import * as datasync from "../datasync.js";
 import { openWindow } from "../desktop.js";
 import { api, tokenUrl } from "../api.js";
 import * as nav from "../nav.js";
@@ -746,6 +747,14 @@ async function handoff(path) {
 export function start(initial) {
   // 管理者認証が変わったら(設定画面で通した等)、実績の保存などをその場で描き直す
   authsync.onChange(async () => {
+    try {
+      render(await api.get("/api/selection/state"));
+    } catch {
+      // 描き直せなくても次の操作で最新になる
+    }
+  });
+  // マスタが変わったら(アクセス権限を直した等)、倉庫送信・蓋を待つかなどをその場で描き直す
+  datasync.onChange(async () => {
     try {
       render(await api.get("/api/selection/state"));
     } catch {

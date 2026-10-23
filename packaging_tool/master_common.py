@@ -341,6 +341,9 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
         return "。ただし手元に取り込めませんでした: " + " / ".join(result.errors)
 
     notes = [f"手元も{result.imported[table]}件に更新しました"]
+    # 開いている画面へ「マスタが変わった」を知らせる(倉庫送信・作業長などを描き直す。VER4.8.94)
+    from . import master_state
+    master_state.changed()
     if table in import_specs.THRESHOLD_TABLES:
         # **閾値を直しただけでは、パレットの適合範囲は変わりません。**
         # 適合範囲はマスタの列に書いてあり、閾値から計算し直して初めて

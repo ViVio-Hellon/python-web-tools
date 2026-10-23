@@ -107,7 +107,7 @@
                   placeholder="倉庫へのひとこと(任意)。送ったあとも確認までは書き足せます"></textarea>
       </div>
       <p class="status" id="sendStatus" hidden></p>
-      {% if order_why %}<p class="status status--ng" id="orderWhy">{{ order_why }}</p>{% endif %}
+      <p class="status status--ng" id="orderWhy"{% if not order_why %} hidden{% endif %}>{{ order_why }}</p>
       <div class="btn-row" style="margin-top:10px">
         <button class="btn btn--commit" type="button" id="send"{% if order_why %} disabled{% endif %}>倉庫へ送信</button>
         <button class="btn btn--danger" type="button" id="clearForm">

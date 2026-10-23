@@ -14,6 +14,7 @@
 */
 import { api } from "./api.js";
 import * as nav from "./nav.js";
+import * as datasync from "./datasync.js";
 import { toast, toastError } from "./toast.js";
 
 export const WATCH_MS = 15_000;
@@ -44,6 +45,8 @@ export function startPlans(initial, open) {
   window.clearInterval(watch);
   watch = window.setInterval(() => pull(), WATCH_MS);
   nav.onLeave(() => window.clearInterval(watch));
+  // マスタが変わったら(アクセス権限を直した等)、この端末の立場(作業長・ライン)をすぐ出し直す
+  datasync.onChange(() => pull());
   // 開いた直後にも一度見に行く(起動直後は共有の分がまだ入っていないことがある)
   pull();
 }

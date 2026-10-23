@@ -275,7 +275,9 @@ def orders():
         keyword=request.args.get("q", ""),
         date_filter=request.args.get("period", ""),
         include_cancelled=request.args.get("cancelled") == "1")
-    return jsonify(presenter.to_dict(view))
+    # 倉庫へ送信できるか(作業長の端末だけ)。マスタを直したら画面がこれで描き直す(VER4.8.94)
+    return jsonify({**presenter.to_dict(view),
+                    "order_why": _order_why() if _mode() == modes.FIELD else ""})
 
 
 @bp.post("/api/warehouse/refresh")
@@ -307,6 +309,7 @@ def refresh():
         date_filter=request.args.get("period", ""),
         include_cancelled=request.args.get("cancelled") == "1")
     return jsonify({**presenter.to_dict(view),
+                    "order_why": _order_why() if _mode() == modes.FIELD else "",
                     "refresh": {"updated": got.updated,
                                 "looked": got.looked,
                                 # 取り込めなかった表と理由(送れていない分があって見送った等)。

@@ -163,7 +163,9 @@
     logPollMs: {{ log_poll_ms }},
     alivePollMs: {{ alive_poll_ms }},
     // 管理者認証の世代。変わったら認証に関わるところを描き直す(`authsync.js`)
-    authEpoch: {{ auth_epoch | tojson }}
+    authEpoch: {{ auth_epoch | tojson }},
+    // マスタの世代。変わったらマスタで決まるところを引き直す(`datasync.js`)
+    dataEpoch: {{ data_epoch | tojson }}
   };
 </script>
 <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>

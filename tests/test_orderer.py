@@ -114,10 +114,18 @@ class WorkerTests(_LidCase):
     def test_倉庫連携の倉庫へ送信も断る(self) -> None:
         page = self.client.get("/warehouse").get_data(as_text=True)
         self.assertIn('id="send" disabled', page)
-        self.assertIn('id="orderWhy"', page)
+        self.assertIn('id="orderWhy">', page)                     # 理由を出している(隠していない)
         res = self.client.post("/api/warehouse/send", json={"lot_no": LOT}, headers=self.auth())
         self.assertEqual(res.status_code, 403)
         self.assertEqual(res.get_json()["error"]["code"], "not_orderer")
+
+    def test_マスタを直したら一覧の応答で送れるかが変わる(self) -> None:
+        """「マスタ編集したらリアルタイムで読み直してください」(VER4.8.94)。画面は一覧を引き直してこれで描き直す。"""
+        body = self.client.get("/api/warehouse/orders", headers=self.auth()).get_json()
+        self.assertIn("作業長", body["order_why"])
+        access_row(self.conn, permission="作業長")                     # この端末を作業長に
+        body = self.client.get("/api/warehouse/orders", headers=self.auth()).get_json()
+        self.assertEqual(body["order_why"], "")
 
 
 class LeaderTests(_LidCase):
@@ -132,7 +140,7 @@ class LeaderTests(_LidCase):
         self.assertTrue(self.step(state, "size")["open"])
         self.assertTrue(state["outputs"]["can_send"])
         page = self.client.get("/warehouse").get_data(as_text=True)
-        self.assertNotIn('id="orderWhy"', page)
+        self.assertIn('id="orderWhy" hidden', page)              # 理由は隠しておく(マスタが変われば出す)
         self.assertNotIn('id="send" disabled', page)
 
 

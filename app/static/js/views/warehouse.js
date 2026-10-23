@@ -17,6 +17,7 @@ import * as nav from "../nav.js";
 import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as lotPlan from "../lotplan_send.js";
+import * as datasync from "../datasync.js";
 import * as toggles from "../toggles.js";
 // ロットの詳細はロット検索と同じものを出す(`../lotdetail.js`)。
 // 動的に読むのは版クエリを合わせるため(`views/lot.js` と同じ理由)
@@ -43,7 +44,19 @@ function setStatus(node, message, kind) {
 // ------------------------------------------------------------------
 // 一覧
 // ------------------------------------------------------------------
+/** 倉庫へ送信できるか(作業長の端末だけ)。サーバが一覧と一緒に返す(`order_why`)。 */
+function applyOrderWhy(why) {
+  if (typeof why !== "string" || !el.send) return;
+  el.send.disabled = Boolean(why);
+  const note = document.getElementById("orderWhy");
+  if (note) {
+    note.hidden = !why;
+    note.textContent = why;
+  }
+}
+
 function render(view) {
+  applyOrderWhy(view.order_why);
   columns = view.columns;
   if (view.detail_fields) detailFields = view.detail_fields;
   if (view.copy_column) copyColumn = view.copy_column;
@@ -1166,6 +1179,11 @@ export function start(state, material, lotPeekWhy) {
 
   render(state);
   load();
+  // マスタが変わったら(アクセス権限を直した等)、倉庫へ送信できるか・作業予定ラインを引き直す
+  datasync.onChange(() => {
+    load();
+    lotPlan.reload();
+  });
 
   el.refresh.addEventListener("click", () => pull());
   // 新しいコメントをまとめて既読に(現場の声:「取り込んだものを全部見るのは厳しい」)。

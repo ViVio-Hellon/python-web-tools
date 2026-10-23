@@ -147,6 +147,10 @@ def health():
         # 関わるところ(マスタ管理の「直せる/直せない」など)を描き直す
         # (`auth_state` の説明。現場の声:「認証系はすぐにどこにでも反映」)
         "auth": _screen_auth(),
+        # **マスタの世代**(VER4.8.94)。画面が開いたときの世代と違えば、マスタで決まるところ
+        # (倉庫送信・作業長・作業ライン・蓋を待つか)を引き直す(`master_state`。
+        # 現場の声:「マスタ編集したらリアルタイムで読み直してください」)
+        "data_epoch": _screen_data_epoch(),
         # いま走っているものの一言。**起動待機画面はこれを読む** ──
         # 取り込みが終わるまで待たせるので、何をどこまでやっているかを
         # 出さないと「止まっている」と受け取られる
@@ -200,6 +204,14 @@ def _screen_auth() -> Optional[dict]:
         return None
     from packaging_tool import auth_state
     return auth_state.snapshot()
+
+
+def _screen_data_epoch() -> Optional[int]:
+    """画面からの問い合わせなら、マスタの世代。"""
+    if not request.headers.get(screen_lock.HEADER):
+        return None
+    from packaging_tool import master_state
+    return master_state.epoch()
 
 
 def _screen_unsaved() -> Optional[dict[str, str]]:

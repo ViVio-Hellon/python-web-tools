@@ -21,6 +21,7 @@ import { confirmBox, promptBox } from "../askbox.js";
 import * as draftStore from "../drafts.js";
 import { toast, toastError } from "../toast.js";
 import * as nav from "../nav.js";
+import * as datasync from "../datasync.js";
 
 const el = {};
 let view = null;          // サーバが返した最後の状態。**画面の唯一の出どころ**
@@ -512,6 +513,8 @@ async function send(path, body) {
     // 切り替えられない**ように見える(現場の声)。
     // 中身(`<main>`)は差し替えないので、開いている面も入力も残る
     if (table === ACCESS_TABLE) nav.refreshShell();
+    // ほかのタブ・窓(資材選択・倉庫連携など)へすぐ知らせる。倉庫送信・作業長などを引き直す
+    datasync.tellOthers();
     return true;
   } catch (err) {
     // 断られても本文には**いまの状態**が入っている。理由を出したうえで

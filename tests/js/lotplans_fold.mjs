@@ -13,8 +13,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const work = mkdtempSync(join(tmpdir(), "lotplans_"));
 copyFileSync(join(ROOT, "app", "static", "js", "lotplans_view.js"), join(work, "lotplans_view.js"));
+copyFileSync(join(ROOT, "app", "static", "js", "datasync.js"), join(work, "datasync.js"));
+// 見に行った回数を数える(マスタが変わったら見に行き直すか)
 writeFileSync(join(work, "api.js"), `
-export const api = { get() { return new Promise(() => {}); }, post() { return new Promise(() => {}); } };`);
+export const api = { get(path) { globalThis.gets.push(path); return new Promise(() => {}); },
+                     post() { return new Promise(() => {}); } };`);
 writeFileSync(join(work, "nav.js"), "export function onLeave() {}");
 writeFileSync(join(work, "toast.js"), "export function toast() {}\nexport function toastError() {}");
 
@@ -39,7 +42,18 @@ globalThis.document = {
   createElement() { return makeEl(); },
   querySelector() { return null; },
 };
-globalThis.window = { setInterval() { return 1; }, clearInterval() {} };
+globalThis.gets = [];
+// Node の BroadcastChannel は開いたままだと終わらないので、ここでは使わない(見張りの道だけ試す)
+delete globalThis.BroadcastChannel;
+const listeners = {};
+globalThis.window = {
+  setInterval() { return 1; }, clearInterval() {},
+  APP: { dataEpoch: 3 },
+  addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
+  removeEventListener() {},
+  dispatchEvent(event) { (listeners[event.type] || []).forEach((fn) => fn(event)); return true; },
+};
+globalThis.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
 
 const mod = await import(pathToFileURL(join(work, "lotplans_view.js")).href);
 const item = (id, seen) => ({ plan_id: id, lot_no: id, line: "AIM", seen, opened: seen,
@@ -80,6 +94,14 @@ check("新しいものは無いと言う", [els.planEmpty.hidden, els.planEmpty.
 
 mod.render({ ...state, items: [item("N2", false)] });
 check("確認済み0件ならボタンは出さない", els.planFold.hidden, true);
+
+// マスタが変わったら(VER4.8.94)、この端末の立場をすぐ見に行き直す。同じ世代なら行かない
+const { announce } = await import(pathToFileURL(join(work, "datasync.js")).href);
+const before = globalThis.gets.length;
+announce(3);
+check("同じ世代なら見に行かない", globalThis.gets.length, before);
+announce(4);
+check("世代が変わったら見に行く", globalThis.gets.slice(before), ["/api/lot/plans?refresh=1"]);
 
 if (failed) { console.log(`${failed} 件 NG`); process.exit(1); }
 console.log("OK");
