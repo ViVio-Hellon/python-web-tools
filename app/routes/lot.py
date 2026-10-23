@@ -144,6 +144,83 @@ def plan_seen(plan_id: str):
     return jsonify(_plans_state(conn))
 
 
+@bp.post("/api/lot/plans/start")
+def plan_start():
+    """予定ロットを「開く」(VER4.8.92)。**発注したパレットを決めて、ボード選定へ**。
+
+    現場の声:「予定に届いたロットを開いた場合に、倉庫連携で発注したパレットサイズを検索して
+    パレットが決定した状態でボード選定まで移行させてください」
+
+    1. ロットを開く(行を開くのと同じ。作業中のロットになる)
+    2. 資材展開(製造板幅・板丈 → 製品サイズ)
+    3. 共有から発注を取り込み直し、このロットに発注したパレットを引く(`lot_plans.ordered_pallet`)
+    4. パレット決定と同じ手順で決める(`selection.decide_pallet`。載るか確かめて製品サイズも確定)
+    5. 資材選択へ移る(パレットと製品サイズが決まっていれば、ボードの段が開く)
+
+    移れないとき(ロットが無い・資材モード・板の寸法が無い・発注したパレットが無い)は、
+    今までどおり**ロット情報を開く**(`next` が空)。理由は `message` に出す。
+    """
+    from packaging_tool import data_sync, lot_plans
+    from . import selection as selection_routes
+    body = request.get_json(silent=True) or {}
+    lot_no = lot_presenter.normalize(str(body.get("lot_no", "")))
+    conn = get_db()
+    detail = _select(conn, lot_no)
+    detail["ribbon"] = work_context.get_context().ribbon()
+    detail["list"] = _list_view(conn, True)
+
+    def stay(message: str = ""):
+        return jsonify({**detail, "next": "", "message": message})
+
+    if current_mode() != modes.FIELD or not detail.get("found"):
+        return stay()
+    context = work_context.get_context()
+    if not context.expand_materials():
+        return stay("製造板幅・板丈が取得できていないので、資材選択へは移りません(ロット情報を開きました)。")
+    session = selection_session.get_session(conn)
+    if session.presenter.mode_1p0113:
+        # 裸梱包はパレットを使わない(展開したら資材を引き直す。資材展開と同じ)
+        session.reload_1p0113_materials()
+        return _go(f"資材展開: Lot {context.lot_no}(裸梱包 1P0113 なのでパレットは使いません)", context)
+
+    # ほかの端末(作業長)の発注を見るので、先に共有から取り込み直す。読めなくても手元の分で続ける
+    try:
+        got = data_sync.refresh_orders(conn)
+        for message in got.errors:
+            log.warning("予定ロットを開く前の発注の取り込み直し: %s", message)
+    except Exception as exc:                      # noqa: BLE001 - 手元の分で続ける
+        log.warning("予定ロットを開く前に発注を取り込み直せませんでした: %s", exc)
+    pallet, why = lot_plans.ordered_pallet(conn, lot_no)
+    if pallet is None:
+        return stay(f"{why} ロット情報を開きました(資材展開してパレットを選んでください)。")
+
+    if pallet.size_only:
+        decided = selection_routes.decide_pallet_size(session, pallet.width, pallet.length, {})
+    else:
+        decided = selection_routes.decide_pallet(
+            session, pallet.width, pallet.length, pallet.symbol, pallet.row_id, {})
+    source = (f"発注したパレット {pallet.hinmei or f'{pallet.width}x{pallet.length}'}"
+              + (f"(発注コード {pallet.code})" if pallet.code and not pallet.size_only else ""))
+    if not decided.ok:
+        return _go(f"{source} を決められませんでした: {decided.message}", context, warn=True)
+    notes = []
+    if pallet.size_only:
+        notes.append("パレットマスタに無い寸法なので、寸法だけ決めました(Lot印刷・倉庫送信には一覧から行を選んでください)")
+    elif pallet.by_name:
+        notes.append("発注コードでは引けなかったので、品名の寸法で選びました")
+    if not decided.product_set:
+        notes.append("製品サイズは載るか確かめられなかったので、資材選択で確かめてください")
+    message = f"{source} で決めました: {decided.message}" + "".join(f" / {n}" for n in notes)
+    log.info("予定ロットを開いた: Lot %s %s", context.lot_no, message)
+    return _go(message, context, warn=bool(notes))
+
+
+def _go(message: str, context, *, warn: bool = False):
+    """資材選択へ移る応答(資材展開と同じ形)。"""
+    return jsonify({"ok": True, "next": "/selection", "message": message, "warn": warn,
+                    "ribbon": context.ribbon()})
+
+
 # ==================================================================
 # 一覧(絞り込み)
 # ==================================================================

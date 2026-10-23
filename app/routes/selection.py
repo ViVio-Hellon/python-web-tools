@@ -27,6 +27,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import quote
 
@@ -119,33 +120,68 @@ def pick_pallet():
     width, length = _parse_int(body.get("width")), _parse_int(body.get("length"))
     if width is None or length is None:
         return jsonify(_error("bad_size", "一覧から行を選んでください。")), 400
+    got = decide_pallet(session, width, length, str(body.get("symbol", "")),
+                        _parse_int(body.get("id")), body)
+    if got.refused is not None:
+        return _apply(session, got.refused)
+    if got.bad_size:
+        return jsonify(_error("bad_size", got.bad_size)), 400
+    return _state(session, message=got.message)
 
+
+@dataclass
+class PalletDecision:
+    """パレット決定の結果(`decide_pallet`)。"""
+
+    ok: bool
+    message: str = ""
+    refused: object = None     # 断り(`BoardOpResult`)。画面へはそのまま返す
+    bad_size: str = ""         # 寸法の形の誤り(400)
+    product_set: bool = False  # 製品サイズまで確定したか(載るか確かめた)
+
+
+def decide_pallet(session, width: int, length: int, symbol: str,
+                  row_id: Optional[int], body: dict) -> PalletDecision:
+    """一覧の行でパレットを決める(「パレット決定」の中身)。予定ロットを開いたとき(`routes/lot`)も通る。
+
+    `row_id` が 0 / None で、寸法だけ分かっているときは**寸法だけ**決める(行は覚えない)。
+    """
     # **EX・上下共用のときパレット決定で受け付けるのは台だけ**(枚は「蓋選択」)。寸法を変える前に断る
-    refused = session.lid_pallet_refusal(width, length, str(body.get("symbol", "")),
-                                        row_id=_parse_int(body.get("id")))
+    refused = session.lid_pallet_refusal(width, length, symbol, row_id=row_id)
     if refused is not None:
-        return _apply(session, refused)
+        return PalletDecision(False, refused.message, refused=refused)
 
     applied = session.apply_pallet(str(width), str(length))
     if not applied.ok:
-        return jsonify(_error("bad_size", applied.message)), 400
-    picked = session.pick_pallet_row(width, length, str(body.get("symbol", "")),
-                                     row_id=_parse_int(body.get("id")))
+        return PalletDecision(False, applied.message, bad_size=applied.message)
+    picked = session.pick_pallet_row(width, length, symbol, row_id=row_id)
     if not picked.ok:
-        return _apply(session, picked)
+        return PalletDecision(False, picked.message, refused=picked)
 
     # 2山積なら、この行がどう当たったか(幅2山 / 丈2山・回転)で2山の向きを
     # 決める。画面に「パレット検索」は無く、一覧から選ぶのが検索の代わり
     pw, pl = _product_dims(body)
-    stack_rotated = session.decide_stack_for_row(
-        width, length, str(body.get("symbol", "")), pw, pl)
+    stack_rotated = session.decide_stack_for_row(width, length, symbol, pw, pl)
 
     # 製品サイズが分かっているなら、載るかどうかまで確かめて確定する。
     # **確かめる規則は変えていない**(`apply_product_size`)。押す回数を
     # 減らしただけで、載らないパレットを選べば今までどおり断られる
     note = _settle_product(session, body, searched_rotated=stack_rotated)
     _prepare_warehouse_draft(session)
-    return _state(session, message=f"{applied.message}{note}")
+    return PalletDecision(True, f"{applied.message}{note}", product_set=bool(note))
+
+
+def decide_pallet_size(session, width: int, length: int, body: dict) -> PalletDecision:
+    """**寸法だけ**でパレットを決める(パレットマスタに無い寸法の発注。行は覚えない)。
+
+    ボード選定に要るのは寸法なので、ここまで決めればボードへ進める。発注コードは
+    行にしか無いので、倉庫送信・Lot印刷はこのままでは出せない(ラインの端末は送らない)。
+    """
+    applied = session.apply_pallet(str(width), str(length))
+    if not applied.ok:
+        return PalletDecision(False, applied.message, bad_size=applied.message)
+    note = _settle_product(session, body)
+    return PalletDecision(True, f"{applied.message}{note}", product_set=bool(note))
 
 
 @bp.post("/api/selection/lid/pick")

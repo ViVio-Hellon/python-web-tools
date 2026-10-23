@@ -28,6 +28,7 @@
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 import unicodedata
 import uuid
@@ -318,3 +319,123 @@ def refresh_if_changed(conn: sqlite3.Connection, path: Optional[Path] = None) ->
 def forget_seen_stamp() -> None:
     """試験用。次の `refresh_if_changed` で必ず見に行く。"""
     _seen_stamp.clear()
+
+
+# ------------------------------------------------------------------
+# 予定ロットを開いたときのパレット(VER4.8.92)
+# ------------------------------------------------------------------
+# 現場の声:「予定に届いたロットを開いた場合に、倉庫連携で発注したパレットサイズを検索して
+# パレットが決定した状態でボード選定まで移行させてください」
+#
+# 発注(資材パレット注文管理)の 幅・丈 は**ロットの板の寸法**で、パレットの寸法ではない。
+# パレットは 発注コード で引く(PalletMaster の コード は1行に1つ。同じ寸法・記号でも 組・台・枚 で
+# コードが違うので、コードで引けば**発注した行そのもの**になる)。コードで引けないとき
+# (マスタのコードが変わった・コードの欄に別の字が入っている)は、品名「業界　記号　幅x丈」で引く。
+ORDER_TABLE = config.TBL_WAREHOUSE_ORDER
+# 蓋(枚)の発注はパレットではない(EX・上下共用の2行目)
+LID_UNIT = "枚"
+# 品名 = 業界　記号　幅x丈(`lot_service.build_hinmei`)。記号は空のこともある
+_HINMEI = re.compile(r"^(?P<industry>[^　]*)　(?P<symbol>[^　]*)　(?P<w>\d+)x(?P<l>\d+)$")
+
+
+@dataclass
+class OrderedPallet:
+    """このロットに倉庫連携で発注したパレット(PalletMaster の1行)。"""
+
+    width: int
+    length: int
+    symbol: str
+    row_id: int
+    code: str
+    hinmei: str
+    sent_at: str
+    by_name: bool = False      # 発注コードで引けず、品名の寸法で引いた
+    # パレットマスタに無い寸法(コードの欄が「単価表のマトリックス」など)。寸法だけ分かる(row_id 0)
+    size_only: bool = False
+
+
+def ordered_pallet(conn: sqlite3.Connection, lot_no: str) -> tuple[Optional[OrderedPallet], str]:
+    """このロットに発注したパレット(**新しい発注から**見る)。見つからなければ (None, 理由)。
+
+    取り消した発注・蓋(枚)・EX の合図(品名 EX)は見ない。
+    """
+    lot = normalize_lot(lot_no)
+    if not lot:
+        return None, "ロット番号がありません。"
+    try:
+        rows = conn.execute(
+            f'SELECT 品名, 発注コード, 単位, 登録日時 FROM "{ORDER_TABLE}"'
+            " WHERE UPPER(TRIM(LotNo)) = ? AND (取り消し済 IS NULL OR 取り消し済 <> '1')"
+            " ORDER BY 登録日時 DESC, 管理番号 DESC", (lot,)).fetchall()
+    except sqlite3.Error as exc:
+        log.warning("発注を読めません: %s", exc)
+        return None, "倉庫連携の発注を読めませんでした。"
+    if not rows:
+        return None, (f"Lot {lot} の倉庫連携の発注がありません"
+                      "(まだ届いていないか、取り消されています)。")
+    kinds: list[str] = []
+    for hinmei, code, unit, sent_at in rows:
+        hinmei, code, unit = (hinmei or "").strip(), (code or "").strip(), (unit or "").strip()
+        if unit == LID_UNIT:
+            kinds.append("蓋")
+            continue
+        if hinmei == "EX":
+            kinds.append("EX")
+            continue
+        hit = _pallet_by_code(conn, code) if code and code != "---" else None
+        by_name = False
+        if hit is None:
+            hit, by_name = _pallet_by_hinmei(conn, hinmei, unit), True
+        if hit is not None:
+            return OrderedPallet(width=int(hit["幅"]), length=int(hit["丈"]),
+                                 symbol=(hit["記号"] or "").strip(), row_id=int(hit["管理番号"]),
+                                 code=(hit["コード"] or "").strip(), hinmei=hinmei,
+                                 sent_at=sent_at or "", by_name=by_name), ""
+        # マスタに無い寸法でも、品名に寸法があれば**寸法だけ**決められる(ボード選定には寸法で足りる)
+        named = _HINMEI.match(hinmei)
+        if named:
+            return OrderedPallet(width=int(named["w"]), length=int(named["l"]),
+                                 symbol=named["symbol"].strip(), row_id=0, code=code, hinmei=hinmei,
+                                 sent_at=sent_at or "", by_name=True, size_only=True), ""
+        kinds.append(hinmei or code or "(空)")
+    if kinds and all(k in ("EX", "蓋") for k in kinds):
+        what = "・".join(dict.fromkeys(
+            "EX の合図(品名 EX)" if k == "EX" else "蓋(枚)" for k in kinds))
+        return None, f"Lot {lot} の発注は {what} だけなので、パレットは決まっていません。"
+    return None, (f"Lot {lot} の発注({'・'.join(k for k in kinds if k not in ('EX', '蓋'))})の"
+                  "パレットが、パレットマスタに見つかりません。")
+
+
+def _pallet_by_code(conn: sqlite3.Connection, code: str) -> Optional[sqlite3.Row]:
+    conn_row = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM PalletMaster WHERE TRIM(コード) = ? ORDER BY 管理番号",
+                            (code,)).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.row_factory = conn_row
+
+
+def _pallet_by_hinmei(conn: sqlite3.Connection, hinmei: str, unit: str) -> Optional[sqlite3.Row]:
+    """品名「業界　記号　幅x丈」で引く。記号は品名に出さないものがある(`filter_pallet_symbol`)ので、
+    マスタの記号を同じ形にして比べる。同じ単位の行を先に、その中で管理番号の若い順。"""
+    from .lot_service import filter_pallet_symbol
+    found = _HINMEI.match(hinmei)
+    if not found:
+        return None
+    conn_row = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM PalletMaster WHERE 幅 = ? AND 丈 = ? ORDER BY 管理番号",
+                            (int(found["w"]), int(found["l"]))).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.row_factory = conn_row
+    same = [r for r in rows
+            if (r["業界"] or "").strip() == found["industry"].strip()
+            and filter_pallet_symbol(r["記号"] or "") == found["symbol"].strip()]
+    same.sort(key=lambda r: 0 if (r["単位"] or "").strip() == unit else 1)
+    return same[0] if same else None

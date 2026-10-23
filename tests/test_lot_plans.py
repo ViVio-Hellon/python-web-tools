@@ -468,7 +468,8 @@ class LotPanelTests(unittest.TestCase):
         self.assertIn('label: "開く"', view)
         self.assertIn("確認", view)
         lot_js = (root / "app/static/js/views/lot.js").read_text(encoding="utf-8")
-        self.assertIn("startPlans(options.plans, openLot)", lot_js)
+        # 「開く」は発注したパレットを決めてボード選定へ(VER4.8.92。`test_plan_start`)
+        self.assertIn("startPlans(options.plans, openPlanned)", lot_js)
         # 確認済みは畳む(VER4.8.91)。最初は閉じている
         html = self.client.get("/lot").get_data(as_text=True)
         self.assertIn('id="planFold"', html)

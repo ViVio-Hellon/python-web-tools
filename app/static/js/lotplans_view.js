@@ -4,7 +4,7 @@
   長が作業ラインに入れたロットのうち、この端末のライン(アクセス権限の「権限」に書いたライン)のもの。
   まだ確認していないものが知らせ。
 
-    開く … そのロットのロット情報を開く(検索して開くのと同じ)。知らせも消える
+    開く … 発注したパレットを決めてボード選定へ移る(移れなければロット情報を開く)。知らせも消える
     確認 … 開かずに知らせだけ消す
 
   確認済みは畳む(「確認済み N件」を押したときだけ出す)。開け閉めは見張りで出し直しても保つ。
@@ -142,10 +142,10 @@ function row(item) {
   return li;
 }
 
-/** 開く(ロット情報を出す)。知らせも消す。 */
+/** 開く。知らせを先に消してから開く(開くと資材選択へ移ることがあるので、移る前に消す)。 */
 export async function openPlan(item) {
-  if (onOpen) await onOpen(item.lot_no);
   if (!item.seen || !item.opened) await markSeen(item, true);
+  if (onOpen) await onOpen(item.lot_no);
 }
 
 async function markSeen(item, opened) {

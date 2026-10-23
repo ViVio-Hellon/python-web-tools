@@ -47,6 +47,24 @@ async function openLot(lotNo) {
   }
 }
 
+/** 予定ロットを開く。発注したパレットを決めて、ボード選定へ移る(移れなければロット情報を開く)。 */
+async function openPlanned(lotNo) {
+  try {
+    const body = await api.post("/api/lot/plans/start", { lot_no: lotNo });
+    applyRibbon(body.ribbon);
+    if (body.next) {
+      if (body.message) toast(body.message, body.warn ? "warn" : "ok");
+      nav.go(body.next);
+      return;
+    }
+    detail.show(body);
+    if (body.list) lotlist.render(body.list);
+    if (body.message) toast(body.message, "warn");
+  } catch (err) {
+    toastError(err);
+  }
+}
+
 export function start(options) {
   const expand = async () => {
     if (!detail.currentLot()) return;
@@ -75,8 +93,9 @@ export function start(options) {
   // ── 7桁の打ち間違いは、そのまま別のロットを開いてしまう
   if (options.openLot) openLot(options.openLot);
 
-  // 予定ロット(この端末のラインに入ったロットの知らせ)。「開く」は行を開くのと同じ
-  startPlans(options.plans, openLot);
+  // 予定ロット(この端末のラインに入ったロットの知らせ)。「開く」は発注したパレットを決めて
+  // ボード選定へ移る(発注が無いなどで移れなければ、行を開くのと同じ)
+  startPlans(options.plans, openPlanned);
 
   // 画面を出たら図面の見張りを打ち切る
   nav.onLeave(detail.stop);
