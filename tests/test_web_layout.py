@@ -909,3 +909,53 @@ class ArrangeTests(LayoutWebTestCase):
             with self.subTest(name=s["name"]):
                 self.assertGreaterEqual(s["x"], 0)
                 self.assertLessEqual(s["x"] + s["w"], width + 1e-6)
+
+
+class MasterFollowTests(LayoutWebTestCase):
+    """マスタ反映もれ #10: 置き場を直したら、出している最寄りの答えを出し直す(VER4.8.103)。
+
+    「最寄り」は検索したときの答えで、マスタで置き場(データラベル)を直しても、
+    検索し直すまで(画面を移っても)古い置き場を指したままだった。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        names = floor_plan.load().item_names
+        self.old, self.new = names[0], names[1]
+        insert_board(self.conn, width=750, length=1130, label=self.old)
+        self.post("/api/layout/search", {"width": 750, "length": 1130})
+
+    def move(self) -> None:
+        self.conn.execute("UPDATE BoardMaster SET データラベル = ?", (self.new,))
+        self.conn.commit()
+
+    def test_置き場を直したら答えを出し直し_一言は1回だけ(self) -> None:
+        from packaging_tool import config, master_state
+        self.move()
+        master_state.touch([config.TBL_BOARD_MASTER])
+        state = self.get()
+        self.assertIn(self.new, state["result"])
+        hit = [s["name"] for s in state["shelves"] if s["state"] == presenter.STATE_HIT]
+        self.assertEqual(hit, [self.new])
+        self.assertIn("出し直しました", state["master_note"])
+        self.assertEqual(self.get()["master_note"], "")
+
+    def test_合図が無ければ前の答えのまま(self) -> None:
+        self.move()
+        state = self.get()
+        self.assertIn(self.old, state["result"])
+        self.assertEqual(state["master_note"], "")
+
+    def test_答えを出していなければ何も言わない(self) -> None:
+        from packaging_tool import config, master_state
+        layout_session.reset_session()
+        self.get()                                       # いまの回数を覚えさせる
+        master_state.touch([config.TBL_BOARD_MASTER])
+        self.assertEqual(self.get()["master_note"], "")
+
+    def test_画面がマスタの変化で引き直す(self) -> None:
+        js = (_ROOT / "app" / "static" / "js" / "views" / "layout.js").read_text(encoding="utf-8")
+        self.assertIn("datasync.onChange(async () => {", js)
+        self.assertIn('render(await api.get("/api/layout/state"))', js)
+        self.assertIn("if (state && state.editing) return;", js)
+        self.assertIn('if (next.master_note) toast(next.master_note, "warn");', js)

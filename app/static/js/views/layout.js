@@ -17,6 +17,7 @@ import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
 import * as unsaved from "../unsaved.js";
+import * as datasync from "../datasync.js";
 // `mapedit.js` は動的に読み込む(理由は `settings.js` が `master.js` を
 // 動的に読み込んでいるのと同じ ── このファイル自身と版クエリを合わせ、
 // 入れ替えたときに中身も必ず一緒に入れ替わるようにするため)。
@@ -153,6 +154,8 @@ function renderBaseOptions(names) {
 
 function render(next) {
   state = next;
+  // マスタ(置き場)が変わって、出していた最寄りの答えを出し直した(サーバが言う)
+  if (next.master_note) toast(next.master_note, "warn");
 
   renderMap(next);
   renderBaseOptions(next.base_points);
@@ -314,6 +317,18 @@ export function start(initial) {
   dragger?.reset();     // 再入場のたびに真っさらから(`nav.js`)
 
   render(initial);
+
+  // マスタが変わったら(置き場・拠点を直した)、棚の中身・拠点の選択肢・最寄りの答えを引き直す。
+  // 配置編集の途中と、寸法を打っている途中は描き直さない(動かしている札・打ちかけの字を取り上げない)
+  datasync.onChange(async () => {
+    if (state && state.editing) return;
+    if ([el.searchWidth, el.searchLength].includes(document.activeElement)) return;
+    try {
+      render(await api.get("/api/layout/state"));
+    } catch {
+      // 描き直せなくても次の操作で最新になる
+    }
+  });
 
   el.basePoint.addEventListener("change", () =>
     send("/api/layout/base-point", { name: el.basePoint.value }));

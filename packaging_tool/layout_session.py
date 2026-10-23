@@ -73,6 +73,11 @@ class LayoutSession:
     editing: bool = False
     dirty: bool = False
 
+    # 置き場のマスタ(ボード・アングルのデータラベル)の変わった回数。変わっていれば答えを出し直す(VER4.8.103)
+    master_revs: Optional[tuple] = None
+    # マスタが変わって答えを出し直したときの一言(画面がトーストで出す)
+    master_note: str = ""
+
     # ------------------------------------------------------------------
     def set_base_point(self, name: str, conn: Any = None) -> LayoutOpResult:
         """拠点の切替。
@@ -97,28 +102,50 @@ class LayoutSession:
                                   REFUSE_FAILED)
         log.info("拠点を切り替えました: %s", name)
 
-        if self.showing == "selection" and self.selection_items:
-            if conn is not None:
-                # まとめて見ていたなら、まとめて出し直す(合計疲労度も新しい拠点から)
-                self.show_selection(conn, self.selection_items)
-            else:
-                self.result = ""
-                self.highlight.clear()
-        elif self.showing == "search" and (self.width_text or self.length_text):
-            if conn is not None:
-                # 探し直した結果(見つからなくても)がそのまま画面に載る。
-                # 拠点の切替そのものは成功しているので、断りにはしない
-                self.search(conn, self.kind, self.width_text, self.length_text)
-            else:
-                # 探し直せないなら、前の拠点の答えを**消す**。
-                # 残すと、新しい拠点の答えとして読まれる
-                self.result = ""
-                self.highlight.clear()
+        self._redo_answer(conn)
         if not on_plan:
             # マスタで足したが、まだ図に置いていない。選べるが、置くまで距離は測れない
             return LayoutOpResult(True, f"拠点を {name} にしました。まだ図に置いていないので距離を測れません"
                                   " ──「配置編集」で図に出して置いてください")
         return LayoutOpResult(True, f"拠点を {name} にしました")
+
+    def _redo_answer(self, conn: Any) -> bool:
+        """出している答え(1件の検索 / 選んだ資材をまとめて)を同じ条件で出し直す。出し直したら True。
+
+        出し直せない(接続が無い)なら前の答えを**消す** ── 残すと、新しい前提の答えとして読まれる。
+        """
+        if self.showing == "selection" and self.selection_items:
+            if conn is not None:
+                # まとめて見ていたなら、まとめて出し直す(合計疲労度も新しい拠点から)
+                self.show_selection(conn, self.selection_items)
+                return True
+            self.result = ""
+            self.highlight.clear()
+        elif self.showing == "search" and (self.width_text or self.length_text):
+            if conn is not None:
+                # 探し直した結果(見つからなくても)がそのまま画面に載る
+                self.search(conn, self.kind, self.width_text, self.length_text)
+                return True
+            self.result = ""
+            self.highlight.clear()
+        return False
+
+    def follow_master(self, conn: Any) -> None:
+        """置き場のマスタ(ボード・アングルのデータラベル)が変わっていたら、出している答えを出し直す
+        (マスタ反映もれ #10。VER4.8.103)。
+
+        「最寄り」と合計疲労度は検索したときの答えで、置き場を直しても検索し直すまで(画面を移っても)
+        古いままだった。
+        """
+        from . import config, master_state
+        revs = (master_state.table_rev(config.TBL_BOARD_MASTER),
+                master_state.table_rev(config.TBL_CORNERBOARD_MASTER))
+        if self.master_revs is None or revs == self.master_revs:
+            self.master_revs = revs
+            return
+        self.master_revs = revs
+        if self._redo_answer(conn):
+            self.master_note = "置き場(マスタのデータラベル)が変わったので、最寄りの答えを出し直しました"
 
     # --- 検索 -------------------------------------------------------
     def search(self, conn: Any, kind: str, width_text: str,

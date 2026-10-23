@@ -39,13 +39,18 @@ ALLOWED_IMAGE_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,",
 
 
 def _session():
-    return layout_session.get_session()
+    session = layout_session.get_session()
+    # 置き場のマスタが変わっていたら、出している答えを出し直す(VER4.8.103)
+    session.follow_master(get_db())
+    return session
 
 
 def _state(session, **extra):
     """いまの画面ぜんぶ。**どの操作の後も同じものを返す**(設計書 §3.3)。"""
     view = presenter.build(get_db(), session)
     body = presenter.to_dict(view)
+    # マスタが変わって答えを出し直したときの一言(1回だけ渡す)
+    body["master_note"], session.master_note = session.master_note, ""
     body.update(extra)
     return jsonify(body)
 
