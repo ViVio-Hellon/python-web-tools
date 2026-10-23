@@ -849,3 +849,47 @@ class MapArrangeTests(InventoryWebTestCase):
         for bad in ("A1", 3, None, [1, 2]):
             with self.subTest(names=bad):
                 self.edit("arrange", {"names": bad, "op": "top"}, expect=400)
+
+
+class MasterFollowTests(InventoryWebTestCase):
+    """マスタ反映もれ #11: 記号・業界の候補と図・一覧をマスタの変化で引き直す(VER4.8.104)。
+
+    記号・業界の候補はプログラムに書いた固定の並びで、パレット記号・業界マスタで足しても出なかった。
+    図・一覧も、別の窓でマスタを直したときは次の操作まで古いままだった。
+    """
+
+    def add(self, table: str, column: str, value: str) -> None:
+        self.conn.execute(f"INSERT INTO [{table}] ([{column}], [有効]) VALUES (?, 1)", (value,))
+        self.conn.commit()
+
+    def test_マスタで足した記号と業界が候補に出る(self) -> None:
+        self.add("PalletSymbolMaster", "記号", "Q9")
+        self.add("PalletIndustryMaster", "業界", "6×12")
+        html = self.client.get("/inventory").get_data(as_text=True)
+        self.assertIn('value="Q9"', html)
+        self.assertIn('value="6×12"', html)
+        body = self.client.get("/api/inventory/choices", headers=self.auth()).get_json()
+        self.assertEqual(body["symbols"][:len(presenter.SYMBOL_PRESETS)], list(presenter.SYMBOL_PRESETS))
+        self.assertEqual(body["symbols"][-1], "Q9")                 # 固定の並びの後ろに足す
+        self.assertIn("6×12", body["industries"])
+        self.assertIn("positions", body["map"])
+
+    def test_固定の並びにある値は重ねない_外した行は出さない(self) -> None:
+        # C1 はマスタの初期値にもある(固定の並びと重なる)
+        self.conn.execute("INSERT INTO PalletSymbolMaster (記号, 有効) VALUES ('X0', 0)")
+        self.conn.commit()
+        symbols = self.client.get("/api/inventory/choices", headers=self.auth()).get_json()["symbols"]
+        self.assertEqual(symbols.count("C1"), 1)
+        self.assertNotIn("X0", symbols)
+
+    def test_表が無くても固定の並びで出す(self) -> None:
+        self.conn.execute("DROP TABLE PalletIndustryMaster")
+        body = self.client.get("/api/inventory/choices", headers=self.auth()).get_json()
+        self.assertEqual(body["industries"], list(presenter.INDUSTRY_PRESETS))
+
+    def test_画面がマスタの変化で引き直す(self) -> None:
+        js = (_ROOT / "app" / "static" / "js" / "views" / "inventory.js").read_text(encoding="utf-8")
+        self.assertIn("datasync.onChange(() => followMaster())", js)
+        self.assertIn('api.get("/api/inventory/choices")', js)
+        self.assertIn("if (lastMap && lastMap.editing) return;", js)
+        self.assertIn("if (lastQuery) await load();", js)

@@ -53,8 +53,8 @@ def page():
         "inventory.html",
         state=inv.to_dict(view),
         modes=inv.SEARCH_MODES,
-        symbol_presets=inv.SYMBOL_PRESETS,
-        industry_presets=inv.INDUSTRY_PRESETS,
+        symbol_presets=inv.symbol_choices(get_db()),
+        industry_presets=inv.industry_choices(get_db()),
         unit_presets=inv.UNIT_PRESETS,
         columns=inv.LIST_COLUMNS,
         **shell_context("inventory"),
@@ -82,6 +82,12 @@ def search():
 @bp.get("/api/inventory/position/<name>")
 def at_position(name: str):
     return jsonify(inv.to_dict(inv.at_position(_db(), name)))
+
+
+@bp.get("/api/inventory/choices")
+def choices():
+    """マスタが変わったときに画面が引き直す: 記号・業界の候補と、何も選んでいない図(VER4.8.104)。"""
+    return jsonify(inv.choices_dict(_db()))
 
 
 @bp.get("/api/inventory/map/background")

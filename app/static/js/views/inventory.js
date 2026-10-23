@@ -18,6 +18,7 @@ import { toast, toastError } from "../toast.js";
 import * as tabs from "../tabs.js";
 import * as toggles from "../toggles.js";
 import * as unsaved from "../unsaved.js";
+import * as datasync from "../datasync.js";
 // `mapedit.js` は動的に読み込む(理由は `settings.js` が `master.js` を
 // 動的に読み込んでいるのと同じ ── このファイル自身と版クエリを合わせ、
 // 入れ替えたときに中身も必ず一緒に入れ替わるようにするため)。
@@ -458,6 +459,33 @@ function afterFailure(err) {
   }
 }
 
+/** datalist の候補を並べ直す。 */
+function fillList(list, values) {
+  if (!list) return;
+  list.replaceChildren(...values.map((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    return option;
+  }));
+}
+
+/**
+ * マスタが変わった(マスタ管理で直した・取り込んだ)。記号・業界の候補と、図・一覧を引き直す。
+ * 配置編集の途中は図を描き直さない(まだ保存していない移動を見えなくしない)。
+ */
+async function followMaster() {
+  try {
+    const choices = await api.get("/api/inventory/choices");
+    fillList(document.getElementById("symbols"), choices.symbols);
+    fillList(document.getElementById("industries"), choices.industries);
+    if (lastMap && lastMap.editing) return;
+    if (lastQuery) await load();
+    else drawMap(choices.map);
+  } catch {
+    // 引き直せなくても次の操作で最新になる
+  }
+}
+
 // ------------------------------------------------------------------
 export function start(state) {
   for (const id of ["w", "l", "search", "clear", "status", "map", "mapMissing", "mapWaiting",
@@ -511,6 +539,7 @@ export function start(state) {
 
   el.search.addEventListener("click", runSearch);
   el.refresh.addEventListener("click", load);
+  datasync.onChange(() => followMaster());
   for (const node of [el.w, el.l]) {
     node.addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); runSearch(); }

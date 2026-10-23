@@ -49,6 +49,39 @@ INDUSTRY_PRESETS = ("1×2", "3×6", "4×10", "4×8", "5×10", "5×8",
                     "スカシ", "タイト", "全面")
 UNIT_PRESETS = ("組", "台", "枚")
 
+
+def _master_values(conn: sqlite3.Connection, table: str, column: str) -> list[str]:
+    """パレット記号・業界マスタの有効な行の値。表が無い・読めないなら空(候補は固定の並びだけ)。"""
+    from .. import pallet_threshold
+    try:
+        return [str(row[column]).strip() for row in pallet_threshold.rows(conn, table)]
+    except Exception:                               # noqa: BLE001 - 候補が減るだけ。画面は止めない
+        return []
+
+
+def _merge(presets: tuple[str, ...], extra: list[str]) -> tuple[str, ...]:
+    out = list(presets)
+    out += [v for v in dict.fromkeys(extra) if v and v not in presets]
+    return tuple(out)
+
+
+def symbol_choices(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """記号の候補。固定の並びに、パレット記号マスタで足した記号を後ろに足す
+    (マスタ反映もれ #11。VER4.8.104。以前は固定の並びだけで、マスタを直しても変わらなかった)。"""
+    return _merge(SYMBOL_PRESETS, _master_values(conn, "PalletSymbolMaster", "記号"))
+
+
+def industry_choices(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """業界の候補。固定の並びに、パレット業界マスタで足した業界を後ろに足す。"""
+    return _merge(INDUSTRY_PRESETS, _master_values(conn, "PalletIndustryMaster", "業界"))
+
+
+def choices_dict(conn: sqlite3.Connection) -> dict[str, Any]:
+    """マスタが変わったときに画面が引き直すもの: 入力の候補と、何も選んでいない図。"""
+    return {"symbols": list(symbol_choices(conn)),
+            "industries": list(industry_choices(conn)),
+            "map": map_dict(build_map(conn))}
+
 # 検索の仕方(VBA `optExact` / `optRange`)
 SEARCH_MODES: tuple[tuple[str, str, str], ...] = (
     ("exact", "完全一致", "幅・丈がぴたりと同じものだけ"),
