@@ -103,6 +103,15 @@ class WiringTests(unittest.TestCase):
         self.assertIn("applyOrderWhy(view.order_why)", warehouse)
         self.assertIn("datasync.onChange(() => pull())", self.read("lotplans_view.js"))
 
+    def test_マスタ管理もほかの窓の直しで読み直す(self) -> None:
+        """マスタ反映もれ #12(VER4.8.105): 別の窓で開いているマスタ管理も、開いている表と
+        「直せる/直せない」を読み直す。1行の窓を開いている間は閉じてから。自分で書いた直後は読み直さない。"""
+        master = self.read("views", "master.js")
+        self.assertRegex(master, r"datasync\.onChange\(\(\) => \{\s*if \(writingHere \|\| !loaded\) return;"
+                                 r"\s*if \(dialogOpen\(\)\) \{\s*masterPending = true;")
+        self.assertRegex(master, r"writingHere = true;\s*try \{\s*datasync\.changedHere\(\);")
+        self.assertIn("if (masterPending && !dialogOpen()) {", master)
+
 
 if __name__ == "__main__":
     unittest.main()

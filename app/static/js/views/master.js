@@ -29,6 +29,8 @@ let loaded = false;
 let editing = null;       // いま開いている行(足すときは null)
 let authPending = false;  // 1行の窓を開いている間に認証が変わった(閉じたら読み直す)
 let dupOnly = false;      // PalletMaster の「発注コードの重複だけ」を出している
+let masterPending = false; // 窓を開いている間にマスタが変わった(閉じたら読み直す)
+let writingHere = false;  // この面で書いた直後の知らせ(書いた応答で描き直し済み)
 
 const IDS = ["mTables", "mMark", "mTitle", "mCan", "mCount", "mQuery", "mFind", "mDup", "mDupNote",
              "mAdd", "mAddCol", "mCreate", "mRebuild", "mDrop", "mReload", "mWhy", "mError", "mHead",
@@ -45,6 +47,7 @@ export function start(frame) {
   if (!el.mTables) return;
   loaded = false;
   editing = null;
+  masterPending = false;
   // 権限は最初の描画で分かっている(共有に触らずに出せる)
   view = frame;
   showWhy();
@@ -103,6 +106,17 @@ export function start(frame) {
   el.mDelete.addEventListener("click", () => askDelete(true));
   el.mDeleteNo.addEventListener("click", () => askDelete(false));
   el.mDeleteYes.addEventListener("click", deleteRow);
+
+  // **ほかの窓・端末でマスタが変わったら、開いている表と「直せる/直せない」を読み直す**
+  // (マスタ反映もれ #12)。1行の窓を開いているときは、打ちかけを消さないよう閉じたあとに読む
+  datasync.onChange(() => {
+    if (writingHere || !loaded) return;
+    if (dialogOpen()) {
+      masterPending = true;
+      return;
+    }
+    loadKeepSort(view && view.table);
+  });
 }
 
 /** 面が開かれた。**最初の1回だけ**読む。 */
@@ -136,6 +150,10 @@ function dialogOpen() {
 
 /** 窓を閉じた。開いている間に認証が変わっていたら、ここで描き直す。 */
 function afterDialog() {
+  if (masterPending && !dialogOpen()) {
+    masterPending = false;
+    if (!authPending) loadKeepSort(view && view.table);   // 認証の読み直しが同じことをする
+  }
   if (authPending && !dialogOpen()) {
     authPending = false;
     authChanged();
@@ -514,7 +532,12 @@ async function send(path, body) {
     // 中身(`<main>`)は差し替えないので、開いている面も入力も残る
     if (table === ACCESS_TABLE) nav.refreshShell();
     // この画面(設定の「いまの状態」「動作」の拠点)と、ほかのタブ・窓(資材選択・倉庫連携など)へすぐ知らせる
-    datasync.changedHere();
+    writingHere = true;
+    try {
+      datasync.changedHere();
+    } finally {
+      writingHere = false;
+    }
     return true;
   } catch (err) {
     // 断られても本文には**いまの状態**が入っている。理由を出したうえで
