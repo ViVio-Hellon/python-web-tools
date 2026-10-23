@@ -119,9 +119,9 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
     # 「蓋選択」(EX・上下共用のとき)で選んだ蓋(単位が枚の行)。**倉庫連携にしか効かない**(ボード選定は台で決まる)。
     # パレット(台)と蓋の両方があれば、1P0113 の角材と松板のように2行まとめて倉庫へ送る
     lid_row: Optional[svc.PalletSizeRow] = None
-    # パレットマスタの変わった回数を、上の2行を引き直したときに覚えておく(VER4.8.95)。
-    # 変わっていれば `bind` でいまのマスタから引き直す(`_follow_pallet_master`)
-    pallet_rev_seen: Optional[int] = None
+    # マスタ(表ごと)の変わった回数を、引き直したときに覚えておく(VER4.8.95〜)。
+    # 変わっていれば `bind` でいまのマスタから引き直す(`_follow_master`)
+    master_revs_seen: dict[str, int] = field(default_factory=dict)
     # マスタが変わって選んだパレット・蓋を引き直した/外したときの一言(画面がトーストで出す)。
     # 選び直したら消える
     master_note: str = ""
@@ -219,10 +219,61 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         セッションに持たせたままにはできない。要求ごとに差し替える。
         """
         self.presenter.conn = conn
-        self._follow_pallet_master()
+        self._follow_master()
 
-    # --- マスタが変わったら(VER4.8.95) ----------------------------------------
-    def _follow_pallet_master(self) -> None:
+    # --- マスタが変わったら(VER4.8.95〜) --------------------------------------
+    def _master_changed(self, table: str) -> bool:
+        """その表が、前に見たときから変わったか(初めて見たときは覚えるだけで False)。"""
+        from . import master_state
+        rev = master_state.table_rev(table)
+        seen = self.master_revs_seen.get(table)
+        self.master_revs_seen[table] = rev
+        return seen is not None and rev != seen
+
+    def _follow_master(self) -> None:
+        """マスタが変わっていたら、覚えている写し・判定をいまのマスタで引き直す。
+
+        現場の声:「マスタを変更後にその内容が反映されていない動作描写をするのはおかしい」。
+        変わったことを一言にまとめて `master_note` に残し(画面がトーストで出す)、倉庫連携の下書きも作り直す。
+        """
+        from . import config
+        notes: list[str] = []
+        if self._master_changed(config.TBL_PALLET_MASTER):
+            notes += self._follow_pallet_master()
+        if self._master_changed(config.TBL_MATSUZAI_KAKUZAI):
+            notes += self._follow_1p0113_master()
+        if not notes:
+            return
+        self.master_note = " / ".join(notes)
+        self.presenter.user_log.log("[マスタ] " + self.master_note, emphasis=True)
+        self._rebuild_pending_orders()
+
+    def _follow_1p0113_master(self) -> list[str]:
+        """松板角材が変わったら、1P0113 の角材・松板を引き直す(マスタ反映もれ #3。VER4.8.97)。
+
+        資材はロットを開いた・セットしたときに引いた写しで、松板角材の発注コード・丈の範囲を直しても
+        倉庫送信は古いコードのまま、足した行があっても「資材マスタに該当がない」で止まり続けていた。
+        製品サイズは引いたときのまま(乗数も変えない)。
+        """
+        presenter = self.presenter
+        if not presenter.mode_1p0113:
+            return []
+        before = presenter.materials_1p0113
+        try:
+            presenter.load_1p0113_materials(before.product_width, before.product_length)
+        except sqlite3.Error as exc:
+            log.warning("1P0113 の資材を引き直せませんでした: %s", exc)
+            return []
+        after = presenter.materials_1p0113
+        notes = []
+        for label, old, new in (("角材", before.kakuzai, after.kakuzai), ("松板", before.matsuita, after.matsuita)):
+            if (old.code, old.unit, old.is_ok, old.info) != (new.code, new.unit, new.is_ok, new.info):
+                notes.append(f"{label}を松板角材のいまの中身にしました"
+                             f"(コード {old.code or '---'}→{new.code or '---'}"
+                             + ("" if new.is_ok else "。マスタに該当がありません") + ")")
+        return notes
+
+    def _follow_pallet_master(self) -> list[str]:
         """パレットマスタが変わっていたら、選んだパレット・蓋を**いまのマスタで**引き直す。
 
         現場の声:「マスタを変更後にその内容が反映されていない動作描写をするのはおかしい」。
@@ -230,15 +281,8 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         Lot印刷・アングル本数が古いままだった(選び直すまで)。行が無くなっていれば外して
         そう言う(倉庫送信は「一覧から選んでください」で止まる)。倉庫連携の下書きも作り直す。
         """
-        from . import config, master_state
         from .pallet_list import refind_pallet_row
-        rev = master_state.table_rev(config.TBL_PALLET_MASTER)
-        if self.pallet_rev_seen is None or rev == self.pallet_rev_seen:
-            self.pallet_rev_seen = rev
-            return
-        self.pallet_rev_seen = rev
         notes: list[str] = []
-        changed = False
         for attr, label in (("pallet_row", "パレット"), ("lid_row", "蓋")):
             old = getattr(self, attr)
             if old is None:
@@ -250,18 +294,12 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
                 continue
             setattr(self, attr, fresh)
             if fresh is None:
-                changed = True
                 notes.append(f"選んでいた{label}({old.width}×{old.length} {old.symbol} コード {old.code or '---'})が"
                              "パレットマスタに見つからなくなったので外しました。一覧から選び直してください")
             elif _row_differs(old, fresh):
-                changed = True
                 notes.append(f"選んでいた{label}をパレットマスタのいまの中身にしました"
                              f"({_row_diff_text(old, fresh)})")
-        if not changed:
-            return
-        self.master_note = " / ".join(notes)
-        self.presenter.user_log.log("[マスタ] " + self.master_note, emphasis=True)
-        self._rebuild_pending_orders()
+        return notes
 
     def _rebuild_pending_orders(self) -> None:
         """倉庫連携の下書き(パレットを決めたときに作ったもの)を、いまの行で作り直す。送れなければ捨てる。"""

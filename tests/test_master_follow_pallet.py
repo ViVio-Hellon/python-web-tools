@@ -161,3 +161,51 @@ class RenumberTests(SelectionWebTestCase):
         self.assertIn("tr.dataset.code = item.code", js)
         self.assertIn('id: pickedPalletRow.id, code: pickedPalletRow.code || ""', js)
         self.assertIn("(r.code || \"\") === (pickedPalletRow.code || \"\")", js)
+
+
+class Materials1P0113Tests(SelectionWebTestCase):
+    """マスタ反映もれ #3: 松板角材を直したら、1P0113 の角材・松板を引き直す(VER4.8.97)。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from app.routes import lot as lot_routes
+        from packaging_tool import special_packaging as spk
+        from tests.test_lot_service import insert_hiki, insert_lot, insert_odr
+        original = lot_routes.get_db
+        lot_routes.get_db = lambda: self.conn
+        self.addCleanup(lambda: setattr(lot_routes, "get_db", original))
+        for name, atsu, haba, code in ((spk.KAKUZAI_NAME, spk.KAKUZAI_ATSU, spk.KAKUZAI_HABA, "K001"),
+                                       (spk.MATSUITA_NAME, spk.MATSUITA_ATSU, spk.MATSUITA_HABA, "M001")):
+            self.conn.execute("INSERT INTO 松板角材 (品名, 厚, 幅, 丈min, 丈max, コード, 単位, 備考)"
+                              " VALUES (?,?,?,?,?,?,?,?)", (name, atsu, haba, 1, 9999, code, "本", ""))
+        self.conn.commit()
+        insert_lot(self.conn)
+        insert_hiki(self.conn)
+        insert_odr(self.conn)
+        self.client.get("/api/lot/1234567", headers=self.auth())
+        session = self.session()
+        session.presenter.force_1p0113 = True
+        session.presenter.apply_1p0113_mode("", product_width=1000, product_length=1800)
+        work_context.get_context().product_width = 1000
+        work_context.get_context().product_length = 1800
+        session.reload_1p0113_materials()
+        self.get()                                        # いまの回数を覚えさせる
+
+    def test_コードを直したら倉庫送信も新しいコード(self) -> None:
+        self.conn.execute("UPDATE 松板角材 SET コード = 'K999' WHERE コード = 'K001'")
+        master_state.touch(["松板角材"])
+        state = self.get()
+        self.assertIn("コード K001→K999", state["master_note"])
+        self.post("/api/selection/send")
+        self.assertEqual([o["hatchu_code"] for o in work_context.get_context().pending_orders], ["K999", "M001"])
+
+    def test_足した行で送れるようになる(self) -> None:
+        self.conn.execute("DELETE FROM 松板角材 WHERE コード = 'M001'")
+        master_state.touch(["松板角材"])
+        self.assertFalse(self.get()["outputs"]["can_send"])          # 該当がないので止まる
+        from packaging_tool import special_packaging as spk
+        self.conn.execute("INSERT INTO 松板角材 (品名, 厚, 幅, 丈min, 丈max, コード, 単位, 備考)"
+                          " VALUES (?,?,?,?,?,?,?,?)",
+                          (spk.MATSUITA_NAME, spk.MATSUITA_ATSU, spk.MATSUITA_HABA, 1, 9999, "M777", "枚", ""))
+        master_state.touch(["松板角材"])
+        self.assertTrue(self.get()["outputs"]["can_send"])
