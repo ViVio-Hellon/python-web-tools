@@ -207,7 +207,7 @@ function sectionCard(section, labels) {
 }
 
 /**
- * 拠点の選択肢を描き直す(VER4.8.102)。マスタ(BoardMaster の「拠点〇〇」)で足した・消した拠点を、画面を移らずに出す。
+ * 拠点の選択肢を描き直す。マスタ(BoardMaster の「拠点〇〇」)で足した・消した拠点を、画面を移らずに出す。
  * 以前は画面を出したときの選択肢のまま、値だけ合わせていた(足した拠点が出ない・消した拠点を選べて保存で断られる)。
  */
 function renderPositions(names, current) {
