@@ -43,8 +43,12 @@ DB_PATH = Path(os.environ.get("PACKAGING_TOOL_DB_PATH", str(BASE_DIR / "data" / 
 # ログを本体側に書くと端末どうしで混ざる。分けておけば混ざらない。
 #
 # 環境変数 `PACKAGING_TOOL_LOG_DIR` で従来どおりの場所にも戻せる。
+#
+# **その下にツールIDのフォルダを作って書く**(VER4.8.111〜。日報複合ツールに合わせた決まり。
+# `log_names`)。前の版はこの直下に書いていた(そこにある前のログは読む・片付けるが、もう書かない)
+from .log_names import TOOL_ID as _LOG_TOOL_ID  # noqa: E402 - 名前だけのモジュール
 LOG_DIR = Path(os.environ.get("PACKAGING_TOOL_LOG_DIR",
-                              str(app_config.local_dir("logs"))))
+                              str(app_config.local_dir("logs")))) / _LOG_TOOL_ID
 # 環境変数で決めたときは、設定画面の値より**環境変数が勝つ**(試験・診断用)
 LOG_DIR_FROM_ENV = "PACKAGING_TOOL_LOG_DIR" in os.environ
 

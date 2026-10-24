@@ -8,9 +8,9 @@
 ここは次を持つ:
 
 - **出力先**: 環境変数 > 設定画面 > 既定(この端末のローカル領域)。
-  設定画面で指定したフォルダには、**端末名のフォルダを作ってその中に
-  書く** ── 共有フォルダを全端末で指しても混ざらず、どの端末の
-  ことかがフォルダ名で分かる。書けないフォルダは選ばせない。起動時に
+  どこでも **`<出力先>/packagingtool/` を作ってその中に、PC名入りの名前で書く**
+  (VER4.8.111〜。日報複合ツールに合わせた決まり。`log_names`)── 共有フォルダを全端末で
+  指しても混ざらず、ほかのツールのログとも分かれる。書けないフォルダは選ばせない。起動時に
   書けなければ(共有に届かない日)既定の場所に書き、理由を画面に出す
 - **エラー記録の一覧と1件の中身**(設定画面「ログ」の面)。1件の中身には、
   同じ操作番号の行をログファイルから集めて添える ── 選定の細かい判断
@@ -29,7 +29,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from . import config, logging_utils
+from . import config, log_names, logging_utils
 from .logging_utils import get_logger
 
 log = get_logger("trace_log")
@@ -52,7 +52,7 @@ SOURCE_SETTING = "setting"
 SOURCE_DEFAULT = "default"
 SOURCE_LABEL = {
     SOURCE_ENV: "環境変数 PACKAGING_TOOL_LOG_DIR で決まっています(設定画面より優先)",
-    SOURCE_SETTING: "設定画面で指定したフォルダ(の下の、この端末の名前のフォルダ)",
+    SOURCE_SETTING: "設定画面で指定したフォルダ(の下の packagingtool フォルダ)",
     SOURCE_DEFAULT: "既定(この端末のローカル領域)",
 }
 
@@ -68,10 +68,8 @@ class Result:
 # 出力先
 # ==================================================================
 def _pc_name() -> str:
-    from . import access_control
-    name = access_control.current_identity().pc_name or "この端末"
-    # フォルダ名に使えない文字は置き換える
-    return re.sub(r'[\\/:*?"<>|]', "_", name)
+    """この端末の名前(ファイル名・前の版のフォルダ名に使う形)。"""
+    return log_names.pc_name()
 
 
 def configured_text() -> str:
@@ -82,12 +80,13 @@ def configured_text() -> str:
 
 
 def folder_for(text: str) -> Path:
-    """指定したフォルダの下の、この端末の書き先: `<指定>/packaging_tool/<端末名>`。
+    """指定したフォルダの下の書き先: `<指定>/packagingtool`(VER4.8.111〜)。
 
-    指定先はほかのツールとも共用するので、**ツール名のフォルダを作ってその下に**書く(VER4.8.107〜。
-    以前は `<指定>/<端末名>` で、ほかのツールのログと並んでどれのものか分からなかった)。
+    指定先はほかのツールとも共用するので、**ツールIDのフォルダを作ってその中に**書く。
+    どの端末のものかはファイル名のPC名で分かる(全端末が同じフォルダに書く。日報複合ツールと同じ)。
+    前の版: `<指定>/<端末名>`(〜4.8.106)・`<指定>/packaging_tool/<端末名>`(4.8.107〜4.8.110)。
     """
-    return config.resolve_dir(text) / logging_utils.TOOL_NAME / _pc_name()
+    return config.resolve_dir(text) / log_names.TOOL_ID
 
 
 def _writable(folder: Path) -> str:
@@ -192,33 +191,114 @@ def set_log_dir(text: str, password: str) -> Result:
 # ==================================================================
 # 片付け
 # ==================================================================
-# 前の版の名前(頭にツール名が無い 取り込み診断_ / エラー記録_)も消す対象・読む対象にする
-_DAY_FILE = re.compile(r"^(?:packaging_tool_取り込み診断|packaging_tool|取り込み診断)_(\d{8})\.log$")
-_MONTH_FILE = re.compile(r"^(?:packaging_tool_)?エラー記録_(\d{6})\.jsonl$")
+@dataclass(frozen=True)
+class Source:
+    """ログを探すフォルダ1つ。
+
+    `new` … いまの形(`packagingtool_…_<PC>_…`)。`pc` が空なら**すべての端末**のファイル。
+    `new` でないもの … 前の版の形(PC名が無い)。フォルダの中は全部 `pc` の端末のもの。
+    """
+
+    folder: Path
+    new: bool
+    pc: str = ""
+
+
+def _configured_base() -> Optional[Path]:
+    """設定画面で指定した出力先(ツールIDのフォルダの1つ上)。指定が無ければ None。"""
+    if config._active_log_dir is not None:
+        return config._active_log_dir.parent
+    text = "" if config.LOG_DIR_FROM_ENV else configured_text()
+    if not text:
+        return None
+    try:
+        return config.resolve_dir(text)
+    except Exception:                               # noqa: BLE001 - 読めなければ見ない
+        return None
+
+
+def sources(everyone: bool = False) -> list[Source]:
+    """**自分のツールのログ**を探すフォルダ(前の場所も含む)。
+
+    - いまの書き先(`<出力先>/packagingtool`)。`everyone` ならほかの端末のファイルも
+    - 既定の書き先(ローカルの `logs/packagingtool`)。共有へ書けなかった日の分
+    - 前の場所(前の版の名前。**この端末のもの**): ローカルの `logs` の直下、
+      指定先の `<端末名>`(〜4.8.106)と `packaging_tool/<端末名>`(4.8.107〜4.8.110)
+    - `everyone` なら前の版の `packaging_tool/<ほかの端末>`。指定先の直下のほかのフォルダは
+      **見ない**(ほかのツールのフォルダかもしれない。決まり5)
+    """
+    me = _pc_name()
+    found: list[Source] = []
+    current = config.log_dir()
+    shared = config._active_log_dir is not None
+    found.append(Source(current, True, "" if (everyone and shared) else me))
+    if current != config.LOG_DIR:
+        found.append(Source(config.LOG_DIR, True, me))
+    found.append(Source(config.LOG_DIR.parent, False, me))
+    base = _configured_base()
+    if base is not None:
+        found.append(Source(base / me, False, me))
+        legacy = base / log_names.LEGACY_TOOL
+        found.append(Source(legacy / me, False, me))
+        if everyone:
+            try:
+                others = sorted(p for p in legacy.iterdir() if p.is_dir() and p.name != me)
+            except OSError:
+                others = []
+            found += [Source(p, False, p.name) for p in others]
+    unique: list[Source] = []
+    seen: set[tuple[str, bool, str]] = set()
+    for src in found:
+        key = (str(src.folder), src.new, src.pc)
+        if key not in seen:
+            seen.add(key)
+            unique.append(src)
+    return unique
+
+
+def _files(src: Source, new_pattern: re.Pattern, old_pattern: re.Pattern):
+    """そのフォルダの、その種類のファイル: (パス, 端末名, 日付の字) を返す。"""
+    try:
+        paths = list(src.folder.iterdir())
+    except OSError:
+        return []
+    out = []
+    for path in paths:
+        if src.new:
+            got = new_pattern.match(path.name)
+            if got and (not src.pc or got.group("pc") == src.pc):
+                out.append((path, got.group("pc"), got.groups()[-1]))
+        else:
+            got = old_pattern.match(path.name)
+            if got:
+                out.append((path, src.pc, got.groups()[-1]))
+    return out
+
+
+def own_files(new_pattern: re.Pattern, old_pattern: re.Pattern) -> list[Path]:
+    """この端末の、その種類のファイル(前の場所・前の名前も)。"""
+    return [path for src in sources() for path, _pc, _d in _files(src, new_pattern, old_pattern)]
 
 
 def prune(today: Optional[date] = None) -> list[str]:
-    """古いログを消す。**消したことはログに書く**(黙って消さない)。"""
+    """古いログを消す。**消したことはログに書く**(黙って消さない)。
+
+    消すのは**自分のツールの、この端末のもの**だけ(前の場所の自分のログも。決まり4・5)。
+    共有の書き先にあるほかの端末のファイル、ほかのツールのファイル・フォルダには触らない。
+    """
     today = today or date.today()
-    folder = config.log_dir()
     day_limit = f"{today - timedelta(days=KEEP_DAYS):%Y%m%d}"
     month_limit = (today.year * 12 + today.month - 1) - KEEP_ERROR_MONTHS
     removed: list[str] = []
-    try:
-        files = list(folder.iterdir())
-    except OSError:
-        return removed
-    for path in files:
-        old = False
-        found = _DAY_FILE.match(path.name)
-        if found and found.group(1) < day_limit:
-            old = True
-        found = _MONTH_FILE.match(path.name)
-        if found:
-            ym = found.group(1)
+    for src in sources(everyone=False):
+        old: list[Path] = []
+        for new_pattern, old_pattern in ((log_names.NEW_DAY, log_names.OLD_DAY),
+                                         (log_names.NEW_DIAG, log_names.OLD_DIAG)):
+            old += [p for p, _pc, d in _files(src, new_pattern, old_pattern) if d < day_limit]
+        for p, _pc, ym in _files(src, log_names.NEW_ERROR, log_names.OLD_ERROR):
             if int(ym[:4]) * 12 + int(ym[4:]) - 1 < month_limit:
-                old = True
-        if old:
+                old.append(p)
+        for path in old:
             try:
                 path.unlink()
                 removed.append(path.name)
@@ -248,29 +328,18 @@ class ErrorItem:
                 "message": self.message, "screen": self.screen}
 
 
-def _folders(everyone: bool) -> list[Path]:
-    """読むフォルダ。`everyone` なら、同じ指定先にいるほかの端末のぶんも。"""
-    mine = config.log_dir()
-    if not everyone or config._active_log_dir is None:
-        return [mine]
-    root = mine.parent
-    try:
-        others = sorted(p for p in root.iterdir() if p.is_dir() and p != mine)
-    except OSError:
-        others = []
-    return [mine, *others]
-
-
 def _read_records(everyone: bool) -> list[dict]:
     rows: list[tuple[str, int, dict]] = []
     seq = 0
-    for folder in _folders(everyone):
-        try:
-            files = sorted((p for p in folder.glob("*エラー記録_*.jsonl") if _MONTH_FILE.match(p.name)),
-                           key=lambda p: _MONTH_FILE.match(p.name).group(1), reverse=True)
-        except OSError:
-            continue
-        for path in files[:3]:                      # 直近3か月ぶん
+    for src in sources(everyone):
+        files = _files(src, log_names.NEW_ERROR, log_names.OLD_ERROR)
+        # 端末ごとに直近3か月ぶん
+        by_pc: dict[str, list] = {}
+        for item in files:
+            by_pc.setdefault(item[1], []).append(item)
+        picked = [item for group in by_pc.values()
+                  for item in sorted(group, key=lambda i: i[2], reverse=True)[:3]]
+        for path, pc, _ym in picked:
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -281,8 +350,11 @@ def _read_records(everyone: bool) -> list[dict]:
                 except ValueError:
                     continue                        # 書きかけの1行は飛ばす
                 if isinstance(row, dict) and row.get("ref"):
-                    row.setdefault("pc", folder.name)
-                    row["_folder"] = str(folder)        # 同じ端末のログを引くため
+                    row.setdefault("pc", pc)
+                    # 同じ端末のその日の動作ログを引くため(`operation_lines`)
+                    row["_folder"] = str(src.folder)
+                    row["_log_pc"] = pc
+                    row["_log_new"] = src.new
                     seq += 1
                     rows.append((str(row.get("at", "")), seq, row))
     # 新しい順。同じ秒のものは後から書いたものを先に
@@ -344,11 +416,17 @@ def operation_lines(row: dict, *, limit: int = OP_LINES_LIMIT) -> list[str]:
     except ValueError:
         return []
     mark = f"[{op_id}]"
-    name = logging_utils.log_path_for(day).name
     lines: list[str] = []
-    folders = [Path(row["_folder"])] if row.get("_folder") else _folders(True)
-    for folder in folders:
-        path = folder / name
+    if row.get("_folder"):
+        # エラー記録と同じ場所・同じ端末のその日の動作ログ(前の版の形なら前の名前)
+        pc = str(row.get("_log_pc") or row.get("pc") or "")
+        name = log_names.day_log(day, pc) if row.get("_log_new", True) else log_names.old_day_log(day)
+        candidates = [Path(row["_folder"]) / name]
+    else:
+        candidates = [src.folder / (log_names.day_log(day, src.pc) if src.new and src.pc
+                                    else log_names.old_day_log(day))
+                      for src in sources(True)]
+    for path in candidates:
         if not path.exists():
             continue
         try:
@@ -488,6 +566,10 @@ def slow_operations(day: Optional[date] = None, *, threshold_ms: int = SLOW_MS,
     """その日の、時間のかかった操作と、画面ごとのまとめ。"""
     day = day or date.today()
     path = logging_utils.log_path_for(day)
+    if not path.exists():
+        # 前の版が書いた日(前の場所・前の名前。この端末のもの)
+        path = next((src.folder / log_names.old_day_log(day) for src in sources()
+                     if not src.new and (src.folder / log_names.old_day_log(day)).exists()), path)
     items: list[dict[str, Any]] = []
     totals: dict[str, dict[str, Any]] = {}
     started: Optional[datetime] = None

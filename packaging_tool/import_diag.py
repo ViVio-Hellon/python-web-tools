@@ -1,4 +1,4 @@
-"""取り込みの診断記録(packaging_tool_取り込み診断_YYYYMMDD.log)。
+"""取り込みの診断記録(packagingtool_取り込み診断_<PC>_YYYYMMDD.log)。
 
 【なぜ別のファイルか】
 「読まなくなった」と言われたとき、ふだんのログからは**何を読んで何を
@@ -44,9 +44,9 @@ SAMPLE = 10
 
 
 def path_for(day: Optional[date] = None) -> Path:
-    from .logging_utils import TOOL_NAME
-    # 頭にツール名(VER4.8.107〜。どのツールのログか、取り出しても分かるように)
-    return config.log_dir() / f"{TOOL_NAME}_取り込み診断_{(day or date.today()):%Y%m%d}.log"
+    from . import log_names
+    # 頭にツールID、PC名も入れる(VER4.8.111〜。`log_names`)
+    return config.log_dir() / log_names.diag_log(day or date.today())
 
 
 def latest_path() -> Optional[Path]:
@@ -59,10 +59,11 @@ def latest_path() -> Optional[Path]:
     today = path_for()
     if today.exists():
         return today
+    # この端末のぶんを、前の場所・前の名前も含めて探す(`trace_log.own_files`)
+    from . import log_names, trace_log
+    found = trace_log.own_files(log_names.NEW_DIAG, log_names.OLD_DIAG)
     try:
-        # 前の版の名前(頭にツール名が無い)も見る
-        found = sorted([*today.parent.glob("*取り込み診断_*.log")],
-                       key=lambda p: p.stat().st_mtime, reverse=True)
+        found.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:
         return None
     return found[0] if found else None

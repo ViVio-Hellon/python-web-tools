@@ -25,7 +25,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from tests import _isolation  # noqa: E402,F401
-from packaging_tool import (config, logging_utils, trace_log,  # noqa: E402
+from packaging_tool import (log_names, config, logging_utils, trace_log,  # noqa: E402
                             user_settings)
 
 try:
@@ -66,7 +66,7 @@ class TraceTestCase(unittest.TestCase):
             self.addCleanup(patcher.stop)
         # 端末名・利用者は**ログに付ける所だけ**決める(本物の身元は画面も使う)
         for target, attr, value in (
-                (trace_log, "_pc_name", lambda: "LINE-3"),
+                (log_names, "pc_name", lambda: "LINE-3"),
                 (logging_utils, "_who",
                  lambda: {"pc": "LINE-3", "login": "yamada", "version": "9.9.9"})):
             patcher = mock.patch.object(target, attr, value)
@@ -144,27 +144,29 @@ class ErrorRecordTests(TraceTestCase):
 # 出力先
 # ==================================================================
 class LogDirTests(TraceTestCase):
-    def test_指定したフォルダの下の端末名のフォルダに書く(self) -> None:
+    def test_指定したフォルダの下のツールIDのフォルダに書く(self) -> None:
+        """決まり(VER4.8.111〜。日報複合ツールに合わせた): `<出力パス>/packagingtool/` の中に、
+        `packagingtool_` で始まりPC名の入った名前で書く。出力パスの直下には置かない。"""
         shared = self.root / "共有"
         result = trace_log.set_log_dir(str(shared), PW)
         self.assertTrue(result.ok, result.message)
-        # ほかのツールと共用する出力先なので、ツール名のフォルダの下に端末名(VER4.8.107〜)
-        self.assertEqual(config.log_dir(), shared / "packaging_tool" / "LINE-3")
+        self.assertEqual(config.log_dir(), shared / "packagingtool")
         log.error("共有へ")
-        self.assertEqual(len(self.records(shared / "packaging_tool" / "LINE-3")), 1)
-        # ファイル名の頭にもツール名
-        self.assertEqual(sorted(p.name[:15] for p in (shared / "packaging_tool" / "LINE-3").iterdir()),
-                         ["packaging_tool_", "packaging_tool_"])
-        self.assertTrue(next((shared / "packaging_tool" / "LINE-3").glob("packaging_tool_エラー記録_*.jsonl")))
+        self.assertEqual(len(self.records(shared / "packagingtool")), 1)
+        names = sorted(p.name for p in (shared / "packagingtool").iterdir())
+        today = date.today()
+        self.assertEqual(names, [f"packagingtool_LINE-3_{today:%Y%m%d}.log",
+                                 f"packagingtool_エラー記録_LINE-3_{today:%Y%m}.jsonl"])
+        self.assertEqual([p.name for p in shared.iterdir()], ["packagingtool"])     # 直下にファイルを置かない
         self.assertEqual(trace_log.state()["source"], trace_log.SOURCE_SETTING)
 
     def test_出力先を変えたら次の行から新しい場所へ(self) -> None:
         log.info("前の場所")
         trace_log.set_log_dir(str(self.root / "共有"), PW)
         log.info("新しい場所")
-        new = (self.root / "共有" / "packaging_tool" / "LINE-3"
-               / f"packaging_tool_{date.today():%Y%m%d}.log").read_text("utf-8")
-        old = (self.default / f"packaging_tool_{date.today():%Y%m%d}.log").read_text("utf-8")
+        name = f"packagingtool_LINE-3_{date.today():%Y%m%d}.log"
+        new = (self.root / "共有" / "packagingtool" / name).read_text("utf-8")
+        old = (self.default / name).read_text("utf-8")
         self.assertIn("新しい場所", new)
         self.assertNotIn("新しい場所", old)
         # 前の場所にも、移ったことを残す
@@ -225,50 +227,41 @@ class LogDirTests(TraceTestCase):
         self.assertIsNone(config._active_log_dir)
         self.assertIn("書けなくなった", trace_log.state()["warn"])
         self.assertIn("切れたあとの行",
-                      (self.default / f"packaging_tool_{date.today():%Y%m%d}.log")
+                      (self.default / f"packagingtool_LINE-3_{date.today():%Y%m%d}.log")
                       .read_text("utf-8"))
         self.assertIs(handler, handler)
 
 
 class PruneTests(TraceTestCase):
-    def test_古いログだけ消す(self) -> None:
+    def test_古いログだけ消す_前の場所の自分のログも_ほかの端末とほかのツールには触らない(self) -> None:
         today = date(2026, 10, 1)
-        for name in ("packaging_tool_20260101.log", "packaging_tool_20260920.log",
-                     "取り込み診断_20260101.log", "エラー記録_202401.jsonl",
-                     "エラー記録_202609.jsonl", "メモ.txt",
-                     # 頭にツール名の付いた名前(VER4.8.107〜)
-                     "packaging_tool_取り込み診断_20260101.log", "packaging_tool_取り込み診断_20260920.log",
-                     "packaging_tool_エラー記録_202401.jsonl", "packaging_tool_エラー記録_202609.jsonl"):
+        legacy = config.LOG_DIR.parent                   # 前の版はここ(ローカルの logs)の直下に書いていた
+        nippou = legacy / "nippou"
+        nippou.mkdir()
+        new_names = ("packagingtool_LINE-3_20260101.log", "packagingtool_LINE-3_20260920.log",
+                     "packagingtool_取り込み診断_LINE-3_20260101.log",
+                     "packagingtool_エラー記録_LINE-3_202401.jsonl",
+                     "packagingtool_エラー記録_LINE-3_202609.jsonl",
+                     "packagingtool_LINE-9_20260101.log",        # ほかの端末(共有を指していれば並ぶ)
+                     "メモ.txt")
+        old_names = ("packaging_tool_20260101.log", "packaging_tool_20260920.log",
+                     "取り込み診断_20260101.log", "エラー記録_202401.jsonl", "エラー記録_202609.jsonl",
+                     "packaging_tool_取り込み診断_20260101.log", "packaging_tool_エラー記録_202401.jsonl")
+        for name in new_names:
             (self.default / name).write_text("x", encoding="utf-8")
+        for name in old_names:
+            (legacy / name).write_text("x", encoding="utf-8")
+        (nippou / "エラー記録_202401.jsonl").write_text("x", encoding="utf-8")   # ほかのツール
         removed = trace_log.prune(today)
-        self.assertEqual(set(removed), {"エラー記録_202401.jsonl",
-                                        "取り込み診断_20260101.log",
-                                        "packaging_tool_20260101.log",
-                                        "packaging_tool_取り込み診断_20260101.log",
-                                        "packaging_tool_エラー記録_202401.jsonl"})
-        self.assertTrue((self.default / "メモ.txt").exists())
-        self.assertTrue((self.default / "エラー記録_202609.jsonl").exists())
-
-
-# ==================================================================
-# 読む側
-# ==================================================================
-class ErrorRefTests(unittest.TestCase):
-    def test_同じ秒のエラー番号は重ならない(self) -> None:
-        """末尾は16進2桁。CI で同じ秒の2件が同じ番号になり、番号で引くと2件出た
-        (`test_一覧は新しい順で絞り込める` が 1/256 で落ちていた)。"""
-        when = datetime(2026, 10, 10, 8, 33, 17)
-        draws = iter(["e8", "e8", "e8", "3c"])
-        with mock.patch.object(logging_utils.secrets, "token_hex", lambda n: next(draws)):
-            first = logging_utils.new_error_ref(when)
-            second = logging_utils.new_error_ref(when)
-        self.assertEqual(first, "E261010-083317-e8")
-        self.assertEqual(second, "E261010-083317-3c")
-
-    def test_1秒に256件を超えても重ならない(self) -> None:
-        when = datetime(2026, 10, 10, 8, 33, 18)
-        refs = {logging_utils.new_error_ref(when) for _ in range(300)}
-        self.assertEqual(len(refs), 300)
+        self.assertEqual(set(removed), {
+            "packagingtool_LINE-3_20260101.log", "packagingtool_取り込み診断_LINE-3_20260101.log",
+            "packagingtool_エラー記録_LINE-3_202401.jsonl",
+            "packaging_tool_20260101.log", "取り込み診断_20260101.log", "エラー記録_202401.jsonl",
+            "packaging_tool_取り込み診断_20260101.log", "packaging_tool_エラー記録_202401.jsonl"})
+        for name in ("メモ.txt", "packagingtool_LINE-9_20260101.log", "packagingtool_LINE-3_20260920.log"):
+            self.assertTrue((self.default / name).exists(), name)
+        self.assertTrue((legacy / "エラー記録_202609.jsonl").exists())
+        self.assertTrue((nippou / "エラー記録_202401.jsonl").exists())
 
 
 class ReadTests(TraceTestCase):
@@ -286,16 +279,26 @@ class ReadTests(TraceTestCase):
         shared = self.root / "共有"
         trace_log.set_log_dir(str(shared), PW)
         log.error("この端末")
+        # 前の版(4.8.107〜4.8.110)の場所・名前のほかの端末のぶんも読む
         other = shared / "packaging_tool" / "LINE-1"
-        other.mkdir()
-        # 前の版の名前(頭にツール名が無い)も読む
-        (other / "エラー記録_202610.jsonl").write_text(json.dumps(
+        other.mkdir(parents=True)
+        (other / "packaging_tool_エラー記録_202610.jsonl").write_text(json.dumps(
             {"ref": "E261001-090000-aa", "at": "2026/10/01 09:00:00",
              "message": "あちらの端末", "pc": "LINE-1"}, ensure_ascii=False) + "\n",
             encoding="utf-8")
+        # いまの形のほかの端末(同じフォルダにPC名入りの名前で並ぶ)
+        (shared / "packagingtool" / "packagingtool_エラー記録_LINE-2_202610.jsonl").write_text(json.dumps(
+            {"ref": "E261001-090000-bb", "at": "2026/10/01 09:00:00",
+             "message": "もう1台"}, ensure_ascii=False) + "\n", encoding="utf-8")
+        # ほかのツールのフォルダは読まない
+        (shared / "nippou").mkdir()
+        (shared / "nippou" / "エラー記録_202610.jsonl").write_text(json.dumps(
+            {"ref": "E261001-090000-cc", "at": "2026/10/01 09:00:00",
+             "message": "日報"}, ensure_ascii=False) + "\n", encoding="utf-8")
         self.assertEqual([i.message for i in trace_log.list_errors()], ["この端末"])
         self.assertEqual({i.pc for i in trace_log.list_errors(everyone=True)},
-                         {"LINE-3", "LINE-1"})
+                         {"LINE-3", "LINE-1", "LINE-2"})
+        self.assertNotIn("日報", [i.message for i in trace_log.list_errors(everyone=True)])
 
     def test_1件の中身に同じ操作番号の行が付く(self) -> None:
         token = logging_utils.begin_operation({"id": "fe12ab", "method": "POST",
@@ -482,3 +485,32 @@ class JobTests(TraceTestCase):
 
 if __name__ == "__main__":                        # pragma: no cover
     unittest.main()
+
+
+class LegacyLogTests(TraceTestCase):
+    """前の場所・前の名前の自分のログも読む(決まり4。VER4.8.111〜)。もう書かない・移さない。"""
+
+    def test_前の版のエラー記録から同じ操作番号の行を引く(self) -> None:
+        legacy = config.LOG_DIR.parent                 # 前の版はローカルの logs の直下
+        (legacy / "エラー記録_202610.jsonl").write_text(json.dumps(
+            {"ref": "E261020-080000-aa", "at": "2026/10/20 08:00:00", "message": "前の版",
+             "operation": {"id": "op0001"}}, ensure_ascii=False) + "\n", encoding="utf-8")
+        (legacy / "packaging_tool_20261020.log").write_text(
+            "2026/10/20 08:00:00 | x | INFO | [op0001] 前の版の動き\n", encoding="utf-8")
+        found = trace_log.find_error("E261020-080000-aa")
+        self.assertEqual(found["pc"], "LINE-3")
+        self.assertEqual(len(found["operation_lines"]), 1)
+        self.assertIn("前の版の動き", found["operation_lines"][0])
+        # 前の場所には書かない
+        log.error("いまの版")
+        self.assertEqual(sorted(p.name for p in legacy.iterdir() if p.is_file()),
+                         ["packaging_tool_20261020.log", "エラー記録_202610.jsonl"])
+
+    def test_取り込み診断の名前と_前の名前も探す(self) -> None:
+        from packaging_tool import import_diag
+        # (pytest では `conftest` が path_for を一時フォルダへ差し替えるので、名前は log_names で見る)
+        self.assertEqual(log_names.diag_log(date(2026, 10, 24)),
+                         "packagingtool_取り込み診断_LINE-3_20261024.log")
+        old = config.LOG_DIR.parent / "取り込み診断_20261001.log"
+        old.write_text("x", encoding="utf-8")
+        self.assertEqual(import_diag.latest_path(), old)

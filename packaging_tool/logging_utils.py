@@ -5,7 +5,7 @@ VBA版はFileSystemObjectで手動追記し、さらに端末のライン名を
 Python版ではファイル配置の複雑さの割に価値が薄いため、標準の
 `logging` モジュールに置き換える。
 
-- 出力先: `config.log_dir()` 配下に `packaging_tool_YYYYMMDD.log`
+- 出力先: `config.log_dir()`(`<出力先>\\packagingtool`)配下に `packagingtool_<PC>_YYYYMMDD.log`
   (設定画面で変えられる。決め方は `trace_log.apply_log_dir`)
 - コンソール(Debug.Printのイミディエイト相当)にも同時出力
 
@@ -16,7 +16,7 @@ Python版ではファイル配置の複雑さの割に価値が薄いため、�
   出た行すべての頭に `[番号]` を付ける。同じ番号で引けば、1つの操作で
   何が起きたかが(選定の細かい判断まで)まとめて読める
 - **エラー記録**: ERROR 以上の行には**エラー番号**を振り、
-  `packaging_tool_エラー記録_YYYYMM.jsonl` に1件1行で残す。どの操作の途中だったか、
+  `packagingtool_エラー記録_<PC>_YYYYMM.jsonl` に1件1行で残す。どの操作の途中だったか、
   その直前に何をしていたか(直近の行)、エラーの中身(トレースバック)、
   端末・利用者・版を一緒に入れる ── 「なぜ」を1段ずつ遡る材料を、
   起きたその場で揃えておく。画面のエラー表示にも同じ番号を出すので、
@@ -47,22 +47,20 @@ DATE_FORMAT = "%Y/%m/%d %H:%M:%S"
 RECENT_LINES = 40
 
 
-# **どのツールのログか、名前とフォルダで分かるようにする**(VER4.8.107)。
-# 現場の声:「いろいろなツールで吐き出しているので何のツールが出したものかわからない。
-# ファイル名にツール名を入れる、ツール名フォルダ生成後その階層に作る の両方を
-# (取り出したとき結局開かないとわからなくなるため)」。
-# ファイル名の頭と、指定した出力先の下に作るフォルダ(`trace_log.folder_for`)に使う
-TOOL_NAME = "packaging_tool"
+# **ログの置き場所と名前の決まり**は `log_names`(VER4.8.111〜。日報複合ツールに合わせた)。
+# `<出力先>\packagingtool\packagingtool_<PC>_<日付>.log` のように、フォルダにもファイル名にも
+# ツールIDを入れ、ファイル名にはPC名も入れる(共有フォルダで何台もが同じファイルに書かない)
+from . import log_names  # noqa: E402
 
 
 def log_path_for(day: date) -> "Path":
-    """その日のログファイル。**名前の作り方はここ1か所**。"""
-    return config.log_dir() / f"{TOOL_NAME}_{day:%Y%m%d}.log"
+    """その日のログファイル。**名前の作り方は `log_names` 1か所**。"""
+    return config.log_dir() / log_names.day_log(day)
 
 
 def error_path_for(when: datetime) -> Path:
-    """その月のエラー記録。月ごとに分ける(1件1行の JSON)。頭にツール名(VER4.8.107〜)。"""
-    return config.log_dir() / f"{TOOL_NAME}_エラー記録_{when:%Y%m}.jsonl"
+    """その月のエラー記録。月ごとに分ける(1件1行の JSON)。"""
+    return config.log_dir() / log_names.error_log(when)
 
 
 # ------------------------------------------------------------------
@@ -194,7 +192,7 @@ def _who() -> dict[str, str]:
 
 
 class _ErrorRecordHandler(logging.Handler):
-    """ERROR 以上を `packaging_tool_エラー記録_YYYYMM.jsonl` へ1件1行で残す。"""
+    """ERROR 以上を `packagingtool_エラー記録_<PC>_YYYYMM.jsonl` へ1件1行で残す。"""
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -232,7 +230,7 @@ class DailyFileHandler(logging.FileHandler):
 
     `TimedRotatingFileHandler` を使わないのは、あちらが「いまのファイルを
     日付付きの名前へ退ける」作りで、こちらの名前の付け方
-    (`packaging_tool_YYYYMMDD.log` にそのまま書く)と噛み合わないため。
+    (`packagingtool_<PC>_YYYYMMDD.log` にそのまま書く)と噛み合わないため。
     日付を見て開き直すだけで足りる。
     """
 
@@ -284,6 +282,9 @@ def configure_logging() -> None:
     global _configured
     if _configured:
         return
+    # **先に立てる。** ファイル名にPC名を入れる(`log_names.pc_name`)ために身元を引くと、
+    # その途中でここがもう一度呼ばれることがある(2重に呼ぶと同じ行が2回書かれる)
+    _configured = True
 
     config.ensure_dirs()
 

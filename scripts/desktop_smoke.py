@@ -175,8 +175,16 @@ def second_launch_exits(exe: str, env: dict, first: subprocess.Popen) -> bool:
     return True
 
 
+# 動作ログ: logs\packagingtool\packagingtool_<PC>_<日付>.log(取り込み診断・エラー記録は除く)
+_DAY_LOG = re.compile(r"^packagingtool_(?!取り込み診断_|エラー記録_).+_\d{8}\.log$")
+
+
+def day_logs(work: Path) -> list[Path]:
+    return sorted(p for p in (work / "logs" / "packagingtool").glob("*.log") if _DAY_LOG.match(p.name))
+
+
 def latest_log(work: Path) -> str:
-    logs = sorted((work / "logs").glob("packaging_tool_[0-9]*.log"))
+    logs = day_logs(work)
     return logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
 
 
@@ -208,8 +216,7 @@ def main() -> int:
             print(f"[NG] exe が先に終わりました(終了コード {app.returncode})")
             ok = False
             break
-        logs = sorted((work / "logs").glob("packaging_tool_[0-9]*.log"))
-        text = logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
+        text = latest_log(work)
         match = footprint.search(text)
         if match:
             seen = match.group(0)
@@ -219,7 +226,7 @@ def main() -> int:
         print(f"[OK] 画面が Python から届きました({time.monotonic() - started:.1f}秒): {seen}")
     elif ok:
         print("[NG] 時間内に画面が届きませんでした。ログの末尾:")
-        logs = sorted((work / "logs").glob("*.log"))
+        logs = sorted((work / "logs").rglob("*.log"))
         for log in logs:
             print(f"--- {log.name}")
             print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-30:]))
