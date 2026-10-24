@@ -671,7 +671,10 @@ class DataWebTestCase(PresenterTestCase):
     def auth(self) -> dict:
         return {"X-Tool-Token": TOKEN}
 
-    def wait_idle(self, timeout: float = 5.0) -> None:
+    def wait_idle(self, timeout: float = 30.0) -> None:
+        # 30秒(終わればすぐ返る)。5秒では Windows の CI で落ちることがあった: 取り込みは既定の
+        # 共有フォルダ(\\\\nlmfangyshrd…)を探しに行き、届かないフォルダの確かめに1か所3秒ほどかかる
+        # (CI のログ: 07:25:41 → 07:25:44)。同時に何本も走ると5秒を超える
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self.registry.is_busy():
@@ -1500,7 +1503,14 @@ class ImportDiagReportTests(DataWebTestCase):
         # 取り込みの記録を残すと「記録が無い」にならないので、取り込みの記録だけ空のフォルダを見せる
         # (ログフォルダごと差し替えると、アプリのログもそこへ開かれ、Windows では消せなくなる)
         from unittest import mock
-        from packaging_tool import import_diag
+        from packaging_tool import config, import_diag, log_names
+        # 試験全体のログフォルダに、ほかの試験(起動時の自動取り込み)の記録があっても見に行かない
+        # (VER4.8.111 で前の場所も探すようにしたとき、ここまで探して Windows の CI で落ちた)
+        from datetime import date
+        stray = config.log_dir() / log_names.diag_log(date(2000, 1, 2))
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("ほかの試験の記録", encoding="utf-8")
+        self.addCleanup(stray.unlink, missing_ok=True)
         with tempfile.TemporaryDirectory() as empty, mock.patch.object(
                 import_diag, "path_for",
                 lambda day=None: Path(empty) / "取り込み診断_20000101.log"):

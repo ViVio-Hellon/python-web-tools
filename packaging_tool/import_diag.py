@@ -59,9 +59,16 @@ def latest_path() -> Optional[Path]:
     today = path_for()
     if today.exists():
         return today
-    # この端末のぶんを、前の場所・前の名前も含めて探す(`trace_log.own_files`)
+    # この端末のぶん: いまの書き先(今日のファイルと同じフォルダ)と、前の場所の前の名前のもの
     from . import log_names, trace_log
-    found = trace_log.own_files(log_names.NEW_DIAG, log_names.OLD_DIAG)
+    me = log_names.pc_name()
+    try:
+        found = [p for p in today.parent.iterdir()
+                 if (m := log_names.NEW_DIAG.match(p.name)) and m.group("pc") == me]
+    except OSError:
+        found = []
+    found += [p for src in trace_log.sources() if not src.new
+              for p, _pc, _d in trace_log._files(src, log_names.NEW_DIAG, log_names.OLD_DIAG)]
     try:
         found.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:

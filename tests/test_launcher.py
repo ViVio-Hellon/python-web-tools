@@ -892,7 +892,10 @@ class AutoImportTests(LocalAreaTestCase):
                 self.stage = text
         return Srv()
 
-    def wait_idle(self, timeout: float = 5.0) -> None:
+    def wait_idle(self, timeout: float = 30.0) -> None:
+        # 30秒(終わればすぐ返る)。5秒では Windows の CI で落ちることがあった: 取り込みは既定の
+        # 共有フォルダ(\\\\nlmfangyshrd…)を探しに行き、届かないフォルダの確かめに1か所3秒ほどかかる
+        # (CI のログ: 07:25:41 → 07:25:44)。同時に何本も走ると5秒を超える
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self.registry.is_busy():
