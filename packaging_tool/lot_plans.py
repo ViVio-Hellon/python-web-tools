@@ -143,9 +143,21 @@ def _events(conn: sqlite3.Connection, where: str = "",
 
 
 def _latest_by_lot(events: Iterable[Plan]) -> dict[str, Plan]:
+    """ロットごとのいまの行(古い順に読み、あとの行が勝つ)。
+
+    **作業済みは、同じラインの予定にだけ効く**(VER4.8.112)。長がロットを別のラインへ入れ直した
+    直後に、前のラインの端末が古い画面のまま「作業済み」を押すと(共有を見に行くのは15秒ごと)、
+    その作業済みの行が新しいラインの予定まで消していた。作業済みの行のラインが、そのときの予定の
+    ラインと違えば読み飛ばす。
+    """
     latest: dict[str, Plan] = {}
-    for event in events:                # 古い順なので、あとの行が勝つ
-        latest[normalize_lot(event.lot_no)] = event
+    for event in events:
+        lot = normalize_lot(event.lot_no)
+        if event.state == DONE:
+            now = latest.get(lot)
+            if now is None or now.state != PLANNED or line_key(now.line) != line_key(event.line):
+                continue                # 予定でない・ほかのラインの予定には効かない
+        latest[lot] = event
     return latest
 
 

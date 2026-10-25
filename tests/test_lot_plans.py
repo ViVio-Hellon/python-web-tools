@@ -302,6 +302,91 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(lot_plans.last_done(self.leader, "N7120D0").terminal, "LINE1")
 
 
+class CycleTests(unittest.TestCase):
+    """複数の予定ロットを各ラインに入れ、各ラインで作業済みにして回す(端末5台・共有越し。VER4.8.112)。
+
+    現場の声:「予定ロットを複数セット、各ラインで解除 きれいに回るかチェック」。
+    """
+
+    LINES = {"長": [], "L1a": ["L-1"], "L1b": ["L-1"], "HVC": ["HVC"], "LVC": ["LVC"]}
+
+    def setUp(self) -> None:
+        from tests.test_warehouse_handoff import make_local, make_shared
+        self.dir = Path(tempfile.mkdtemp(prefix="plan_cycle_"))
+        self.src = self.dir / config.MATERIAL_DB_NAME
+        make_shared(self.src)
+        self.t = {name: make_local() for name in self.LINES}
+        for conn in self.t.values():
+            self.addCleanup(conn.close)
+            data_sync.import_master(conn, self.src)
+        self.addCleanup(lot_plans.forget_seen_stamp)
+
+    def sync(self, name: str) -> None:
+        result = data_sync.write_back(self.t[name], self.src)
+        self.assertEqual(result.errors, [], name)
+
+    def pull(self, *names: str) -> None:
+        for name in names:                       # 1台ずつ別のプロセスのつもり
+            lot_plans.forget_seen_stamp()
+            lot_plans.refresh_if_changed(self.t[name], self.src)
+
+    def shown(self, name: str) -> list[str]:
+        return sorted(p.lot_no for p in lot_plans.for_lines(self.t[name], self.LINES[name]))
+
+    def finish(self, name: str, lot: str):
+        plan = lot_plans.current(self.t[name], lot)
+        self.assertIsNotNone(plan, f"{name}: {lot}")
+        return lot_plans.finish(self.t[name], plan.plan_id, lines=self.LINES[name], terminal=name)
+
+    def test_複数セットして各ラインで作業済み_きれいに回る(self) -> None:
+        for lot, line in (("A1", "L-1"), ("A2", "L-1"), ("A3", "HVC"), ("A4", "HVC"), ("A5", "LVC")):
+            lot_plans.send(self.t["長"], lot, line, terminal="長")
+        self.sync("長")
+        self.pull("L1a", "L1b", "HVC", "LVC")
+        self.assertEqual((self.shown("L1a"), self.shown("L1b"), self.shown("HVC"), self.shown("LVC")),
+                         (["A1", "A2"], ["A1", "A2"], ["A3", "A4"], ["A5"]))
+        # L1a が A1 → 同じラインの L1b からも消え、長には作業済みと出る
+        self.assertTrue(self.finish("L1a", "A1").ok)
+        self.sync("L1a")
+        self.pull("L1b", "長")
+        self.assertEqual(self.shown("L1b"), ["A2"])
+        self.assertEqual(lot_plans.last_done(self.t["長"], "A1").terminal, "L1a")
+        # L1a と L1b が同時に A2(どちらも送る前)→ どちらも通り、どちらの欄からも消える
+        self.assertTrue(self.finish("L1a", "A2").ok)
+        self.assertTrue(self.finish("L1b", "A2").ok)
+        self.sync("L1a")
+        self.sync("L1b")
+        self.pull("L1a", "L1b")
+        self.assertEqual((self.shown("L1a"), self.shown("L1b")), ([], []))
+        # 作業済みの A1 を入れ直せば、また知らせる
+        self.pull("長")
+        lot_plans.send(self.t["長"], "A1", "L-1", terminal="長")
+        self.sync("長")
+        self.pull("L1a")
+        self.assertEqual(self.shown("L1a"), ["A1"])
+        self.assertEqual(lot_plans.unseen_count(self.t["L1a"], ["L-1"]), 1)
+        # HVC・LVC も片付けて、全ラインが空になる
+        for name, lots in (("HVC", ("A3", "A4")), ("LVC", ("A5",)), ("L1a", ("A1",))):
+            for lot in lots:
+                self.assertTrue(self.finish(name, lot).ok)
+            self.sync(name)
+        self.pull("L1a", "L1b", "HVC", "LVC")
+        self.assertEqual([self.shown(n) for n in ("L1a", "L1b", "HVC", "LVC")], [[], [], [], []])
+
+    def test_入れ直した直後に前のラインが古い画面で作業済みにしても_新しいラインの予定は消えない(self) -> None:
+        lot_plans.send(self.t["長"], "A4", "HVC", terminal="長")
+        self.sync("長")
+        self.pull("HVC")
+        lot_plans.send(self.t["長"], "A4", "LVC", terminal="長")     # 長が LVC へ入れ直した
+        self.sync("長")
+        self.assertTrue(self.finish("HVC", "A4").ok)                 # HVC はまだ受け取っていない
+        self.sync("HVC")
+        self.pull("長", "HVC", "LVC")
+        self.assertEqual(self.shown("LVC"), ["A4"])
+        self.assertEqual(self.shown("HVC"), [])
+        self.assertIsNone(lot_plans.last_done(self.t["長"], "A4"))
+
+
 # ======================================================================
 # 画面
 # ======================================================================
