@@ -266,6 +266,7 @@ def start(mode: str, *, open_browser: bool = True) -> int:
     import server as server_module
     from packaging_tool import app_config
 
+    auto = mode in ("", AUTO)          # モードを端末の権限で決める(明示されていない)
     mode = resolve_mode(mode)
     log_environment(mode)
 
@@ -302,6 +303,7 @@ def start(mode: str, *, open_browser: bool = True) -> int:
 
         # --- 待ち受けを始める(この時点ではまだ待機画面だけ) ---
         srv = server_module.AppServer(mode, port)
+        srv.auto_mode = auto
         thread = server_module.run_in_background(srv)
 
         check = server_module.diagnose_listening(port, timeout=LISTEN_TIMEOUT_SEC)
@@ -424,9 +426,11 @@ def start_bridge(mode: str, *, token: str = "", server_factory) -> int:
     import launch_guard
     import server as server_module
 
+    auto = mode in ("", AUTO)
     mode = resolve_mode(mode)
     log_environment(mode)
     srv = server_factory(mode, token or secrets.token_urlsafe(24))
+    srv.auto_mode = auto
     thread = server_module.run_in_background(srv)
     # stop.bat・状態表示が「デスクトップ版が動いている」と分かるように(`launch_guard`)
     launch_guard.write_desktop_marker(mode)
@@ -628,7 +632,41 @@ def _ready_when_imported(srv, job) -> None:
     if job.is_running:
         log().warning("取り込みが %s秒 で終わらないので、先に画面を開きます",
                       IMPORT_WAIT_LIMIT_SEC)
+    else:
+        _follow_imported_grant(srv)
     srv.mark_ready(True)
+
+
+def _follow_imported_grant(srv) -> Optional[str]:
+    """**取り込んだアクセス権限で、開くモードを決め直す**(VER4.8.113)。切り替えたら新しいモード。
+
+    開くモードは取り込みの前に決める(待機画面を早く出すため)。初めて起動した端末・手元のDBを
+    作り直した端末は、その時点で手元にアクセス権限が無いので**現場モード**になり、資材だけの
+    倉庫の端末でも現場モードで開いていた(exe起動・vbs起動を混ぜた通し点検で見つけた)。
+    取り込みが終わったら(画面を開く前に)決め直す:
+      - モードを指定せずに起動した(既定) … 権限の強いほう(`startup_mode`)
+      - 指定したモードに権限が無くて現場へ落とした … 権限があれば指定したモードへ戻す
+    """
+    try:
+        from packaging_tool import access_control, modes
+        app = getattr(srv, "app", None)
+        if app is None:
+            return None
+        grant = access_control.startup_grant()
+        if not grant.has_master:
+            return None
+        current = app.config["MODE"]
+        want = grant.startup_mode() if getattr(srv, "auto_mode", False) \
+            else (app.config.get("NOTE_MODE") or current)
+        if want == current or not grant.allows_mode(want):
+            return None
+        app.config.update(MODE=want, MODE_NOTE="", NOTE_MODE="", STARTUP_GRANT=grant)
+        log().info("取り込んだアクセス権限で、開くモードを %s から %s にしました",
+                   modes.label(current), modes.label(want))
+        return want
+    except Exception:                             # noqa: BLE001 - 決め直せなくても起動は続ける
+        log().exception("取り込んだ権限でモードを決め直せませんでした")
+        return None
 
 
 # ------------------------------------------------------------------

@@ -389,6 +389,10 @@ def _refresh_if_changed(conn: sqlite3.Connection, path: Optional[Path]) -> bool:
     if TABLE not in result.imported:
         return False
     log.info("予定ロットを取り込み直しました: %s件", result.imported[TABLE])
+    # 開いている画面(倉庫連携の作業予定ラインなど)が見張りの `lot_plans_rev` で気づいて引き直す
+    # (`import_tables` の終わりでも進むが、ここで進んだことをはっきりさせる)
+    from . import master_state
+    master_state.touch([TABLE])
     return True
 
 

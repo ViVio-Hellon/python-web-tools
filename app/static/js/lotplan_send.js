@@ -8,6 +8,7 @@
   そのロットの予定を出し直す。発注とは別に送る(発注の無いロットも入れられる)。
 */
 import { api } from "./api.js";
+import * as nav from "./nav.js";
 import { toast, toastError } from "./toast.js";
 
 const el = {};
@@ -25,6 +26,10 @@ export function startLotPlanCard(lotInput) {
   el.lotPlanSend.addEventListener("click", () => send());
   el.lotPlanCancel.addEventListener("click", () => cancel());
   if (el.lotInput) el.lotInput.addEventListener("input", () => reload(400));
+  // ラインの端末が作業済みにした・ほかの長が入れ直した(見張りが予定ロットを取り込み直した)
+  const onPlans = () => reload();
+  window.addEventListener("tool:plans-changed", onPlans);
+  nav.onLeave(() => window.removeEventListener("tool:plans-changed", onPlans));
 }
 
 function lotNo() {

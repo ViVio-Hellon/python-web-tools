@@ -154,6 +154,9 @@ def health():
         # **まだ確認していない予定ロットの数**(VER4.8.106)。レールの「予N」を、ロット検索の画面に
         # いなくても合わせる(心拍のときだけ数え、共有は背景で見に行く)
         "lot_plans_unseen": _screen_plan_unseen(),
+        # **予定ロットの変わった回数**(VER4.8.113)。取り込み直して変わったら、開いている倉庫連携の
+        # 「作業予定ライン」がそのロットの予定を引き直す(ラインで押した作業済みが長の端末に出る)
+        "lot_plans_rev": _screen_plans_rev(),
         # いま走っているものの一言。**起動待機画面はこれを読む** ──
         # 取り込みが終わるまで待たせるので、何をどこまでやっているかを
         # 出さないと「止まっている」と受け取られる
@@ -228,6 +231,14 @@ def _screen_plan_unseen() -> Optional[int]:
     except Exception:                       # noqa: BLE001 - 見張りは止めない
         log.debug("予定ロットを数えられませんでした(次の心拍で試します)", exc_info=True)
         return None
+
+
+def _screen_plans_rev() -> Optional[int]:
+    """画面からの問い合わせなら、予定ロットの表の変わった回数(`master_state.table_rev`)。"""
+    if not request.headers.get(screen_lock.HEADER):
+        return None
+    from packaging_tool import config, master_state
+    return master_state.table_rev(config.TBL_LOT_PLAN)
 
 
 def _screen_data_epoch() -> Optional[int]:

@@ -38,6 +38,7 @@ function setOffline(offline) {
   帯に書いてある「描いたときのモード」と比べる。
 */
 let redrawing = false;
+let plansRev = null;          // 見張りが最後に見た予定ロットの変わった回数
 
 async function followModes(modes) {
   const end = document.querySelector(".ribbon__end");
@@ -86,6 +87,13 @@ async function beat() {
     if (body && typeof body.data_epoch === "number") datasync.announce(body.data_epoch);
     // レールの「予N」。ロット検索の画面にいなくても、届いた予定を出す
     if (body && typeof body.lot_plans_unseen === "number") nav.planBadge(body.lot_plans_unseen);
+    // 予定ロットが取り込み直されて変わった。開いている画面(倉庫連携の作業予定ライン)が引き直す
+    if (body && typeof body.lot_plans_rev === "number") {
+      if (plansRev !== null && body.lot_plans_rev !== plansRev) {
+        window.dispatchEvent(new CustomEvent("tool:plans-changed"));
+      }
+      plansRev = body.lot_plans_rev;
+    }
     // 保存していない図。タブを閉じるときに聞くため(`unsaved.js`)
     if (body && body.unsaved && typeof body.unsaved === "object") {
       unsaved.fromServer(body.unsaved);
