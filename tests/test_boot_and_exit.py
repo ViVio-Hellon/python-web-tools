@@ -476,6 +476,49 @@ class IdleWatchTests(unittest.TestCase):
         w = self.watch(sleep_gap_sec=30.0)
         self.assertFalse(w.check_sleep(w.tick_sec + 1))
 
+    # --- 時計のずれ・タブの休止(ほかのツールで起きた不具合。VER4.8.114) ----------
+    def test_スリープ明けに壁時計が追いついていなくても_経過時間で気づく(self):
+        """壁時計だけで見ていたので、戻った直後に壁時計がまだ進んでいない・時刻合わせで
+        戻された、と見抜けず、Windows の monotonic(スリープ中も進む)で「心拍が無い」になって終わっていた。"""
+        w = self.watch(idle_sec=60.0, sleep_gap_sec=30.0)
+        self.assertTrue(w.check_sleep(2.0, 7200.0))            # 壁時計はまだ 2秒
+        self.assertTrue(w.check_sleep(-7200.0, 2.0))           # 時刻合わせで戻された(ずれ)
+        self.assertFalse(w.check_sleep(2.0, 2.0))
+
+    def test_時計を差し替えて回すと_スリープ明けも時刻合わせも黙ったタブも終わらない(self):
+        """見張りを本当に回し、時計だけ差し替える(`_loop` の中身ごと確かめる)。"""
+        import threading
+
+        class Clock:
+            mono, wall = 1000.0, 1_700_000_000.0
+        fake = type("T", (), {"monotonic": staticmethod(lambda: Clock.mono),
+                              "time": staticmethod(lambda: Clock.wall)})
+        cases = {"壁時計が追いついていない": [(7200, 2, 1), (2, 2, 3)],
+                 "時刻合わせで戻された": [(7200, -10, 1), (2, 2, 3)],
+                 "表のタブが2分黙った": [(2, 2, 60)]}
+        for label, script in cases.items():
+            with self.subTest(label), mock.patch.object(idle_exit, "time", fake):
+                stopped = threading.Event()
+                w = idle_exit.IdleWatch(stopped.set, lambda: False, tick_sec=0.02)
+                w.beat("A", visible=True)
+                w.start()
+                try:
+                    for mono, wall, n in script:
+                        for _ in range(n):
+                            Clock.mono += mono
+                            Clock.wall += wall
+                            time.sleep(0.03)
+                    time.sleep(0.1)
+                finally:
+                    w.cancel()
+                self.assertFalse(stopped.is_set(), label)
+
+    def test_表のまま黙った画面を待つのは10分(self):
+        """90秒では、PCは起きたままブラウザだけ止まったときに使っている最中に終わっていた。
+        閉じたときは「閉じました」が届くので、こちらは短くなくてよい。"""
+        self.assertGreaterEqual(idle_exit.IDLE_SEC, 600.0)
+        self.assertLessEqual(idle_exit.GRACE_SEC, 10.0)          # 閉じたらすぐ終わるのは変えない
+
     def test_1度も繋がっていなければ落とさない(self):
         """`--no-browser` で立てておく使い方を巻き添えにしない。"""
         w = self.watch(idle_sec=0.0)

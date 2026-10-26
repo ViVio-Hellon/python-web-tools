@@ -38,9 +38,15 @@ from .logging_utils import get_logger
 
 log = get_logger("idle_exit")
 
-# 心拍が途切れてから終わるまで(秒)。画面は `HEARTBEAT_MS` ごとに送るので、
-# 数回落としても持ちこたえる長さにする
-IDLE_SEC = 90.0
+# 心拍が途切れてから終わるまで(秒)。**表のまま黙った画面を待つ長さ。**
+#
+# 以前は 90秒 だった(心拍 20秒 の数回ぶん)。ところが、PCは起きたままブラウザだけが止まる
+# (タブの休止・ブラウザの固まり・「隠れます」の合図が届かなかった)と、90秒 で**使っている最中に
+# 終わっていた**(ほかのツールで起きた不具合。VER4.8.114 で同じ作りだと確かめた)。
+# タブを閉じたときは「閉じました」が届いて `GRACE_SEC` で終わるので、ここが効くのは
+# 合図なしに画面が消えた(ブラウザが落ちた)ときだけ。その残り時間は短くなくてよい
+# (同じ版なら次の起動はこのプロセスへ合流し、違う版なら古いほうを止めて立て直す: `launch_guard`)
+IDLE_SEC = 600.0
 
 # 「閉じました」を受けてから終わるまで(秒)。
 # 再読込でも閉じた合図は飛ぶので、戻ってくるぶんを待つ
@@ -86,8 +92,8 @@ class IdleWatch:
     【スリープから戻ったら、待ち直す】
     PCがスリープしているあいだは、画面もこのプロセスも止まります。
     Windows では `time.monotonic()` がスリープ中も進むので、戻った瞬間に
-    「90秒 心拍が無い」が成り立ち、画面の最初の心拍より先に落ちていました。
-    見張りの間隔が壁時計で大きく空いたら**スリープから戻った**とみなし、
+    「心拍が無い」が成り立ち、画面の最初の心拍より先に落ちていました。
+    見張りの間隔が(経過時間でも壁時計でも)大きく空いたら**スリープから戻った**とみなし、
     そこから `idle_sec` は待ちます。
     """
 
@@ -189,11 +195,11 @@ class IdleWatch:
         self._done.set()
 
     def _loop(self) -> None:
-        last_wall = time.time()
+        last_wall, last_mono = time.time(), time.monotonic()
         while not self._done.wait(self.tick_sec):
-            now_wall = time.time()
-            self.check_sleep(now_wall - last_wall)
-            last_wall = now_wall
+            now_wall, now_mono = time.time(), time.monotonic()
+            self.check_sleep(now_wall - last_wall, now_mono - last_mono)
+            last_wall, last_mono = now_wall, now_mono
             why = self.overdue()
             if why is None:
                 continue
@@ -216,14 +222,25 @@ class IdleWatch:
             self._stop()
             return
 
-    def check_sleep(self, elapsed_wall: float) -> bool:
-        """見張りの間隔が壁時計で大きく空いた = スリープから戻った。待ち直す。"""
-        if elapsed_wall < self.tick_sec + self.sleep_gap_sec:
+    def check_sleep(self, elapsed_wall: float, elapsed_mono: Optional[float] = None) -> bool:
+        """見張りの間隔が大きく空いた = スリープから戻った。待ち直す。
+
+        **壁時計だけで決めない**(VER4.8.114)。スリープ明けに壁時計がまだ追いついていない・
+        時刻合わせで戻されたと、壁時計の間隔は小さく見える。一方 Windows の `monotonic` は
+        スリープ中も進むので、そのまま「心拍が無い」で終わっていた(ほかのツールで起きた不具合)。
+        経過時間(`monotonic`)の間隔・壁時計の間隔・その2つのずれの、どれかが大きければ戻ったとみなす。
+        """
+        gaps = [elapsed_wall]
+        if elapsed_mono is not None:
+            gaps += [elapsed_mono, abs(elapsed_wall - elapsed_mono)]
+        gap = max(gaps)
+        if gap < self.tick_sec + self.sleep_gap_sec:
             return False
         with self._lock:
             self._resumed_at = time.monotonic()
-        log.info("スリープから戻ったようです(%.0f秒 止まっていた)。画面が戻るのを"
-                 " %.0f秒 待ちます", elapsed_wall, self.idle_sec)
+        log.info("スリープから戻ったようです(%.0f秒 止まっていた。壁時計 %.0f秒 / 経過 %s)。"
+                 "画面が戻るのを %.0f秒 待ちます", gap, elapsed_wall,
+                 "-" if elapsed_mono is None else f"{elapsed_mono:.0f}秒", self.idle_sec)
         return True
 
     def overdue(self) -> Optional[str]:
