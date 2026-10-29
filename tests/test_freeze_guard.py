@@ -181,13 +181,17 @@ class SettingsOpensTests(unittest.TestCase):
             self.assertTrue(view.can_import, "確かめ終わる前に「できません」と言っています")
             self.assertTrue(presenter.to_dict(view)["status_pending"])
             release.set()
-            presenter._status_flight.wait_idle(5)
+            presenter._status_flight.wait_idle(60)
+        # 2回目は**待つ上限を長くして**確かめる。Windows の試験機は既定の置き場所(届かない
+        # UNC)を見に行くだけで数秒かかるので、0.2秒のままだと「確かめています」が正しく出る
+        with mock.patch.object(presenter, "STATUS_WAIT_SEC", 60.0):
             again = presenter.build(self.conn)
         self.assertFalse(again.status_pending)
         self.assertIn("梱包資材マスタ", [s.title for s in again.sections])
 
     def test_間に合えばいままでどおり(self) -> None:
-        view = presenter.build(self.conn)
+        with mock.patch.object(presenter, "STATUS_WAIT_SEC", 60.0):   # 試験機の UNC 待ちを見込む
+            view = presenter.build(self.conn)
         self.assertFalse(view.status_pending)
         titles = [s.title for s in view.sections]
         self.assertEqual(titles[:4], ["梱包資材マスタ", "看板マスタ", "パレット閾値マスタ", "仕掛台帳"])
