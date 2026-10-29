@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ja"{% if theme %} data-theme="{{ theme }}"{% endif %}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>パレット適合設定 — {{ display_name }}</title>
+{#
+  パレット適合設定(専用の窓)。設定のマスタ管理・資材選択のパレット一覧から別の窓で開く。
+  手順型: ① 何を直す → ② どのパレット → ③ 業界・記号 → ④ 新しい値 → ⑤ 確かめて反映。
+  直す表と行・変わるパレット・断りの文言はサーバが決める(packaging_tool/fit_setting.py)。
+  この窓は「いま使っているタブ」を名乗らない(作業中の資材選択のタブを取り上げない)。
+  色はアプリと同じ tokens.css(ライト / ダーク)。
+#}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--ground); color: var(--ink); font-family: var(--sans);
+         font-size: var(--fs-md); line-height: var(--lh); min-width: 980px; }
+  button, input, select { font: inherit; }
+  .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px;
+         padding: 8px 20px; background: linear-gradient(115deg, var(--bar-a), var(--bar-b));
+         color: var(--bar-ink); box-shadow: 0 2px 6px rgb(0 0 0 / 20%); }
+  .top h1 { margin: 0; font-size: var(--fs-xl); white-space: nowrap; }
+  .top .ver { font-size: var(--fs-sm); opacity: .85; white-space: nowrap; }
+  .top .grow { flex: 1; }
+  .status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--pill);
+          font-size: var(--fs-sm); font-weight: 700; background: rgb(255 255 255 / 16%);
+          border: 1px solid rgb(255 255 255 / 30%); white-space: nowrap; }
+  .chip.ok::before { content: "●"; color: var(--bar-ok); }
+  .chip.ng::before { content: "●"; color: var(--bar-alert); }
+  .auth { display: inline-flex; gap: 6px; align-items: center; }
+  .auth input { width: 150px; padding: 3px 8px; border-radius: var(--radius-xs); border: 1px solid var(--bar-edge);
+                background: var(--surface); color: var(--ink); }
+  .auth button, .top .btn-light { padding: 3px 12px; border-radius: var(--radius-xs); cursor: pointer;
+                font-weight: 700; border: 1px solid rgb(255 255 255 / 45%); background: transparent; color: inherit; }
+
+  .where { padding: 4px 20px; font-size: var(--fs-sm); color: var(--muted); background: var(--sunken);
+           border-bottom: 1px solid var(--rule); display: flex; gap: 18px; flex-wrap: wrap; }
+  .where b { color: var(--ink); font-weight: 600; }
+
+  .wrap { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 18px;
+          max-width: 1400px; margin: 0 auto; padding: 16px 20px 40px; }
+  .steps { align-self: start; position: sticky; top: 80px; display: flex; flex-direction: column; gap: 6px; }
+  .step { display: block; width: 100%; text-align: left; border: 1px solid var(--rule); border-radius: var(--radius);
+          background: var(--surface); color: var(--ink); padding: 8px 12px; cursor: default; }
+  .step .n { font-weight: 700; }
+  .step .ans { display: block; font-size: var(--fs-sm); color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+  .step.done { cursor: pointer; }
+  .step.done .n::after { content: " ✓"; color: var(--state-ok); }
+  .step.done:hover { border-color: var(--accent); }
+  .step.now { border: 2px solid var(--accent); background: var(--accent-soft); }
+  .step.later { opacity: .55; }
+  .steps .hint { font-size: var(--fs-sm); color: var(--muted); padding: 4px 2px; }
+
+  main { min-width: 0; }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px;
+          padding: 16px 20px 18px; margin-bottom: 16px; box-shadow: var(--shadow-sm); }
+  h2 { margin: 0 0 10px; font-size: var(--fs-xl); }
+  h3 { margin: 16px 0 6px; font-size: var(--fs-lg); }
+  p { margin: 6px 0; }
+  .lead { color: var(--muted); }
+  .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
+  .choice { text-align: left; padding: 16px 18px; border-radius: var(--radius); border: 2px solid var(--rule);
+            background: var(--raised); color: var(--ink); cursor: pointer; }
+  .choice:hover, .choice.on { border-color: var(--accent); background: var(--accent-soft); }
+  .choice b { display: block; font-size: var(--fs-lg); margin-bottom: 4px; }
+  .choice span { color: var(--muted); font-size: var(--fs-sm); }
+  .choice[disabled] { cursor: not-allowed; opacity: .55; }
+
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+  .row label { font-weight: 600; }
+  input.num { width: 96px; padding: 5px 8px; text-align: right; border: 1px solid var(--field-line);
+              border-radius: var(--radius-xs); background: var(--surface); color: var(--ink); height: var(--ctl-h); }
+  input.code { width: 140px; padding: 5px 8px; border: 1px solid var(--field-line); border-radius: var(--radius-xs);
+               background: var(--surface); color: var(--ink); height: var(--ctl-h); }
+  .rowsgrid { display: grid; grid-template-columns: max-content max-content; gap: 6px 18px; align-items: center;
+              margin: 6px 0; }
+  .rowsgrid label { display: flex; gap: 8px; align-items: center; }
+  .fitgrid { display: grid; grid-template-columns: 90px auto; gap: 8px 12px; align-items: center; margin: 10px 0; }
+  .fitgrid .cur { color: var(--muted); font-size: var(--fs-sm); }
+  .btn { padding: 6px 16px; border-radius: var(--ctl-r); border: 1px solid var(--accent-line); cursor: pointer;
+         background: var(--raised); color: var(--ink); font-weight: 700; min-height: var(--ctl-h); }
+  .btn.primary { background: var(--act-commit); color: var(--act-commit-fg); border-color: transparent; }
+  .btn.find { background: var(--act-find); color: #fff; border-color: transparent; }
+  .btn[disabled] { opacity: .5; cursor: not-allowed; }
+  .btn.small { padding: 2px 10px; min-height: 0; font-size: var(--fs-sm); }
+  /* 確かめの窓(askbox.js)のボタン */
+  .btn--commit { background: var(--act-commit); color: var(--act-commit-fg); border-color: transparent; }
+  .btn--danger { background: var(--act-danger); color: #fff; border-color: transparent; }
+
+  .groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .group { text-align: left; border: 2px solid var(--rule); border-radius: var(--radius); background: var(--raised);
+           color: var(--ink); padding: 12px 14px; cursor: pointer; }
+  .group:hover, .group.on { border-color: var(--accent); background: var(--accent-soft); }
+  .group b { font-size: var(--fs-lg); }
+  .group .rule { display: inline-block; margin-left: 6px; font-size: var(--fs-xs); padding: 0 8px; border-radius: var(--pill);
+                 background: var(--info-bg); color: var(--info-fg); vertical-align: middle; }
+  .group ul { margin: 6px 0 0; padding-left: 1.2em; font-size: var(--fs-sm); color: var(--muted); }
+
+  .opts { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+  .opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; border: 1px solid var(--rule);
+         border-radius: var(--radius-sm); background: var(--raised); cursor: pointer; }
+  .opt.on { border-color: var(--accent); background: var(--accent-soft); }
+  .opt.off { opacity: .6; cursor: not-allowed; }
+  .opt small { display: block; color: var(--muted); }
+
+  .box { border-left: 4px solid var(--state-info); background: var(--info-bg); color: var(--ink);
+         padding: 8px 12px; border-radius: var(--radius-sm); margin: 8px 0; }
+  .box.warn { border-left-color: var(--state-warn); background: var(--warn-bg); }
+  .box.err { border-left-color: var(--state-error); background: var(--night-error-bg, var(--warn-bg)); }
+  .box.ok { border-left-color: var(--state-ok); background: var(--ok-bg); }
+  .box ul { margin: 0; padding-left: 1.2em; }
+  .summary { font-size: var(--fs-lg); font-weight: 700; }
+
+  table { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); }
+  th, td { border-bottom: 1px solid var(--hairline); padding: 4px 8px; text-align: left; white-space: nowrap; }
+  th { background: var(--sunken); position: sticky; top: 0; z-index: 1; font-weight: 700; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.free { white-space: normal; }
+  tr.other td { color: var(--muted); }
+  .chg { font-weight: 700; color: var(--state-error); }
+  .tag { display: inline-block; font-size: var(--fs-xs); padding: 0 6px; border-radius: var(--pill);
+         background: var(--sunken); border: 1px solid var(--rule); }
+  .tag.me { background: var(--accent-soft); border-color: var(--accent-line); }
+  .scroll { max-height: 420px; overflow: auto; border: 1px solid var(--rule); border-radius: var(--radius-sm); }
+  .muted { color: var(--muted); }
+  .apply { display: flex; align-items: center; gap: 14px; margin-top: 14px; flex-wrap: wrap; }
+  .check { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .busy { position: fixed; right: 20px; bottom: 20px; padding: 8px 16px; border-radius: var(--pill);
+          background: var(--night); color: var(--night-ink); box-shadow: var(--shadow-pop); z-index: 20; }
+  details > summary { cursor: pointer; font-weight: 700; font-size: var(--fs-lg); }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>パレット適合設定</h1>
+  <span class="ver">{{ version_label }}</span>
+  <span class="grow"></span>
+  <div class="status" id="status"><span class="chip">確かめています…</span></div>
+</header>
+<div class="where" id="where">共有の置き場所を確かめています…</div>
+<div class="wrap">
+  <nav class="steps" id="steps" aria-label="手順"></nav>
+  <main>
+    <section class="card" id="main" aria-live="polite"></section>
+    <section class="card">
+      <details id="historyBox">
+        <summary>変更の記録(最近30件)</summary>
+        <p class="lead">この画面で反映した変更です。新しいものから順に「元に戻す」ができます
+          (あとで同じ行をほかで直していたら、戻さずに止めます)。</p>
+        <div id="history" class="muted">読んでいます…</div>
+      </details>
+    </section>
+  </main>
+</div>
+<div class="busy" id="busy" hidden>読んでいます…</div>
+<script>
+  window.APP = {
+    token: {{ token | tojson }},
+    // この窓は「いま使っているタブ」を名乗らない(作業中のタブを取り上げない)
+    screenId: "",
+    alivePollMs: {{ alive_poll_ms }},
+    dataEpoch: {{ data_epoch | tojson }},
+    startWidth: {{ start_width | tojson }},
+    startLength: {{ start_length | tojson }}
+  };
+</script>
+<script type="module" src="{{ url_for('static', filename='js/pallet_fit.js') }}"></script>
+</body>
+</html>

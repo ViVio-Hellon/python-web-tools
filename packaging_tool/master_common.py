@@ -154,8 +154,72 @@ def added_columns(path: Optional[Path], table: str) -> dict[str, str]:
     return {str(r["列"]): str(r.get("型") or "text") for r in rows if r.get("列")}
 
 
+# ==================================================================
+# パレット適合設定で直す表・列(VER4.8.116)
+# ==================================================================
+# 現場の声:「極力この機能に関してはマスタをダイレクトに操作させないつくりにしてください。
+# 影響範囲が大きいです」。適合範囲を決める表とパレットの寸法は、マスタ管理では見るだけにして、
+# パレット適合設定(`fit_setting`。直す表と行を自動で決め、変わるパレットを見せてから書く)へ案内する。
+#
+# **代わりの無いものは今までどおり直せる**(業務の機能を減らさない): 脚数・桁数の帯、記号ごとの
+# 桁数・脚数、パレットごとの桁数・脚数、新しいパレットの行を足す(寸法を入れて足す)、行を消す。
+FIT_PAGE = "パレット適合設定"
+FIT_PAGE_WHY = ("適合範囲とパレットのサイズは「パレット適合設定」で直します(直す表と行を自動で決め、"
+                "変わるパレットを全部見せてから反映します。記録から元に戻せます)。"
+                "マスタ管理の「パレット適合設定を開く」から開けます。")
+# 表ごと見るだけ(行を足す・直す・消すをしない)
+FIT_LOCKED_TABLES: frozenset[str] = frozenset({
+    "PalletDakeThreshold", "PalletHabaThreshold", "PalletIndustryMaster", "PalletComboMaster"})
+# 行は足せない・消せない。直せるのはここに挙げた列だけ
+FIT_ONLY_COLUMNS: dict[str, frozenset[str]] = {
+    "PalletSymbolMaster": frozenset({"桁数", "脚数", "備考", "更新日時"}),
+}
+FIT_ONLY_WHY = {
+    "PalletSymbolMaster": ("記号ごとの適合範囲・記号を足すのは「パレット適合設定」で直します。"
+                           "ここで直せるのは桁数・脚数・備考だけです(行は足せません・消せません)。"),
+}
+# 書き換えるときは触らせない列(新しい行を足すときは入れてよい)
+FIT_LOCKED_ON_EDIT: dict[str, frozenset[str]] = {
+    config.TBL_PALLET_MASTER: frozenset({"幅", "丈"}),
+}
+# いつも触らせない列(各端末が閾値から計算し直して上書きする。直しても次で消える)
+FIT_COMPUTED: dict[str, frozenset[str]] = {
+    config.TBL_PALLET_MASTER: frozenset({"巾適合min", "巾適合max", "丈適合min", "丈適合max"}),
+}
+FIT_COLUMN_NOTE = "パレット適合設定で直します"
+FIT_COMPUTED_NOTE = "各端末が閾値から計算する値です(パレット適合設定で直します)"
+
+
+def fit_locked(table: str) -> bool:
+    """表ごと見るだけの表か(パレット適合設定で直す)。"""
+    return table in FIT_LOCKED_TABLES
+
+
+def fit_rows_locked(table: str) -> bool:
+    """行を足す・消すをさせない表か。"""
+    return table in FIT_LOCKED_TABLES or table in FIT_ONLY_COLUMNS
+
+
+def fit_table_why(table: str) -> str:
+    if table in FIT_LOCKED_TABLES:
+        return FIT_PAGE_WHY
+    return FIT_ONLY_WHY.get(table, "")
+
+
+def column_locked(table: str, name: str, *, adding: bool) -> bool:
+    """その列をマスタ管理で触らせないか。`adding` は新しい行を足すとき。"""
+    if name in FIT_COMPUTED.get(table, frozenset()):
+        return True
+    only = FIT_ONLY_COLUMNS.get(table)
+    if only is not None:
+        return name not in only
+    return not adding and name in FIT_LOCKED_ON_EDIT.get(table, frozenset())
+
+
 def view_only_why(table: str) -> str:
     """その表を直せない理由。直せる表なら空。"""
+    if table in FIT_LOCKED_TABLES:
+        return FIT_PAGE_WHY
     if table in BY_TABLE:
         return ""
     if table in brought_tables(data_sync.find_material_db()):

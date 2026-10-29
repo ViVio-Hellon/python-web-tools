@@ -179,9 +179,12 @@
           <span class="ops__name">パレットマスタ</span>
           <div class="btn-row">
             <button class="btn" type="button" id="recompute">適合範囲を再計算</button>
+            <button class="btn btn--run" type="button" data-open-fit>パレット適合設定を開く</button>
           </div>
         </div>
-        <p class="why">取り込みのたびに自動で走ります。手で直したいとき用です。</p>
+        <p class="why">再計算は取り込みのたびに自動で走ります(手で走らせたいとき用)。
+          適合範囲・パレットのサイズを<b>直す</b>ときは「パレット適合設定」から(直す表と行を自動で決め、
+          変わるパレットを見せてから反映します)。</p>
       </div>
     </div>
   </section>
@@ -212,6 +215,11 @@
       <div class="pad">
         <div class="mlist" id="mTables">
           <p class="why">「マスタ管理」を開くと読み込みます。</p>
+        </div>
+        {# 適合範囲を決める表とパレットの寸法は、ここでは見るだけ(パレット適合設定で直す) #}
+        <div class="mfit">
+          <button class="btn btn--run" type="button" data-open-fit>パレット適合設定を開く</button>
+          <p class="why">パレットの適合範囲・サイズはここから直します(別の窓が開きます)。</p>
         </div>
       </div>
     </aside>
@@ -1304,6 +1312,10 @@
   .masterwrap > .card > header h3 { margin-right:auto; }
   .mlist { flex:1; min-height:0; overflow-y:auto; display:grid;
            gap:2px; align-content:start; }
+  /* 一覧の下に、パレット適合設定への入口(適合範囲・サイズはそちらで直す) */
+  .mfit { border-top:1px solid var(--rule); margin-top:8px; padding-top:8px; }
+  .mfit .btn { width:100%; }
+  .mfit .why { margin:4px 0 0; }
   /* 表の1つ。**押せるものは押せる形**にする(高さ44px、§1.2) */
   .mrow { display:grid; grid-template-columns:auto 1fr auto; gap:8px;
           align-items:center; min-height:44px; padding:5px 9px;

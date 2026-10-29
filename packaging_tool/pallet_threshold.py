@@ -119,9 +119,42 @@ def rows(conn: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
         raise ThresholdError(f"{table} を読めません: {exc}") from exc
 
 
+def select_rows(table: str, raw: Iterable[Any]) -> list[Any]:
+    """`rows()` と同じ選び方を、**手元のDBを通さずに**する(画面の見本で使う。VER4.8.116)。
+
+    有効<>0 の行だけ、並びは帯の表が `入力最小値`・鍵の表が `並び順`、同じ値なら `ID`
+    (無ければ `__行` = 取り込み元の rowid)。`rows()` と食い違うと、見本と反映が違ってしまう。
+    """
+    order = "入力最小値" if table in BAND_TABLES else "並び順"
+
+    def enabled(row: Any) -> bool:
+        value = _get(row, "有効")
+        if value is None:
+            return False
+        try:
+            return float(value) != 0
+        except (TypeError, ValueError):
+            return str(value).strip() not in ("", "0")
+
+    def key(row: Any) -> tuple:
+        return (_int(_get(row, order)), _int(_get(row, "ID", _get(row, "__行", 0))))
+
+    return sorted((r for r in raw if enabled(r)), key=key)
+
+
+def _get(row: Any, name: str, default: Any = None) -> Any:
+    try:
+        return row[name]
+    except (KeyError, IndexError):
+        return default
+
+
 def _load_band(conn: sqlite3.Connection, table: str) -> tuple[Band, ...]:
+    return _band_from(table, rows(conn, table))
+
+
+def _band_from(table: str, found: list[Any]) -> tuple[Band, ...]:
     lo_col, hi_col = _BAND_VALUE_COLUMNS[table]
-    found = rows(conn, table)
     if not found:
         raise ThresholdError(f"{table} に有効な行がありません")
     return tuple(
@@ -210,11 +243,16 @@ def load(conn: sqlite3.Connection) -> Thresholds:
     手元のSQLiteを4回読むだけです。**捨て忘れて古い値で計算する**
     という失敗の余地を残さないほうが確かです。
     """
+    return load_from(lambda table: rows(conn, table))
+
+
+def load_from(get_rows) -> "Thresholds":
+    """`load` の中身。`get_rows(表)` は有効な行を並び順で返す(`rows` / `select_rows`)。"""
     got = Thresholds(
-        dake=_load_band(conn, "PalletDakeThreshold"),
-        haba=_load_band(conn, "PalletHabaThreshold"),
-        ashi_bands=_load_band(conn, "PalletAshiThreshold"),
-        keta_bands=_load_band(conn, "PalletKetaThreshold"),
+        dake=_band_from("PalletDakeThreshold", get_rows("PalletDakeThreshold")),
+        haba=_band_from("PalletHabaThreshold", get_rows("PalletHabaThreshold")),
+        ashi_bands=_band_from("PalletAshiThreshold", get_rows("PalletAshiThreshold")),
+        keta_bands=_band_from("PalletKetaThreshold", get_rows("PalletKetaThreshold")),
     )
     _check_band("PalletDakeThreshold", got.dake)
     _check_band("PalletHabaThreshold", got.haba)
@@ -231,7 +269,7 @@ def load(conn: sqlite3.Connection) -> Thresholds:
 # ==================================================================
 # **移植元 `PT_CreateThresholdDB` が投入する行そのまま。**
 # 数値は社内基準表の写しなので、ここを気軽に直さないこと
-# (直す場所はマスタ管理画面です。ここは「まだ1行も無いとき」に
+# (直す場所はパレット適合設定です(脚数・桁数の帯はマスタ管理)。ここは「まだ1行も無いとき」に
 #  入れる出発点でしかありません)。
 #
 # 業界の `×` は移植元が投入時に `x` から変換しているもの。

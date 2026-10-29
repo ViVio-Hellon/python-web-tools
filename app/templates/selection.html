@@ -291,6 +291,11 @@
         <button class="btn" type="button" id="twoStack"
                 aria-pressed="{{ 'true' if view.two_stack else 'false' }}">2山積</button>
         <span class="eyebrow" id="listNote">{{ view.list_note }}</span>
+        {# パレット適合設定(別の窓)。選んだ行があればその寸法から始める。
+           「このパレットが出ない・出てほしくない」を、その場から直しに行ける #}
+        <button class="btn btn--nav" type="button" id="openFit"
+                title="パレットの適合範囲・サイズを直す画面を別の窓で開きます(一覧で行を選んでいれば、その寸法から始めます)">
+          適合を直す<span class="gl">▸</span></button>
       </div>
       <p class="why" id="exOnlyWhy" {% if not view.ex_only_why %}hidden{% endif %}>{{ view.ex_only_why }}</p>
       <div class="tablewrap tablewrap--tall">

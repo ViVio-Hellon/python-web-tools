@@ -42,10 +42,15 @@ class Column:
     blank_text: bool = False
     # 空欄のときに書く値(手元の既定値。`EMPTY_TEXT_TABLES` の表だけ)。None なら NULL で書く
     blank_value: Any = None
+    # マスタ管理では触らせない列(パレット適合設定で直す。VER4.8.116)。
+    # `locked` は足すときも、`locked_edit` は書き換えるときだけ
+    locked: bool = False
+    locked_edit: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "kind": self.kind,
-                "required": self.required, "note": self.note}
+                "required": self.required, "note": self.note,
+                "locked": self.locked, "locked_edit": self.locked_edit}
 
 
 # **空欄でよい(空の文字として書く)列。** 手元の表では NULL にできない(NOT NULL)が、
@@ -196,12 +201,16 @@ def columns(conn: sqlite3.Connection, table: str,
         # (空の文字に意味がある列 `BLANK_TEXT` は除く)
         required = (bool(row["notnull"]) and row["dflt_value"] is None
                     and not stamp and not blank_text)
+        locked = master_common.column_locked(table, local, adding=True)
+        locked_edit = master_common.column_locked(table, local, adding=False)
+        lock_note = (master_common.FIT_COMPUTED_NOTE if locked and table in master_common.FIT_COMPUTED
+                     else master_common.FIT_COLUMN_NOTE if locked or locked_edit else "")
         out.append(Column(
-            name=local, kind=kind, required=required, stamp=stamp, blank_text=blank_text,
-            blank_value=blank_value,
-            note=("空欄なら今の日時が入ります" if stamp
-                  else BLANK_TEXT_NOTE.get((table, local), "")
-                  or COLUMN_NOTE.get((table, local), ""))))
+            name=local, kind=kind, required=required and not locked, stamp=stamp, blank_text=blank_text,
+            blank_value=blank_value, locked=locked, locked_edit=locked_edit,
+            note=lock_note or ("空欄なら今の日時が入ります" if stamp
+                               else BLANK_TEXT_NOTE.get((table, local), "")
+                               or COLUMN_NOTE.get((table, local), ""))))
     # マスタ管理で足した列(`master_schema.add_column`)。取り込みは読まないが、
     # 足した人が直すために足した列なので直せる列に出す。型は足したときの型
     if source_path is not None:

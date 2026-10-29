@@ -58,6 +58,11 @@ def make_source(directory: Path) -> Path:
     return path
 
 
+def source_db_columns(path: Path, table: str) -> list[str]:
+    from packaging_tool import source_db
+    return source_db.columns(path, table)
+
+
 class MasterTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = Path(tempfile.mkdtemp(prefix="master_"))
@@ -281,17 +286,50 @@ class EditTests(MasterTestCase):
         self.assertEqual(got["位置"], "B-2")
 
     def test_パレットは適合範囲も計算し直す(self) -> None:
-        """寸法を直したら適合範囲も変わる。取り込みと同じ後始末をする。"""
+        """パレットの行を直したら適合範囲も計算し直す。取り込みと同じ後始末をする。"""
         master_admin.save_row(self.conn, "PalletMaster",
-                              self.key("PalletMaster"), {"幅": "1200"},
+                              self.key("PalletMaster"), {"位置": "B-2"},
                               path=self.src)
         got = self.conn.execute(
             "SELECT 幅, 巾適合min, 巾適合max FROM PalletMaster").fetchone()
-        self.assertEqual(got["幅"], 1200)
         # 取り込み元は空だった。計算し直されて、載る製品の幅の幅になる
         self.assertLess(0, got["巾適合min"])
         self.assertLess(got["巾適合min"], got["巾適合max"])
         self.assertLess(got["巾適合max"], got["幅"])
+
+    def test_寸法はマスタ管理では直さない_パレット適合設定へ案内する(self) -> None:
+        """寸法と適合の4列はパレット適合設定で直す(VER4.8.116。影響が大きいので直接は触らせない)。"""
+        result = master_admin.save_row(self.conn, "PalletMaster", self.key("PalletMaster"),
+                                       {"幅": "1200"}, path=self.src)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, master_admin.REFUSE_NOT_EDITABLE)
+        self.assertIn("パレット適合設定", result.message)
+        self.assertEqual(self.source_rows("PalletMaster")[0]["幅"], 1100)
+
+    def test_同じ値のまま送られてきた寸法は黙って除く(self) -> None:
+        """古い画面・道具は全部の列を送ってくる。値が同じなら断らずに、ほかの列だけ書く。"""
+        result = master_admin.save_row(self.conn, "PalletMaster", self.key("PalletMaster"),
+                                       {"幅": "1100", "位置": "C-3"}, path=self.src)
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(self.source_rows("PalletMaster")[0]["位置"], "C-3")
+
+    def test_新しいパレットの行は寸法を入れて足せる(self) -> None:
+        """足すのは今までどおり(新しいパレット)。適合の4列は入れても計算し直す値に戻る。"""
+        result = master_admin.add_row(
+            self.conn, "PalletMaster",
+            {"幅": "1150", "丈": "2650", "位置": "", "業界": "タイト", "単位": "台", "コード": "088888",
+             "巾適合min": "1", "巾適合max": "2"}, path=self.src)
+        self.assertTrue(result.ok, result.message)
+        added = [r for r in self.source_rows("PalletMaster") if r["コード"] == "088888"][0]
+        self.assertEqual((added["幅"], added["巾適合min"]), (1150, None))
+
+    def test_適合と寸法の列は画面で打てない形で出す(self) -> None:
+        cols = {c.name: c for c in master_admin.columns(self.conn, "PalletMaster",
+                                                         source_db_columns(self.src, "PalletMaster"))}
+        self.assertTrue(cols["巾適合min"].locked)
+        self.assertTrue(cols["幅"].locked_edit)
+        self.assertFalse(cols["幅"].locked)              # 足すときは入れる
+        self.assertFalse(cols["桁数"].locked_edit)        # 桁数・脚数は今までどおり直せる
 
     def test_送っていない列は触らない(self) -> None:
         """一部だけ送られたときに、送っていない項目を消さない。"""

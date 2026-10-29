@@ -577,6 +577,14 @@ export function start(state, jobState, masterFrame) {
   });
   el.recompute.addEventListener("click", () =>
     startJob("/api/settings/recompute", {}));
+  // パレット適合設定(別の窓の専用ページ)
+  for (const button of document.querySelectorAll("[data-open-fit]")) {
+    button.addEventListener("click", () => {
+      if (!openWindow("/pallet-fit", "パレット適合設定")) {
+        toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
+      }
+    });
+  }
   el.dedupeRun.addEventListener("click", runDedupe);
   // 押されたら、走っている確認が終わるのを待ってから確かめ直す(押す前の答えを返さない)
   el.refresh.addEventListener("click", () => refreshStatus({ fresh: true }));

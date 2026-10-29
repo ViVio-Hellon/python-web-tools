@@ -375,10 +375,19 @@ class PriorityTests(ThresholdTestCase):
 # ------------------------------------------------------------------
 class MasterAdminTests(ThresholdTestCase):
     def test_7表とも管理画面に載っている(self):
+        """7表とも中身は管理画面で見られる。**適合範囲を決める4表は見るだけ**で、
+        パレット適合設定で直す(VER4.8.116)。脚数・桁数の帯と記号表は今までどおり直せる。"""
+        from packaging_tool import master_common
         for table in pallet_threshold.TABLES:
             with self.subTest(table=table):
                 self.assertIn(table, master_admin.BY_TABLE)
-                self.assertEqual(master_admin.view_only_why(table), "")
+                if table in master_common.FIT_LOCKED_TABLES:
+                    self.assertIn("パレット適合設定", master_admin.view_only_why(table))
+                else:
+                    self.assertEqual(master_admin.view_only_why(table), "")
+        self.assertEqual(master_common.FIT_LOCKED_TABLES,
+                         {"PalletDakeThreshold", "PalletHabaThreshold",
+                          "PalletIndustryMaster", "PalletComboMaster"})
 
     def test_取り込み元に無くてもよい表として扱う(self):
         """移植元は別ファイル(accdb)に持っていたので、現場の梱包資材

@@ -788,7 +788,7 @@ export function start(initial) {
                     "palFindWidth", "palFindLength",
                     "sizeStatus", "decideWhy", "productFrom", "exOnlyWhy",
                     "showOnStock",
-                    "showAll", "exOnly", "twoStack",
+                    "showAll", "exOnly", "twoStack", "openFit",
                     "decide", "clearSizes",
                     // ボード
                     "boardCard", "boardType", "boardRows", "candidateNote",
@@ -873,6 +873,17 @@ export function start(initial) {
   });
 
   // 「一覧に無い寸法を使う」は無くした。一覧に無いパレットは倉庫送信できないため
+
+  // パレット適合設定(別の窓)。選んだ行があれば、その寸法から始める
+  el.openFit.addEventListener("click", () => {
+    const tr = picked(el.palletRows);
+    const width = (tr && tr.dataset.width) || (pickedPalletRow && pickedPalletRow.width) || "";
+    const length = (tr && tr.dataset.length) || (pickedPalletRow && pickedPalletRow.length) || "";
+    const query = width && length ? `?w=${encodeURIComponent(width)}&l=${encodeURIComponent(length)}` : "";
+    if (!openWindow(`/pallet-fit${query}`, "パレット適合設定")) {
+      toast("別の窓を開けませんでした。ポップアップの許可を確認してください。", "warn");
+    }
+  });
 
   // 製品 幅・丈を打つたびに、**確定させずに**候補を一覧へ出す。
   // 片方だけでもその辺に近いパレットを、両方そろえば「載るか」の

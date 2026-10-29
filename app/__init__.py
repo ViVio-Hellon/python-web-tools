@@ -634,8 +634,11 @@ _write_holder: dict = {}
 #   /api/mode      … 画面の切り替え。DBを書かない
 # 前方一致で見る
 #   /api/alive     … 心拍。20秒ごとに来るので、待たせると自動終了が誤る
+#   /api/pallet-fit/find・plan・check … パレット適合設定の見本づくり。**書かない**(共有を読むだけ。
+#                    読むのに時間がかかっても、ほかの書く要求を待たせない。VER4.8.116)
 _NO_LOCK_PREFIXES = ("/api/jobs", "/api/mode", "/api/log", "/api/alive",
-                     "/api/client-error")
+                     "/api/client-error",
+                     "/api/pallet-fit/find", "/api/pallet-fit/plan", "/api/pallet-fit/check")
 
 
 def _is_write(req) -> bool:
@@ -758,6 +761,10 @@ def _register_routes(app: Flask) -> None:
     # 操作説明書(写真入り)。どのモードでも開ける
     from .routes import manual as manual_routes
     app.register_blueprint(manual_routes.bp)
+    # パレット適合設定(別の窓の専用ページ)。**どのモードでも登録する** ── 直せるかどうかは
+    # 要求のたびに権限と管理者認証で見る(`fit_setting.can_edit`。マスタ管理と同じ)
+    from .routes import pallet_fit
+    app.register_blueprint(pallet_fit.bp)
     # 部品カタログ。利用者向けではなく開発を進めるための見本帳
     app.register_blueprint(catalog.bp)
     # 設定画面は**どのモードでも**開ける。取り込みと書き戻し、そして

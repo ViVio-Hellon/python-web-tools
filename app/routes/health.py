@@ -223,9 +223,12 @@ def _screen_plan_unseen() -> Optional[int]:
     if not current_app.config.get("READY"):
         return None
     try:
-        from packaging_tool import access_control, lot_plans
+        from packaging_tool import access_control, fit_setting, lot_plans
         from .. import current_grant, get_db
         lot_plans.refresh_in_background()
+        # 閾値マスタ(パレット適合設定)がほかの端末で直されたら、取り込み直して計算し直す
+        # (背景の1本だけ。30秒に1回まで。VER4.8.116)
+        fit_setting.refresh_in_background()
         conn = get_db()
         return lot_plans.unseen_count(conn, access_control.lines(conn, current_grant().identity))
     except Exception:                       # noqa: BLE001 - 見張りは止めない

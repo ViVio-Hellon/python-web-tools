@@ -220,10 +220,15 @@ def build_pallet_range_table(conn: sqlite3.Connection) -> PalletRangeTable:
     鍵は `normalize_key` でそろえます。マスタの「5x10」「５×１０」を
     同じ1つの鍵として扱うためです。
     """
+    return build_range_table_from(lambda table: pallet_threshold.rows(conn, table))
+
+
+def build_range_table_from(get_rows) -> PalletRangeTable:
+    """`build_pallet_range_table` の中身。`get_rows(表)` は有効な行を並び順で返す(VER4.8.116)。"""
     t = PalletRangeTable()
 
     # --- 1. 業界単独 -------------------------------------------------
-    for row in pallet_threshold.rows(conn, "PalletIndustryMaster"):
+    for row in get_rows("PalletIndustryMaster"):
         key = normalize_key(str(row["業界"] or ""))
         t.w_min[key] = int(row["巾適合最小値"] or 0)
         t.w_max[key] = int(row["巾適合最大値"] or 0)
@@ -231,7 +236,7 @@ def build_pallet_range_table(conn: sqlite3.Connection) -> PalletRangeTable:
         t.l_max[key] = int(row["丈適合最大値"] or 0)
 
     # --- 2. 記号(同じ鍵なら上書き勝ち) -------------------------------
-    for row in pallet_threshold.rows(conn, "PalletSymbolMaster"):
+    for row in get_rows("PalletSymbolMaster"):
         key = normalize_key(str(row["記号"] or ""))
         t.w_min[key] = int(row["巾適合最小値"] or 0)
         t.w_max[key] = int(row["巾適合最大値"] or 0)
@@ -241,7 +246,7 @@ def build_pallet_range_table(conn: sqlite3.Connection) -> PalletRangeTable:
         t.ashi[key] = int(row["脚数"] or 0)
 
     # --- 3. 複合キー(業界|記号) --------------------------------------
-    for row in pallet_threshold.rows(conn, "PalletComboMaster"):
+    for row in get_rows("PalletComboMaster"):
         key = (f"{normalize_key(str(row['業界'] or ''))}"
                f"|{normalize_key(str(row['記号'] or ''))}")
         t.combo[key] = (int(row["巾適合最小値"] or 0),
@@ -396,6 +401,138 @@ def loose_key_rows(conn: sqlite3.Connection) -> list[LooseMatch]:
     return found
 
 
+# どの決まりで適合範囲が決まったか(`fit_row`。パレット適合設定の画面も同じ言葉を使う)
+RULE_COMBO = "combo"          # 組合せ表(業界|記号)
+RULE_SYMBOL = "symbol"        # 記号表
+RULE_INDUSTRY = "industry"    # 業界表
+RULE_BAND = "band"            # 帯(丈の帯・幅の帯)
+
+
+@dataclass
+class RowFit:
+    """1行ぶんの計算結果(`fit_row`)。**書かない**ので、画面の見本にもそのまま使える。"""
+
+    updates: dict[str, int] = field(default_factory=dict)
+    rule: str = RULE_BAND
+    key: str = ""                 # 当たった鍵(帯なら空)
+    loose: list[tuple[str, str, str]] = field(default_factory=list)   # (列, 元の字, そろえた鍵)
+    band_miss: list[str] = field(default_factory=list)
+    dake: int = 0                 # 丈の帯から入れた(0/1)
+    haba: int = 0                 # 幅の帯から入れた(0/1)
+    ashi: int = 0                 # 脚数を補った(0/1)
+    keta: int = 0                 # 桁数を補った(0/1)
+
+
+def fit_row(row: Any, thresholds: "pallet_threshold.Thresholds",
+            table: PalletRangeTable) -> RowFit:
+    """1行の適合範囲・桁数・脚数を計算する(**書かない**。VER4.8.116 で `recompute_fit_ranges` から分けた)。
+
+    `row` は PalletMaster の1行(管理番号・幅・丈・記号・業界・脚数・桁数)。
+    計算はここ1か所 ── 画面の見本(パレット適合設定)と実際の再計算が**同じ道を通る**ようにするため。
+    決まりの順は `recompute_fit_ranges` の説明のとおり。
+    """
+    got = RowFit()
+    dake = _size(row["丈"])
+    haba = _size(row["幅"])
+    # 記号は**もとの記号**で引く。「C1 ﾊﾟﾚｯﾄ台」「強度UP ﾊﾟﾚｯﾄ台 薄板用5x10」の
+    # ままだと固定表の C1・強度UP に当たらず、計算の帯に落ちる(`pallet_symbol`)
+    sym_raw = base_symbol(row["記号"])
+    sym2 = normalize_key(sym_raw)
+    gyk = normalize_key(row["業界"] or "")
+    c_key = f"{gyk}|{sym2}"
+    updates = got.updates
+
+    def note_loose(column: str, raw: Any, key: str) -> None:
+        """そろえて初めて当たったなら、そのことを控える(元の字と、そろえた結果)。"""
+        text = str(raw or "")
+        if text.strip() != key:
+            got.loose.append((column, text, key))
+
+    def note_miss(side: str, size: int, *values: int) -> bool:
+        """帯に当たったか。当たっていなければ控えて False(`recompute_fit_ranges` の説明)。"""
+        if pallet_threshold.NO_HIT not in values:
+            return True
+        got.band_miss.append(
+            f"管理番号 {row['管理番号']}  {side}={size}"
+            f"(帯の範囲外なのでこの列は触っていません)")
+        return False
+
+    # --- 固定適合の上書き(最優先) -------------------------
+    #     ① 複合キー(業界|記号) → ② 記号単独 → ③ 業界単独
+    if c_key in table.combo:
+        w_min, w_max, l_min, l_max = table.combo[c_key]
+        updates.update({"巾適合min": w_min, "巾適合max": w_max,
+                        "丈適合min": l_min, "丈適合max": l_max})
+        note_loose("業界", row["業界"], gyk)
+        note_loose("記号", sym_raw, sym2)
+        got.rule, got.key = RULE_COMBO, c_key
+    elif sym2 in table.w_min:
+        updates.update({
+            "巾適合min": table.w_min[sym2], "巾適合max": table.w_max[sym2],
+            "丈適合min": table.l_min[sym2], "丈適合max": table.l_max[sym2],
+        })
+        # 記号で当たった行の桁数・脚数は**表の値で上書きする**。
+        # 記号は現物の型そのものなので、表のほうが確かな事実
+        if sym2 in table.keta:
+            updates["桁数"] = table.keta[sym2]
+        if sym2 in table.ashi:
+            updates["脚数"] = table.ashi[sym2]
+        note_loose("記号", sym_raw, sym2)
+        got.rule, got.key = RULE_SYMBOL, sym2
+    elif gyk and gyk in table.w_min:
+        updates.update({
+            "巾適合min": table.w_min[gyk], "巾適合max": table.w_max[gyk],
+            "丈適合min": table.l_min[gyk], "丈適合max": table.l_max[gyk],
+        })
+        note_loose("業界", row["業界"], gyk)
+        got.rule, got.key = RULE_INDUSTRY, gyk
+
+    # --- 段階表からの計算 -----------------------------------
+    if got.rule == RULE_BAND:
+        # min/maxは必ず対の段階表から引く(条件なしで常に上書きし、
+        # 既存の誤った値も正しい範囲に矯正する)。
+        # 上限は現物サイズでクランプする(下の cap_to_pallet を参照)
+        if dake > 0:
+            lo = thresholds.dake_min(dake)
+            hi = thresholds.dake_max(dake)
+            if note_miss("丈", dake, lo, hi):
+                updates["丈適合min"] = lo
+                updates["丈適合max"] = cap_to_pallet(hi, dake)
+                got.dake = 1
+        if haba > 0:
+            lo = thresholds.haba_min(haba)
+            hi = thresholds.haba_max(haba)
+            if note_miss("幅", haba, lo, hi):
+                updates["巾適合min"] = lo
+                updates["巾適合max"] = cap_to_pallet(hi, haba)
+                got.haba = 1
+
+    # --- 後始末:脚数・桁数の補完 ---------------------------
+    # **どの道を通った行もここを通る**(移植元の `SkipCalc:`)。
+    # 埋めるのは**空のときだけ** ── 現場が手で入れた本数を潰さない
+    if dake > 0 and "脚数" not in updates and is_blank(row["脚数"]):
+        ashi = thresholds.ashi(dake)
+        if note_miss("丈", dake, ashi, ashi):
+            updates["脚数"] = ashi
+            got.ashi = 1
+    if haba > 0 and "桁数" not in updates and is_blank(row["桁数"]):
+        keta = thresholds.keta(haba)
+        if note_miss("幅", haba, keta, keta):
+            updates["桁数"] = keta
+            got.keta = 1
+    return got
+
+
+def _size(value: Any) -> int:
+    """寸法の欄を整数に(空・読めない値は0)。取り込み元の欄は文字のこともある。"""
+    if value is None:
+        return 0
+    try:
+        return int(float(str(value).strip() or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
     """VBA `RunUpdatePalletAll` の移植。
 
@@ -444,123 +581,21 @@ def recompute_fit_ranges(conn: sqlite3.Connection) -> RecomputeSummary:
     got = RecomputeSummary(ok=True, total=len(rows))
     with conn:
         for row in rows:
-            dake = row["丈"] or 0
-            haba = row["幅"] or 0
-            # 記号は**もとの記号**で引く。「C1 ﾊﾟﾚｯﾄ台」「強度UP ﾊﾟﾚｯﾄ台 薄板用5x10」の
-            # ままだと固定表の C1・強度UP に当たらず、計算の帯に落ちる(`pallet_symbol`)
-            sym_raw = base_symbol(row["記号"])
-            sym2 = normalize_key(sym_raw)
-            gyk = normalize_key(row["業界"] or "")
-            c_key = f"{gyk}|{sym2}"
-
-            updates: dict[str, int] = {}
-            from_table = False
-
-            def note_loose(column: str, raw: Any, key: str) -> None:
-                """そろえて初めて当たったなら、そのことを控える。
-
-                元の文字と、そろえた結果を並べて出す。マスタのどの行を
-                直せばよいかが、そのまま読める形にする。
-                """
-                text = str(raw or "")
-                if text.strip() != key:
-                    got.loose.append(LooseMatch(
-                        number=row["管理番号"], column=column,
-                        raw=text, matched=key))
-
-            def note_miss(side: str, size: int, *values: int) -> bool:
-                """帯に当たったか。当たっていなければ控えて False を返す。
-
-                帯は0〜999999を覆っていることを読み込み時に確かめて
-                あるので、ここへ来るのは寸法がその外(999999超)のとき
-                だけです。**まず起きません。**
-
-                【移植元との違い ── 当たらなかった値は書きません】
-                VBA `RunUpdatePalletAll` は `PT_Lookup` が返した
-                `-999999` をそのままマスタへ書き、ログに1行出します。
-                しかし適合minに -999999 が入った行は「幅マイナス99万まで
-                載る」という意味になり、以後どんな検索にも当たり続けます
-                ── **壊れていることが検索結果の形で現れません**。
-                Python版はその列を触らずに残し、件数と管理番号を
-                まとめに出します(同じ「気づける」を、実害なしで満たす)。
-                """
-                if pallet_threshold.NO_HIT not in values:
-                    return True
-                got.band_miss.append(
-                    f"管理番号 {row['管理番号']}  {side}={size}"
-                    f"(帯の範囲外なのでこの列は触っていません)")
-                return False
-
-            # --- 固定適合の上書き(最優先) -------------------------
-            #     ① 複合キー(業界|記号) → ② 記号単独 → ③ 業界単独
-            if c_key in table.combo:
-                w_min, w_max, l_min, l_max = table.combo[c_key]
-                updates.update({"巾適合min": w_min, "巾適合max": w_max,
-                                "丈適合min": l_min, "丈適合max": l_max})
-                note_loose("業界", row["業界"], gyk)
-                note_loose("記号", sym_raw, sym2)
-                got.fixed += 1
-                from_table = True
-            elif sym2 in table.w_min:
-                updates.update({
-                    "巾適合min": table.w_min[sym2], "巾適合max": table.w_max[sym2],
-                    "丈適合min": table.l_min[sym2], "丈適合max": table.l_max[sym2],
-                })
-                # 記号で当たった行の桁数・脚数は**表の値で上書きする**。
-                # 記号は現物の型そのものなので、表のほうが確かな事実
-                if sym2 in table.keta:
-                    updates["桁数"] = table.keta[sym2]
-                if sym2 in table.ashi:
-                    updates["脚数"] = table.ashi[sym2]
-                note_loose("記号", sym_raw, sym2)
-                got.fixed += 1
-                from_table = True
-            elif gyk and gyk in table.w_min:
-                updates.update({
-                    "巾適合min": table.w_min[gyk], "巾適合max": table.w_max[gyk],
-                    "丈適合min": table.l_min[gyk], "丈適合max": table.l_max[gyk],
-                })
-                note_loose("業界", row["業界"], gyk)
-                got.fixed += 1
-                from_table = True
-
-            # --- 段階表からの計算 -----------------------------------
-            if not from_table:
-                # min/maxは必ず対の段階表から引く(条件なしで常に上書きし、
-                # 既存の誤った値も正しい範囲に矯正する)。
-                # 上限は現物サイズでクランプする(下の cap_to_pallet を参照)
-                if dake > 0:
-                    lo = thresholds.dake_min(dake)
-                    hi = thresholds.dake_max(dake)
-                    if note_miss("丈", dake, lo, hi):
-                        updates["丈適合min"] = lo
-                        updates["丈適合max"] = cap_to_pallet(hi, dake)
-                        got.dake_min += 1
-                        got.dake_max += 1
-                if haba > 0:
-                    lo = thresholds.haba_min(haba)
-                    hi = thresholds.haba_max(haba)
-                    if note_miss("幅", haba, lo, hi):
-                        updates["巾適合min"] = lo
-                        updates["巾適合max"] = cap_to_pallet(hi, haba)
-                        got.haba_min += 1
-                        got.haba_max += 1
+            fit = fit_row(row, thresholds, table)
+            got.loose.extend(LooseMatch(number=row["管理番号"], column=column, raw=raw, matched=key)
+                             for column, raw, key in fit.loose)
+            got.band_miss.extend(fit.band_miss)
+            if fit.rule == RULE_BAND:
                 got.calculated += 1
-
-            # --- 後始末:脚数・桁数の補完 ---------------------------
-            # **どの道を通った行もここを通る**(移植元の `SkipCalc:`)。
-            # 埋めるのは**空のときだけ** ── 現場が手で入れた本数を潰さない
-            if dake > 0 and "脚数" not in updates and is_blank(row["脚数"]):
-                ashi = thresholds.ashi(dake)
-                if note_miss("丈", dake, ashi, ashi):
-                    updates["脚数"] = ashi
-                    got.ashi += 1
-            if haba > 0 and "桁数" not in updates and is_blank(row["桁数"]):
-                keta = thresholds.keta(haba)
-                if note_miss("幅", haba, keta, keta):
-                    updates["桁数"] = keta
-                    got.keta += 1
-
+            else:
+                got.fixed += 1
+            got.dake_min += fit.dake
+            got.dake_max += fit.dake
+            got.haba_min += fit.haba
+            got.haba_max += fit.haba
+            got.ashi += fit.ashi
+            got.keta += fit.keta
+            updates = fit.updates
             if updates:
                 set_sql = ", ".join(f"[{c}] = ?" for c in updates)
                 conn.execute(

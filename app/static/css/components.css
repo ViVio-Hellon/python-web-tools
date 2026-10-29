@@ -265,6 +265,13 @@ a.btn { text-decoration: none; }
   border-color: var(--focus);
   box-shadow: none;
 }
+/* マスタ管理で触らせない列(パレット適合設定で直す列)。読めるが打てない */
+.input--locked {
+  background: var(--sunken);
+  color: var(--muted);
+  border-style: dashed;
+  cursor: not-allowed;
+}
 .input--num {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;

@@ -88,12 +88,15 @@ def tables(path: Optional[Path],
                 out.append(TableInfo(
                     table=managed.table, label=managed.table,
                     mark=managed.mark, note=managed.note, rows=0,
-                    editable=True, missing=True,
+                    editable=not master_common.fit_locked(managed.table), missing=True,
                     why=master_schema._create_why(managed.table)))
             continue
+        # 適合範囲を決める表はパレット適合設定で直す(ここでは見るだけ。VER4.8.116)
         out.append(TableInfo(
             table=managed.table, label=managed.table, mark=managed.mark,
-            note=managed.note, rows=counts[managed.table], editable=True))
+            note=managed.note, rows=counts[managed.table],
+            editable=not master_common.fit_locked(managed.table),
+            why=master_common.fit_table_why(managed.table)))
     # 「表を持ってくる」で足した表は、直せる表として資材課の表のすぐ後に出す。
     # 記録の表そのもの(`REGISTRIES`: 足した表・足した列)は出さない
     brought = master_common.brought_tables(path)
@@ -128,6 +131,8 @@ class Page:
     # いま並び替えている列。空なら既定(rowid、取り込み順)
     sort: str = ""
     sort_dir: str = "asc"
+    # 行を足す・消すができるか(パレット適合設定で直す表は できない。VER4.8.116)
+    can_add_row: bool = True
     # この表を消せるか(このツールが使わない表だけ)と、消す前に言うこと
     droppable: bool = False
     drop_note: str = ""
@@ -151,6 +156,7 @@ class Page:
                 "sort": self.sort, "sort_dir": self.sort_dir,
                 "droppable": self.droppable, "drop_note": self.drop_note,
                 "can_add_column": self.can_add_column,
+                "can_add_row": self.can_add_row and self.editable,
                 "add_column_note": self.add_column_note,
                 "dupes": {"available": self.dupes_available, "on": self.dupes_on,
                           "text": self.dupes_text, "groups": self.dupes_groups}}
@@ -194,8 +200,10 @@ def page(path: Optional[Path], table: str, *, query: str = "",
     brought = table in master_common.brought_tables(path)
     view = Page(table=table,
                 label=table,
-                editable=managed is not None or brought,
-                why="" if brought else view_only_why(table))
+                editable=(managed is not None or brought) and not master_common.fit_locked(table),
+                why="" if brought else (view_only_why(table) or master_common.fit_table_why(table)),
+                # 行を足す・消すをさせない表(パレット適合設定で直す。VER4.8.116)
+                can_add_row=not master_common.fit_rows_locked(table))
     if path is None:
         from . import sync_sources
         view.error = sync_sources.material_db_missing_why()

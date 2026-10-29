@@ -320,7 +320,8 @@ function render(next) {
   // 表が無い/列名が違うあいだは行を足せない。押せる形にしておくと、
   // 押した先で「入れる値がありません」としか言えず、何が足りないのか
   // 分からない
-  el.mAdd.disabled = !editable || missing || rebuildable;
+  // 行を足せない表(適合範囲を決める表はパレット適合設定で直す)はサーバが言う
+  el.mAdd.disabled = !editable || missing || rebuildable || page.can_add_row === false;
   el.mCreate.hidden = !missing;
   el.mCreate.disabled = !view.can_edit;
   el.mRebuild.hidden = !rebuildable;
@@ -421,8 +422,8 @@ function openRow(key) {
   el.mEditKind.textContent = editable ? "直せます" : "見るだけ";
   el.mEditError.hidden = true;
   el.mSave.textContent = key === null ? "取り込み元へ足す" : "取り込み元へ書く";
-  // 足すときに「消す」は意味を成さない
-  el.mDelete.hidden = key === null;
+  // 足すときに「消す」は意味を成さない。行を消せない表でも出さない(サーバが言う)
+  el.mDelete.hidden = key === null || page.can_add_row === false;
   el.mFoot.hidden = !editable;
   askDelete(false);
 
@@ -437,7 +438,7 @@ function openRow(key) {
   // 直せないなら**打ち込める形にしない**。読めない欄を出すと、打てると
   // 思って打ち、押してから断られる。読むだけの表は文字のまま出す
   el.mFields.replaceChildren(
-    ...(editable && columns.length ? fields(columns, row) : plain(page, row)));
+    ...(editable && columns.length ? fields(columns, row, key === null) : plain(page, row)));
   // 書く前の打ちかけは、止まっても失わない(`drafts.js`)。**どの表の・どの行の**欄か
   // まで名前に入れる(別の行を開いたときに戻さない)
   for (const input of el.mFields.querySelectorAll("input[data-column]")) {
@@ -449,13 +450,15 @@ function openRow(key) {
   if (first) first.focus();
 }
 
-/** 直せる列を、打ち込める形で並べる。 */
-function fields(columns, row) {
+/** 直せる列を、打ち込める形で並べる。`adding` は新しい行を足すとき。
+    マスタ管理では触らせない列(サーバの `locked`・`locked_edit`)は読むだけの欄にして、送らない。 */
+function fields(columns, row, adding = false) {
   const out = [];
   for (const column of columns) {
+    const locked = Boolean(column.locked || (!adding && column.locked_edit));
     const label = document.createElement("label");
     label.setAttribute("for", `mf-${column.name}`);
-    label.className = column.required ? "req" : "";
+    label.className = column.required && !locked ? "req" : "";
     label.textContent = column.name;
 
     const box = document.createElement("div");
@@ -466,6 +469,10 @@ function fields(columns, row) {
     input.value = text(row[column.name]);
     input.spellcheck = false;
     input.autocomplete = "off";
+    if (locked) {
+      input.readOnly = true;
+      input.classList.add("input--locked");
+    }
     box.appendChild(input);
 
     // 何を入れる欄なのかを添える。言い方はサーバが持っている
@@ -498,6 +505,7 @@ function plain(page, row) {
 function values() {
   const out = {};
   for (const input of el.mFields.querySelectorAll("input[data-column]")) {
+    if (input.readOnly) continue;            // 触らせない列は送らない
     out[input.dataset.column] = input.value;
   }
   return out;
@@ -506,6 +514,8 @@ function values() {
 function askDelete(on) {
   el.mFoot.hidden = on || !(view && view.can_edit && view.page
                             && view.page.editable);
+  // 行を消せない表では「消す」を出さない
+  if (view && view.page && view.page.can_add_row === false) el.mDelete.hidden = true;
   el.mConfirm.hidden = !on;
 }
 

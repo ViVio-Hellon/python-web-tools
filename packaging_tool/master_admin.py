@@ -117,6 +117,9 @@ def save_row(conn: sqlite3.Connection, table: str, row_key: Any,
                             present=source_db.columns(path, table), source_path=path)
     if problem:
         return Result(False, problem, REFUSE_BAD_VALUE)
+    clean, locked_why = _drop_locked(path, table, row_key, clean)
+    if locked_why:
+        return Result(False, locked_why, REFUSE_NOT_EDITABLE)
     if not clean:
         return Result(False, "変える値がありません。", REFUSE_BAD_VALUE)
 
@@ -141,7 +144,11 @@ def add_row(conn: sqlite3.Connection, table: str, values: dict[str, Any], *,
     path, refused = _ready(conn, table, path)
     if refused:
         return refused
+    if master_common.fit_rows_locked(table):
+        return Result(False, master_common.fit_table_why(table), REFUSE_NOT_EDITABLE)
 
+    # 計算し直す列(適合の4列)は足すときも入れない。入れても次の計算で上書きされる
+    values = {k: v for k, v in values.items() if not master_common.column_locked(table, k, adding=True)}
     clean, problem = _clean(conn, table, values, filling=True,
                             present=source_db.columns(path, table), source_path=path)
     if problem:
@@ -169,6 +176,8 @@ def delete_row(conn: sqlite3.Connection, table: str, row_key: Any, *,
     path, refused = _ready(conn, table, path)
     if refused:
         return refused
+    if master_common.fit_rows_locked(table):
+        return Result(False, master_common.fit_table_why(table), REFUSE_NOT_EDITABLE)
     why = _last_row_why(path, table)
     if why:
         return Result(False, why, REFUSE_BAD_VALUE)
@@ -200,6 +209,29 @@ KEEP_LAST_ROW: dict[str, str] = {
         "看板置き場の最後の1行は消せません(全部消すと、取り込み元は空でも手元や他の端末の対応が"
         "残って効き続けるため)。止めたいときは、その行の「有効」を 0 にしてください。",
 }
+
+
+def _drop_locked(path: Path, table: str, row_key: Any,
+                 clean: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """マスタ管理では触らせない列(`master_common.column_locked`)を除く。
+
+    画面はその欄を打てない形で出し、送ってこない。**送ってきても、いまの値と同じなら黙って除く**
+    (古い画面・道具から全部の列が来ることがある)。違う値なら断って、パレット適合設定へ案内する。
+    """
+    locked = [k for k in clean if master_common.column_locked(table, k, adding=False)]
+    if not locked:
+        return clean, ""
+    try:
+        now = source_db.read_query(
+            path, f"SELECT * FROM {source_db.quote_identifier(table)} WHERE rowid = ?", [row_key])
+    except source_db.SourceError:
+        now = []
+    current = now[0] if now else {}
+    changed = [k for k in locked if not _same_value(current.get(k), clean[k])]
+    if changed:
+        return clean, (f"{'・'.join(changed)} はマスタ管理では直せません。"
+                       + (master_common.fit_table_why(table) or master_common.FIT_PAGE_WHY))
+    return {k: v for k, v in clean.items() if k not in locked}, ""
 
 
 def _last_row_why(path: Path, table: str) -> str:
@@ -284,6 +316,9 @@ def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],
     allowed, why = can_edit(conn, table)
     if not allowed:
         return None, Result(False, why, REFUSE_NOT_ALLOWED)
+    if master_common.fit_locked(table):
+        # 適合範囲を決める表は、パレット適合設定で直す(VER4.8.116)
+        return None, Result(False, master_common.FIT_PAGE_WHY, REFUSE_NOT_EDITABLE)
     found = path or source_for(table)
     if table not in BY_TABLE and table not in master_common.brought_tables(found):
         if found is not None and not source_db.columns(found, table):
