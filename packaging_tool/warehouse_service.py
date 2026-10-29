@@ -39,7 +39,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from . import db, import_specs, outbox_sync
+from . import db, import_specs, outbox_sync, source_db
 from .logging_utils import get_logger
 
 log = get_logger("warehouse_service")
@@ -267,7 +267,11 @@ def _order_values(order: dict, *, now: str, sender: str) -> tuple[dict, str]:
     }, ""
 
 
-def already_sent(conn: sqlite3.Connection, lot_no: str) -> list[dict]:
+class SentUnreadable(RuntimeError):
+    """送信済みの発注を読めない(「送っていない」とは違う。VER4.8.122)。"""
+
+
+def already_sent(conn: sqlite3.Connection, lot_no: str, *, strict: bool = False) -> list[dict]:
     """同じLotNoで出して、まだ取り消していない発注(新しい順)。VBA `ConfirmNotAlreadySent`。
 
     **同じロットを二度送ると二重発注になる。** 送る前に見せて、続けるかを
@@ -283,6 +287,10 @@ def already_sent(conn: sqlite3.Connection, lot_no: str) -> list[dict]:
             " WHERE LotNo = ? AND (取り消し済 IS NULL OR 取り消し済 <> '1')"
             " ORDER BY 登録日時 DESC, 管理番号 DESC", (lot_no,)).fetchall()
     except sqlite3.Error as exc:
+        if strict and not source_db.is_missing_error(str(exc)):
+            # **読めないのを「送っていない」にしない**(VER4.8.122)。送る前の確かめでは聞き直す
+            log.warning("送信済みの発注を読めません(二重発注かどうか確かめられません): %s", exc)
+            raise SentUnreadable(str(exc)) from exc
         log.warning("送信済みの発注を読めません(確認せずに続けます): %s", exc)
         return []
     return [{"registered": r[0] or "", "hinmei": r[1] or "",

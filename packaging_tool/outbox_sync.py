@@ -556,7 +556,9 @@ def _target_rows(tx: "source_db.SourceTransaction", spec: WriteBackSpec,
         # 一意の鍵(発注キー)を中身より先に見る
         try:
             found, cond_sql, cond_params = rows_by({spec.unique_column: row[spec.unique_column]})
-        except source_db.SourceError:
+        except (source_db.SourceError, sqlite3.Error) as exc:
+            if not source_db.is_missing_error(str(exc)):
+                raise                      # 読めない。「行が無い」にしない(印を捨てない。VER4.8.122)
             found = []                     # 送り先にその列が無い(古い共有)
     if not found and spec.match_columns and all(
             c in row.keys() and row[c] not in (None, "") for c in spec.match_columns):
@@ -1060,8 +1062,11 @@ def write_back(conn: sqlite3.Connection,
             try:
                 have = {r["name"] for r in source.query(
                     f"PRAGMA table_info({source_db.quote_identifier(spec.access_table)})")}
-            except source_db.SourceError:
-                have = set()
+            except source_db.SourceError as exc:
+                # **読めないのを「列が無い」にしない**(VER4.8.122)。前は 送信端末・発注キー などを
+                # 無い列と見て、その列を抜いた行を送り、送った印まで付けていた。今回は送らない
+                result.errors.append(f"{spec.sqlite_table}: 送り先の列を確かめられないので送りません({exc})")
+                continue
             local_only |= {c for c in spec.optional_columns if c not in have}
         try:
             rows, op_ids = claim_rows(conn, spec)

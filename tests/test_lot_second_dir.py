@@ -121,13 +121,26 @@ class SecondLotDirTests(unittest.TestCase):
         self.assertEqual(dict(self.local("SELECT 受注番号, 納入先名称 FROM 仕掛受注")),
                          {"J1": "1つ目", "J2": "2つ目だけ"})
 
-    def test_1つ目が読めなければ2つ目を読む(self) -> None:
-        (self.first / "SIKALOT.sqlite3").write_bytes(b"not sqlite" * 100)
+    def test_1つ目が読めなければ手元は入れ替えず_無いものだけ2つ目から足す(self) -> None:
+        """VER4.8.122。前は2つ目(圧縮版)で手元をまるごと入れ替えていた(読めないのを「無い」とみなした)。"""
+        write_ledger(self.first, "SIKALOT.sqlite3", "仕掛ロット", [lot("A000001")])
+        data_sync.import_lot_ledger(self.conn)                       # 1つ目を読めていた日
+        (self.first / "SIKALOT.sqlite3").write_bytes(b"not sqlite" * 100)   # 読めなくなった
         write_ledger(self.second, "SIKALOT.sqlite3", "仕掛ロット", [lot("B000002")])
         result = data_sync.import_lot_ledger(self.conn)
-        self.assertEqual(self.local("SELECT ロット番号 FROM 仕掛ロット"), [("B000002",)])
-        self.assertFalse([e for e in result.errors if e.startswith("仕掛ロット:")], result.errors)
-        self.assertTrue(any("2つ目" in w for w in result.warnings), result.warnings)
+        self.assertEqual(sorted(self.local("SELECT ロット番号 FROM 仕掛ロット")),
+                         [("A000001",), ("B000002",)])               # A は消えず、B は足した
+        self.assertTrue([e for e in result.errors if e.startswith("仕掛ロット:")], result.errors)  # 読めないと言う
+        self.assertTrue(any("入れ替えず" in w for w in result.warnings), result.warnings)
+
+    def test_1つ目のフォルダに届かなければ2つ目を1つ目の代わりにしない(self) -> None:
+        from unittest import mock as _mock
+        write_ledger(self.second, "SIKALOT.sqlite3", "仕掛ロット", [lot("B000002")])
+        real = source_db.listing_of
+        with _mock.patch.object(source_db, "listing_of",
+                                side_effect=lambda d: None if Path(d) == self.first else real(d)):
+            found = sync_sources.find_lot_dbs()
+        self.assertNotIn("仕掛ロット", found)
 
     def test_ファイルごと_ロットごとに2つ目を見る(self) -> None:
         """現場の質問の例そのまま。**1つ目を丸ごと捨てて2つ目へ移るのではない。**

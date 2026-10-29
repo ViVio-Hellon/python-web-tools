@@ -51,6 +51,9 @@ class ImportResult:
     # `notes` とは別に持つ。閾値マスタを足して8表になり、1表1行だと
     # 案内だけで8行になって、本当に直すべき問題が埋もれた
     missing_optional: list[str] = field(default_factory=list)
+    # **読めなかった**表(無いのではなく、読めなかった・書けなかった)。VER4.8.122
+    # これが1つでもある取り込みは「いまの姿で読んだ」と覚えない(次にやり直す)
+    unreadable: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -67,6 +70,7 @@ class ImportResult:
         self.notes.extend(other.notes)
         self.warnings.extend(other.warnings)
         self.missing_optional.extend(other.missing_optional)
+        self.unreadable.extend(other.unreadable)
         return self
 
     def summary(self) -> str:
@@ -190,7 +194,11 @@ def import_tables(
         try:
             rows = sync_sources.read_table(source_path, source_table or table)
         except SyncError as exc:
-            if table in optional:
+            missing = source_db.is_missing_error(str(exc))
+            if not missing:
+                # **読めなかった**(無いのではない)。任意の表でも「無い」とは言わない(VER4.8.122)
+                result.unreadable.append(table)
+            if table in optional and missing:
                 # 無くてよい表。失敗として数えると、毎回「失敗」と出て
                 # 本当に直すべき問題が埋もれる
                 log.info("%s: 取り込み元にありません(任意)", table)
@@ -328,6 +336,7 @@ def import_tables(
         except sqlite3.Error as exc:
             log.exception("%s: 取り込み中にエラー", table)
             result.errors.append(f"{table}: {exc}")
+            result.unreadable.append(table)
             notify(step_pct, step_message, ok=False)
             report(imported=None, skipped={}, skipped_samples=[],
                    after=import_diag.local_count(conn, table),
@@ -540,8 +549,9 @@ def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
                                 for name, count in summary.counts()))
 
     # いまの姿で読んだ、と覚えておく。**起動直後の見張りが、取り込んだ
-    # ばかりのものをもう一度取り込みに行かないため**
-    sync_sources.note_source_read(path)
+    # ばかりのものをもう一度取り込みに行かないため**。読めなかった表があれば覚えない(VER4.8.122)
+    if not result.unreadable:
+        sync_sources.note_source_read(path)
     return result
 
 def duplicate_count(conn: sqlite3.Connection, table: str,
@@ -668,21 +678,18 @@ def import_lot_table(conn: sqlite3.Connection, table: str, path: Path,
                      progress_range: tuple[int, int] = (0, 100)) -> None:
     """仕掛台帳の1表を取り込む。2つ目の置き場所があれば、足りない分をそこから足す。
 
-    1つ目のファイルが**読めなかった**ときは、2つ目のファイルを1つ目として読む
-    (ファイルが無いときと同じ扱い)。ただし2つ目の SIKALOT は**圧縮版で列が違う**
-    (設計_設備ｺｰｽ・実績_設備ｺｰｽ などが無い)ので、1つ目の代わりにはならない。そこから入った
-    ロットは BOX かどうか決められず、`COURSE_UNKNOWN_TABLE` に控えて画面で断る。
+    1つ目のファイルが**読めなかった**ときは、**手元を入れ替えない**(VER4.8.122)。前は2つ目の
+    ファイルを1つ目として読み、手元の表をまるごと入れ替えていた(読めないのを「無い」とみなしていた)。
+    いまは手元の前の中身を残し、手元に無いロットだけを2つ目から足す(`merge_second_lot`。消さない)。
+    2つ目の SIKALOT は**圧縮版で列が違う**(設計_設備ｺｰｽ・実績_設備ｺｰｽ などが無い)ので、そこから
+    足したロットは BOX かどうか決められず、`COURSE_UNKNOWN_TABLE` に控えて画面で断る。
+    1つ目のファイルが**無いと確かめられた**ときだけ、2つ目を1つ目として読む(`find_lot_dbs`)。
 
-    1つ目のファイルが**読めるが0行**のときは、手元の前の中身を消さない(取り込みの決まり
+    1つ目のファイルが**読めるが0行**のときも、手元の前の中身を消さない(取り込みの決まり
     「0行の表は手元を消さない」)。そのうえで、手元に無いロットだけを2つ目から足す。
     """
     spec = import_specs.LOT_IMPORT_SPECS[table]
     log.info("仕掛台帳 取り込み: %s → %s", path.name, table)
-    if table == "仕掛ロット":
-        # 候補は1つ目・2つ目の今の中身から作り直す(前の取り込みの候補を残さない)
-        with conn:
-            conn.execute(f"DELETE FROM [{BOX_CHOICE_TABLE}]")
-            conn.execute(f"DELETE FROM [{COURSE_UNKNOWN_TABLE}]")
     mine = ImportResult()
     import_tables(
         conn, path, {table: spec},
@@ -691,29 +698,26 @@ def import_lot_table(conn: sqlite3.Connection, table: str, path: Path,
         blank_is_missing=import_specs.BLANK_IS_MISSING,
         fallbacks=import_specs.NULL_FALLBACKS,
         result=mine, progress=progress, progress_range=progress_range)
+    if table == "仕掛ロット" and mine.imported.get(table):
+        # 候補・コース不明の印は、**1つ目を読めて入れ替えたときだけ**作り直す(VER4.8.122。前は読む前に
+        # 消していたので、読めなかった回に印だけ消えて、BOX か決められないロットを断れなくなった)
+        with conn:
+            conn.execute(f"DELETE FROM [{BOX_CHOICE_TABLE}]")
+            conn.execute(f"DELETE FROM [{COURSE_UNKNOWN_TABLE}]")
     if second is not None and not _same_file(second, path):
         if table not in mine.imported:
-            log.warning("%s: 1つ目(%s)が読めないので、2つ目(%s)から読みます",
+            # **入れ替えない。** 手元の前の中身を残し、手元に無いものだけ2つ目から足す(VER4.8.122)
+            log.warning("%s: 1つ目(%s)を読めなかったので手元は入れ替えず、手元に無いものだけ2つ目(%s)から足します",
                         table, path, second)
-            mine.warnings.append(f"{table}: 1つ目の置き場所のファイルが読めないため、"
-                                 f"2つ目({second})から読みました")
-            import_tables(
-                conn, second, {table: spec},
-                source_table=import_specs.LOT_SOURCE_TABLE,
-                required=import_specs.REQUIRED_KEY_COLUMNS,
-                blank_is_missing=import_specs.BLANK_IS_MISSING,
-                fallbacks=import_specs.NULL_FALLBACKS, result=mine)
-            if table in mine.imported:
-                # 2つ目で読めた。1つ目の「読めません」は残さない(入ったのに失敗に見える)
-                mine.errors = [e for e in mine.errors if not e.startswith(f"{table}:")]
-                if table == "仕掛ロット" and _lacks_course(second):
-                    _mark_course_unknown(conn)
+            mine.warnings.append(f"{table}: 1つ目の置き場所のファイルを読めなかったので、手元は入れ替えず、"
+                                 f"手元に無いものだけ2つ目({second})から足しました")
+            merge_second_lot(conn, table, second, mine)
         else:
             if table == "仕掛ロット" and mine.imported.get(table) and _lacks_course(path):
                 _mark_course_unknown(conn)        # 読んだ1つ目にも 設計_設備ｺｰｽ が無い
             merge_second_lot(conn, table, second, mine)
     elif table == "仕掛ロット" and mine.imported.get(table) and _lacks_course(path):
-        _mark_course_unknown(conn)                # 1つ目が無く、2つ目を1つ目として読んだ
+        _mark_course_unknown(conn)                # 1つ目が無いと確かめ、2つ目を1つ目として読んだ
     result.merge(mine)
 
 
@@ -733,6 +737,7 @@ def merge_second_lot(conn: sqlite3.Connection, table: str, path: Path,
     try:
         rows = sync_sources.read_table(path, import_specs.LOT_SOURCE_TABLE)
     except SyncError as exc:
+        result.unreadable.append(f"{table}(2つ目)")       # 読めなかった。覚えない(VER4.8.122)
         result.warnings.append(f"{table}: 2つ目の置き場所のファイルを読めませんでした({exc})")
         import_diag.write(f"  [{table}] 2つ目 {path} を読めません: {exc}")
         return 0

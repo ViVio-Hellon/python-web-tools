@@ -285,6 +285,8 @@ class JobRegistry:
 
         書きかけを読ませないよう、別名で書いてから置き換える。
         """
+        if getattr(self, "_keep_unreadable", False):
+            return                                # 読めなかった記録を上書きしない(別名にもできなかった)
         path = self._store_path()
         payload = {
             "running": asdict(self._running) if self._running else None,
@@ -308,7 +310,12 @@ class JobRegistry:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            log.warning("進捗の読み直しに失敗: %s", exc)
+            # **読めなかった記録は空で上書きしない**(VER4.8.122)。別名で残してから新しく始める
+            log.warning("進捗の読み直しに失敗(前の記録は別名で残します): %s", exc)
+            try:
+                path.replace(path.with_name(f"{path.name}.読めなかった"))
+            except OSError:
+                self._keep_unreadable = True
             return
 
         recent = [self._to_job(row) for row in payload.get("recent") or []]

@@ -109,7 +109,10 @@ def load(*, force: bool = False) -> dict[str, Any]:
         _cache = _copy(_FALLBACK)
     except Exception as exc:  # noqa: BLE001 - 理由を残して既定値で続行する
         _load_error = f"設定ファイルを読めませんでした ({CONFIG_PATH}): {exc}"
-        _cache = _copy(_FALLBACK)
+        # **読めなかった既定値は覚えない**(VER4.8.122)。次に読むときもう一度読みに行く
+        fallback = _copy(_FALLBACK)
+        _canonicalize_modes(fallback)
+        return fallback
     _canonicalize_modes(_cache)
     return _cache
 

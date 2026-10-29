@@ -55,6 +55,17 @@ RECENT_LINES = 40
 from . import log_names  # noqa: E402
 
 
+def ensure_log_folder(folder: "Path") -> None:
+    """ログのフォルダを用意する。**指定の出力先(共有など)は、その上のフォルダがあるときだけ**作る
+    (VER4.8.122)。共有が一瞬見えないときに、その場所へフォルダを丸ごと作り直さない。
+    既定の場所(この端末の中)は、上のフォルダごと作ってよい。作れなければ OSError(呼び手が既定へ戻す)。"""
+    folder = Path(folder)
+    if folder == Path(config.LOG_DIR):
+        folder.mkdir(parents=True, exist_ok=True)
+        return
+    folder.mkdir(exist_ok=True)               # 上のフォルダが無ければ FileNotFoundError
+
+
 def log_path_for(day: date) -> "Path":
     """その日のログファイル。**名前の作り方は `log_names` 1か所**。"""
     return config.log_dir() / log_names.day_log(day)
@@ -243,7 +254,7 @@ class _ErrorRecordHandler(logging.Handler):
             }
             path = _target_dir(record) / log_names.error_log(when)
             with _error_lock:
-                path.parent.mkdir(parents=True, exist_ok=True)
+                ensure_log_folder(path.parent)
                 with path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:                       # noqa: BLE001 - ログで業務を止めない
@@ -277,7 +288,7 @@ class DailyFileHandler(logging.FileHandler):
             self.baseFilename = target
             self.stream = None                    # 次の emit で開き直す
             try:
-                os.makedirs(os.path.dirname(target), exist_ok=True)
+                ensure_log_folder(Path(os.path.dirname(target)))
             except OSError:
                 pass                              # 書けなければ handleError へ
         super().emit(record)

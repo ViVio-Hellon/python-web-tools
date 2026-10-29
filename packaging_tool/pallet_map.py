@@ -117,12 +117,9 @@ class PalletMap:
 
 def load(path: Optional[Path] = None) -> PalletMap:
     """保管位置マップを読む。現場で編集したものがあればそれを優先する。"""
-    for candidate in ([path] if path is not None else [USER_PATH, DEFAULT_PATH]):
-        if candidate is None:
-            continue
-        data = map_data.read_json(candidate)
-        if data is not None:
-            return PalletMap.from_dict(data)
+    data = map_data.load_first([path] if path is not None else [USER_PATH, DEFAULT_PATH], "保管位置マップ")
+    if data is not None:
+        return PalletMap.from_dict(data)
     log.warning("保管位置マップが見つかりません。空のマップで続行します")
     return PalletMap()
 

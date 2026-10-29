@@ -71,6 +71,7 @@ class KeptNoteTests(TraceTestCase):
         from datetime import date
         from tests.test_trace_log import PW
         shared = self.root / "指定した出力先"
+        shared.mkdir()
         self.assertTrue(trace_log.set_log_dir(str(shared), PW).ok)
         log.warning("時間のかかった操作: GET /selection 45000ms",
                     extra={"keep": True, "kind": "時間のかかった操作"})

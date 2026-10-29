@@ -242,8 +242,9 @@ def _last_row_why(path: Path, table: str) -> str:
     try:
         rows = source_db.read_query(
             path, f"SELECT COUNT(*) AS n FROM {source_db.quote_identifier(table)}")
-    except source_db.SourceError:
-        return ""                                 # 数えられない。消す側の失敗に任せる
+    except source_db.SourceError as exc:
+        # **数えられないのを「残る」にしない**(VER4.8.122)。最後の1行を消してしまうかもしれないので断る
+        return f"何行あるか確かめられないので消しません({exc})"
     return why if rows and int(rows[0]["n"] or 0) <= 1 else ""
 
 

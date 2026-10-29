@@ -58,6 +58,9 @@ class TraceTestCase(unittest.TestCase):
         self.root = Path(tmp.name)
         self.default = self.root / "既定"
         self.default.mkdir()
+        # 指定する出力先(共有の真似)。**指定したフォルダは、あるものを指す**(VER4.8.122。
+        # 無いフォルダを作り直さない)
+        (self.root / "共有").mkdir()
         for target, attr, value in (
                 (config, "LOG_DIR", self.default),
                 (config, "LOG_DIR_FROM_ENV", False),

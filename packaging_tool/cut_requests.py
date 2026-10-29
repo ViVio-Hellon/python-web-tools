@@ -140,7 +140,11 @@ def _load(conn: sqlite3.Connection, where: str = "", params: tuple = (),
             f"SELECT 依頼ID, LotNo, 要約, 送った端末, 送った日時, 題名, 差し替え元 FROM {TABLE}"
             f" WHERE 依頼ID <> ''{where} ORDER BY 送った日時 DESC, 管理番号 DESC"
             + (f" LIMIT {int(limit)}" if limit else ""), params).fetchall()
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
+        if "no such table" not in str(exc).lower():
+            # **読めないのを「1件も無い」にしない**(VER4.8.122)。無いと答えると、送るときに同じものを
+            # 足し、取り消すときに「入っていません」と言ってしまう
+            raise
         return []                       # 表がまだ無い(古い手元DB)
     out = [Request(request_id=r["依頼ID"], lot_no=r["LotNo"], summary=r["要約"],
                    terminal=r["送った端末"], sent_at=r["送った日時"], title=r["題名"],

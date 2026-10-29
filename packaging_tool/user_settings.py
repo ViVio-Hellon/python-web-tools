@@ -19,6 +19,9 @@ VBAでは1つのレジストリ値をこれら全部が読んでいたので、P
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from typing import Any
 
 from . import config
@@ -34,17 +37,79 @@ DEFAULT_POSITION = "L-1"
 UNSET_LABEL = "未登録"
 
 
-def load_all() -> dict[str, Any]:
-    """設定ファイル全体を読む。壊れていても例外にせず空扱いにする。"""
+class SettingsUnreadable(RuntimeError):
+    """設定ファイルは**あるのに読めない**(ほかが掴んでいる・書きかけ・壊れている)。
+
+    「無い」(初めての端末)とは分ける。読めないのに空とみなして保存すると、保存した1つ以外の
+    設定がぜんぶ消える(別ツールで起きた: 保存するたびにほかの設定が消え、配布設定で PC の値が
+    上書きされた)。**読めないときは書かない・消さない・覚えない**(VER4.8.122)。
+    """
+
+
+_lock = threading.RLock()
+# 最後に**読めた**中身。読めないあいだの読み取りはこれで答える(書くときには使わない)
+_last_good: dict[str, Any] = {}
+
+
+def _read() -> dict[str, Any]:
+    """設定ファイル全体を読む。**無ければ空**、あるのに読めなければ `SettingsUnreadable`。
+
+    無いかどうかは開いてみて決める(`exists()` は、届かない・権限が無いときも False を返すので使わない)。
+    メモ帳で保存すると付く BOM も読む。
+    """
     path = config.USER_CONFIG_PATH
-    if not path.exists():
-        return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        log.warning("設定ファイルを読めませんでした(既定値で続行): %s", exc)
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
         return {}
-    return data if isinstance(data, dict) else {}
+    except OSError as exc:
+        raise SettingsUnreadable(f"{path} を読めません: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise SettingsUnreadable(f"{path} の中身を読めません(書きかけか壊れています): {exc}") from exc
+    if not isinstance(data, dict):
+        raise SettingsUnreadable(f"{path} の中身が設定の形ではありません")
+    return data
+
+
+def load_all_strict() -> dict[str, Any]:
+    """設定ファイル全体。**読めなければ `SettingsUnreadable`**(読んだ中身で何かを決めて書く呼び手用)。"""
+    with _lock:
+        data = _read()
+        _last_good.clear()
+        _last_good.update(data)
+        return dict(data)
+
+
+def load_all() -> dict[str, Any]:
+    """設定ファイル全体を読む(画面に出す・既定値で続けてよい呼び手用)。
+
+    読めないときは、前に読めた中身で答える(一度も読めていなければ空 = 既定値)。**この答えを
+    もとに書いてはいけない**(書くのは `save`。`save` は自分で読み直し、読めなければ書かない)。
+    """
+    try:
+        return load_all_strict()
+    except SettingsUnreadable as exc:
+        _note_unreadable(exc)
+        with _lock:
+            return dict(_last_good)
+
+
+def readable() -> tuple[bool, str]:
+    """いま設定ファイルを読めるか(読めなければ理由)。"""
+    try:
+        load_all_strict()
+    except SettingsUnreadable as exc:
+        return False, str(exc)
+    return True, ""
+
+
+def _note_unreadable(exc: Exception) -> None:
+    from . import trouble
+    trouble.failed(log, "設定ファイル", trouble.KIND_UNREADABLE,
+                   "この端末の設定ファイル(user_config.json)の読み取り", exc)
+    log.warning("設定ファイルを読めません(前に読めた値で続けます。保存はしません): %s", exc)
 
 
 def get(key: str, default: Any = None) -> Any:
@@ -56,17 +121,47 @@ def get(key: str, default: Any = None) -> Any:
 HIDDEN_IN_LOG = ("admin_password",)
 
 
+def _write(data: dict[str, Any]) -> None:
+    """**丸ごと書いてから入れ替える**(書きかけのファイルを残さない・読む側に半分の姿を見せない)。"""
+    path = config.USER_CONFIG_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:                   # Windows: 誰かが一瞬開いている
+            if attempt == 4:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.1 * (attempt + 1))
+
+
 def save(key: str, value: Any) -> bool:
-    """VBA `SaveSetting` 相当。書き込めなければ False を返す。"""
-    data = load_all()
-    data[key] = value
-    try:
-        config.USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        config.USER_CONFIG_PATH.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError as exc:
-        log.warning("設定ファイルに書けませんでした: %s", exc)
-        return False
+    """VBA `SaveSetting` 相当。書き込めなければ False を返す。
+
+    **読み直してから1つだけ変えて書く。** 設定ファイルがあるのに読めないときは書かない
+    (空とみなして書くと、ほかの設定がぜんぶ消える)。
+    """
+    with _lock:
+        try:
+            data = _read()
+        except SettingsUnreadable as exc:
+            _note_unreadable(exc)
+            log.warning("設定を保存しませんでした(設定ファイルを読めないため。ほかの設定を消さないように): %s",
+                        key, extra={"keep": True, "kind": "設定を保存できない"})
+            return False
+        data[key] = value
+        try:
+            _write(data)
+        except OSError as exc:
+            log.warning("設定ファイルに書けませんでした: %s", exc)
+            return False
+        _last_good.clear()
+        _last_good.update(data)
+    from . import trouble
+    trouble.ok(log, "設定ファイル")
     # **値を出さない鍵がある。** 管理者パスワードは撹拌済みだが、
     # ログに残す理由が無い(残せば持ち出せる)
     log.info("設定を保存しました: %s=%s", key,

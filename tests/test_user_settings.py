@@ -23,6 +23,8 @@ class UserSettingsTests(unittest.TestCase):
         self._patch = mock.patch(
             "packaging_tool.config.USER_CONFIG_PATH", Path(self._tmp.name) / "cfg.json")
         self._patch.start()
+        svc._last_good.clear()
+        self.addCleanup(svc._last_good.clear)
 
     def tearDown(self) -> None:
         self._patch.stop()
@@ -46,6 +48,41 @@ class UserSettingsTests(unittest.TestCase):
 
         config.USER_CONFIG_PATH.write_text("{ this is not json", encoding="utf-8")
         self.assertEqual(svc.load_all(), {})
+
+    def test_読めない設定ファイルには書かない_ほかの設定を消さない(self):
+        """VER4.8.122。読めないのに空とみなして保存すると、ほかの設定がぜんぶ消える(別ツールで起きた)。"""
+        from packaging_tool import config
+
+        svc.save("a", 1)
+        svc.save("b", 2)
+        broken = "{ 書きかけ"
+        config.USER_CONFIG_PATH.write_text(broken, encoding="utf-8")
+        self.assertFalse(svc.save("theme", "dark"))                 # 書かない
+        self.assertEqual(config.USER_CONFIG_PATH.read_text(encoding="utf-8"), broken)  # 消さない
+        self.assertEqual(svc.load_all(), {"a": 1, "b": 2})          # 前に読めた値で答える
+        with self.assertRaises(svc.SettingsUnreadable):
+            svc.load_all_strict()
+        self.assertFalse(svc.readable()[0])
+
+    def test_無いのは空_初めての端末は保存できる(self):
+        self.assertEqual(svc.load_all_strict(), {})
+        self.assertTrue(svc.save("a", 1))
+        self.assertEqual(svc.load_all_strict(), {"a": 1})
+
+    def test_メモ帳で保存したBOMつきも読める(self):
+        from packaging_tool import config
+
+        config.USER_CONFIG_PATH.write_text('{"position": "HVC"}', encoding="utf-8-sig")
+        self.assertEqual(svc.get_position(), "HVC")
+        self.assertTrue(svc.save("theme", "dark"))
+        self.assertEqual(svc.load_all_strict(), {"position": "HVC", "theme": "dark"})
+
+    def test_書くときは丸ごと書いてから入れ替える(self):
+        from packaging_tool import config
+
+        svc.save("a", 1)
+        leftovers = [p.name for p in config.USER_CONFIG_PATH.parent.iterdir() if p.suffix == ".tmp"]
+        self.assertEqual(leftovers, [])
 
     def test_non_dict_json_is_ignored(self):
         from packaging_tool import config

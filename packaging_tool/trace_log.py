@@ -92,7 +92,11 @@ def folder_for(text: str) -> Path:
 def _writable(folder: Path) -> str:
     """書けるか試す。書けなければ理由(書ければ空)。"""
     try:
-        folder.mkdir(parents=True, exist_ok=True)
+        # 指定したフォルダ(共有など)が**あるときだけ**、その下にツールのフォルダを作る(VER4.8.122)。
+        # 見えないときに、その場所へフォルダを丸ごと作り直さない
+        if not folder.parent.is_dir():
+            return f"{folder} に書けません({folder.parent} が見つかりません。届かないか、まだありません)"
+        folder.mkdir(exist_ok=True)
         probe = folder / ".書けるか確認"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink()

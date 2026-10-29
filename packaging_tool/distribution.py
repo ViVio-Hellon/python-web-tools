@@ -248,7 +248,12 @@ def export(password: str, items: list[str], maps: list[str]) -> Result:
     if not items and not maps:
         return Result(False, "入れる項目を1つ以上選んでください。", REFUSE_BAD_INPUT)
 
-    current = user_settings.load_all()
+    try:
+        current = user_settings.load_all_strict()
+    except user_settings.SettingsUnreadable as exc:
+        # 読めないのに書き出すと「既定のまま」の空の配布設定になる(VER4.8.122)
+        return Result(False, f"この端末の設定ファイルを読めないので、書き出しませんでした({exc})。",
+                      REFUSE_FAILED)
     settings = {k: current[k] for k in items if k in current}
     defaults = [ITEM_LABELS[k] for k in items if k not in current]
     map_sources = {key: _map_source(key) for key in maps}
@@ -425,9 +430,20 @@ def _file_digest(path: Path) -> str:
         return ""
 
 
+REFUSE_UNREADABLE = "settings_unreadable"
+
+
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
-    current = user_settings.load_all()
+    # **この端末の設定ファイルを読めないときは、配布設定を読まない**(VER4.8.122)。空とみなすと
+    # 「この端末に無いもの」が全部になり、この端末で入れた値まで配布の値で上書きする(別ツールで起きた)
+    try:
+        current = user_settings.load_all_strict()
+    except user_settings.SettingsUnreadable as exc:
+        log.warning("配布設定を読みませんでした(この端末の設定ファイルを読めないため): %s", exc,
+                    extra={"keep": True, "kind": "設定を保存できない"})
+        return Result(False, f"この端末の設定ファイルを読めないので、配布設定は読みませんでした({exc})。",
+                      REFUSE_UNREADABLE)
     record = _applied_record()
     # 前に読んだものと違う配布設定か(初めてなら「前」は無い)
     renewed = bool(record.get("fingerprint")) and record["fingerprint"] != bundle.fingerprint()
@@ -461,7 +477,11 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
                 or (renewed and dest_digest and record["maps"].get(key) == dest_digest)):
             result.kept.append(MAP_LABELS[key])         # この端末で保存した配置
             continue
-        plan = map_data.read_json(src)
+        try:
+            plan = map_data.read_json(src)
+        except map_data.MapUnreadable as exc:
+            plan = None
+            log.warning("配布設定の配置図を読めません: %s", exc)
         if not isinstance(plan, dict):
             log.warning("配布設定の配置図を読めません: %s", src)
             continue
@@ -494,6 +514,8 @@ def reapply(password: str) -> Result:
     if bundle is None:
         return Result(False, "配布設定が置かれていません。", REFUSE_BAD_INPUT)
     result = _apply(bundle, overwrite=True)
+    if not result.ok:
+        return result
     _reload_map_sessions()
     result.message = f"配布設定を読み込みました({len(result.applied)}項目)"
     return result

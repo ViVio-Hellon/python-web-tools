@@ -35,11 +35,14 @@ class AdminPasswordTestCase(unittest.TestCase):
             lambda key, default=None: self.store.get(key, default))
         save = mock.patch.object(
             user_settings, "save",
-            lambda key, value: self.store.__setitem__(key, value))
+            lambda key, value: (self.store.__setitem__(key, value), True)[1])
+        readable = mock.patch.object(user_settings, "readable", lambda: (True, ""))
         get.start()
         save.start()
+        readable.start()
         self.addCleanup(get.stop)
         self.addCleanup(save.stop)
+        self.addCleanup(readable.stop)
 
 
 class DefaultTests(AdminPasswordTestCase):

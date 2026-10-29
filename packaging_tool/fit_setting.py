@@ -996,14 +996,16 @@ def _limit_rows(master: Path, width: int, length: int, row: dict[str, Any]) -> l
     q = source_db.quote_identifier
     table = import_specs.PALLET_LIMIT_TABLE
     try:
-        if table not in source_db.list_tables(master):
-            return []
+        if table not in source_db.list_tables(master, strict=True):
+            return []                             # 表が無いと確かめた
         found = source_db.read_query(
             master, f"SELECT rowid AS __行, * FROM {q(table)}"
                     " WHERE CAST(パレット幅 AS INTEGER) = ? AND CAST(パレット丈 AS INTEGER) = ?",
             [width, length])
-    except source_db.SourceError:
-        return []
+    except source_db.SourceError as exc:
+        # **読めないのを「限定条件は無い」にしない**(VER4.8.122)。黙って外すと、寸法を直したあと
+        # そのロットでパレットが出なくなる。見本を作らずに断る
+        raise FitError(f"パレット限定条件を読めないので、見本を作れません: {exc}", REFUSE_NO_SOURCE) from exc
     industry = normalize_key(_industry(row.get("業界")))
     return [r for r in found if not str(r.get("業界") or "").strip()
             or normalize_key(str(r.get("業界") or "")) == industry]
@@ -1379,8 +1381,9 @@ def _follow(conn: sqlite3.Connection, threshold: Path, master: Optional[Path]) -
     from . import master_state, sync_auto
     notes = []
     try:
-        _import(conn, threshold, import_specs.THRESHOLD_TABLES)
-        sync_auto.mark_imported(conn, threshold)
+        got = _import(conn, threshold, import_specs.THRESHOLD_TABLES)
+        if not getattr(got, "unreadable", None):          # 読めなかったら覚えない(VER4.8.122)
+            sync_auto.mark_imported(conn, threshold)
     except Exception as exc:                       # noqa: BLE001 - 書けたことは言う
         log.warning("閾値マスタを取り込み直せませんでした: %s", exc)
         notes.append("ただし閾値を手元へ取り込み直せませんでした(設定の「取り込み直す」を押してください)")
@@ -1411,7 +1414,7 @@ HISTORY_COLUMNS = ("番号", "日時", "端末", "利用者", "種類", "内容"
 def history(limit: int = 30) -> list[dict[str, Any]]:
     try:
         path = _threshold_path()
-        if LOG_TABLE not in source_db.list_tables(path):
+        if LOG_TABLE not in source_db.list_tables(path, strict=True):
             return []
         return source_db.read_query(
             path, f"SELECT {', '.join(HISTORY_COLUMNS)} FROM {source_db.quote_identifier(LOG_TABLE)}"
@@ -1434,7 +1437,7 @@ def undo(conn: sqlite3.Connection, log_no: Any) -> ApplyResult:
     try:
         threshold = _threshold_path()
         rows = (source_db.read_query(threshold, f"SELECT * FROM {q(LOG_TABLE)} WHERE 番号 = ?", [number])
-                if LOG_TABLE in source_db.list_tables(threshold) else [])
+                if LOG_TABLE in source_db.list_tables(threshold, strict=True) else [])
     except (FitError, source_db.SourceError) as exc:
         return ApplyResult(False, f"記録を読めません: {exc}", reason=REFUSE_NO_SOURCE)
     if not rows:
@@ -1540,7 +1543,8 @@ SIZE_KINDS = ("サイズ", KIND_UNDO)
 
 
 def _latest_log(path: Path) -> tuple[int, list[dict[str, Any]]]:
-    if LOG_TABLE not in source_db.list_tables(path):
+    """最新の記録の番号と、新しい50件。**読めなければ SourceError**(読めないのを「記録0件」にしない)。"""
+    if LOG_TABLE not in source_db.list_tables(path, strict=True):
         return 0, []
     rows = source_db.read_query(path, f"SELECT 番号, 種類 FROM {source_db.quote_identifier(LOG_TABLE)}"
                                       " ORDER BY 番号 DESC LIMIT 50")
@@ -1568,8 +1572,15 @@ def refresh_if_changed(conn: sqlite3.Connection) -> bool:
     if path is None or not sync_auto.needs_import(conn, path):
         return False
     result = _import(conn, path, import_specs.THRESHOLD_TABLES)
+    if result.unreadable:
+        # 読めなかった。覚えず、次の見張りでやり直す(VER4.8.122)
+        return False
+    try:
+        latest, rows = _latest_log(path)
+    except source_db.SourceError as exc:
+        log.warning("パレット適合の変更記録を読めません(次にやり直します): %s", exc)
+        return False
     sync_auto.mark_imported(conn, path)
-    latest, rows = _latest_log(path)
     size_changed = _seen_log is not None and any(
         _int(r["番号"]) > _seen_log and str(r.get("種類") or "") in SIZE_KINDS for r in rows)
     _seen_log = latest

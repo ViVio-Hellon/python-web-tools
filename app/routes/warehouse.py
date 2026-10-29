@@ -442,7 +442,13 @@ def send():
         # 同じロットで発注していれば訊く(現場の声:「ロットNoが重複していたら、同じロットで
         # 発注していると警告を。追加注文もあるので、あくまで警告でいい」)
         for lot_no in dict.fromkeys(o["lot_no"] for o in orders):
-            sent = svc.already_sent(conn, lot_no)
+            try:
+                sent = svc.already_sent(conn, lot_no, strict=True)
+            except svc.SentUnreadable as exc:
+                # **読めないのを「送っていない」にしない**(VER4.8.122)。確かめられなかったと言って訊く
+                return jsonify({"error": {"code": "already_sent",
+                                          "message": f"このロット({lot_no})の送信済みの発注を確かめられませんでした。"},
+                                "ask": presenter.unknown_sent_ask(lot_no, str(exc))}), 409
             if sent:
                 log.info("同じロットの送信済みがあるので確かめます: LotNo=%s %s件", lot_no, len(sent))
                 return jsonify({"error": {"code": "already_sent",

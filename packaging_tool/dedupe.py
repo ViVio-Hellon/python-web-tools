@@ -225,7 +225,9 @@ def backup(path: Path) -> Path:
     """丸ごとの控え。**書いている途中の姿を写さない**よう SQLite の backup で取る。"""
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
     copy = path.with_name(f"{path.stem}.bak-{stamp}{path.suffix}")
-    src = sqlite3.connect(path)
+    # 元は**読むだけで開く**(無ければ作らない。VER4.8.122)。既定の開き方だと、共有のマスタが一瞬
+    # 見えなくなったときに空のマスタを作り、その空を控えにしていた
+    src = sqlite3.connect(source_db.to_uri(Path(path)) + "?mode=ro", uri=True)
     try:
         dst = sqlite3.connect(copy)
         try:

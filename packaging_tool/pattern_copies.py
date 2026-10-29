@@ -215,7 +215,9 @@ def same_in(conn: sqlite3.Connection, header: dict[str, Any], sign: str) -> Opti
         return None
     try:
         cursor = conn.execute(f"SELECT * FROM {_q(H)} WHERE 登録日時 = ?", (when,))
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as exc:
+        if not source_db.is_missing_error(str(exc)):
+            raise                       # 読めない。「同じ実績は無い」にしない(VER4.8.122)
         return None
     names = [d[0] for d in cursor.description or []]
     key = header_key(header)

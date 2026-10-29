@@ -611,6 +611,13 @@ class LayoutSession:
     def save(self) -> LayoutOpResult:
         """編集した配置図をファイルへ書く(VBA `do_save`)。"""
         if not floor_plan.save(self.plan):
+            from . import map_data
+            why = map_data.blocked_why(floor_plan.USER_PATH)
+            if why:
+                # 開いたときに直した図を読めなかった。いま持っているのは出荷時の図かもしれないので書かない
+                return LayoutOpResult(False, "配置図を保存しませんでした。開いたときに、この端末で直した配置図を"
+                             f"読めなかったためです(直した図を上書きしないように)。開き直してください: {why}",
+                                  REFUSE_FAILED)
             return LayoutOpResult(False, "配置図を保存できませんでした。",
                                   REFUSE_FAILED)
         self.dirty = False

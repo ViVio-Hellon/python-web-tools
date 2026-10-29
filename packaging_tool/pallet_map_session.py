@@ -219,6 +219,13 @@ class PalletMapSession:
     # --- 保存 -------------------------------------------------------
     def save(self) -> MapOpResult:
         if not pallet_map.save(self.plan):
+            from . import map_data
+            why = map_data.blocked_why(pallet_map.USER_PATH)
+            if why:
+                # 開いたときに直した図を読めなかった。いま持っているのは出荷時の図かもしれないので書かない
+                return MapOpResult(False, "保管位置マップを保存しませんでした。開いたときに、この端末で直した保管位置マップを"
+                             f"読めなかったためです(直した図を上書きしないように)。開き直してください: {why}",
+                                  REFUSE_FAILED)
             return MapOpResult(False, "保管位置マップを保存できませんでした。",
                                REFUSE_FAILED)
         self.dirty = False

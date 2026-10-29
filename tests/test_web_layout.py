@@ -671,11 +671,23 @@ class FsBrowseTests(unittest.TestCase):
 class MapDataTests(unittest.TestCase):
     """ファイルの読み書き。`floor_plan` と `pallet_map` が共有する部分。"""
 
-    def test_壊れたJSONでも落ちない(self) -> None:
+    def test_壊れたJSONでも落ちない_ただし直した図には書かない(self) -> None:
+        """VER4.8.122。読めない図を「無い」とみなして出荷時の図で続け、保存で上書きしない。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "broken.json"
+            default = Path(tmp) / "default.json"
             path.write_text("{ こわれている", encoding="utf-8")
-            self.assertIsNone(map_data.read_json(path))
+            default.write_text('{"canvas": {"width": 10}}', encoding="utf-8")
+            with self.assertRaises(map_data.MapUnreadable):
+                map_data.read_json(path)
+            self.assertEqual(map_data.load_first([path, default], "配置図"), {"canvas": {"width": 10}})
+            self.assertTrue(map_data.blocked_why(path))
+            self.assertFalse(map_data.write_json(path, {"canvas": {"width": 10}}))   # 書かない
+            self.assertEqual(path.read_text(encoding="utf-8"), "{ こわれている")       # 消さない
+            path.write_text('{"canvas": {"width": 20}}', encoding="utf-8")            # 読めるようになった
+            self.assertEqual(map_data.load_first([path, default], "配置図"), {"canvas": {"width": 20}})
+            self.assertTrue(map_data.write_json(path, {"canvas": {"width": 30}}))
+            self.assertIsNone(map_data.read_json(Path(tmp) / "無い.json"))              # 無いのは None
 
 
 

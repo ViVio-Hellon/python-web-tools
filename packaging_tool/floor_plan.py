@@ -164,12 +164,9 @@ class FloorPlan:
 
 def load(path: Optional[Path] = None) -> FloorPlan:
     """配置図を読む。現場で編集したものがあればそれを、無ければ既定値を。"""
-    for candidate in ([path] if path is not None else [USER_PATH, DEFAULT_PATH]):
-        if candidate is None:
-            continue
-        data = map_data.read_json(candidate)
-        if data is not None:
-            return _canonical(FloorPlan.from_dict(data))
+    data = map_data.load_first([path] if path is not None else [USER_PATH, DEFAULT_PATH], "配置図")
+    if data is not None:
+        return _canonical(FloorPlan.from_dict(data))
     log.warning("配置図のデータが見つかりません。空の配置図で続行します")
     return FloorPlan()
 

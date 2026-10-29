@@ -222,9 +222,10 @@ def refresh_if_changed(conn: sqlite3.Connection,
         blank_is_missing=import_specs.BLANK_IS_MISSING,
         optional=import_specs.OPTIONAL_TABLES,
         fallbacks=import_specs.NULL_FALLBACKS)
-    # 読めなかった表は次も読めない(取り込み元に表が無いなど)。同じ姿で
-    # 何度も読みに行かないよう、見たことにする
-    _seen_stamp[str(path)] = stamp
+    # **読めた(無いと確かめた)ときだけ**、その姿で見たと覚える。読めなかったら覚えない
+    # (次の見張りでやり直す。VER4.8.122。前は「読めなかった表は次も読めない」と見て覚えていた)
+    if not result.unreadable:
+        _seen_stamp[str(path)] = stamp
     if TABLE not in result.imported:
         return False
     # 送信済みの記録は `import_tables` が入れ替えと同じトランザクションで付けた

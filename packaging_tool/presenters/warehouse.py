@@ -598,6 +598,22 @@ def same_lot_note(lot_no: str, sent: list[dict]) -> str:
             + "同じものなら二重発注です。追加の注文なら、そのまま送れます。")
 
 
+def unknown_sent_ask(lot_no: str, why: str) -> dict[str, Any]:
+    """送信済みの発注を**読めなかった**ときに訊く中身(VER4.8.122)。
+
+    読めないのを「送っていない」にして黙って送ると、二重発注を見落とす。確かめられなかったことを言って訊く。
+    """
+    return {
+        "title": "同じロットの発注を確かめられません",
+        "lead": (f"このロット({lot_no})をもう発注しているか、手元の記録を読めませんでした。"
+                 "同じものをもう一度送ると、二重発注になります。"),
+        "why": f"読めなかった理由: {why}。少し待ってから送り直すと確かめられることがあります。",
+        "ok": "確かめずに送信する",
+        "compact": True,
+        "fields": [],
+    }
+
+
 def already_sent_ask(lot_no: str, sent: list[dict]) -> dict[str, Any]:
     """同じロットを送ってあるときに訊く中身(VBA `ConfirmNotAlreadySent`)。
 

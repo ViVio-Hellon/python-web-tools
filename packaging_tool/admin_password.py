@@ -101,6 +101,12 @@ def verify(password: str) -> bool:
     stored = _stored()
     if stored is not None:
         return _matches(str(password), stored)
+    # **設定ファイルを読めないときは既定のパスワードで通さない**(VER4.8.122)。変えてあるのに
+    # 読めないだけかもしれない(読めないのを「変えていない」にしない)
+    ok, why = user_settings.readable()
+    if not ok:
+        log.warning("管理者パスワードを確かめられません(設定ファイルを読めない): %s", why)
+        return False
     # 一度も変えていない端末。これまでどおり `config` の値で通す
     return hmac.compare_digest(str(password).encode("utf-8"),
                                config.ADMIN_PASSWORD.encode("utf-8"))
@@ -125,7 +131,8 @@ def change(current: str, new: str, confirm: str) -> Result:
     if verify(new):
         return Result(False, "いまと同じパスワードです。", REFUSE_SAME)
 
-    user_settings.save(KEY, _encode(new, os.urandom(SALT_BYTES)))
+    if not user_settings.save(KEY, _encode(new, os.urandom(SALT_BYTES))):
+        return Result(False, "設定ファイルに書けなかったので、変えていません。", REFUSE_WRONG)
     log.info("管理者パスワードを変更しました")
     return Result(True, "管理者パスワードを変えました。")
 
@@ -139,7 +146,8 @@ def reset(current: str) -> Result:
     """
     if not verify(current):
         return Result(False, "いまのパスワードが違います。", REFUSE_WRONG)
-    user_settings.save(KEY, "")
+    if not user_settings.save(KEY, ""):
+        return Result(False, "設定ファイルに書けなかったので、戻していません。", REFUSE_WRONG)
     log.info("管理者パスワードを既定に戻しました")
     return Result(True, "既定のパスワードに戻しました。")
 

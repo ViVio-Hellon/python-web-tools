@@ -18,6 +18,7 @@ VBA版には座標を持つ図が2つある。
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
@@ -258,22 +259,81 @@ def arrange(boxes: dict[str, Box], op: str) -> dict[str, Box]:
 # ------------------------------------------------------------------
 # ファイルの読み書き(現場で編集したもの → 出荷時の既定値、の順に探す)
 # ------------------------------------------------------------------
+class MapUnreadable(RuntimeError):
+    """図のファイルは**あるのに読めない**(ほかが掴んでいる・書きかけ・壊れている)。VER4.8.122
+
+    「無い」とは分ける。読めないのを無いとみなして出荷時の図で続け、そのまま保存すると、現場で直した
+    図(背景の写真も)が出荷時の図で上書きされる。**読めないときは書かない**。
+    """
+
+
+# 読めなかった図のファイル → 理由。ここに入っているあいだは、その場所へ保存しない
+# (画面が持っている図は出荷時の図かもしれない)。読めたら外す
+_blocked: dict[str, str] = {}
+
+
 def read_json(path: Path) -> Optional[dict[str, Any]]:
-    if not path.exists():
-        return None
+    """図のデータを読む。**無ければ None**、あるのに読めなければ `MapUnreadable`。"""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        log.warning("図のデータを読めませんでした(%s): %s", path, exc)
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise MapUnreadable(f"{path} を読めません: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise MapUnreadable(f"{path} の中身を読めません(書きかけか壊れています): {exc}") from exc
+    if not isinstance(data, dict):
+        raise MapUnreadable(f"{path} の中身が図の形ではありません")
+    return data
+
+
+def load_first(paths: list[Path], what: str) -> Optional[dict[str, Any]]:
+    """現場で直したもの → 出荷時の既定値、の順に読む。
+
+    **現場で直したファイルがあるのに読めないとき**は、出荷時の図で画面を出すが、その場所への保存を
+    止める(`write_json` が断る)。画面の記録にも出す。
+    """
+    for index, candidate in enumerate(paths):
+        try:
+            data = read_json(candidate)
+        except MapUnreadable as exc:
+            if index == 0:
+                _blocked[str(candidate)] = str(exc)
+                log.warning("%sを読めません。出荷時の図で出しますが、保存はしません"
+                            "(直した図を上書きしないため): %s", what, exc,
+                            extra={"keep": True, "kind": "図を読めない"})
+            else:
+                log.warning("%s(出荷時)を読めません: %s", what, exc)
+            continue
+        if index == 0:
+            _blocked.pop(str(candidate), None)
+        if data is not None:
+            return data
+    return None
+
+
+def blocked_why(path: Path) -> str:
+    """その場所への保存を止めている理由(止めていなければ空)。"""
+    return _blocked.get(str(path), "")
 
 
 def write_json(path: Path, data: dict[str, Any]) -> bool:
+    """図のデータを書く。**丸ごと書いてから入れ替える**(書きかけを残さない)。
+    読めなかった図の場所へは書かない(`load_first`)。"""
+    why = blocked_why(path)
+    if why:
+        log.warning("図のデータを保存しませんでした(開いたときに読めなかったため。直した図を上書きしない): %s",
+                    why, extra={"keep": True, "kind": "図を読めない"})
+        return False
+    tmp = Path(path).with_name(f"{Path(path).name}.{os.getpid()}.tmp")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                        encoding="utf-8")
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
     except OSError as exc:
+        tmp.unlink(missing_ok=True)
         log.warning("図のデータを保存できませんでした(%s): %s", path, exc)
         return False
     log.info("図のデータを保存しました: %s", path)
@@ -281,7 +341,8 @@ def write_json(path: Path, data: dict[str, Any]) -> bool:
 
 
 def drop_user_file(path: Path) -> None:
-    """現場での編集を捨てる(出荷時の配置に戻すとき)。"""
+    """現場での編集を捨てる(出荷時の配置に戻すとき。押した人が決めたことなので、読めなくても捨てる)。"""
+    _blocked.pop(str(path), None)
     if not path.exists():
         return
     try:

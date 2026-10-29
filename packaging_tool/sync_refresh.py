@@ -177,7 +177,8 @@ def _refresh_orders(conn: sqlite3.Connection,
     # (実際にそうなっていた。共有に パレット入出庫履歴 が無い環境で、
     #  60秒ごとに総入れ替えが走る)。読めなかった表は次も読めないので、
     #  待っても変わらない。何も読めなかったときだけ、次にやり直す
-    if result.tables:
+    # ただし**読めなかった表**(無いのではなく)があれば覚えない(VER4.8.122)
+    if result.tables and not imported.unreadable:
         sync_sources.note_source_read(path)
     log.info("発注を取り込み直しました: %s件(変化=%s)", result.imported, changed)
     return result

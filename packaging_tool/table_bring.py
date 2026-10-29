@@ -911,7 +911,8 @@ def _compare_columns(found: "Candidate", have: list[str], table: str,
     消えてしまう。列は残し、値は空になる(`emptied` で先に言う)。
     """
     from .master_common import added_columns
-    mine = {c.lower() for c in added_columns(dest, table)} if dest is not None else set()
+    # 読めなければ止める(足した列を「消えた列」と見て作り直さない。VER4.8.122)
+    mine = {c.lower() for c in added_columns(dest, table, strict=True)} if dest is not None else set()
     access = {c.lower() for c in found.columns}
     found.added_columns = [c for c in found.columns if c not in have]
     found.tool_columns = [c for c in have if c.lower() in mine and c.lower() not in access]
@@ -1034,7 +1035,7 @@ def refresh(conn: Optional[sqlite3.Connection], source_path: str,
             columns = source_db.columns(src, table)
             found = Candidate(name=table, columns=columns, exists=True,
                               suspect=_suspect_rows(src, table, columns))
-            _compare_columns(found, source_db.columns(dest, table), table, dest)
+            _compare_columns(found, source_db.columns(dest, table, strict=True), table, dest)
             if table in APPEND_KEYS:
                 # 入れ替えない表。Access にしか無い行だけを足す
                 _look_append(found, src, dest, table)
@@ -1465,8 +1466,8 @@ def _refresh_one(dst: "source_db.SourceConnection", src: Path,
     照らし合わせるための Access の行を入れる)。
     """
     q = source_db.quote_identifier
-    have = source_db.columns(dst.path, table)
-    columns = source_db.columns(src, table)
+    have = source_db.columns(dst.path, table, strict=True)
+    columns = source_db.columns(src, table, strict=True)
     added = [c for c in columns if c not in have]
     kinds = _column_types(src, table)
     rows = source_db.read_table(src, table)
@@ -1532,15 +1533,16 @@ def _rebuild_one(dst: "source_db.SourceConnection", src: Path, table: str,
     """
     q = source_db.quote_identifier
     create, indexes = _create_sql(src, table)
-    columns = source_db.columns(src, table)
-    old_columns = source_db.columns(dst.path, table)
+    columns = source_db.columns(src, table, strict=True)
+    # 読めなければ止める(在庫の行を持ち越せないまま作り直さない。VER4.8.122)
+    old_columns = source_db.columns(dst.path, table, strict=True)
     rows = source_db.read_table(src, table)
     old = f"{table}_作り直す前_{stamp}"
     notes = []
     from .master_common import added_columns
     from .master_schema import ADD_KINDS
     # 書く前に読む(書いている最中に別の接続で読みに行かない)
-    kinds = added_columns(dst.path, table) if keep_columns else {}
+    kinds = added_columns(dst.path, table, strict=True) if keep_columns else {}
     with dst.transaction() as tx:
         if tx.query("SELECT 1 FROM sqlite_master WHERE name = ?", [old]):
             raise source_db.SourceError(f"{old} という表がもうあります")

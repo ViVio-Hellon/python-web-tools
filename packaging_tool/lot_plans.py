@@ -135,7 +135,11 @@ def _events(conn: sqlite3.Connection, where: str = "",
             f"SELECT 予定ID, LotNo, ライン, 状態, 送った端末, 送った人, 送った日時, 要約"
             f" FROM {TABLE} WHERE 予定ID <> ''{where}"
             " ORDER BY 送った日時, 管理番号", params).fetchall()
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
+        if "no such table" not in str(exc).lower():
+            # **読めないのを「1件も無い」にしない**(VER4.8.122)。無いと答えると、送るときに同じものを
+            # 足し、取り消すときに「入っていません」と言ってしまう
+            raise
         return []                       # 表がまだ無い(古い手元DB)
     return [Plan(plan_id=r["予定ID"], lot_no=r["LotNo"], line=r["ライン"],
                  state=r["状態"], terminal=r["送った端末"], sender=r["送った人"],
@@ -384,8 +388,10 @@ def _refresh_if_changed(conn: sqlite3.Connection, path: Optional[Path]) -> bool:
         blank_is_missing=import_specs.BLANK_IS_MISSING,
         optional=import_specs.OPTIONAL_TABLES,
         fallbacks=import_specs.NULL_FALLBACKS)
-    # 読めなかった表は次も読めない(共有にまだ無いなど)。同じ姿で何度も読みに行かない
-    _seen_stamp[str(path)] = stamp
+    # **読めた(無いと確かめた)ときだけ**、その姿で見たと覚える。読めなかったら覚えない
+    # (次の見張りでやり直す。VER4.8.122。前は「読めなかった表は次も読めない」と見て覚えていた)
+    if not result.unreadable:
+        _seen_stamp[str(path)] = stamp
     if TABLE not in result.imported:
         return False
     log.info("予定ロットを取り込み直しました: %s件", result.imported[TABLE])

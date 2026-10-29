@@ -137,10 +137,12 @@ def _auto_import(conn: sqlite3.Connection, *, force: bool = False,
         import_diag.decision(p, read or force, "手で押した(強制)" if force else why)
     if master is not None and (force or any(r for r, _ in reasons.values())):
         log.info("自動取り込み(マスタ): %s", master)
-        result.merge(sync_import.import_master(conn, master, progress=progress,
-                                   progress_range=(0, 50)))
-        for path in master_group:
-            mark_imported(conn, path)
+        got = sync_import.import_master(conn, master, progress=progress, progress_range=(0, 50))
+        result.merge(got)
+        # 読めなかった表があれば「取り込んだ」と覚えない(次の起動・見張りでやり直す。VER4.8.122)
+        if not got.unreadable:
+            for path in master_group:
+                mark_imported(conn, path)
 
     found = sync_sources.find_lot_dbs()
     second = sync_sources.find_second_lot_dbs()
@@ -156,11 +158,13 @@ def _auto_import(conn: sqlite3.Connection, *, force: bool = False,
         if not force and not any(read for read, _why in decisions.values()):
             continue
         log.info("自動取り込み(仕掛台帳): %s", path)
+        before = len(result.unreadable)
         sync_import.import_lot_table(
             conn, table, path, second.get(table), result=result,
             progress=progress, progress_range=(50, 100))
-        for p in group:
-            mark_imported(conn, p)
+        if len(result.unreadable) == before:          # 読めなかったら覚えない(VER4.8.122)
+            for p in group:
+                mark_imported(conn, p)
 
     return result
 

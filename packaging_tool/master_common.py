@@ -141,16 +141,23 @@ ADDED_REGISTRY = "ツールで足した列"
 REGISTRIES = (BROUGHT_REGISTRY, ADDED_REGISTRY)
 
 
-def added_columns(path: Optional[Path], table: str) -> dict[str, str]:
-    """「列を足す」で足した列 {列名: 型("int"/"real"/"text")}。足した順。"""
+def added_columns(path: Optional[Path], table: str, *, strict: bool = False) -> dict[str, str]:
+    """「列を足す」で足した列 {列名: 型("int"/"real"/"text")}。足した順。
+
+    記録の表が**無い**ときは空(まだ1つも足していない)。**読めない**とき、`strict` なら
+    `SourceError`(表の作り直しなど、足した列を消すかどうかを決める呼び手。VER4.8.122。前は読めない
+    ときも空にしていたので、足した列を「消えた列」と見て、作り直しで列ごと消していた)。
+    """
     if path is None or not table:
         return {}
     try:
         rows = source_db.read_query(
             path, f"SELECT 列, 型 FROM {source_db.quote_identifier(ADDED_REGISTRY)}"
                   " WHERE 表 = ? ORDER BY rowid", [table])
-    except source_db.SourceError:
-        return {}                               # まだ1つも足していない
+    except source_db.SourceError as exc:
+        if strict and not source_db.is_missing_error(str(exc)):
+            raise
+        return {}                               # まだ1つも足していない(画面に出すだけなら読めないときも)
     return {str(r["列"]): str(r.get("型") or "text") for r in rows if r.get("列")}
 
 

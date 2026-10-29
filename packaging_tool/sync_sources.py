@@ -94,6 +94,10 @@ def find_material_db(directory: Optional[Path] = None) -> Optional[Path]:
     named = source_db.find(directory, config.MATERIAL_DB_NAME)
     if named is not None:
         return named
+    # **既定の名前が「無い」と確かめられたときだけ**ほかの候補を見る(VER4.8.122)。フォルダの一覧を
+    # 読めないときに、ほかのファイル(控えの .bak- など)を梱包資材マスタとして読み書きしない
+    if source_db.listing_of(directory) is None:
+        return None
     found = material_candidates(directory)
     if len(found) == 1:
         log.info("梱包資材マスタとして %s を使います(既定の名前のファイルが無いため)",
@@ -110,12 +114,14 @@ def material_candidates(directory: Path) -> list[Path]:
 
     仕掛台帳(SIKA で始まる。**名前ではなく頭で外す** ── 上流が SIKALOTNOW →
     SIKALOT と改名したとき古い名前のファイルが残った)、看板マスタ、
-    パレット閾値マスタ、置き換え待ちの `.pending_` は梱包資材マスタではない。
+    パレット閾値マスタ、置き換え待ちの `.pending_`、控えの `.bak-` は梱包資材マスタではない。
     """
     known = {Path(config.KANBAN_DB_NAME).stem, Path(config.THRESHOLD_DB_NAME).stem}
     return [f for f in source_db.list_source_files(directory)
             if not f.stem.upper().startswith("SIKA") and f.stem not in known
-            and ".pending_" not in f.name]
+            and ".pending_" not in f.name
+            # 控え(「--fix を実行」・表を持ってくるが置く)は梱包資材マスタではない(VER4.8.122)
+            and ".bak-" not in f.name and ".bak_" not in f.name and not f.name.endswith(".tmp")]
 
 
 def material_db_missing_why(directory: Optional[Path] = None) -> str:
@@ -197,10 +203,18 @@ def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
                 found[table] = path
         return found
     second = find_second_lot_dbs()
+    # 1つ目のフォルダを**読めないとき**は、2つ目を1つ目の代わりにしない(VER4.8.122)。前は届かないのを
+    # 「無い」とみなし、2つ目(圧縮版)で手元の表をまるごと入れ替えていた。読めないときは、その表を
+    # 今回は取り込まない(手元はそのまま)。1つ目に**無いと確かめられた**ときだけ2つ目を読む
+    first_listing = source_db.listing_of(config.lot_db_dir())
     for table, filename in config.LOT_DB_FILES.items():
-        path = source_db.find(config.lot_db_dir(), filename) or second.get(table)
+        path = source_db.find(config.lot_db_dir(), filename)
+        if path is None and first_listing is not None:
+            path = second.get(table)
         if path is not None:
             found[table] = path
+    if first_listing is None:
+        log.warning("仕掛台帳の1つ目の置き場所を読めません(%s)。2つ目で手元を入れ替えません", config.lot_db_dir())
     return found
 
 

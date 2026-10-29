@@ -469,7 +469,9 @@ def _try_uri(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
     """
     if read_only and is_wal_file(resolved):
         raise sqlite3.OperationalError("WAL のファイルは共有の上で読み取り専用では開きません")
-    uri = to_uri(resolved) + ("?mode=ro" if read_only else "")
+    # 書くときも `mode=rw`(**無ければ作らない**。VER4.8.122)。既定の rwc だと、共有のマスタが一瞬
+    # 見えなくなったときに、その場所へ空のファイルを作ってしまう
+    uri = to_uri(resolved) + ("?mode=ro" if read_only else "?mode=rw")
     conn = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000)
     try:
         return _prepare(conn)
@@ -484,7 +486,28 @@ def _try_plain(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
     `mode=ro` の代わりに `query_only` を立てます。取り込み元へ
     書き込まないことは**譲れない**ので、読み取り専用は必ず掛けます。
     """
+    if not read_only:
+        # 素のパスで開くと、無いファイルは作られてしまう。**中身のあるファイルがあるときだけ**開き、
+        # 開いたあとで空なら(そのあいだに消えて、こちらが作った)閉じて消す(VER4.8.122)
+        try:
+            if resolved.stat().st_size <= 0:
+                raise sqlite3.OperationalError("中身の無いファイルには書きません")
+        except FileNotFoundError as exc:
+            raise sqlite3.OperationalError(f"ファイルがありません: {exc}") from exc
     conn = sqlite3.connect(str(resolved), timeout=BUSY_TIMEOUT_MS / 1000)
+    if not read_only:
+        try:
+            created = resolved.stat().st_size <= 0
+        except OSError:
+            created = True
+        if created:
+            conn.close()
+            try:
+                if resolved.stat().st_size <= 0:
+                    resolved.unlink()
+            except OSError:
+                pass
+            raise sqlite3.OperationalError("開くあいだにファイルが消えました(空のファイルは作りません)")
     try:
         if read_only:
             conn.execute("PRAGMA query_only = 1")
@@ -688,8 +711,12 @@ def _raw_copy(resolved: Path, copy: Path,
         wal_before = wal_stamp() if wal else None
         for extra in extras:
             side = Path(str(resolved) + extra)
-            if side.exists():
-                shutil.copyfile(side, Path(str(copy) + extra))
+            try:
+                side.stat()
+            except FileNotFoundError:
+                continue                          # 付き添いは無い(確かめて無い)
+            # 届かない・権限が無いときは OSError のまま上げる(付き添いを抜いた古い姿を写さない。VER4.8.122)
+            shutil.copyfile(side, Path(str(copy) + extra))
         shutil.copyfile(resolved, copy)
         after = resolved.stat()
         now = (after.st_size, after.st_mtime_ns)
@@ -891,16 +918,32 @@ def list_tables(path: Path, *, strict: bool = False) -> list[str]:
         return []
 
 
-def columns(path: Path, table: str) -> list[str]:
-    """テーブルの列名。取り込み前に「その列があるか」を見るのに使う。"""
+def columns(path: Path, table: str, *, strict: bool = False) -> list[str]:
+    """テーブルの列名。取り込み前に「その列があるか」を見るのに使う。
+
+    読めないときはふだん空を返す(案内に使うだけの呼び手のため)。**列が無いことで何かを決めて書く
+    呼び手は `strict=True`**(読めなければ `SourceError`。表が無いときは空 = 確かめて無い)。VER4.8.122
+    """
     try:
         with _opened(Path(path), read_only=True) as conn:
             with identifiers_as_utf8(conn):
                 rows = conn.execute(
                     f"PRAGMA table_info({quote_identifier(table)})").fetchall()
         return [r["name"] for r in rows]
-    except (SourceError, sqlite3.Error):
+    except SourceError:
+        if strict:
+            raise
         return []
+    except sqlite3.Error as exc:
+        if strict:
+            raise SourceError(f"{Path(path).name} の {table} の列を読めません: {exc}") from exc
+        return []
+
+
+def is_missing_error(message: str) -> bool:
+    """表・列が**無い**と sqlite が答えた(読めたうえで無い)。読めないのとは違う(VER4.8.122)。"""
+    lowered = (message or "").lower()
+    return "no such table" in lowered or "no such column" in lowered
 
 
 def read_query(path: Path, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
@@ -1128,16 +1171,26 @@ def find(directory: Path, *names: str) -> Optional[Path]:
     こちらが折れるほうが、現場でファイル名を直させるより早い。
     """
     directory = Path(directory)
+    # **フォルダの一覧で決める**(VER4.8.122)。`exists()` は共有に一瞬届かないときも False を返すので、
+    # `.sqlite3` が見えなかっただけで古い `.db` を拾うことがあった。一覧を読めなければ「無い」とは言わない
+    listing = listing_of(directory)
+    if listing is None:
+        return None
     for name in names:
         stem = Path(name).stem
         for suffix in SUFFIXES:
-            candidate = directory / f"{stem}{suffix}"
-            try:
-                if candidate.exists():
-                    return candidate
-            except OSError:                      # 共有に届かない
-                return None
+            real = listing.get(f"{stem}{suffix}".lower())
+            if real is not None:
+                return directory / real
     return None
+
+
+def listing_of(directory: Path) -> Optional[dict[str, str]]:
+    """フォルダにあるファイルの名前(小文字 → 実際の名前)。**読めなければ None**(「無い」とは違う)。"""
+    try:
+        return {name.lower(): name for name in os.listdir(directory)}
+    except OSError:
+        return None
 
 
 def find_named(directory: Path, name: str) -> Optional[Path]:
