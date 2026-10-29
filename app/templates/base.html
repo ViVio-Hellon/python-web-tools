@@ -36,6 +36,12 @@
   <button class="btn" type="button" onclick="location.reload()">再読込</button>
 </div>
 
+{# 裏で長く動いている処理と、いまの段(`js/health.js`・`packaging_tool/work_status.py`) #}
+<div class="busyband" id="busyband" hidden role="status" aria-live="polite">
+  <span class="busyband__spin" aria-hidden="true"></span>
+  <span class="busyband__lines" id="busylines"></span>
+</div>
+
 <header class="ribbon">
   {#
     アプリの名前と版。**どの画面でも消えない。**

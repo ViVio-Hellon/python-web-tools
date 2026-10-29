@@ -100,6 +100,155 @@ class PatternImportTests(TroubleTestCase, SyncTestCase):
         self.assertEqual(kinds, [trouble.KIND_UNREADABLE, trouble.KIND_RECOVERED])
 
 
+class SlowImportTests(TroubleTestCase):
+    """裏の取り込みに長くかかったら画面の記録に出す(VER4.8.121)。"""
+
+    def test_短い取り込みは出さない_長いと表ごとの秒数つきで1件(self) -> None:
+        trouble.slow_import(log, "梱包資材マスタ.sqlite3 の取り込み", 2.0, {"PalletMaster": 1.5}, now=T0)
+        self.assertEqual(self.shown(), [])
+        trouble.slow_import(log, "梱包資材マスタ.sqlite3 の取り込み", 12.3,
+                            {"PalletMaster": 9.0, "資材パレット注文管理": 3.0, "発注コメント": 0.01}, now=T0 + 1)
+        trouble.slow_import(log, "梱包資材マスタ.sqlite3 の取り込み", 11.0, now=T0 + 2)   # 1時間に1件
+        [(kind, text)] = self.shown()
+        self.assertEqual(kind, trouble.KIND_SLOW_IMPORT)
+        self.assertIn("12.3秒", text)
+        self.assertIn("PalletMaster 9.0秒、資材パレット注文管理 3.0秒", text)
+        self.assertNotIn("発注コメント", text)
+
+    def test_表の取り込みが長いと記録に出る(self) -> None:
+        from packaging_tool import db, import_specs, sync_import
+        with mock.patch.object(trouble, "SLOW_IMPORT_SEC", 0.0):
+            conn = sqlite3.connect(":memory:")
+            self.addCleanup(conn.close)
+            conn.row_factory = sqlite3.Row
+            db.apply_schema(conn)
+            shared = self.root / "梱包資材マスタ.sqlite3"
+            with closing(sqlite3.connect(shared)) as raw, raw:
+                raw.execute("CREATE TABLE PalletMaster (管理番号 INTEGER, 幅 INTEGER, 丈 INTEGER)")
+            specs = {"PalletMaster": import_specs.IMPORT_SPECS["PalletMaster"]}
+            sync_import.import_tables(conn, shared, specs, optional=frozenset(specs))
+        [(kind, text)] = self.shown()
+        self.assertEqual(kind, trouble.KIND_SLOW_IMPORT)
+        self.assertIn("梱包資材マスタ.sqlite3 の取り込み", text)
+
+
+class _LockedOnce:
+    """手元のDBの1文だけ「混んでいる」で落とす接続(裏の取り込みが長く書いている最中の真似)。"""
+
+    def __init__(self, conn, words: str) -> None:
+        self._conn = conn
+        self._words = words
+        self.tripped = False
+
+    def execute(self, sql, *args):
+        if not self.tripped and self._words in sql:
+            self.tripped = True
+            raise sqlite3.OperationalError("database is locked")
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        return self._conn.__enter__()
+
+    def __exit__(self, *exc):
+        return self._conn.__exit__(*exc)
+
+
+class LongWaitNeverDuplicatesTests(SyncTestCase):
+    """**長いこと(待たされること)が原因で重複を出さない**(VER4.8.121 で試験を足した)。
+
+    現場の声:「長いことが原因で重複を出すなどもってのほか」。共有へ届いたあと、手元に「送った」と
+    書くところで手元のDBが待たされて落ちても(裏の取り込みが長く書いている最中など)、次に送るとき
+    二重にならない。送信ID の無い古い実績でも同じ(送る前に送信ID を付けて手元に書いておくため)。
+    """
+
+    def test_共有に届いたあと手元が待たされて落ちても二重にならない(self) -> None:
+        save(self.a)
+        self.push(self.a)
+        with closing(sqlite3.connect(self.path)) as raw, raw:
+            raw.execute(f'UPDATE "{H}" SET 送信ID = NULL')              # 送信ID の無い古い実績
+        sync.import_from(self.b, self.path)
+        with self.b:
+            self.b.execute(f'UPDATE "{H}" SET 取込元実績ID = NULL')     # なにかで未送信に戻った
+        locked = _LockedOnce(self.b, "SET 取込元実績ID = ?")
+        with self.assertRaises(sqlite3.OperationalError):
+            sync.push_to(locked, self.path)                           # 共有には届いたが、控えで落ちた
+        self.assertTrue(locked.tripped)
+        for _ in range(3):
+            self.push(self.b)
+        self.assertEqual(self.source(f'SELECT COUNT(*) FROM "{H}"')[0][0], 1)
+        self.assertEqual(sync.pending(self.b), {})
+
+    def test_送信IDを付けるところで落ちたら何も送らない(self) -> None:
+        save(self.a)
+        self.push(self.a)
+        with closing(sqlite3.connect(self.path)) as raw, raw:
+            raw.execute(f'UPDATE "{H}" SET 送信ID = NULL')
+        sync.import_from(self.b, self.path)
+        with self.b:
+            self.b.execute(f'UPDATE "{H}" SET 取込元実績ID = NULL, 送信ID = NULL')
+        locked = _LockedOnce(self.b, "SET 送信ID = ?")
+        with self.assertRaises(sqlite3.OperationalError):
+            sync.push_to(locked, self.path)
+        self.push(self.b)
+        self.assertEqual(self.source(f'SELECT COUNT(*) FROM "{H}"')[0][0], 1)
+
+
+class WorkStatusTests(TroubleTestCase):
+    """裏で長く動いている処理を画面の帯に出す(VER4.8.121。`work_status`)。"""
+
+    def test_段と数と手を返す_入れ子は1本(self) -> None:
+        from packaging_tool import work_status
+        with work_status.work("発注まわりの取り込み直し"):
+            work_status.step("PalletMaster を取り込んでいます", done=3, total=9)
+            work_status.detail("梱包資材マスタ.sqlite3(28.6MB)を手元へ写しています")
+            with work_status.work("実績の取り込み直し"):               # 内側は外側の段を書き換えるだけ
+                [item] = work_status.snapshot(min_sec=0)
+                self.assertEqual(item["step"], "実績の取り込み直し")
+                work_status.step("共有の実績 9件と手元を比べています")
+            [item] = work_status.snapshot(min_sec=0)
+            self.assertEqual(item["name"], "発注まわりの取り込み直し")
+            self.assertEqual(work_status.snapshot(min_sec=60), [])    # すぐ終わるものは出さない
+        self.assertEqual(work_status.snapshot(min_sec=0), [])           # 終われば消える
+        text = work_status.describe({"name": "発注まわりの取り込み直し", "step": "PalletMaster を取り込んでいます",
+                                     "done": 3, "total": 9, "detail": "写しています", "elapsed_sec": 12.4})
+        self.assertEqual(text, "発注まわりの取り込み直し ── PalletMaster を取り込んでいます(3/9) … 写しています・12秒")
+
+    def test_表の取り込みは表ごとに段を書く(self) -> None:
+        from packaging_tool import db, import_specs, sync_import, work_status
+        seen = []
+        real = work_status.step
+
+        def record(text, done=None, total=None):
+            seen.append((text, done, total))
+            return real(text, done, total)
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+        conn.row_factory = sqlite3.Row
+        db.apply_schema(conn)
+        shared = self.root / "梱包資材マスタ.sqlite3"
+        with closing(sqlite3.connect(shared)) as raw, raw:
+            raw.execute("CREATE TABLE PalletMaster (管理番号 INTEGER, 幅 INTEGER, 丈 INTEGER)")
+        specs = {"PalletMaster": import_specs.IMPORT_SPECS["PalletMaster"]}
+        with mock.patch.object(work_status, "step", side_effect=record), work_status.work("マスタの取り込み"):
+            sync_import.import_tables(conn, shared, specs, optional=frozenset(specs))
+        self.assertIn(("PalletMaster を取り込んでいます", 1, 1), seen)
+
+    def test_心拍と_api_busy_が返す(self) -> None:
+        from packaging_tool import work_status
+        from tests import _web
+        client = _web.make_client("field")
+        with work_status.work("発注まわりの取り込み直し"):
+            work_status.step("PalletMaster を取り込んでいます", done=1, total=2)
+            with mock.patch.object(work_status, "SHOW_AFTER_SEC", 0.0):
+                beat = client.get("/api/health").get_json()
+                busy = client.get("/api/busy", headers=_web.auth()).get_json()
+        self.assertEqual(beat["busy"][0]["name"], "発注まわりの取り込み直し")
+        self.assertIn("PalletMaster を取り込んでいます(1/2)", busy["lines"][0])
+
+
 class GuardTests(SyncTestCase):
     """共有の実績の表の「同じ実績は1件だけ」(VER4.8.120)。"""
 

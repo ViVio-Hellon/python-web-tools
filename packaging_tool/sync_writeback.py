@@ -369,8 +369,9 @@ def write_back(conn: sqlite3.Connection,
     **送れないのが続いたら画面の記録に出す**(VER4.8.120。`trouble`)。1回きりで次に送れたものは
     その日のログにだけ書く。続いていたものが直ったら「直った」も出す。
     """
-    from . import trouble
-    result = _write_back(conn, source_path)
+    from . import trouble, work_status
+    with work_status.work("共有への送信(発注・受払・コメント・実績)"):
+        result = _write_back(conn, source_path)
     key = "書き戻し"
     if result.errors or result.skipped_reason:
         reason = result.skipped_reason or " / ".join(result.errors[:3])

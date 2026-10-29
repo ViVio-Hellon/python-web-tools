@@ -442,6 +442,28 @@ select.input { cursor: pointer; }
 .offline[hidden] { display: none; }
 
 /* ================================================================
+   裏で長く動いている処理の帯 (`js/health.js`)
+   何をしていて、どこまで進んだか。待たされている理由を見せる
+   ================================================================ */
+.busyband {
+  position: sticky; top: 0; z-index: 39;
+  background: var(--info-bg); color: var(--ink);
+  border-bottom: 2px solid var(--state-info);
+  padding: 6px 16px; font-size: var(--fs-sm);
+  display: flex; align-items: center; gap: 10px;
+}
+.busyband[hidden] { display: none; }
+.busyband__lines { display: flex; flex-direction: column; gap: 2px; }
+.busyband__bar { display: inline-block; vertical-align: middle; width: 120px; height: 8px; margin-left: 8px;
+                 border-radius: 4px; background: var(--surface); border: 1px solid var(--state-info); overflow: hidden; }
+.busyband__bar > i { display: block; height: 100%; background: var(--state-info); }
+.busyband__spin { width: 14px; height: 14px; border-radius: 50%; flex: none;
+                  border: 2px solid var(--state-info); border-right-color: transparent;
+                  animation: busyspin 1s linear infinite; }
+@keyframes busyspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .busyband__spin { animation: none; } }
+
+/* ================================================================
    このタブは操作を譲った、という覆い (`js/screen.js`)
 
    **画面ぜんぶを覆う。** 帯やトーストにすると、その下の入力欄は

@@ -592,6 +592,9 @@ def _copy_of(resolved: Path) -> Path:
         _COPY_DIR = Path(tempfile.mkdtemp(prefix=_COPY_PREFIX))
         atexit.register(shutil.rmtree, _COPY_DIR, True)
     copy = _COPY_DIR / f"{abs(hash(key)):x}{resolved.suffix}"
+    # 裏の長い処理の中なら、画面の帯に「いま写している」を出す(VER4.8.121。`work_status`)
+    from . import work_status
+    work_status.detail(f"{resolved.name}({stat.st_size / 1048576:.1f}MB)を手元へ写しています")
     for extra in _SIDECARS:
         Path(str(copy) + extra).unlink(missing_ok=True)
     if not _snapshot(resolved, copy):

@@ -337,7 +337,12 @@ def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
     **しくじりが続いたら画面の記録に出す**(VER4.8.120。`trouble`)。1回きりで次に読めたものは
     その日のログにだけ書く。続いていたものが直ったら「直った」も出す。
     """
-    outcome = _import_from(conn, path)
+    import time as _time
+    from . import work_status
+    began = _time.monotonic()
+    with work_status.work("実績の取り込み直し"):
+        outcome = _import_from(conn, path)
+    trouble.slow_import(log, f"{path.name} の実績の取り込み", _time.monotonic() - began)
     key = f"実績の取り込み|{path}"
     if outcome.error:
         trouble.failed(log, key, trouble.KIND_UNREADABLE,
@@ -399,11 +404,14 @@ def _import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
                          "取り込み元に実績の表がありません。手元の%s件を送り直します(%s)", n, path)
         return outcome
 
+    from . import work_status
+    work_status.step("共有の実績を読んでいます")
     try:
         headers = source_db.read_table(path, config.TBL_PT_HEADER)
     except source_db.SourceError as exc:
         outcome.error = str(exc)
         return outcome
+    work_status.step(f"共有の実績 {len(headers)}件と手元を比べています")
     names = list(SOURCE_HEADER_NAMES)
     source: dict[int, dict[str, Any]] = {}
     for row in headers:
@@ -432,6 +440,7 @@ def _import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
         return outcome
 
     need = sorted(set(added) | set(renew))
+    work_status.step(f"変わった実績を書いています(足す・入れ直す {len(need)}件・消す {len(gone)}件)")
     try:
         details = _read_details(path, tables, need, whole=len(need) * 2 > len(source))
     except source_db.SourceError as exc:

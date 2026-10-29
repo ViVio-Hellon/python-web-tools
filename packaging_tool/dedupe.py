@@ -246,6 +246,7 @@ class FixResult:
     removed: dict[str, int] = field(default_factory=dict)
     truncated: dict[str, int] = field(default_factory=dict)  # removed のうち切り捨ての写し
     patterns: list[str] = field(default_factory=list)       # 消した実績の写しの組(何の写しか)
+    compacted: str = ""                                     # 詰め直しの結果の1行(しなかったときは空)
     error: str = ""
 
     @property
@@ -256,7 +257,8 @@ class FixResult:
         if self.error:
             return f"共有の重複を消せませんでした: {self.error}"
         if not self.total:
-            return "共有の梱包資材マスタに、重複はありませんでした。"
+            return "\n".join(["共有の梱包資材マスタに、重複はありませんでした。"]
+                             + ([self.compacted] if self.compacted else []))
         lines = [f"共有の梱包資材マスタから、重複を {self.total}件 消しました"
                  f"(控え: {self.backup})。"]
         lines += [f"  {t}: {n}件" + (f"(うち切り捨ての写し {self.truncated[t]}件。小数のある元の行を残しました)"
@@ -265,6 +267,8 @@ class FixResult:
         if self.patterns:
             lines.append("  実績の写し(いちばん小さい実績ID を残しました。明細の行数は上の表ごとの数):")
             lines += [f"    {text}" for text in self.patterns]
+        if self.compacted:
+            lines.append(self.compacted)
         return "\n".join(lines)
 
 
@@ -276,6 +280,42 @@ def count_patterns(path: Path) -> "pattern_copies.Copies":
             return pattern_copies.find(conn)
     except sqlite3.Error as exc:
         raise source_db.SourceError(f"実績を読めません: {exc}") from exc
+
+
+# 詰め直すのは、空いた場所がこれ以上あるとき(小さな空きのために共有を書き直さない)
+COMPACT_MIN_BYTES = 1024 * 1024
+
+
+def compact(path: Path) -> str:
+    """共有の梱包資材マスタを**詰め直す**(SQLite の VACUUM)。結果の1行を返す(しなかったときは空)。
+
+    行を消しても、消した場所は空きとして残り、ファイルは小さくならない。端末は共有が変わるたびに
+    ファイルを丸ごと手元へ写して読むので、空きの分まで毎回写すことになる(現場の共有は写しを消しても
+    28.6MB。詰め直すと 1MB)。中身は変わらない。
+
+    ほかの端末が読んでいる・書いているときは詰め直せない(待つのは上限まで)。そのときは見送り、
+    次に「--fix を実行」を押したときにもう一度試す。
+    """
+    try:
+        size_before = Path(path).stat().st_size
+        with source_db.connect(path) as src:
+            [row] = src.query("PRAGMA freelist_count")
+            free_pages = int(list(row.values())[0])
+            [row] = src.query("PRAGMA page_size")
+            page_size = int(list(row.values())[0])
+            if free_pages * page_size < COMPACT_MIN_BYTES:
+                return ""
+            src.execute("VACUUM")
+        size_after = Path(path).stat().st_size
+    except (OSError, source_db.SourceError, sqlite3.Error) as exc:
+        log.warning("共有の梱包資材マスタを詰め直せませんでした(次の --fix でもう一度試します): %s", exc)
+        return f"共有のファイルの詰め直しは見送りました({exc})。次に「--fix を実行」を押したときにもう一度試します。"
+    from . import trouble
+    trouble.once(log, f"詰め直し|{path}", trouble.KIND_CLEANED,
+                 "共有の梱包資材マスタを詰め直しました: %sKB → %sKB(%s)",
+                 size_before // 1024, size_after // 1024, path, every=0)
+    return (f"共有のファイルを詰め直しました: {size_before / 1048576:.1f}MB → {size_after / 1048576:.1f}MB"
+            "(消した行の空きを除いた。中身は変わりません)。")
 
 
 def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
@@ -299,6 +339,9 @@ def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
         return FixResult(ok=False, error="共有を読めませんでした(" + " / ".join(broken) + ")")
     before = [c for c in counted if c.remove]
     if not before and not copies.drop:
+        # 消すものが無くても、前の片付けで空いた場所が残っていれば詰め直す(VER4.8.119 で片付けた共有など)
+        if patterns:
+            result.compacted = compact(path)
         return result
     try:
         result.backup = str(backup(path))
@@ -337,6 +380,9 @@ def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
     from . import trouble
     trouble.once(log, f"重複を消した|{path}", trouble.KIND_CLEANED,
                  "共有の重複を消しました: %s(控え %s)", result.removed, result.backup, every=0)
+    if patterns:
+        # 消した行の場所は空きとして残り、ファイルは小さくならない。詰め直す(VER4.8.121)
+        result.compacted = compact(path)
     if result.patterns:
         # 写しが消えたので、共有の側の守り(同じ実績は1件だけ)をすぐ付ける(VER4.8.120)
         pattern_copies.forget_guard()

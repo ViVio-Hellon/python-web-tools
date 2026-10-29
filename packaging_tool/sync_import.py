@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Optional
@@ -167,7 +168,13 @@ def import_tables(
         link = shared_link.bind(conn, Path(source_path))
         blocked_why = link.why()
 
+    # 表ごとにかかった秒数(長ければ画面の記録に出す。VER4.8.121。`trouble.slow_import`)
+    began = time.monotonic()
+    marks: list[tuple[str, float]] = []
+    from . import work_status
     for index, (table, spec) in enumerate(specs.items()):
+        marks.append((table, time.monotonic()))
+        work_status.step(f"{table} を取り込んでいます", done=index + 1, total=len(specs))
         if blocked_why and table in _WRITEBACK_BY_TABLE:
             result.errors.append(f"{table}: 取り込みを見送りました ── {blocked_why}")
             continue
@@ -336,6 +343,12 @@ def import_tables(
                            if lots_before is not None else None))
         log.info("%s: %s件取り込み(%s件スキップ)", table, imported, skipped)
     notify(end_pct, "")
+    ended = time.monotonic()
+    parts = {name: (marks[i + 1][1] if i + 1 < len(marks) else ended) - at
+             for i, (name, at) in enumerate(marks)}
+    log.info("取り込みにかかった時間: %.1f秒(%s)", ended - began, Path(source_path).name)
+    from . import trouble
+    trouble.slow_import(log, f"{Path(source_path).name} の取り込み", ended - began, parts)
     # 手元の表が入れ替わった。写しを持つところ・開いている画面が読み直す(VER4.8.95)
     from . import master_state
     master_state.touch(result.imported.keys())
@@ -845,8 +858,10 @@ def _with_diag(label: str, work: Callable[[], ImportResult]) -> ImportResult:
 def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
                   **kw: Any) -> ImportResult:
     """梱包資材マスタを取り込む(本体は `_import_master`。説明もそちら)。"""
-    result = _with_diag("マスタの取り込み",
-                        lambda: _import_master(conn, source_path, **kw))
+    from . import work_status
+    with work_status.work("マスタの取り込み"):
+        result = _with_diag("マスタの取り込み",
+                            lambda: _import_master(conn, source_path, **kw))
     # 取り込めないのが続いたら画面の記録に出す(VER4.8.120。`trouble`)
     from . import trouble
     errors = list(getattr(result, "errors", []) or [])

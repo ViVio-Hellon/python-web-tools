@@ -362,6 +362,32 @@ class CopiesTests(SyncTestCase):
                 raw.execute(f'INSERT INTO "{H}" ({quoted}) SELECT {quoted} FROM "{H}" WHERE 実績ID = ?',
                             (first,))
 
+    def test_片付けたあと共有のファイルを詰め直す(self) -> None:
+        """消した行の場所は空きとして残る。詰め直して、毎回写す大きさを減らす(VER4.8.121)。"""
+        import os
+        from packaging_tool import dedupe
+        self.make_copies(300)
+        size_before = os.path.getsize(self.path)
+        with mock.patch.object(dedupe, "COMPACT_MIN_BYTES", 1):
+            fixed = dedupe.fix_shared(self.path)
+        self.assertIn("詰め直しました", fixed.summary())
+        self.assertLess(os.path.getsize(self.path), size_before)
+        self.assertEqual(self.count(), 2)                              # 中身は変わらない
+
+    def test_消すものが無くても空きが残っていれば詰め直す_小さい空きは触らない(self) -> None:
+        import os
+        from packaging_tool import dedupe
+        self.make_copies(300)
+        with mock.patch.object(dedupe, "compact", return_value=""):
+            dedupe.fix_shared(self.path)                               # 前の版で片付けた(詰め直していない)
+        self.assertEqual(dedupe.fix_shared(self.path).compacted, "")   # 空きは 1MB 未満なので触らない
+        size_before = os.path.getsize(self.path)
+        with mock.patch.object(dedupe, "COMPACT_MIN_BYTES", 1):
+            again = dedupe.fix_shared(self.path)
+        self.assertIn("重複はありませんでした", again.summary())
+        self.assertIn("詰め直しました", again.summary())
+        self.assertLess(os.path.getsize(self.path), size_before)
+
     def test_明細が違えば写しではない(self) -> None:
         from packaging_tool import dedupe
         self.make_copies(2)

@@ -143,6 +143,10 @@ def health():
         # 閉じさせない(現場の声:「配置編集保存されてないよ」)。
         # どの画面にいても分かるよう、棚検索・簡易在庫の両方を返す
         "unsaved": _screen_unsaved(),
+        # **裏で長く動いている処理と、いまの段**(VER4.8.121。`work_status`)。しばらく続いているもの
+        # だけ。画面はこれがあれば帯に出し、終わるまで `/api/busy` で細かく見る
+        # (現場の声:「何故長いのかがわからないことが問題」「長ければ進捗としてプログレス等だす」)
+        "busy": _busy(),
         # **管理者認証の世代。** 画面が開いたときの世代と違えば、認証に
         # 関わるところ(マスタ管理の「直せる/直せない」など)を描き直す
         # (`auth_state` の説明。現場の声:「認証系はすぐにどこにでも反映」)
@@ -327,6 +331,22 @@ def jobs():
     """
     from packaging_tool.presenters import settings as settings_presenter
     return jsonify(settings_presenter.jobs_dict())
+
+
+def _busy() -> list[dict]:
+    from packaging_tool import work_status
+    return work_status.snapshot()
+
+
+@bp.get("/api/busy")
+def busy():
+    """裏で長く動いている処理の、いまの進み具合だけ(VER4.8.121)。帯を出しているあいだ画面が数秒ごとに見る。
+
+    業務データは含まない(処理の名前・段・数・秒数だけ)。DBも共有も開かない。
+    """
+    from packaging_tool import work_status
+    items = _busy()
+    return jsonify({"busy": items, "lines": [work_status.describe(i) for i in items]})
 
 
 @bp.post("/api/alive")

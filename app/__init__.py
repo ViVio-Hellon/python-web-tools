@@ -84,12 +84,12 @@ TOKEN_EXEMPT_PATHS = frozenset({"/api/health", "/api/alive"})
 # 断ってしまうと伝わらない(応答の `screen_ok` がその知らせ)。
 # `/api/alive` も同じ理由 ── 心拍を断ると、開いているタブが死んだ扱いに
 # なって自動終了が誤る。どちらも業務データを含まない。
-SCREEN_EXEMPT_PATHS = frozenset({"/api/health", "/api/alive", "/api/client-error"})
+SCREEN_EXEMPT_PATHS = frozenset({"/api/health", "/api/alive", "/api/client-error", "/api/busy"})
 
 # 操作の足跡(1要求1行)に**書かない**もの。数秒〜1分おきに来る見張り・
 # 進捗の問い合わせで、書くと肝心の操作が押し流される。
 # 前方一致で見る。`only_if_changed=1` の見張り(倉庫)も同じ扱い
-QUIET_PREFIXES = ("/static/", "/api/alive", "/api/health", "/api/jobs",
+QUIET_PREFIXES = ("/static/", "/api/alive", "/api/health", "/api/busy", "/api/jobs",
                   "/api/client-error")
 QUIET_GET_PREFIXES = ("/api/log",)
 

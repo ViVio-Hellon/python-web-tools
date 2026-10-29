@@ -54,6 +54,58 @@ async function followModes(modes) {
   }
 }
 
+/*
+  **裏で長く動いている処理を帯に出す**。
+
+  現場の声:「長い処理がある事はある程度許容できるが何故長いのかがわからないことが問題」
+  「長ければ進捗としてプログレス等だす」。共有が変わるたびの取り込み直しが裏で何十秒も
+  動いても、前は画面に何も出なかった。心拍の答えに `busy`(しばらく続いている処理と、いまの段)
+  があれば帯に出し、終わるまで `/api/busy` を数秒ごとに見て書き換える。
+*/
+const BUSY_POLL_MS = 2000;
+let busyTimer = null;
+
+function busyLine(item) {
+  const row = document.createElement("div");
+  let text = item.name || "";
+  if (item.step) text += ` ── ${item.step}`;
+  const counted = item.total ? ` (${item.done || 0}/${item.total})` : "";
+  row.append(document.createTextNode(text + counted));
+  if (item.total) {
+    const bar = document.createElement("span");
+    bar.className = "busyband__bar";
+    const fill = document.createElement("i");
+    fill.style.width = `${Math.min(100, Math.round(100 * (item.done || 0) / item.total))}%`;
+    bar.append(fill);
+    row.append(bar);
+  }
+  const tail = (item.detail ? ` … ${item.detail}` : "") + `・${Math.floor(item.elapsed_sec || 0)}秒`;
+  row.append(document.createTextNode(tail));
+  return row;
+}
+
+function showBusy(items) {
+  const band = document.getElementById("busyband");
+  const lines = document.getElementById("busylines");
+  if (!band || !lines) return;
+  const list = Array.isArray(items) ? items : [];
+  lines.replaceChildren(...list.map(busyLine));
+  band.hidden = list.length === 0;
+  if (list.length && !busyTimer) {
+    busyTimer = setInterval(async () => {
+      try {
+        const body = await api.get("/api/busy");
+        showBusy(body && body.busy);
+      } catch {
+        showBusy([]);
+      }
+    }, BUSY_POLL_MS);
+  } else if (!list.length && busyTimer) {
+    clearInterval(busyTimer);
+    busyTimer = null;
+  }
+}
+
 async function beat() {
   try {
     // `beat=1`: 画面の心拍。サーバはこのついでに、送れていない発注などを送り直す
@@ -74,6 +126,7 @@ async function beat() {
     if (body && body.screen_ok === false) screen.showTaken();
     else if (body && body.screen_ok === true) screen.clearTaken();
     if (body && Array.isArray(body.modes)) followModes(body.modes);
+    if (body && Array.isArray(body.busy)) showBusy(body.busy);
     // **このモードの権限が外れて、サーバが使えるモードへ切り替えた**(マスタ反映もれ #14)。
     // 出している画面は前のモードのものなので、切り替えた先の最初の画面へ移る
     // (帯の一言が「…の権限が外れたため…に切り替えました」と言う)。図の編集はサーバが持っているので消えない

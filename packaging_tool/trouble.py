@@ -39,6 +39,11 @@ KIND_RESENT = "実績の送り直し"
 KIND_STOPPED_DUPLICATE = "二重を止めた"
 KIND_CLEANED = "重複を消した"
 KIND_GUARD_OFF = "二重登録の防止が効いていない"
+KIND_SLOW_IMPORT = "時間のかかった取り込み"
+
+# 取り込み(裏の取り込み直しも含む)がこの秒数を超えたら、画面の記録に出す(VER4.8.121)。
+# 取り込みのあいだは手元のDBを書いているので、長いと画面の読み取りが待たされる
+SLOW_IMPORT_SEC = 10.0
 
 
 def keep(kind: str) -> dict[str, Any]:
@@ -123,6 +128,23 @@ def once(log: logging.Logger, key: str, kind: str, message: str, *args: Any,
     else:
         log.warning(message, *args)
     return show
+
+
+def slow_import(log: logging.Logger, what: str, seconds: float,
+                parts: dict[str, float] | None = None, *, now: Optional[float] = None) -> bool:
+    """取り込みに `SLOW_IMPORT_SEC` 秒以上かかったら、画面の記録に出す(同じ取り込みは1時間に1件。
+    あいだの回数は次に添える)。`parts` は表ごとの秒数(長い順に5つまで添える)。出したら True。
+
+    前は、裏の取り込みに何秒かかったかをどこにも出していなかったので、発注などが増えて少しずつ
+    長くなっても、遅くなってから気づくしかなかった(VER4.8.121)。
+    """
+    if seconds < SLOW_IMPORT_SEC:
+        return False
+    top = sorted((parts or {}).items(), key=lambda kv: -kv[1])[:5]
+    detail = "、".join(f"{name} {sec:.1f}秒" for name, sec in top if sec >= 0.05)
+    return once(log, f"時間のかかった取り込み|{what}", KIND_SLOW_IMPORT,
+                "%s に %.1f秒 かかりました(取り込みのあいだ、画面の読み取りが待たされることがあります)%s",
+                what, seconds, f"。長かった表: {detail}" if detail else "", now=now)
 
 
 def forget() -> None:

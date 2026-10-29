@@ -66,6 +66,18 @@ class OrderRefresh:
 def refresh_orders(conn: sqlite3.Connection,
                    source_path: Optional[Path] = None,
                    *, only_if_changed: bool = False) -> OrderRefresh:
+    """発注まわりの表だけを取り込み直す(中身は `_refresh_orders`)。
+
+    裏で長くかかると、画面の帯に「何をしていて、どこまで進んだか」を出す(VER4.8.121。`work_status`)。
+    """
+    from . import work_status
+    with work_status.work("発注まわりの取り込み直し"):
+        return _refresh_orders(conn, source_path, only_if_changed=only_if_changed)
+
+
+def _refresh_orders(conn: sqlite3.Connection,
+                    source_path: Optional[Path] = None,
+                    *, only_if_changed: bool = False) -> OrderRefresh:
     """発注まわりの表だけを取り込み直す。
 
     `only_if_changed` は見張り用。取り込み元が前回から変わっていなければ
@@ -101,6 +113,8 @@ def refresh_orders(conn: sqlite3.Connection,
              if t in ORDER_TABLES or t == config.TBL_PALLET_MASTER}
     unsent = sync_writeback._unsent_writeback_tables(conn)
     if unsent:
+        from . import work_status
+        work_status.step("まだ送れていない発注などを先に送っています")
         sync_writeback.write_back(conn, path)
         unsent = sync_writeback._unsent_writeback_tables(conn)
     for table in unsent:
@@ -111,7 +125,8 @@ def refresh_orders(conn: sqlite3.Connection,
     # 実績も取り込み直す。**ほかの端末で保存した実績**が、開き直さなくても
     # 一覧に出るように(VBA は共有を直接読むので、保存すればすぐ見える)
     if config.TBL_PT_HEADER not in unsent:
-        from . import pattern_sync
+        from . import pattern_sync, work_status
+        work_status.step("実績を取り込み直しています")
         outcome = pattern_sync.import_from(conn, path)
         if outcome.error:
             result.errors.append(f"{config.TBL_PT_HEADER}: {outcome.error}")
