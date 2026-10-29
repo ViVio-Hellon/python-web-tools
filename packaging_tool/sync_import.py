@@ -353,7 +353,8 @@ def _import_patterns(conn: sqlite3.Connection, path: Path,
         result.errors.append(
             f"{config.TBL_PT_HEADER}: 取り込みを見送りました({outcome.skipped_reason})")
     elif not outcome.missing:
-        result.imported[config.TBL_PT_HEADER] = outcome.imported
+        # 取り込み元と同じになった実績の数(変わった分だけ書くので、書いた数ではない。VER4.8.118)
+        result.imported[config.TBL_PT_HEADER] = outcome.in_sync
 
 
 def _import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,

@@ -93,6 +93,11 @@ QUIET_PREFIXES = ("/static/", "/api/alive", "/api/health", "/api/jobs",
                   "/api/client-error")
 QUIET_GET_PREFIXES = ("/api/log",)
 
+# 設定の「ログ」の面にも残す断り(VER4.8.118)。権限が無い・モードが違う(403・404)、混んでいる(503)
+KEEP_REFUSAL_STATUS = frozenset({403, 404, 503})
+# これより長くかかった操作は、設定の「ログ」の面にも残す(ミリ秒)
+SLOW_KEEP_MS = 30_000
+
 
 def create_app(mode: str = modes.FIELD, *,
                token: Optional[str] = None,
@@ -435,10 +440,20 @@ def _register_trace(app: Flask) -> None:
             body = response.get_json(silent=True) or {}
             info = body.get("error") if isinstance(body.get("error"), dict) else {}
             why = info.get("message") or body.get("message") or ""
+            # 権限・モード・混んでいる で断ったものは、設定の「ログ」の面にも残す(VER4.8.118)。
+            # 入力の誤りなど業務の断り(400・422)は、その日のログファイルだけ
+            keep = response.status_code in KEEP_REFUSAL_STATUS
             log.warning("断り %s → %s %s「%s」(%dms)%s", what, response.status_code,
-                        info.get("code", ""), why, took, tail)
+                        info.get("code", ""), why, took, tail,
+                        extra={"keep": True, "kind": "断った操作"} if keep else None)
         else:
             log.info("操作 %s → %s (%dms)%s", what, response.status_code, took, tail)
+        if took >= SLOW_KEEP_MS:
+            # **時間のかかった操作も残す**(VER4.8.118。現場の声「検索一つに15分とかかかる事がある。
+            # その時そのタイミングに立ち会えないのでログを見るしかないが出ていない」)。
+            # 開くと、同じ操作番号の行(何を読んで何を待ったか)がそのまま付いてくる
+            log.warning("時間のかかった操作: %s → %s(%.0f秒)%s", what, response.status_code,
+                        took / 1000, tail, extra={"keep": True, "kind": "時間のかかった操作"})
         return response
 
     @app.teardown_request

@@ -102,11 +102,16 @@ def _require_material_mode():
             g.pop("grant", None)
             grant = current_grant()
         if not grant.allows_mode(modes.MATERIAL):
-            log.info("資材モードの権限が無いため断りました: %s", request.path)
+            # **どの端末として見て、何を読んで、何が足りなかったか**まで言う(VER4.8.118)。
+            # 現場の声:「その操作はこの端末では使えません…となる。権限は付与されている」──
+            # 前は理由が無く、ログにも1行(INFO)しか残らなかった
+            why = access_control.explain(grant, get_db())
+            log.warning("資材モードの権限が無いため断りました: %s / %s / 読んだ権限: %s",
+                        request.path, why, ", ".join(sorted(grant.codes)) or "(なし)")
             return jsonify({"error": {
                 "code": "not_found",
-                "message": "その操作はこの端末では使えません。"
-                          "設定画面でアクセス権限の登録状況を確認してください。"
+                "message": "その操作はこの端末では使えません(資材モードの権限が見つかりません)。"
+                          f"{why}。設定画面「いまの状態」でアクセス権限の登録状況を確認してください。"
                 }}), 404
     if current_mode() != modes.MATERIAL:
         log.info("資材モードではないため断りました: %s", request.path)

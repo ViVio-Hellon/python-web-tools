@@ -390,7 +390,9 @@ class RefreshIfChangedTests(SyncTestCase):
         self.assertIsNone(sync.refresh_if_changed(self.b, self.path))   # 変わっていない
         save(self.a, 製品幅=1000)
         self.push(self.a)
-        self.assertEqual(sync.refresh_if_changed(self.b, self.path).imported, 2)
+        got = sync.refresh_if_changed(self.b, self.path)
+        # **書くのは足された1件だけ**(VER4.8.118。前は2件とも入れ直していた)
+        self.assertEqual((got.in_sync, got.imported, got.unchanged), (2, 1, 1))
         self.assertEqual(len(ps.get_pattern_list(self.b)), 2)
 
     def test_送れていない実績があれば入れ替えず次にまた見る(self) -> None:
@@ -401,7 +403,81 @@ class RefreshIfChangedTests(SyncTestCase):
         self.assertTrue(got.skipped_reason)
         self.assertEqual(len(ps.get_pattern_list(self.b)), 1)   # Bの分は消えない
         self.push(self.b)
-        self.assertEqual(sync.refresh_if_changed(self.b, self.path).imported, 2)
+        got = sync.refresh_if_changed(self.b, self.path)
+        self.assertEqual((got.in_sync, got.imported), (2, 1))      # Bの分は送ったまま(書き直さない)
+        self.assertEqual(len(ps.get_pattern_list(self.b)), 2)
+
+
+class IncrementalImportTests(SyncTestCase):
+    """取り込みは**変わった実績だけ書く**(VER4.8.118)。
+
+    現場の声「検索一つに15分とかかかる事がある」。共有の梱包資材マスタはどの端末が送っても変わり、
+    そのたびに実績(現場では 37,161件・明細 427,424行)をまるごと入れ直していた。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        save(self.a)
+        save(self.a, 製品幅=1000)
+        self.push(self.a)
+        sync.import_from(self.b, self.path)
+
+    def detail_ids(self, conn) -> list:
+        return [r[0] for r in conn.execute(f'SELECT 明細ID FROM "{config.TBL_PT_SELECT}" ORDER BY 明細ID')]
+
+    def test_変わっていなければ何も書かない(self) -> None:
+        before = self.detail_ids(self.b)
+        got = sync.import_from(self.b, self.path)
+        self.assertEqual((got.imported, got.updated, got.removed, got.unchanged), (0, 0, 0, 2))
+        self.assertEqual(self.detail_ids(self.b), before)          # 明細も入れ直していない
+
+    def test_読んだ回数だけ変わったらヘッダだけ直す(self) -> None:
+        before = self.detail_ids(self.b)
+        with closing(sqlite3.connect(self.path)) as raw, raw:
+            raw.execute(f'UPDATE "{H}" SET 使用回数 = 7 WHERE 製品幅 = 1000')
+        got = sync.import_from(self.b, self.path)
+        self.assertEqual((got.imported, got.updated), (0, 1))
+        self.assertEqual(self.detail_ids(self.b), before)
+        counts = {r[0]: r[1] for r in self.b.execute(f'SELECT 製品幅, 使用回数 FROM "{H}"')}
+        self.assertEqual(counts[1000], 7)
+
+    def test_共有で消えた実績は手元からも消す(self) -> None:
+        with closing(sqlite3.connect(self.path)) as raw, raw:
+            pid = raw.execute(f'SELECT 実績ID FROM "{H}" WHERE 製品幅 = 1000').fetchone()[0]
+            raw.execute(f'DELETE FROM "{H}" WHERE 実績ID = ?', (pid,))
+            for table, _cols, _order in ps.DETAIL_TABLES:
+                raw.execute(f'DELETE FROM "{table}" WHERE 実績ID = ?', (pid,))
+        got = sync.import_from(self.b, self.path)
+        self.assertEqual(got.removed, 1)
+        self.assertEqual([p.product_width for p in ps.get_pattern_list(self.b)], [1122])
+        left = self.b.execute(f'SELECT COUNT(*) FROM "{config.TBL_PT_SELECT}" WHERE 実績ID NOT IN '
+                              f'(SELECT 実績ID FROM "{H}")').fetchone()[0]
+        self.assertEqual(left, 0)                                  # 明細も残さない
+
+    def test_中身が変わった実績は明細ごと入れ直す(self) -> None:
+        with closing(sqlite3.connect(self.path)) as raw, raw:
+            raw.execute(f'UPDATE "{H}" SET 配置方式 = \'通常\', 更新日時 = \'2026-10-29 10:00:00\' WHERE 製品幅 = 1000')
+            pid = raw.execute(f'SELECT 実績ID FROM "{H}" WHERE 製品幅 = 1000').fetchone()[0]
+            raw.execute(f'DELETE FROM "{config.TBL_PT_SELECT}" WHERE 実績ID = ? AND rowid NOT IN '
+                        f'(SELECT MIN(rowid) FROM "{config.TBL_PT_SELECT}" WHERE 実績ID = ?)', (pid, pid))
+        got = sync.import_from(self.b, self.path)
+        self.assertEqual(got.imported, 1)
+        local = self.b.execute(f'SELECT 実績ID FROM "{H}" WHERE 取込元実績ID = ?', (pid,)).fetchone()[0]
+        n = self.b.execute(f'SELECT COUNT(*) FROM "{config.TBL_PT_SELECT}" WHERE 実績ID = ?', (local,)).fetchone()[0]
+        self.assertEqual(n, 1)
+
+    def test_手元で送った実績と番号がぶつかっても取り込める(self) -> None:
+        # Bで保存して送る(手元の番号と取り込み元の番号が違う実績ができる)
+        save(self.b, 製品幅=900)
+        self.push(self.b)
+        # Aがさらに保存して送る。取り込み元の新しい番号が、Bの手元の番号とぶつかることがある
+        save(self.a, 製品幅=800)
+        self.push(self.a)
+        got = sync.import_from(self.b, self.path)
+        self.assertFalse(got.error, got.error)
+        self.assertEqual(sorted(p.product_width for p in ps.get_pattern_list(self.b)), [800, 900, 1000, 1122])
+        pairs = self.b.execute(f'SELECT COUNT(DISTINCT 取込元実績ID), COUNT(*) FROM "{H}"').fetchone()
+        self.assertEqual(tuple(pairs), (4, 4))
 
 
 class StalePatternIdTests(SyncTestCase):
@@ -470,3 +546,29 @@ class ProvisionalNameTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PatternListLimitTests(SyncTestCase):
+    """実績の一覧は新しいほうから上限まで。数はかならず言う(VER4.8.118)。
+
+    現場の写しでは 1350×1450 に同じ実績が 37,154件あり、画面を作り直すたびに全部並べていた
+    (明細を引く `IN (...)` も Windows の sqlite3 の上限 32,766 を超えていた)。
+    """
+
+    def test_上限まで出して数を数え_明細は小分けに引く(self) -> None:
+        from unittest import mock
+        for i in range(7):
+            save(self.a, 製品幅=1000 + i)
+        with mock.patch.object(ps, "ID_CHUNK", 3):
+            rows = ps.get_pattern_list(self.a, 1150, 2650, limit=5)
+            every = ps.get_pattern_list(self.a, 1150, 2650)
+        self.assertEqual([r.product_width for r in rows], [1006, 1005, 1004, 1003, 1002])
+        self.assertEqual(ps.count_patterns(self.a, 1150, 2650), 7)
+        self.assertTrue(all("下:" in r.board_summary and r.board_summary != "[別案A] 下: / 上:" for r in every))
+
+    def test_1件だけ番号で引ける(self) -> None:
+        first = save(self.a, 製品幅=1000)
+        save(self.a, 製品幅=1001)
+        [row] = ps.get_pattern_list(self.a, ids=[first])
+        self.assertEqual(row.product_width, 1000)
+        self.assertEqual(ps.get_pattern_list(self.a, ids=[]), [])

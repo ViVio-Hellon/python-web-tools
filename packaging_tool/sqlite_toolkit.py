@@ -45,6 +45,10 @@ def is_lock_error(exc: BaseException) -> bool:
     return any(snippet in msg for snippet in LOCK_ERROR_SNIPPETS)
 
 
+# WAL が使えないと言ったファイル(1度だけ言う)
+_no_wal_reported: set[str] = set()
+
+
 def enable_wal(conn: sqlite3.Connection) -> None:
     """読み書きが同時でも待たされないようにする(WALモード)。
 
@@ -64,7 +68,19 @@ def enable_wal(conn: sqlite3.Connection) -> None:
         return
     actual = (mode[0] if mode else "") or ""
     if str(actual).lower() != "wal":
-        log.info("WALは使えませんでした(journal_mode=%s)。既定のまま続行します", actual)
+        # **ファイルごとに1度だけ、設定の「ログ」の面にも残す**(VER4.8.118)。WAL でないと、裏で
+        # 取り込んでいるあいだ画面の読み取りが待たされる(「検索に何分もかかる」の出どころになりうる)
+        try:
+            where = conn.execute("PRAGMA database_list").fetchone()[2] or "(メモリ上)"
+        except sqlite3.Error:
+            where = "(不明)"
+        if where not in _no_wal_reported and where != "(メモリ上)":
+            _no_wal_reported.add(where)
+            log.warning("作業用のDBで WAL が使えません(journal_mode=%s): %s。裏で取り込んでいるあいだ、"
+                        "画面の読み取りが待たされます(置き場所が共有フォルダなどだと起きます)", actual, where,
+                        extra={"keep": True, "kind": "DBが遅くなる設定"})
+        else:
+            log.debug("WALは使えませんでした(journal_mode=%s)。既定のまま続行します", actual)
 
 
 # ------------------------------------------------------------------

@@ -38,8 +38,11 @@ _crowd_reported = False
 
 def begin(label: str) -> None:
     """このスレッドで要求が始まった。"""
+    from .logging_utils import current_operation
+    # どの操作か(操作番号・画面・入力)。止まったときの記録に付けて、同じ操作の行を集められるようにする
+    operation = dict(current_operation() or {})
     with _lock:
-        _active[threading.get_ident()] = [label, time.monotonic(), False]
+        _active[threading.get_ident()] = [label, time.monotonic(), False, operation]
     _ensure_thread()
 
 
@@ -53,8 +56,8 @@ def stalled(now: Optional[float] = None) -> list[tuple[str, float]]:
     """いま止まっている要求(何の要求か, 秒)。"""
     moment = time.monotonic() if now is None else now
     with _lock:
-        return [(label, moment - began) for label, began, _ in _active.values()
-                if moment - began >= STALL_SEC]
+        return [(entry[0], moment - entry[1]) for entry in _active.values()
+                if moment - entry[1] >= STALL_SEC]
 
 
 def check(now: Optional[float] = None) -> int:
@@ -62,19 +65,23 @@ def check(now: Optional[float] = None) -> int:
     global _crowd_reported
     moment = time.monotonic() if now is None else now
     frames = sys._current_frames()                       # noqa: SLF001 - 調べるための標準の口
-    report: list[tuple[str, float, str]] = []
+    report: list[tuple[str, float, str, dict]] = []
     with _lock:
         for ident, entry in _active.items():
-            label, began, done = entry
+            label, began, done = entry[0], entry[1], entry[2]
             if done or moment - began < STALL_SEC:
                 continue
             entry[2] = True
             frame = frames.get(ident)
             stack = "".join(traceback.format_stack(frame)) if frame is not None else "(呼び出しの並びが取れません)"
-            report.append((label, moment - began, stack))
-        crowd = sum(1 for _, began, _ in _active.values() if moment - began >= STALL_SEC)
-    for label, took, stack in report:
-        log.warning("要求が %.0f秒 返っていません: %s\nいまここにいます:\n%s", took, label, stack)
+            report.append((label, moment - began, stack, entry[3] if len(entry) > 3 else {}))
+        crowd = sum(1 for entry in _active.values() if moment - entry[1] >= STALL_SEC)
+    for label, took, stack, operation in report:
+        # **設定の「ログ」の面に出す**(VER4.8.118。前はその日のログファイルにだけあった)。
+        # 立ち会えなくても、あとから「何が・どこで待っていたか」を開ける
+        log.warning("要求が %.0f秒 返っていません: %s\nいまここにいます:\n%s", took, label, stack,
+                    extra={"keep": True, "kind": "返らない操作", "operation": operation,
+                           "detail": f"いまここにいます(呼び出しの並び。いちばん下が今いるところ):\n{stack}"})
     if crowd > CROWD and not _crowd_reported:
         _crowd_reported = True
         log.warning("返らない要求が %s件 あります(受付がふさがりかけています): %s",

@@ -199,9 +199,19 @@ def _who() -> dict[str, str]:
 
 
 class _ErrorRecordHandler(logging.Handler):
-    """ERROR 以上を `packagingtool_エラー記録_<PC>_YYYYMM.jsonl` へ1件1行で残す。"""
+    """ERROR 以上を `packagingtool_エラー記録_<PC>_YYYYMM.jsonl` へ1件1行で残す。
+
+    **残しておくべき注意**(`extra={"keep": True, "kind": "…"}` を付けた WARNING)も同じ記録に残す
+    (VER4.8.118)。断った操作・時間のかかった操作・返らない操作・権限を読めない、など。
+    現場の声:「その時そのタイミングに立ち会えないのでログを見るしかないが出ていない。
+    機能が生かし切れていない」── 前は ERROR しか残らず、設定の「ログ」の面に出なかった
+    (その日のログファイルには1行あったが、画面からは見えなかった)。
+    """
 
     def emit(self, record: logging.LogRecord) -> None:
+        keep = bool(getattr(record, "keep", False))
+        if record.levelno < logging.ERROR and not keep:
+            return
         try:
             when = datetime.fromtimestamp(record.created)
             detail = getattr(record, "detail", "") or ""
@@ -210,7 +220,7 @@ class _ErrorRecordHandler(logging.Handler):
                      else "")
             if trace:
                 detail = (detail + "\n" if detail else "") + trace
-            ref = getattr(record, "ref", "")
+            ref = getattr(record, "ref", "") or (new_error_ref() if keep else "")
             # 起きたスレッドで写した分(`_OpFilter`)。直接呼ばれたとき(試験)はいまの分
             recent = getattr(record, "recent_lines", None)
             if recent is None:
@@ -222,6 +232,8 @@ class _ErrorRecordHandler(logging.Handler):
                 "ref": ref,
                 "at": when.strftime(DATE_FORMAT),
                 "level": record.levelname,
+                # 何の記録か(エラー / 断った操作 / 時間のかかった操作 …)。画面の一覧に出す
+                "kind": getattr(record, "kind", "") or ("エラー" if record.levelno >= logging.ERROR else "注意"),
                 "where": record.name,
                 "message": record.getMessage(),
                 "detail": detail,
@@ -557,7 +569,7 @@ def configure_logging() -> None:
         # 書き手を替えるとき(`_AsyncWriter._stuck`)も同じ形で作り直す
         daily = DailyFileHandler(date.today(), encoding="utf-8", delay=True)
         daily.setFormatter(formatter)
-        return [_ErrorRecordHandler(level=logging.ERROR), daily]
+        return [_ErrorRecordHandler(level=logging.WARNING), daily]
 
     _writer = _AsyncWriter(file_targets)
     _writer.addFilter(op_filter)

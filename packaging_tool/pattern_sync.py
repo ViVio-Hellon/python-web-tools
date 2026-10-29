@@ -252,17 +252,57 @@ def push(conn: sqlite3.Connection,
 # ------------------------------------------------------------------
 @dataclass
 class ImportOutcome:
-    imported: int = 0              # 取り込んだ実績(ヘッダ)の数
+    imported: int = 0              # 取り込んだ(足した・中身ごと入れ直した)実績(ヘッダ)の数
     skipped_reason: str = ""       # 入れ替えなかった理由
     missing: bool = False          # 取り込み元に実績の表が無かった
     error: str = ""
+    updated: int = 0               # 使用回数・更新日時だけ直した実績
+    removed: int = 0               # 取り込み元から消えたので消した実績
+    unchanged: int = 0             # 変わっていなかった実績(書かない)
+
+    @property
+    def in_sync(self) -> int:
+        """取り込み元と同じになった実績の数(取り込みの結果に出す数。ほかの表の「取り込んだ件数」と同じ意味)。"""
+        return self.imported + self.updated + self.unchanged
+
+
+# ヘッダのこの列だけが違うなら、ヘッダだけ直す(明細は読まない)。読んだ回数は全端末で毎回増える。
+# 更新日時が変わったら明細ごと入れ直す(保存し直したのかもしれない。1件ぶんの明細なので軽い)
+HEADER_ONLY_COLUMNS = frozenset({"使用回数"})
+# 明細を `WHERE 実績ID IN (...)` で引く1回の数。足す実績が全体の半分を超えたら表ごと読む
+DETAIL_CHUNK = 400
+
+
+def _same(now: Any, was: Any) -> bool:
+    """取り込み元と手元の値が同じか。共有の列は型が無く数が文字のことがある('1030' と 1030 は同じ)。"""
+    if now is None or was is None:
+        return (now is None or now == "") and (was is None or was == "")
+    if now == was:
+        return True
+    try:
+        return float(now) == float(was)
+    except (TypeError, ValueError):
+        return str(now) == str(was)
 
 
 def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
-    """取り込み元の実績を手元へ総入れ替えで取り込む。
+    """取り込み元の実績を手元へ取り込む。**変わった実績だけ書く**(VER4.8.118)。
 
-    **送れていないものが残っていれば入れ替えない。** 取り込み元に表が
-    無ければ、手元の実績を消さずに「未送信」へ戻す(次の書き戻しで送り直す)。
+    前は毎回**総入れ替え**だった。共有の梱包資材マスタは、どの端末が発注・受払・コメントを
+    送っても変わるので、そのたびに全端末が実績をまるごと入れ直していた。現場の写しは実績
+    37,161件・明細 427,424行で、1回に手元でも7秒(こちらの速い機械で。ラインの端末と共有ではもっとかかる)、そのあいだ手元のDBを
+    書きっぱなしにしていた(資材選択は画面を作るたびにこれを待っていた。現場の声
+    「検索一つに15分とかかかる事がある」)。
+
+    いまは取り込み元のヘッダを読んで手元と比べ、
+        足された実績       … ヘッダと明細を足す(明細はその実績の分だけ読む)
+        中身が変わった実績 … ヘッダと明細を入れ直す
+        読んだ回数だけ違う … ヘッダの その列だけ直す
+        消えた実績         … 手元からも消す
+    変わっていなければ**何も書かない**。
+
+    **送れていないものが残っていれば入れ替えない。** 取り込み元に表が無ければ、手元の実績を
+    消さずに「未送信」へ戻す(次の書き戻しで送り直す)。
     """
     outcome = ImportOutcome()
     left = pending(conn)
@@ -289,18 +329,48 @@ def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
 
     try:
         headers = source_db.read_table(path, config.TBL_PT_HEADER)
-        details = [source_db.read_table(path, table) if table in tables else []
-                   for table, _cols, _order in store.DETAIL_TABLES]
+    except source_db.SourceError as exc:
+        outcome.error = str(exc)
+        return outcome
+    names = list(SOURCE_HEADER_NAMES)
+    source: dict[int, dict[str, Any]] = {}
+    for row in headers:
+        pid = store.pt_long(row.get("実績ID"))
+        if pid > 0:
+            source[pid] = row
+    h = _q(config.TBL_PT_HEADER)
+    local = {int(r["取込元実績ID"]): dict(r) for r in conn.execute(
+        f"SELECT 実績ID, 取込元実績ID, {', '.join(_q(n) for n in names)} FROM {h}"
+        " WHERE 取込元実績ID IS NOT NULL")}
+
+    added = [pid for pid in source if pid not in local]
+    gone = [pid for pid in local if pid not in source]
+    renew: list[int] = []
+    header_only: dict[int, list[str]] = {}
+    for pid in source.keys() & local.keys():
+        diff = [n for n in names if not _same(source[pid].get(n), local[pid].get(n))]
+        if not diff:
+            outcome.unchanged += 1
+        elif set(diff) <= HEADER_ONLY_COLUMNS:
+            header_only[pid] = diff
+        else:
+            renew.append(pid)
+    if not (added or gone or renew or header_only):
+        log.debug("実績は変わっていません(%s件)", outcome.unchanged)
+        return outcome
+
+    need = sorted(set(added) | set(renew))
+    try:
+        details = _read_details(path, tables, need, whole=len(need) * 2 > len(source))
     except source_db.SourceError as exc:
         outcome.error = str(exc)
         return outcome
 
-    names = list(SOURCE_HEADER_NAMES)
     try:
         with conn:
-            # **入れ替える直前に、同じトランザクションの中でもう一度確かめる。**
-            # 上で確かめてから取り込み元を読むあいだに保存された実績を、入れ替えで
-            # 消さないため(IMMEDIATE で書き込みを先に押さえる)
+            # **書く直前に、同じトランザクションの中でもう一度確かめる。**
+            # 上で確かめてから取り込み元を読むあいだに保存された実績を消さないため
+            # (IMMEDIATE で書き込みを先に押さえる)
             if not conn.in_transaction:
                 conn.execute("BEGIN IMMEDIATE")
             left = pending(conn)
@@ -309,34 +379,75 @@ def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
                     "まだ取り込み元へ送れていない実績があります("
                     + "・".join(f"{k}{v}件" for k, v in left.items()) + ")")
                 return outcome
-            for table, _cols, _order in store.DETAIL_TABLES:
-                conn.execute(f"DELETE FROM {_q(table)}")
-            conn.execute(f"DELETE FROM {_q(config.TBL_PT_HEADER)}")
-            for row in headers:
-                pid = store.pt_long(row.get("実績ID"))
-                if pid <= 0:
-                    continue
-                cols = ["実績ID", *names, "取込元実績ID", "使用回数未反映"]
-                values = [pid, *[row.get(n) for n in names], pid, 0]
-                conn.execute(
-                    f"INSERT INTO {_q(config.TBL_PT_HEADER)} "
-                    f"({', '.join(_q(c) for c in cols)}) "
+            for pid in gone + renew:
+                local_id = local[pid]["実績ID"]
+                for table, _cols, _order in store.DETAIL_TABLES:
+                    conn.execute(f"DELETE FROM {_q(table)} WHERE 実績ID = ?", (local_id,))
+                conn.execute(f"DELETE FROM {h} WHERE 実績ID = ?", (local_id,))
+            outcome.removed = len(gone)
+            for pid, diff in header_only.items():
+                conn.execute(f"UPDATE {h} SET {', '.join(f'{_q(n)} = ?' for n in diff)} WHERE 実績ID = ?",
+                             [*(source[pid].get(n) for n in diff), local[pid]["実績ID"]])
+            outcome.updated = len(header_only)
+            taken = {int(r[0]) for r in conn.execute(f"SELECT 実績ID FROM {h}")}
+            for pid in need:
+                row = source[pid]
+                # 手元の番号は取り込み元と同じにする。**この端末で保存して送った実績**が同じ番号を
+                # 手元で使っていれば、番号は手元で振る(取込元実績ID で取り込み元とつなぐ)
+                cols = [*names, "取込元実績ID", "使用回数未反映"]
+                values = [*[row.get(n) for n in names], pid, 0]
+                if pid not in taken:
+                    cols, values = ["実績ID", *cols], [pid, *values]
+                cursor = conn.execute(
+                    f"INSERT INTO {h} ({', '.join(_q(c) for c in cols)}) "
                     f"VALUES ({', '.join('?' for _ in cols)})", values)
+                local_id = pid if pid not in taken else int(cursor.lastrowid)
+                taken.add(local_id)
+                for (table, columns, _order) in store.DETAIL_TABLES:
+                    dcols = ["実績ID", *[n for n, _ in columns]]
+                    for drow in details.get(table, {}).get(pid, []):
+                        conn.execute(
+                            f"INSERT INTO {_q(table)} ({', '.join(_q(c) for c in dcols)}) "
+                            f"VALUES ({', '.join('?' for _ in dcols)})",
+                            [local_id, *[drow.get(c) for c in dcols[1:]]])
                 outcome.imported += 1
-            for (table, columns, _order), rows in zip(store.DETAIL_TABLES, details):
-                cols = ["実績ID", *[n for n, _ in columns]]
-                for row in rows:
-                    conn.execute(
-                        f"INSERT INTO {_q(table)} ({', '.join(_q(c) for c in cols)}) "
-                        f"VALUES ({', '.join('?' for _ in cols)})",
-                        [row.get(c) for c in cols])
     except sqlite3.Error as exc:
         outcome.error = str(exc)
-        outcome.imported = 0
+        outcome.imported = outcome.updated = outcome.removed = 0
         log.exception("実績の取り込みに失敗しました(手元は元のまま)")
         return outcome
-    log.info("実績を取り込みました: %s件", outcome.imported)
+    log.info("実績を取り込み直しました: 足した・入れ直した %s件 / 回数だけ直した %s件 / 消した %s件"
+             "(変わらない %s件)", outcome.imported, outcome.updated, outcome.removed, outcome.unchanged)
+    from . import master_state
+    master_state.touch([config.TBL_PT_HEADER])
     return outcome
+
+
+def _read_details(path: Path, tables: set[str], ids: list[int], *,
+                  whole: bool) -> dict[str, dict[int, list[dict[str, Any]]]]:
+    """取り込み元の明細を、実績IDごとに。`whole` なら表ごと読む(足す実績が多いとき)。"""
+    out: dict[str, dict[int, list[dict[str, Any]]]] = {}
+    if not ids:
+        return out
+    wanted = set(ids)
+    for table, _cols, _order in store.DETAIL_TABLES:
+        if table not in tables:
+            continue
+        rows: list[dict[str, Any]] = []
+        if whole:
+            rows = source_db.read_table(path, table)
+        else:
+            for i in range(0, len(ids), DETAIL_CHUNK):
+                chunk = ids[i:i + DETAIL_CHUNK]
+                rows += source_db.read_query(
+                    path, f"SELECT * FROM {_q(table)} WHERE CAST(実績ID AS INTEGER) IN "
+                          f"({', '.join('?' for _ in chunk)}) ORDER BY rowid", chunk)
+        found = out.setdefault(table, {})
+        for row in rows:
+            pid = store.pt_long(row.get("実績ID"))
+            if pid in wanted:
+                found.setdefault(pid, []).append(row)
+    return out
 
 
 # 実績だけを取り込み直したときの、取り込み元の姿(`refresh_if_changed`)
@@ -366,6 +477,33 @@ def refresh_if_changed(conn: sqlite3.Connection,
     if not outcome.error and not outcome.skipped_reason:
         _seen_stamp[str(path)] = stamp
     return outcome
+
+
+# 資材選択が実績の一覧を作る前に待つ秒数(VER4.8.118)。資材選択は操作のたびに画面を作り直すので短く。
+# 間に合わなければ手元の実績で一覧を出し、取り込みは背景で続ける(次の操作で新しい一覧になる)
+from .bounded import wait_seconds as _wait_seconds  # noqa: E402
+PAGE_WAIT_SEC = _wait_seconds(1.0)
+_flights = None
+
+
+def refresh_bounded(conn: sqlite3.Connection, wait: float = PAGE_WAIT_SEC) -> bool:
+    """`refresh_if_changed` を**待つ上限つきで**(`bounded` の説明)。取り込んだら True。
+
+    前は資材選択の要求の中で取り込んでいた(画面を作るたびに、共有が変わっていれば実績を
+    まるごと入れ直すのを待っていた)。走っている最中なら待たない。
+    """
+    global _flights
+    import sys
+    from .bounded import FileFlights
+    if _flights is None:
+        _flights = FileFlights("実績の取り込み直し",
+                               lambda c: sys.modules[__name__].refresh_if_changed(c))
+    outcome = _flights.run(conn, wait, wait_if_running=0.0)
+    if outcome.error is not None:
+        log.warning("実績を取り込み直せませんでした(手元の実績で出します): %s", outcome.error)
+        return False
+    got = outcome.value if outcome.done else outcome.late
+    return bool(got and (got.imported or got.updated or got.removed))
 
 
 def forget_seen() -> None:

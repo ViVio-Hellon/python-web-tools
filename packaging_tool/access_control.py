@@ -309,14 +309,46 @@ def _fallback_codes() -> frozenset[str]:
     return frozenset({mode_permission(modes.DEFAULT)})
 
 
-def load_rules(conn: sqlite3.Connection) -> list[Rule]:
-    """マスタを読む。テーブルが無ければ空を返す(まだ取り込んでいない)。"""
-    try:
-        rows = conn.execute(
-            f'SELECT "ログインID", "PC名", "権限", "有効", "備考" '
-            f'FROM {TABLE} ORDER BY "管理番号"').fetchall()
-    except sqlite3.Error as exc:
-        log.info("%s を読めません(未取り込み): %s", TABLE, exc)
+class RulesUnreadable(Exception):
+    """表はあるのに読めない(取り込みの最中で手元のDBが混んでいる など)。**「無い」とは違う。**"""
+
+
+# 読めなかったときに読み直す間(秒)。合わせて2秒ほど待つ
+READ_RETRY_SEC = (0.2, 0.6, 1.2)
+
+
+def _is_missing_table(exc: BaseException) -> bool:
+    return "no such table" in str(exc).lower()
+
+
+def load_rules(conn: sqlite3.Connection, *, strict: bool = False) -> list[Rule]:
+    """マスタを読む。テーブルが無ければ空を返す(まだ取り込んでいない)。
+
+    **表はあるのに読めない**(手元のDBが混んでいる・壊れかけ)ときは、少し待って読み直す。
+    それでも読めなければ、`strict` なら `RulesUnreadable`(権限を決めるところ。前は「無い」と
+    同じ扱いで**現場だけ**に落とし、資材の端末で「その操作はこの端末では使えません」になった。
+    VER4.8.118)。`strict` でなければ空(ラインの名前など、無くても動くところ)。
+    """
+    import time
+    last: Optional[BaseException] = None
+    for wait in (0.0, *READ_RETRY_SEC):
+        if wait:
+            time.sleep(wait)
+        try:
+            rows = conn.execute(
+                f'SELECT "ログインID", "PC名", "権限", "有効", "備考" '
+                f'FROM {TABLE} ORDER BY "管理番号"').fetchall()
+            break
+        except sqlite3.Error as exc:
+            if _is_missing_table(exc):
+                log.info("%s がまだ手元にありません(未取り込み): %s", TABLE, exc)
+                return []
+            last = exc
+    else:
+        log.warning("%s を読めませんでした(%s回読み直しても): %s", TABLE, len(READ_RETRY_SEC), last,
+                    extra={"keep": True, "kind": "権限を読めない"})
+        if strict:
+            raise RulesUnreadable(str(last))
         return []
     return [Rule(login_id=_clean(r[0]), pc_name=_clean(r[1]),
                  permission=_clean(r[2]), enabled=bool(r[3]),
@@ -500,7 +532,17 @@ def resolve(conn: sqlite3.Connection,
     覚えていないと結果を説明できない。
     """
     identity = identity or current_identity()
-    rules = load_rules(conn)
+    try:
+        rules = load_rules(conn, strict=True)
+    except RulesUnreadable as exc:
+        # **読めないことを「権限が無い」にしない。** 前に読めた権限があればそれで続ける
+        last = _last_good.get(_identity_key(identity))
+        if last is not None:
+            return Grant(identity=identity, codes=last.codes, matched=last.matched,
+                         has_master=last.has_master,
+                         reason=f"{TABLE} を読めなかったので、前に読めた権限で続けています({exc})")
+        return Grant(identity=identity, codes=_fallback_codes(), has_master=False,
+                     reason=f"{TABLE} を読めませんでした({exc})。現場モードだけで続けています")
     if not rules:
         return Grant(identity=identity, codes=_fallback_codes(),
                      has_master=False,
@@ -537,8 +579,44 @@ def resolve(conn: sqlite3.Connection,
         codes |= _fallback_codes()
         reason = (f"{TABLE} の登録にモードの権限が無いため、"
                   "現場モードだけを使えるようにしています")
-    return Grant(identity=identity, codes=frozenset(codes),
-                 matched=matched, has_master=True, reason=reason)
+    grant = Grant(identity=identity, codes=frozenset(codes),
+                  matched=matched, has_master=True, reason=reason)
+    _last_good[_identity_key(identity)] = grant
+    return grant
+
+
+# 端末ごとの、最後に読めた権限(`resolve`)。表を読めなかったときはこれで続ける(VER4.8.118)
+_last_good: dict[tuple[str, str], "Grant"] = {}
+
+
+def _identity_key(identity: Identity) -> tuple[str, str]:
+    return (identity.login_id.casefold(), identity.pc_name.casefold())
+
+
+def explain(grant: "Grant", conn: Optional[sqlite3.Connection] = None) -> str:
+    """その端末の権限を、**断ったときに読ませる**一文にする(VER4.8.118)。
+
+    現場の声:「その操作はこの端末では使えません…となる。権限は付与されている」。
+    断るだけだと、どの端末として見て・何を読んで・何が足りなかったのかが分からない。
+    """
+    from . import modes
+    parts = [f"この端末: ID {grant.identity.login_id or '(不明)'} / PC {grant.identity.pc_name or '(不明)'}"]
+    allowed = grant.allowed_modes()
+    parts.append("使えるモード: " + ("・".join(modes.label(m) for m in allowed) if allowed else "なし"))
+    if grant.reason:
+        parts.append(grant.reason)
+    if conn is not None:
+        try:
+            rules = load_rules(conn)
+        except Exception:                          # noqa: BLE001 - 説明なので握る
+            rules = []
+        mine = [r for r in rules if r.matches(grant.identity)]
+        unknown = sorted({c for r in mine for c in r.other_codes() if c.startswith(PERM_PREFIX_MODE)})
+        if unknown:
+            # ほかのツールの権限かもしれない(表は共用)ので、誤りとは言わない。このツールでは読まないことだけ言う
+            parts.append(f"この端末の行にある {', '.join(unknown)} はこのツールでは読みません"
+                         f"(このツールのモードは {', '.join(mode_permission(m.key) for m in modes.ALL)})")
+    return "。".join(parts)
 
 
 # 画面に出す権限を決める前に、取り込み元を見に行った時刻と、そのときの

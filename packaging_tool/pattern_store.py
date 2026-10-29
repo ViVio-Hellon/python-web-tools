@@ -426,31 +426,60 @@ def _piece(row: dict[str, Any]) -> str:
             f"({pt_long(row.get('枚数'))}){tag_mark(nv_str(row.get('タグ')))}")
 
 
+# 明細を `WHERE 実績ID IN (...)` で引く1回の数。Windows の Python の sqlite3 は1文に書ける値が
+# 32,766 個まで(このPCの版は 250,000)で、現場の写しでは 1350×1450 に実績が 37,154件あり、超えていた
+ID_CHUNK = 500
+
+
+def count_patterns(conn: sqlite3.Connection, pallet_width: int = 0, pallet_length: int = 0) -> int:
+    """`get_pattern_list` が出せる実績の数(上限で切る前の数。画面に「ほか N件」と言うため)。"""
+    sql = f"SELECT COUNT(*) FROM {_q(config.TBL_PT_HEADER)} WHERE 保存形式 = ?"
+    params: list[Any] = [config.PT_FORMAT_VER]
+    if pallet_width > 0 and pallet_length > 0:
+        sql += " AND パレット幅 = ? AND パレット丈 = ?"
+        params += [pallet_width, pallet_length]
+    return int(conn.execute(sql, tuple(params)).fetchone()[0])
+
+
 def get_pattern_list(conn: sqlite3.Connection, pallet_width: int = 0,
-                     pallet_length: int = 0) -> list[PatternSummary]:
+                     pallet_length: int = 0, *, limit: Optional[int] = None,
+                     ids: Optional[Iterable[int]] = None) -> list[PatternSummary]:
     """実績の一覧(新しい順)。パレット幅・丈が両方あるときだけ絞り込む。
 
     **保存形式が違うものは出さない**(読めないものを並べない)。
+    `limit` … 新しいほうからこの数まで(VER4.8.118。数はかならず `count_patterns` で言う)。
+    `ids` … この番号の実績だけ(1件を確かめるとき。前は全部の実績を並べてから探していた)。
     """
     sql = (f"SELECT * FROM {_q(config.TBL_PT_HEADER)} WHERE 保存形式 = ?")
     params: list[Any] = [config.PT_FORMAT_VER]
     if pallet_width > 0 and pallet_length > 0:
         sql += " AND パレット幅 = ? AND パレット丈 = ?"
         params += [pallet_width, pallet_length]
+    if ids is not None:
+        wanted = [int(i) for i in ids]
+        if not wanted:
+            return []
+        sql += f" AND 実績ID IN ({', '.join('?' for _ in wanted[:ID_CHUNK])})"
+        params += wanted[:ID_CHUNK]
     sql += " ORDER BY 実績ID DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
     headers = _read_rows(conn, sql, params)
     if not headers:
         return []
 
-    ids = [h["実績ID"] for h in headers]
-    marks = ", ".join("?" for _ in ids)
+    ids_found = [h["実績ID"] for h in headers]
     lower: dict[int, list[str]] = {}
     upper: dict[int, list[str]] = {}
-    for row in _read_rows(
-            conn, f"SELECT * FROM {_q(config.TBL_PT_SELECT)} "
-                  f"WHERE 実績ID IN ({marks}) ORDER BY 実績ID, 行順", ids):
-        bucket = upper if nv_str(row.get("区分")) == CATEGORY_UPPER else lower
-        bucket.setdefault(row["実績ID"], []).append(_piece(row))
+    for start in range(0, len(ids_found), ID_CHUNK):
+        chunk = ids_found[start:start + ID_CHUNK]
+        marks = ", ".join("?" for _ in chunk)
+        for row in _read_rows(
+                conn, f"SELECT * FROM {_q(config.TBL_PT_SELECT)} "
+                      f"WHERE 実績ID IN ({marks}) ORDER BY 実績ID, 行順", chunk):
+            bucket = upper if nv_str(row.get("区分")) == CATEGORY_UPPER else lower
+            bucket.setdefault(row["実績ID"], []).append(_piece(row))
 
     out = []
     for h in headers:

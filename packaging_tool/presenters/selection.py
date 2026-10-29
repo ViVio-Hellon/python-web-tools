@@ -1412,6 +1412,11 @@ def _next_action(view: SelectionViewModel,
 # ------------------------------------------------------------------
 # 管理者と実績パターン
 # ------------------------------------------------------------------
+def _pattern_limit() -> int:
+    from ..selection_records import PATTERN_LIST_LIMIT
+    return PATTERN_LIST_LIMIT
+
+
 def build_admin(session: Any) -> AdminViewModel:
     """管理者エリア。**パスワードは1文字も渡さない**(設計書 §3.6)。"""
     view = AdminViewModel(authenticated=session.admin)
@@ -1443,9 +1448,11 @@ def build_admin(session: Any) -> AdminViewModel:
                    registered_at=p.registered_at, usage_count=p.usage_count,
                    boards=p.board_summary, method=p.method, unsent=p.unsent)
         for p in patterns]
+    total = session.pattern_count() if len(patterns) >= _pattern_limit() else len(patterns)
     view.patterns_note = (
-        f"{session.palette.width}×{session.palette.length} の実績 "
-        f"{len(patterns)} 件" if patterns
+        f"{session.palette.width}×{session.palette.length} の実績 {total} 件"
+        + (f"(新しい {len(patterns)}件を出しています)" if total > len(patterns) else "")
+        if patterns
         else f"{session.palette.width}×{session.palette.length} の実績はありません")
     return view
 

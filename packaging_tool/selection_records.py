@@ -30,6 +30,10 @@ from . import placement_algorithm as place
 from . import user_settings
 from .board_selection_types import ProtecCutResult
 from .models import PlacedBoardModel
+
+# 実績の一覧に出す上限(新しいほうから。VER4.8.118)。現場の写しでは 1350×1450 に同じ実績が 37,154件あり、
+# 画面を作り直すたびに全部並べていた。出しきれない分は数で言う(`pattern_count`)
+PATTERN_LIST_LIMIT = 300
 from .pattern_store import METHOD_NORMAL
 from .logging_utils import get_logger
 from .selection_common import (BoardOpResult, REFUSE_DENIED, REFUSE_FAILED,
@@ -286,14 +290,24 @@ class RecordsMixin:
         """いまのパレット寸法で登録されている実績(VBA `GetPatternList`)。
 
         **ほかの端末が保存した実績も出す。** 共有が変わっていれば、一覧を作る
-        前に実績だけ取り込み直す(`pattern_sync.refresh_if_changed`)。
+        前に実績だけ取り込み直す。**待つのは上限まで**(VER4.8.118。`pattern_sync.refresh_bounded`)──
+        前はここで取り込み終わるのを待っていた(現場の声「検索一つに15分とかかかる事がある」)。
+        間に合わなければ手元の実績で出し、取り込みは背景で続ける。
         """
         if not self.palette.is_set:
             return []
         from . import pattern_sync
-        pattern_sync.refresh_if_changed(self.presenter.conn)
+        pattern_sync.refresh_bounded(self.presenter.conn)
+        # 出すのは新しいほうから上限まで(数は `pattern_count` で言う。VER4.8.118)
         return store.get_pattern_list(
-            self.presenter.conn, self.palette.width, self.palette.length)
+            self.presenter.conn, self.palette.width, self.palette.length,
+            limit=PATTERN_LIST_LIMIT)
+
+    def pattern_count(self) -> int:
+        """いまのパレット寸法の実績の数(一覧に出しきれないとき「ほか N件」と言うため)。"""
+        if not self.palette.is_set:
+            return 0
+        return store.count_patterns(self.presenter.conn, self.palette.width, self.palette.length)
 
     def _stale_pattern(self, pattern_id: int, seen: Optional[dict]) -> str:
         """画面が見ていた実績と、いまその番号の実績が違えば理由を返す。
@@ -304,8 +318,7 @@ class RecordsMixin:
         """
         if not seen:
             return ""
-        now = next((p for p in store.get_pattern_list(self.presenter.conn)
-                    if p.id == pattern_id), None)
+        now = next(iter(store.get_pattern_list(self.presenter.conn, ids=[pattern_id])), None)
         if now is None:
             return "その実績はもうありません(ほかの端末で消されたか、番号が振り直されました)。一覧を確かめてください。"
         if (str(seen.get("registered_at", "")) != now.registered_at

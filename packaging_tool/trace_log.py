@@ -322,10 +322,12 @@ class ErrorItem:
     message: str
     screen: str
     data: dict = field(default_factory=dict, repr=False)
+    # 何の記録か(エラー / 断った操作 / 時間のかかった操作 / 返らない操作 …。VER4.8.118)
+    kind: str = "エラー"
 
     def to_dict(self) -> dict[str, Any]:
         return {"ref": self.ref, "at": self.at, "pc": self.pc, "where": self.where,
-                "message": self.message, "screen": self.screen}
+                "message": self.message, "screen": self.screen, "kind": self.kind}
 
 
 def _read_records(everyone: bool) -> list[dict]:
@@ -375,6 +377,14 @@ def _screen(row: dict) -> str:
     return ""
 
 
+def kind_of(row: dict) -> str:
+    """記録の種類。前の版が書いた記録(種類が無い)はエラー。"""
+    kind = str(row.get("kind") or "")
+    if kind:
+        return kind
+    return "注意" if str(row.get("level", "")).upper() == "WARNING" else "エラー"
+
+
 def list_errors(*, everyone: bool = False, query: str = "",
                 limit: int = LIST_LIMIT) -> list[ErrorItem]:
     """新しい順のエラー記録。`query` はエラー番号・文言・端末のどれでも当たる。"""
@@ -385,9 +395,9 @@ def list_errors(*, everyone: bool = False, query: str = "",
                          pc=str(row.get("pc", "")), where=str(row.get("where", "")),
                          message=str(row.get("message", "")).splitlines()[0][:200]
                          if row.get("message") else "",
-                         screen=_screen(row), data=row)
+                         screen=_screen(row), data=row, kind=kind_of(row))
         if text and text not in " ".join(
-                [item.ref, item.message, item.pc, item.screen,
+                [item.ref, item.message, item.pc, item.screen, item.kind,
                  str(row.get("detail", ""))]).casefold():
             continue
         items.append(item)

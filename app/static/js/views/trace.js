@@ -103,7 +103,9 @@ function render(body) {
     tr.dataset.ref = item.ref;
     tr.tabIndex = 0;
     tr.className = "clickable";
-    tr.append(cell(item.at), cell(item.ref), cell(item.pc), cell(item.screen),
+    // 種類(エラー / 断った操作 / 時間のかかった操作 …)。エラー以外は「注意」の色で
+    const kind = cell(item.kind || "エラー", `t kind ${item.kind && item.kind !== "エラー" ? "kind--note" : "kind--error"}`);
+    tr.append(cell(item.at), kind, cell(item.ref), cell(item.pc), cell(item.screen),
               cell(item.message));
     tr.addEventListener("keydown", (event) => {
       if (event.key === "Enter") openError(item.ref);
