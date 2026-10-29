@@ -96,7 +96,9 @@ def _plans_state(conn, *, refresh: bool = False) -> dict:
     from packaging_tool import access_control, lot_plans
     if refresh:
         try:
-            lot_plans.refresh_if_changed(conn)
+            # 待つのは上限まで(VER4.8.115)。間に合わなければ手元の予定で返す
+            from packaging_tool import data_sync
+            lot_plans.refresh_bounded(conn, data_sync.PAGE_WAIT_SEC)
         except Exception as exc:                  # noqa: BLE001 - 見張りで画面を落とさない
             log.warning("予定ロットを取り込み直せませんでした: %s", exc)
     identity = access_control.current_identity()
@@ -238,7 +240,8 @@ def _plan_refresh_orders(conn) -> None:
     """ほかの端末(作業長)の発注を見るので、共有から取り込み直す。読めなくても手元の分で続ける。"""
     from packaging_tool import data_sync
     try:
-        got = data_sync.refresh_orders(conn)
+        # 待つのは上限まで(VER4.8.115)。間に合わなければ手元の発注で続ける
+        got = data_sync.catch_up(data_sync.ACTION_WAIT_SEC, force=True, conn=conn) or data_sync.pending_refresh()
         for message in got.errors:
             log.warning("予定ロットを開く前の発注の取り込み直し: %s", message)
     except Exception as exc:                      # noqa: BLE001 - 手元の分で続ける

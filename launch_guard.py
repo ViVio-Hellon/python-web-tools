@@ -338,17 +338,108 @@ def proxy_settings() -> dict[str, str]:
         return {}
 
 
-def is_our_app(health: Optional[dict], mode: str) -> bool:
+def is_our_app(health: Optional[dict], mode: str, *, pid: Optional[int] = None) -> bool:
     """その応答が**自分と同じアプリの同じmode**か。
 
     `app_id` を見ないと、たまたま同じポートを使っている別のアプリを
     自分だと誤認する(基盤仕様書 2.3)。mode まで見るのは、現場と資材が
     別ポートで動く設計なので、取り違えると権限の分離が崩れるため。
+
+    **`pid` を渡したら、ロックを書いたプロセスそのものかでも決める**(VER4.8.115)。モードは
+    画面の帯で切り替えられるので、資材で起動して現場へ切り替えたプロセスは、資材のロックの
+    まま「現場」と答える。前はこれを「別物」と見て、ロックを消して2つ目を立ち上げていた
+    (同じ手元のDBを2つのプロセスが掴む。起動し直しても直らない、の出どころの1つ)。
     """
     if not health:
         return False
-    return (health.get("app_id") == app_config.app_id()
-            and health.get("mode") == mode)
+    if health.get("app_id") != app_config.app_id():
+        return False
+    if health.get("mode") == mode:
+        return True
+    return pid is not None and str(health.get("pid", "")) == str(pid)
+
+
+# 1回目に応答が無かったとき、聞き直す待ち時間(秒)。**忙しいだけ**のプロセスを
+# 「固まっている」と取り違えないよう、間を置いて少し長く待つ(VER4.8.115)
+PATIENT_PROBES = (3.0, 5.0)
+
+
+def probe_patiently(port: int) -> Optional[dict]:
+    """`/api/health` を聞く。返らなければ、待ち受けている間だけ少し待って聞き直す。"""
+    health = probe_health(port)
+    for timeout in PATIENT_PROBES:
+        if health is not None or not is_port_accepting(port):
+            return health
+        log.info("ポート %s が応答しません。%.0f秒 待って聞き直します", port, timeout)
+        health = probe_health(port, timeout=timeout)
+    return health
+
+
+def looks_like_our_process(pid: int, app_root: str = "") -> bool:
+    """そのPIDが本当にこのアプリ(`start_app.py`)か。**落とす前に必ず確かめる**。
+
+    コマンドラインに**このアプリの置き場所**か起動スクリプトの名前が入っていることを見る。
+    取れない環境では False(誤って別のアプリを落とすより、止まらないほうが害が小さい)。
+    """
+    cmdline = process_command_line(pid)
+    if not cmdline:
+        log.warning("pid=%s のコマンドラインを取得できませんでした", pid)
+        return False
+    root = (app_root or str(app_config.APP_ROOT)).replace("\\", "/")
+    normalized = cmdline.replace("\\", "/")
+    if root and root in normalized:
+        return True
+    return "start_app.py" in normalized
+
+
+# 固まったプロセスを終わらせてから、消えるのを待つ上限(秒)
+HUNG_KILL_WAIT_SEC = 8.0
+
+
+def terminate_tree(pid: int) -> None:
+    """そのプロセスを(子の変換ごと)終わらせる。確かめるのは呼ぶ側(`looks_like_our_process`)。"""
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                           capture_output=True, text=True, timeout=10,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            return
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("taskkill を実行できませんでした(直接止めます): %s", exc)
+    import signal
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+    except OSError:
+        return
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and is_process_alive(pid):
+        time.sleep(0.1)
+    if is_process_alive(pid):
+        try:
+            os.kill(int(pid), getattr(signal, "SIGKILL", signal.SIGTERM))
+        except OSError:
+            pass
+
+
+def end_hung(mode: str, info: "LockInfo") -> bool:
+    """**応答しない自分のプロセスを終わらせる**(VER4.8.115)。消えたら True(ロックも片付ける)。
+
+    現場の声:「一度でもフリーズすると起動しなおしても設定タブが開けなくなる」。
+    固まったプロセスは画面の「閉じました」も受け取れないので、自動終了まで(心拍が
+    途切れてから10分)残る。そのあいだに起動し直すと、前は「応答しない = 別物」と見て
+    ロックだけ消し、**固まったプロセスを残したまま**2つ目を立ち上げていた。
+    """
+    log.warning("前のプロセス(pid=%s port=%s)が応答しないので終わらせます", info.pid, info.port)
+    terminate_tree(info.pid)
+    deadline = time.monotonic() + HUNG_KILL_WAIT_SEC
+    while time.monotonic() < deadline:
+        if not is_process_alive(info.pid):
+            remove_lock(mode, expect=info)
+            log.info("応答しなかった前のプロセス(pid=%s)を終わらせました", info.pid)
+            return True
+        time.sleep(0.2)
+    log.warning("前のプロセス(pid=%s)が %.0f秒 で終わりませんでした", info.pid, HUNG_KILL_WAIT_SEC)
+    return False
 
 
 # ------------------------------------------------------------------
@@ -393,8 +484,17 @@ def check_existing(mode: str) -> GuardResult:
     if info.port == STARTING_PORT:
         return _wait_for_starting(mode, info)
 
-    health = probe_health(info.port)
-    if not is_our_app(health, mode):
+    # **忙しいだけかもしれないので、少し待って聞き直す**(VER4.8.115)
+    health = probe_patiently(info.port)
+    if not is_our_app(health, mode, pid=info.pid):
+        if (health is None and is_port_accepting(info.port)
+                and looks_like_our_process(info.pid, info.app_root)):
+            # **自分のアプリだが応答しない(固まっている)。** 終わらせてから立て直す。
+            # 前はロックだけ消して2つ目を立ち上げ、固まったプロセスが残っていた
+            if end_hung(mode, info):
+                return GuardResult(True, reason="応答しない前のプロセスを終わらせました")
+            remove_lock(mode, expect=info)
+            return GuardResult(True, reason="応答しない前のプロセスが終わりません(新しく起動します)")
         # プロセスは居るがアプリではない(PIDの使い回し、または
         # 起動途中で落ちた)。ロックを消して新しく起動する
         log.info("pid=%s は生きているが %s:%s は自分ではない",
@@ -411,6 +511,27 @@ def check_existing(mode: str) -> GuardResult:
              mode, info.pid, info.port, running or "(不明)")
     return GuardResult(False, url=info.url, existing=info,
                        reason="同じアプリが起動中")
+
+
+def running_elsewhere(mode: str) -> Optional[GuardResult]:
+    """**ほかのモードのロックで、この端末のアプリが動いていれば**合流先を返す(VER4.8.115)。
+
+    モードは画面の帯で切り替えられる。資材で起動して現場へ切り替えたあと、起動し直すと
+    (既定のモードは現場)、前は現場のロックが無いので**2つ目を立ち上げていた** ── 同じ
+    手元のDBを2つのプロセスが掴む。権限で決める起動(`Start.vbs`)のときだけ見る。
+    固まっている・古い版なら `check_existing` が片付ける(そのときは None)。
+    """
+    for other in modes.KEYS:
+        if other == mode:
+            continue
+        info = read_lock(other)
+        if info is None or info.port == STARTING_PORT:
+            continue
+        guard = check_existing(other)
+        if not guard.should_start:
+            log.info("%s のロックで動いているアプリに合流します: %s", other, guard.url)
+            return guard
+    return None
 
 
 def _wait_for_starting(mode: str, info: "LockInfo") -> GuardResult:

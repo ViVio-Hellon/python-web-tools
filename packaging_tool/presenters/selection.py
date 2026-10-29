@@ -1423,8 +1423,9 @@ def build_admin(session: Any) -> AdminViewModel:
     view.save_confirm = session.save_confirm()
 
     from .. import board_usage
-    # ほかの端末が「使用する」を押した分も出す(共有が変わっていれば取り込み直す)
-    board_usage.refresh_if_changed(session.presenter.conn)
+    # ほかの端末が「使用する」を押した分も出す(共有が変わっていれば取り込み直す)。
+    # **待つのは上限まで**(VER4.8.115)。共有が応答しないと資材選択がここで止まった
+    board_usage.refresh_bounded(session.presenter.conn)
     view.usage = [
         BoardUsageRow(width=u.width, length=u.length, board_type=u.board_type,
                      usage_count=u.usage_count, last_used_at=u.last_used_at)

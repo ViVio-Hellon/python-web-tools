@@ -37,6 +37,9 @@ class OrderRefresh:
     tables: int = 0               # 入れ直せた表の数
     errors: list[str] = field(default_factory=list)
     reason: str = ""              # 見に行けなかった理由
+    # 背景の取り込みが待つ上限までに終わらなかった(VER4.8.115。`data_sync.catch_up`)。
+    # 手元の一覧のまま返し、取り込みは背景で続く
+    pending: bool = False
 
     @property
     def updated(self) -> bool:
@@ -49,6 +52,8 @@ class OrderRefresh:
         return self.changed and self.tables > 0
 
     def message(self) -> str:
+        if self.pending:
+            return self.reason
         if not self.looked:
             return self.reason or "取り込み元を見に行けませんでした。"
         if not self.tables and self.errors:

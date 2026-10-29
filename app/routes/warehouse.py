@@ -97,7 +97,7 @@ def _require_material_mode():
     if not grant.allows_mode(modes.MATERIAL):
         # 手元がまだ古い可能性がある。断る前に取り込み元から
         # アクセス権限だけ読み直し、それでも無ければ本当に無い
-        if access_control.resync(get_db()):
+        if access_control.resync_bounded(get_db()):     # 待つのは上限まで(VER4.8.115)
             from flask import g
             g.pop("grant", None)
             grant = current_grant()
@@ -328,7 +328,11 @@ def refresh():
     """
     only_if_changed = request.args.get("only_if_changed") == "1"
     conn = get_db()
-    got = data_sync.refresh_orders(conn, only_if_changed=only_if_changed)
+    # **待つのは上限まで**(VER4.8.115)。共有が遅いと、見張りの要求が受付をふさいでいた。
+    # 間に合わなければ手元の一覧を返す(取り込みは背景で続き、届いたら次の見張りで描き直す)
+    got = data_sync.catch_up(
+        data_sync.PAGE_WAIT_SEC if only_if_changed else data_sync.BUTTON_WAIT_SEC,
+        force=not only_if_changed, conn=conn) or data_sync.pending_refresh()
     if got.errors:
         for message in got.errors:
             log.warning("発注の取り込み直し: %s", message)
@@ -345,7 +349,9 @@ def refresh():
                                 # 取り込めなかった表と理由(送れていない分があって見送った等)。
                                 # 見張りでも画面に残す(`showReach`)
                                 "errors": list(got.errors),
-                                "message": got.message()}})
+                                "message": got.message(),
+                                # 背景でまだ取り込んでいる(VER4.8.115)
+                                "pending": got.pending}})
 
 
 @field_only.post("/api/warehouse/send")
@@ -495,8 +501,7 @@ def send():
     # **共有フォルダが見えないときは「送信しました」と言わない。** 手元に預かっただけで、
     # 倉庫にはまだ届いていない(通し点検: 見えない間も「送信しました」と出て、現場は
     # 届いたと思っていた)。つながれば心拍のついでに自動で送る(`retry_unsent_in_background`)
-    from packaging_tool import sync_sources
-    queued = sync_sources.find_material_db() is None
+    queued = not data_sync.shared_reachable()      # 待つのは上限まで(VER4.8.115)
     message = result.message
     if queued:
         rows = f"{len(result.mgr_nos)}行まとめて" if len(result.mgr_nos) > 1 else ""
@@ -585,7 +590,7 @@ def _stock_to_use(conn, orders: list[dict], use: int, *, from_draft: bool):
 def _refresh_before(label: str, conn) -> None:
     """共有で変わっていれば取り込み直す。失敗しても止めない(手元で確かめて続ける)。"""
     try:
-        data_sync.refresh_orders(conn, only_if_changed=True)
+        data_sync.catch_up(data_sync.ACTION_WAIT_SEC, conn=conn)   # 待つのは上限まで(VER4.8.115)
     except Exception:                               # noqa: BLE001 - 送る操作は止めない
         log.exception("%s の前の取り込み直しに失敗(手元の発注で確かめます)", label)
 
@@ -642,7 +647,7 @@ def export_csv():
                                   "message": "開始日と終了日を入れてください。"}}), 400
     conn = get_db()
     try:
-        data_sync.refresh_orders(conn, only_if_changed=True)
+        data_sync.catch_up(data_sync.ACTION_WAIT_SEC, conn=conn)   # 待つのは上限まで(VER4.8.115)
     except Exception:                               # noqa: BLE001 - 手元の発注で出す
         log.exception("CSVの前の取り込み直しに失敗(手元の発注で出します)")
     result = order_export.export(conn, str(body.get("kind") or ""), start, end)
@@ -733,7 +738,7 @@ def comment():
     conn = get_db()
     before = svc.identity(conn, mgr_no)
     try:
-        data_sync.refresh_orders(conn, only_if_changed=True)
+        data_sync.catch_up(data_sync.ACTION_WAIT_SEC, conn=conn)   # 待つのは上限まで(VER4.8.115)
     except Exception:                               # noqa: BLE001 - 書く操作は止めない
         log.exception("コメントの前の取り込み直しに失敗(手元の状態で続けます)")
     mgr_no = svc.find_again(conn, mgr_no, before)
@@ -816,7 +821,7 @@ def _action(func, label: str):
     # (送るときにも止めるが、それでは押した人に伝わらない)。
     # 変わっていなければファイルの姿を見るだけで帰る
     try:
-        data_sync.refresh_orders(conn, only_if_changed=True)
+        data_sync.catch_up(data_sync.ACTION_WAIT_SEC, conn=conn)   # 待つのは上限まで(VER4.8.115)
     except Exception:                               # noqa: BLE001 - 押す操作は止めない
         log.exception("%s の前の取り込み直しに失敗(手元の状態で続けます)", label)
     # 取り込み直すと手元の管理番号は振り直される。画面が持っている番号の
@@ -872,7 +877,7 @@ def _cut_mark(state: str):
     conn = get_db()
     # 押す前に共有の変化を取り込む(相手が先に受け取った・取り消した、を知るため)
     try:
-        data_sync.refresh_orders(conn, only_if_changed=True)
+        data_sync.catch_up(data_sync.ACTION_WAIT_SEC, conn=conn)   # 待つのは上限まで(VER4.8.115)
     except Exception:                               # noqa: BLE001 - 押す操作は止めない
         log.exception("切断依頼の前の取り込み直しに失敗(手元の状態で続けます)")
     side = (cut_requests.SIDE_MATERIAL if _mode() == modes.MATERIAL

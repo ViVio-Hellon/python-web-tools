@@ -277,6 +277,18 @@ def start(mode: str, *, open_browser: bool = True) -> int:
     # 確認だけで最大15秒あり、その日の最初なら取り込みも走るので、
     # 利用者が「反応が無い」ともう一度押す時間は十分にある。
     # `try_acquire` は作れたかどうかで決めるので、2つ目は必ず外れる。
+    #
+    # **権限で決める起動なら、ほかのモードのロックで動いているものにも合流する**
+    # (VER4.8.115)。画面の帯でモードを切り替えたプロセスは、起動したときのモードの
+    # ロックのまま動いている。見ないと2つ目が立ち上がり、同じ手元のDBを2つが掴む
+    if auto:
+        guard = launch_guard.running_elsewhere(mode)
+        if guard is not None:
+            log().info("既存のインスタンスに合流します: %s", guard.url)
+            print(f"すでに起動しています。ブラウザを開きます: {guard.url}")
+            if open_browser:
+                webbrowser.open(guard.url)
+            return 0
     while not launch_guard.try_acquire(mode):
         guard = launch_guard.check_existing(mode)
         if not guard.should_start:

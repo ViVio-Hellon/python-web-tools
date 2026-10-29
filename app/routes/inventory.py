@@ -40,7 +40,10 @@ def _db():
     """
     conn = get_db()
     try:
-        data_sync.refresh_orders(conn, only_if_changed=True)
+        # **待つのは上限まで**(VER4.8.115)。画面を出すときは短く、動かす前は少し長く。
+        # 間に合わなければ手元の値で続け、取り込みは背景で続く(`data_sync.catch_up`)
+        data_sync.catch_up(data_sync.PAGE_WAIT_SEC if request.method == "GET"
+                           else data_sync.ACTION_WAIT_SEC, conn=conn)
     except Exception:                               # noqa: BLE001 - 画面は止めない
         log.exception("在庫を見る前の取り込み直しに失敗(手元の値で続けます)")
     return conn

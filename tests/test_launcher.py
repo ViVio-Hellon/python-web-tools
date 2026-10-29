@@ -375,10 +375,10 @@ class StartupModeTests(unittest.TestCase):
         grant = access_control.grant_of("mode:field")
         self.assertEqual(grant.startup_mode(), "field")
 
-    def test_両方あるなら強いほうから開く(self) -> None:
-        """「アクセス権限を2つ以上付与していたら強いもの優先にしてください」(VER4.8.90)。
-        前は狭いほう(現場)から開いていた。帯の切替でいつでも移れるのは同じ。"""
-        self.assertEqual(_ALL.startup_mode(), "material")
+    def test_両方あるなら現場から開く(self) -> None:
+        """「両方の権限があったらデフォルトを現場にしてください」(VER4.8.115)。
+        VER4.8.90〜4.8.114 は強いほう(資材)から開いていた。帯の切替でいつでも移れるのは同じ。"""
+        self.assertEqual(_ALL.startup_mode(), "field")
 
     def test_権限が無くても開ける(self) -> None:
         """開けないと、権限を直す画面(設定)にも辿り着けない。"""

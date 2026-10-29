@@ -29,8 +29,10 @@ import contextvars
 import json
 import logging
 import os
+import queue
 import secrets
 import threading
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -130,6 +132,11 @@ class _OpFilter(logging.Filter):
             record.op_id = (op or {}).get("id", "")
         if record.levelno >= logging.ERROR and not getattr(record, "ref", ""):
             record.ref = new_error_ref(datetime.fromtimestamp(record.created))
+        if record.levelno >= logging.ERROR and not hasattr(record, "recent_lines"):
+            # **書くのは別のスレッド**(`_AsyncWriter`)なので、その時点の「直前の動き」と
+            # 操作は、ここ(起きたスレッド)で写しておく。この行そのものはまだ入っていない
+            record.recent_lines = recent_lines()
+            record.operation = op or {}
         head = f"[{record.op_id}] " if record.op_id else ""
         if getattr(record, "ref", ""):
             head += f"<{record.ref}> "
@@ -198,9 +205,19 @@ class _ErrorRecordHandler(logging.Handler):
         try:
             when = datetime.fromtimestamp(record.created)
             detail = getattr(record, "detail", "") or ""
-            if record.exc_info:
-                detail = (detail + "\n" if detail else "") + logging.Formatter().formatException(record.exc_info)
+            trace = (record.exc_text if getattr(record, "exc_text", None)
+                     else logging.Formatter().formatException(record.exc_info) if record.exc_info
+                     else "")
+            if trace:
+                detail = (detail + "\n" if detail else "") + trace
             ref = getattr(record, "ref", "")
+            # 起きたスレッドで写した分(`_OpFilter`)。直接呼ばれたとき(試験)はいまの分
+            recent = getattr(record, "recent_lines", None)
+            if recent is None:
+                recent = recent_lines()
+            operation = getattr(record, "operation", None)
+            if operation is None:
+                operation = current_operation() or {}
             entry: dict[str, Any] = {
                 "ref": ref,
                 "at": when.strftime(DATE_FORMAT),
@@ -208,11 +225,11 @@ class _ErrorRecordHandler(logging.Handler):
                 "where": record.name,
                 "message": record.getMessage(),
                 "detail": detail,
-                "operation": current_operation() or {},
-                "recent": [line for line in recent_lines() if ref not in line][-RECENT_LINES:],
+                "operation": operation,
+                "recent": [line for line in recent if ref not in line][-RECENT_LINES:],
                 **_who(),
             }
-            path = error_path_for(when)
+            path = _target_dir(record) / log_names.error_log(when)
             with _error_lock:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with path.open("a", encoding="utf-8") as fh:
@@ -240,9 +257,9 @@ class DailyFileHandler(logging.FileHandler):
 
     def emit(self, record: logging.LogRecord) -> None:
         # **書く直前に見る。** 日付が変わったこと・設定画面で出力先を
-        # 変えたことは、次の1行で気づく
+        # 変えたことは、次の1行で気づく。出力先は**その行が起きたときの**もの(`_target_dir`)
         self._day = date.today()
-        target = os.path.abspath(log_path_for(self._day))
+        target = os.path.abspath(_target_dir(record) / log_names.day_log(self._day))
         if target != self.baseFilename:
             self.close()
             self.baseFilename = target
@@ -259,14 +276,11 @@ class DailyFileHandler(logging.FileHandler):
         共有フォルダを指していて、途中でネットワークが切れた ── そのまま
         だとそこから先のログが全部失われる(追いたいのはまさにその時間)。
         """
-        if config._active_log_dir is not None:
-            global fallback_why
-            fallback_why = (f"{config._active_log_dir} に書けなくなったので、"
-                            f"{config.LOG_DIR} に書いています"
-                            f"({datetime.now():%Y/%m/%d %H:%M})")
-            config._active_log_dir = None
+        folder = _target_dir(record)
+        if folder != config.LOG_DIR:
+            _abandon(folder, f"{folder} に書けなくなったので")
             try:
-                self.emit(record)
+                self.emit(record)               # 今度は既定の場所(`_target_dir`)
                 return
             except Exception:                   # noqa: BLE001
                 pass
@@ -275,6 +289,247 @@ class DailyFileHandler(logging.FileHandler):
 
 # 指定の出力先に書けず、既定の場所へ戻したときの理由(画面に出す)
 fallback_why = ""
+
+# 書けなくなった・遅すぎた出力先(VER4.8.115)。並んでいた行もここへは書かない
+_abandoned: set = set()
+
+
+def _target_dir(record: logging.LogRecord) -> Path:
+    """その行を書くフォルダ。**行が起きたときの出力先**(`_AsyncWriter` が写す)。
+
+    書くのは別のスレッドなので、書くときの設定を見ると、出力先を変える前の行まで新しい
+    場所へ入る。やめた出力先(`_abandoned`)の行は、いまの出力先へ書く。
+    """
+    folder = getattr(record, "log_dir", None)
+    if folder is None:
+        return config.log_dir()
+    if folder in _abandoned and folder != config._active_log_dir:
+        return config.log_dir()
+    return folder
+
+
+def _abandon(folder: Path, why: str) -> None:
+    """その出力先をやめる。いまの出力先ならローカル(既定)へ戻し、理由を画面に出す。"""
+    global fallback_why
+    _abandoned.add(folder)
+    if config._active_log_dir is not None and Path(config._active_log_dir) == Path(folder):
+        fallback_why = (f"{why}、{config.LOG_DIR} に書いています"
+                        f"({datetime.now():%Y/%m/%d %H:%M})")
+        config._active_log_dir = None
+
+
+# ------------------------------------------------------------------
+# ファイルへ書くのは別のスレッド(VER4.8.115)
+# ------------------------------------------------------------------
+# 現場の声:「資材と現場を切り替えると時々フリーズする」。
+#
+# ログは1行ごとに、その場(画面の要求のスレッド)でファイルへ書いていた。出力先が共有
+# フォルダだと、1行ごとにネットワークの往復がある。書き込みはハンドラの錠を持ったまま
+# 行うので、**共有が遅い・一時的に応答しないと、ログを1行でも書くスレッドがぜんぶ
+# そこで待つ** ── モードの切替も「切り替えました」を書くので止まる。資材選択は細かい
+# 判断(DEBUG)を数千行書く。
+#
+# 要求のスレッドは**並べるだけ**にし、書くのは1本のスレッドに任せる。共有が遅くても
+# 画面は止まらない。1行に `SLOW_WRITE_SEC` 以上かかったら、この端末のローカルの
+# ログフォルダへ切り替える(書けなくなったときと同じ。理由は設定の「ログ」の面に出る)。
+SLOW_WRITE_SEC = 5.0
+# 書き待ちがこれを超えたら、細かい判断(DEBUG)は捨てる(INFO 以上は捨てない)
+MAX_PENDING = 20000
+
+
+# 1行の書き込みがこれだけ返らなければ、その出力先(共有)をやめて、新しい書き手で
+# ローカルへ書き続ける(VER4.8.115)。共有が応答しないと、書き込みは何十秒も戻らない
+STUCK_SEC = 15.0
+
+
+class _AsyncWriter(logging.Handler):
+    """受け取った行を並べて、別のスレッドで書く。書く先(ハンドラ)は `make_targets` が作る。
+
+    書き込みが `STUCK_SEC` 返らないときは、**新しい書き手(スレッドとハンドラ)に替えて**続ける
+    (`takeover`)。止まった書き手は、戻ってきたらそこで終わる。コンソールは替えない(管が
+    詰まっているなら、新しい書き手も同じところで止まる)── 止まっているあいだは捨てる。
+    """
+
+    def __init__(self, make_targets, *, name: str = "log-writer",
+                 console: bool = False, takeover: bool = True) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.make_targets = make_targets
+        self.targets: list[logging.Handler] = make_targets()
+        self.thread_name = name
+        # コンソール(標準エラー)へ書く係か(`silence_console` が外す)
+        self.is_console = console
+        self.takeover = takeover
+        self._queue: "queue.SimpleQueue" = queue.SimpleQueue()
+        self._pending = 0
+        self._count_lock = threading.Lock()
+        self.dropped = 0
+        self._thread: Optional[threading.Thread] = None
+        self._thread_lock = threading.Lock()
+        # いま書いている1行(いつから・どこへ)。止まっているかを見るため
+        self._busy_since: Optional[float] = None
+        self._busy_folder: Optional[Path] = None
+        self._generation = 0
+
+    # --- 要求のスレッド ---------------------------------------------------
+    def handle(self, record: logging.LogRecord) -> bool:  # noqa: D401 - logging の口
+        """**錠を取らない。** 並べるだけなので、ほかのスレッドを待たせない。"""
+        if not self.filter(record):
+            return False
+        self.emit(record)
+        return True
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if self._stuck():
+                return                           # コンソールが詰まっている。捨てる
+            if record.levelno < logging.INFO and self._pending >= MAX_PENDING:
+                self.dropped += 1
+                return
+            _freeze(record)
+            if not hasattr(record, "log_dir"):
+                record.log_dir = config.log_dir()   # 行が起きたときの出力先(`_target_dir`)
+            with self._count_lock:
+                self._pending += 1
+            self._ensure_thread()
+            self._queue.put(record)
+        except Exception:                       # noqa: BLE001 - ログで業務を止めない
+            pass
+
+    def flush(self, timeout: float = 2.0) -> bool:  # type: ignore[override]
+        """ここまでに並べた分を書き終えるまで待つ(上限 `timeout` 秒)。書き終えたら True。"""
+        if self._thread is None or not self._thread.is_alive():
+            return self._pending == 0
+        done = threading.Event()
+        self._queue.put(done)
+        return done.wait(timeout)
+
+    def close(self) -> None:
+        self.flush(2.0)
+        super().close()
+
+    @property
+    def pending(self) -> int:
+        return self._pending
+
+    def _stuck(self) -> bool:
+        """書き込みが `STUCK_SEC` 返っていないか。ファイルなら新しい書き手に替える(False を返す)。"""
+        since = self._busy_since
+        if since is None or time.monotonic() - since < STUCK_SEC:
+            return False
+        if not self.takeover:
+            self.dropped += 1
+            return True
+        with self._thread_lock:
+            if self._busy_since != since:
+                return False                     # その間に戻ってきた
+            folder = self._busy_folder
+            if folder is None or Path(folder) == Path(config.LOG_DIR):
+                return False                     # ローカルなら替えても同じ。待つ
+            self._generation += 1
+            self._busy_since, self._busy_folder = None, None
+            self.targets = self.make_targets()
+            self._thread = None
+        _abandon(folder, f"{folder} への書き込みが {STUCK_SEC:.0f}秒 返らないので")
+        return False
+
+    # --- 書くスレッド -----------------------------------------------------
+    def _ensure_thread(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        with self._thread_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(target=self._run, args=(self._generation,),
+                                            name=self.thread_name, daemon=True)
+            self._thread.start()
+
+    def _run(self, generation: int) -> None:
+        targets = self.targets
+        # 替えられたら(`_stuck`)、いま書いている1行を終えたところで終わる
+        while generation == self._generation:
+            item = self._queue.get()
+            if isinstance(item, threading.Event):
+                item.set()
+                continue
+            try:
+                self._write(item, targets, generation)
+            finally:
+                with self._count_lock:
+                    self._pending -= 1
+
+    def _write(self, record: logging.LogRecord, targets, generation: int) -> None:
+        if self.dropped:
+            dropped, self.dropped = self.dropped, 0
+            note = logging.LogRecord(record.name, logging.WARNING, __file__, 0,
+                                     "書き待ちが多すぎた・書けなかったので、%s行 捨てました",
+                                     (dropped,), None)
+            note.op = ""
+            self._write_one(note, targets, generation)
+        self._write_one(record, targets, generation)
+
+    def _write_one(self, record: logging.LogRecord, targets, generation: int) -> None:
+        for handler in targets:
+            if record.levelno < handler.level:
+                continue
+            began = time.monotonic()
+            if generation == self._generation:
+                self._busy_folder = (_target_dir(record) if isinstance(handler, DailyFileHandler)
+                                     else None)
+                self._busy_since = began
+            try:
+                handler.handle(record)
+            except Exception:                   # noqa: BLE001 - 書けなくても続ける
+                pass
+            finally:
+                if generation == self._generation:
+                    self._busy_since = None
+            took = time.monotonic() - began
+            if took >= SLOW_WRITE_SEC and isinstance(handler, DailyFileHandler):
+                _too_slow(took, _target_dir(record))
+
+
+def _freeze(record: logging.LogRecord) -> None:
+    """**あとで別のスレッドが書いても、起きたときの中身になるように**固める。
+
+    引数(%s の中身)はあとで変わることがあるので、ここで文にしてしまう。トレースバックも
+    ここで文にする(`Formatter` は `exc_text` があればそれを使う)。
+    """
+    if record.args:
+        try:
+            record.msg = record.getMessage()
+            record.args = None
+        except Exception:                       # noqa: BLE001 - 固められなくても書く
+            pass
+    if record.exc_info and not record.exc_text:
+        try:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        except Exception:                       # noqa: BLE001
+            pass
+
+
+def _too_slow(took: float, folder: Path) -> None:
+    """1行に時間がかかりすぎた。その出力先(共有)をやめ、ローカルへ切り替える。"""
+    if Path(folder) == Path(config.LOG_DIR):
+        return
+    _abandon(folder, f"{folder} への書き込みに {took:.0f}秒 かかったので"
+                     "(共有フォルダの応答が戻ったら、ログの面で出力先を保存し直してください)")
+
+
+_writer: Optional[_AsyncWriter] = None
+
+
+def flush_logs(timeout: float = 2.0) -> bool:
+    """ここまでのログを書き終えるまで待つ(読む前・終わる前に呼ぶ)。書き終えたら True。"""
+    if _writer is None:
+        return True
+    return _writer.flush(timeout)
+
+
+def file_handler() -> Optional["DailyFileHandler"]:
+    """その日のログファイルへ書くハンドラ(書くスレッドが使う)。"""
+    if _writer is None:
+        return None
+    return next((h for h in _writer.targets if isinstance(h, DailyFileHandler)), None)
 
 
 def configure_logging() -> None:
@@ -294,16 +549,19 @@ def configure_logging() -> None:
     formatter = logging.Formatter(LINE_FORMAT, datefmt=DATE_FORMAT)
     op_filter = _OpFilter()
 
-    # エラー記録を先に置く ── 「直前の動き」にエラーの行そのものが
-    # まだ入っていないうちに写す
-    error_handler = _ErrorRecordHandler(level=logging.ERROR)
-    error_handler.addFilter(op_filter)
-    root.addHandler(error_handler)
+    # エラー記録とその日のファイルは**書くスレッドが書く**(`_AsyncWriter`。VER4.8.115)。
+    # 先に置く ── 「直前の動き」にエラーの行そのものがまだ入っていないうちに写す(`_OpFilter`)
+    global _writer
 
-    file_handler = DailyFileHandler(date.today(), encoding="utf-8")
-    file_handler.setFormatter(formatter)
-    file_handler.addFilter(op_filter)
-    root.addHandler(file_handler)
+    def file_targets() -> list[logging.Handler]:
+        # 書き手を替えるとき(`_AsyncWriter._stuck`)も同じ形で作り直す
+        daily = DailyFileHandler(date.today(), encoding="utf-8", delay=True)
+        daily.setFormatter(formatter)
+        return [_ErrorRecordHandler(level=logging.ERROR), daily]
+
+    _writer = _AsyncWriter(file_targets)
+    _writer.addFilter(op_filter)
+    root.addHandler(_writer)
 
     recent_handler = _RecentHandler(level=logging.INFO)
     recent_handler.setFormatter(formatter)
@@ -318,10 +576,17 @@ def configure_logging() -> None:
     # 選定アルゴリズムは実データ1件で数千行のDEBUGを出すため、
     # 誰にも見えない例外をその回数ぶん払うことになる。
     if _has_console():
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        console_handler.addFilter(op_filter)
-        root.addHandler(console_handler)
+        # **コンソールも別のスレッドで書く**(VER4.8.115)。デスクトップ版では標準エラーが外枠
+        # (exe)への管で、読む側が止まると管が詰まり、書いたスレッドがそこで止まる。ファイルとは
+        # 別の1本にする(コンソールが詰まっても、ファイルのログは書き続ける)
+        def console_targets() -> list[logging.Handler]:
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            return [console_handler]
+
+        console = _AsyncWriter(console_targets, name="log-console", console=True, takeover=False)
+        console.addFilter(op_filter)
+        root.addHandler(console)
 
     _configured = True
 
@@ -361,6 +626,9 @@ def silence_console() -> None:
     logger = logging.getLogger("packaging_tool")
 
     def _is_console(handler: logging.Handler) -> bool:
+        # 別のスレッドで書く係(VER4.8.115)。中身がコンソールなら外す
+        if getattr(handler, "is_console", False):
+            return True
         # FileHandler は StreamHandler の派生なので先に除外する
         return (isinstance(handler, logging.StreamHandler)
                 and not isinstance(handler, logging.FileHandler))

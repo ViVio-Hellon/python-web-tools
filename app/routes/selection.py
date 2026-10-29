@@ -789,7 +789,7 @@ def send_cut_request():
     conn = get_db()
     # 同じロットの前の依頼が、倉庫でもう受け取られていないかを最新で見る
     try:
-        data_sync.refresh_orders(conn, only_if_changed=True)
+        data_sync.catch_up(data_sync.ACTION_WAIT_SEC, conn=conn)   # 待つのは上限まで(VER4.8.115)
     except Exception:                               # noqa: BLE001 - 送る操作は止めない
         log.exception("切断依頼を送る前の取り込み直しに失敗(手元の状態で続けます)")
     # **紙面のロットNOで送る**(VER4.8.77)。紙面でロットNOを直したら(連続で同じ内容のロット)、
@@ -818,8 +818,7 @@ def send_cut_request():
     data_sync.write_back_in_background()
     # 共有フォルダが見えないときは「送りました」と言わない(発注の送信と同じ)。
     # つながれば心拍のついでに自動で送る(`retry_unsent_in_background`)
-    from packaging_tool import sync_sources
-    if sync_sources.find_material_db() is None:
+    if not data_sync.shared_reachable():              # 待つのは上限まで(VER4.8.115)
         return jsonify({"ok": True, "queued": True, "id": result.request_id,
                         "message": (f"切断依頼(Lot {lot_no})をこの端末に預かりましたが、共有フォルダに"
                                     "届かないため、まだ倉庫には届いていません。つながると自動で送ります。")})

@@ -39,10 +39,13 @@ log = logging_utils.get_logger("試験.trace")
 
 
 def _close_log_files() -> None:
-    """日ごとのログファイルを閉じる(次の1行で開き直される)。"""
-    for handler in logging.getLogger("packaging_tool").handlers:
-        if isinstance(handler, logging_utils.DailyFileHandler):
-            handler.close()
+    """日ごとのログファイルを閉じる(次の1行で開き直される)。
+
+    書くのは別のスレッド(VER4.8.115)なので、並んでいる分を書き終えてから閉じる。"""
+    logging_utils.flush_logs(5.0)
+    handler = logging_utils.file_handler()
+    if handler is not None:
+        handler.close()
 
 
 class TraceTestCase(unittest.TestCase):
@@ -74,6 +77,7 @@ class TraceTestCase(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def records(self, folder: Path | None = None) -> list[dict]:
+        logging_utils.flush_logs(5.0)          # 書くのは別のスレッド(VER4.8.115)
         folder = folder or config.log_dir()
         rows = []
         for path in folder.glob("*エラー記録_*.jsonl"):
@@ -81,6 +85,7 @@ class TraceTestCase(unittest.TestCase):
         return rows
 
     def day_log(self, folder: Path | None = None) -> str:
+        logging_utils.flush_logs(5.0)          # 書くのは別のスレッド(VER4.8.115)
         folder = folder or config.log_dir()
         return logging_utils.log_path_for(date.today()).read_text("utf-8") \
             if folder == config.log_dir() else ""
@@ -164,6 +169,7 @@ class LogDirTests(TraceTestCase):
         log.info("前の場所")
         trace_log.set_log_dir(str(self.root / "共有"), PW)
         log.info("新しい場所")
+        logging_utils.flush_logs(5.0)          # 書くのは別のスレッド(VER4.8.115)
         name = f"packagingtool_LINE-3_{date.today():%Y%m%d}.log"
         new = (self.root / "共有" / "packagingtool" / name).read_text("utf-8")
         old = (self.default / name).read_text("utf-8")
@@ -210,8 +216,7 @@ class LogDirTests(TraceTestCase):
 
     def test_途中で書けなくなったら既定へ戻して書き続ける(self) -> None:
         trace_log.set_log_dir(str(self.root / "共有"), PW)
-        handler = next(h for h in logging.getLogger("packaging_tool").handlers
-                       if isinstance(h, logging_utils.DailyFileHandler))
+        handler = logging_utils.file_handler()
         real_emit = logging.FileHandler.emit
         calls = []
 
@@ -224,6 +229,7 @@ class LogDirTests(TraceTestCase):
 
         with mock.patch.object(logging.FileHandler, "emit", flaky):
             log.info("切れたあとの行")
+            logging_utils.flush_logs(5.0)       # 書くのは別のスレッド(VER4.8.115)
         self.assertIsNone(config._active_log_dir)
         self.assertIn("書けなくなった", trace_log.state()["warn"])
         self.assertIn("切れたあとの行",
@@ -331,6 +337,7 @@ class ReadTests(TraceTestCase):
 
     def test_壊れた行は飛ばす(self) -> None:
         log.error("ちゃんとした行")
+        logging_utils.flush_logs(5.0)
         path = next(config.log_dir().glob("*エラー記録_*.jsonl"))
         with path.open("a", encoding="utf-8") as fh:
             fh.write('{"ref": "書きかけ\n')
@@ -427,6 +434,7 @@ class WebTests(TraceTestCase):
         res = self.client.post("/api/trace/log-dir", json={"path": "", "password": "x"},
                                headers=self._web.auth())
         self.assertEqual(res.status_code, 403)
+        logging_utils.flush_logs(5.0)
         text = logging_utils.log_path_for(date.today()).read_text("utf-8")
         self.assertIn("断り POST /api/trace/log-dir → 403 need_password", text)
         self.assertIn("管理者パスワードが要ります", text)
@@ -434,6 +442,7 @@ class WebTests(TraceTestCase):
     def test_操作の足跡は1要求1行_見張りは書かない(self) -> None:
         self.client.get("/api/trace/state", headers=self._web.auth())
         self.client.get("/api/jobs", headers=self._web.auth())
+        logging_utils.flush_logs(5.0)
         text = logging_utils.log_path_for(date.today()).read_text("utf-8")
         self.assertIn("操作 GET /api/trace/state → 200", text)
         self.assertNotIn("操作 GET /api/jobs", text)

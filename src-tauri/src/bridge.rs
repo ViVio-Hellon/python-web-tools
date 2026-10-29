@@ -252,18 +252,14 @@ impl Bridge {
         self.state.lock().unwrap().python = program.to_string();
 
         // 標準エラー: 末尾だけ覚える(Python のログもここに出る)
+        //
+        // **UTF-8 でない行が来ても読み続ける**(VER4.8.115)。前は `lines()` が UTF-8 でない行
+        // (子の変換が Shift_JIS で書いた一言など)で失敗した時点で読むのをやめていた。読む側が
+        // 居なくなると管が詰まり、Python がログを1行書くところで止まる(アプリ全体のフリーズ)
         let tail = self.stderr.clone();
         thread::Builder::new()
             .name("python-stderr".into())
-            .spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                    let mut tail = tail.lock().unwrap();
-                    if tail.len() >= STDERR_LINES {
-                        tail.pop_front();
-                    }
-                    tail.push_back(line);
-                }
-            })?;
+            .spawn(move || keep_tail(stderr, &tail))?;
 
         // 標準出力: 応答と知らせを読む
         let me = self.clone();
@@ -422,6 +418,33 @@ fn python_candidates() -> Vec<(String, Vec<String>)> {
     }
 }
 
+/// 標準エラーを読み続け、末尾 `STDERR_LINES` 行だけ覚える。
+///
+/// **UTF-8 でない行が来ても読み続ける**(VER4.8.115。読めない字は置き換える)。
+/// 読むのをやめるのは管が閉じた・読めなくなったときだけ。
+fn keep_tail(stream: impl Read, tail: &Mutex<VecDeque<String>>) {
+    let mut reader = BufReader::new(stream);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buf)
+                    .trim_end_matches(|c| c == '\r' || c == '\n')
+                    .to_string();
+                let mut tail = tail.lock().unwrap();
+                if tail.len() >= STDERR_LINES {
+                    tail.pop_front();
+                }
+                tail.push_back(line);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
 /// 起動ごとの合言葉。ほかのプロセスから Python へ要求は届かないが
 /// (標準入出力は親子だけのもの)、アプリ側の確認はそのまま生かす。
 pub fn new_token() -> String {
@@ -440,6 +463,28 @@ pub fn new_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 標準エラーはutf8でない行が来ても読み続ける() {
+        // 前は `lines()` が Shift_JIS の行で失敗した時点で読むのをやめ、管が詰まって Python が止まった
+        let tail = Mutex::new(VecDeque::new());
+        keep_tail(std::io::Cursor::new(b"first\n\x82\xa0 sjis\r\nlast\n".to_vec()), &tail);
+        let got: Vec<String> = tail.lock().unwrap().iter().cloned().collect();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], "first");
+        assert!(got[1].ends_with(" sjis"));
+        assert_eq!(got[2], "last");
+    }
+
+    #[test]
+    fn 標準エラーは末尾だけ覚える() {
+        let tail = Mutex::new(VecDeque::new());
+        let text: String = (0..STDERR_LINES + 5).map(|i| format!("{i}\n")).collect();
+        keep_tail(std::io::Cursor::new(text.into_bytes()), &tail);
+        let got = tail.lock().unwrap();
+        assert_eq!(got.len(), STDERR_LINES);
+        assert_eq!(got.back().unwrap(), &format!("{}", STDERR_LINES + 4));
+    }
 
     #[test]
     fn 合言葉は毎回違い十分に長い() {

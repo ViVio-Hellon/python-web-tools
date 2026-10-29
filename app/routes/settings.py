@@ -47,7 +47,9 @@ def _caught_up_db():
     conn = get_db()
     try:
         from packaging_tool import data_sync
-        data_sync.refresh_orders(conn, only_if_changed=True)
+        # **待つのは上限まで**(VER4.8.115)。共有が遅いと設定画面そのものが開けなかった
+        # (ログも見られない)。間に合わなければ手元の数で出し、取り込みは背景で続く
+        data_sync.catch_up(data_sync.SETTINGS_WAIT_SEC, conn=conn)
     except Exception:                               # noqa: BLE001 - 画面は止めない
         log.exception("設定画面の前の取り込み直しに失敗(手元の数で出します)")
     return conn
@@ -55,6 +57,8 @@ def _caught_up_db():
 
 @bp.get("/settings")
 def page():
+    # 共有フォルダの確認を先に始めておく(発注の取り込み直しを待つ間に進む。VER4.8.115)
+    settings_presenter.start_shared_check()
     view = settings_presenter.build(_caught_up_db(), _startup_modes())
     registry = jobs.get_registry()
     # `?tab=` で面を名指しできる(帯のモード表示から「この端末の権限」
@@ -100,8 +104,10 @@ def _badge(view) -> tuple[str, str, str]:
 
 @bp.get("/api/settings/state")
 def state():
+    """いまの状態。`?fresh=1`(「状態を再確認」)は、走っている確認が終わってから確かめ直す。"""
+    fresh = request.args.get("fresh") == "1"
     return jsonify(settings_presenter.to_dict(
-        settings_presenter.build(get_db(), _startup_modes())))
+        settings_presenter.build(get_db(), _startup_modes(), fresh=fresh)))
 
 
 def _startup_modes() -> tuple[str, ...]:
@@ -167,8 +173,9 @@ def save():
         return jsonify(_error(result.reason, result.message)), status
 
     log.info("設定を保存しました: %s", ", ".join(sorted(body)))
+    # 置き場所を変えた直後。**変える前に始まった確認の答えを使わない**(VER4.8.115)
     state = settings_presenter.to_dict(
-        settings_presenter.build(get_db(), _startup_modes()))
+        settings_presenter.build(get_db(), _startup_modes(), fresh=True))
     state["message"] = result.message
     return jsonify(state)
 

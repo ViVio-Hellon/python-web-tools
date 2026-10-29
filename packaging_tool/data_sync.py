@@ -97,6 +97,69 @@ from .sync_import import (  # noqa: F401
 from .sync_refresh import OrderRefresh, refresh_orders  # noqa: F401
 
 
+# ==================================================================
+# 画面の要求から呼ぶ取り込み直し(VER4.8.115)── 待つのは上限まで
+# ==================================================================
+# 画面を出す前に待つ秒数。共有が遅いときは手元の値で出す(取り込みは背景で続く)
+PAGE_WAIT_SEC = 2.0
+# 設定画面を出す前に待つ秒数。設定画面で発注の取り込み直しが効くのはボード人気度だけなので短く
+SETTINGS_WAIT_SEC = 1.0
+# 送る・確かめる・取り消すの前に待つ秒数。ほかの端末が先に動かしたことを知りたいので少し長く
+ACTION_WAIT_SEC = 5.0
+# 「取り込み直す」を押したときに待つ秒数
+BUTTON_WAIT_SEC = 10.0
+# 間に合わなかったときの一言(倉庫連携の「取り込み直す」・見張り)
+PENDING_MESSAGE = ("取り込み元の応答を待っています(背景で取り込みを続けています。"
+                   "届いたら一覧が変わります)。")
+
+
+def _catch_up_work(force: bool):
+    """背景の1本の中身。`refresh_orders` はこのモジュールの名前で呼ぶ ── 試験が
+    `data_sync.refresh_orders` を差し替えたら、ここにも効くように。"""
+    def work(conn):
+        return sys.modules[__name__].refresh_orders(conn, only_if_changed=not force)
+    return work
+
+
+_flights = None
+
+
+def _flight(force: bool):
+    global _flights
+    if _flights is None:
+        from .bounded import FileFlights
+        _flights = {False: FileFlights("発注の取り込み直し", _catch_up_work(False)),
+                    True: FileFlights("発注の取り込み直し(押された)", _catch_up_work(True))}
+    return _flights[force]
+
+
+def catch_up(wait: float = PAGE_WAIT_SEC, *, force: bool = False,
+             conn: Optional[sqlite3.Connection] = None) -> Optional[OrderRefresh]:
+    """発注まわりを取り込み直す。**待つのは `wait` 秒まで**(VER4.8.115。`bounded` の説明)。
+
+    `conn` は画面の要求の接続(そのDBファイルを背景の1本が開き直す。省略すれば手元のDB)。
+    間に合えばその結果を返す。間に合わなければ `None`(取り込みは背景で続く。終われば
+    `master_state` の世代が進んで、開いている画面が読み直す)。同時に2本は走らせない。
+
+    前の回で待つのをやめたあとに終わった取り込みが「変わった」なら、それも含めて返す
+    (倉庫連携の見張りが、背景で入った発注を描き直せるように)。
+    """
+    outcome = _flight(force).run(conn, wait)
+    late = outcome.late or _flight(not force).take_late(conn)
+    if outcome.error is not None:
+        raise outcome.error
+    got = outcome.value if outcome.done else None
+    if late is not None and getattr(late, "updated", False):
+        if got is None or not got.updated:
+            return late
+    return got
+
+
+def pending_refresh() -> OrderRefresh:
+    """`catch_up` が間に合わなかったときに画面へ返すもの(見に行けていないとは言わない)。"""
+    return OrderRefresh(looked=True, pending=True, reason=PENDING_MESSAGE)
+
+
 # 共有フォルダに届かず、この端末に預かっただけのときに添える一言
 QUEUED_NOTE = ("(共有フォルダに届かないため、相手にはまだ見えていません。"
                "つながると自動で送ります)")
@@ -110,7 +173,28 @@ def queued_note() -> str:
     押した人は相手にも見えていると思う(通し点検: 発注の送信で同じことが
     起きていた)。手元では済んでいるので失敗にはせず、そう言い添える。
     """
-    return QUEUED_NOTE if sync_sources.find_material_db() is None else ""
+    return "" if shared_reachable() else QUEUED_NOTE
+
+
+# 「共有の取り込み元が見えるか」を、送ったあとの一言のために待つ上限(秒。VER4.8.115)
+REACH_WAIT_SEC = 1.0
+_reach_flight = None
+
+
+def shared_reachable(wait: float = REACH_WAIT_SEC) -> bool:
+    """共有の取り込み元が見えるか。**待つのは `wait` 秒まで**(VER4.8.115。`bounded` の説明)。
+
+    送った・確かめたあとに「まだ相手に届いていません」を添えるかを決めるためだけに見る。
+    共有が応答しないと、ファイルがあるかを確かめるだけで要求が返らなかった(錠を持ったまま)。
+    間に合わなければ「見えない」とみなす(送るのは背景が続ける。届いていないと言うほうが正直)。
+    """
+    global _reach_flight
+    from .bounded import Flight
+    if _reach_flight is None:
+        _reach_flight = Flight("取り込み元が見えるか",
+                               lambda: sync_sources.find_material_db() is not None)
+    outcome = _reach_flight.run(wait)
+    return bool(outcome.done and outcome.value)
 from .sync_auto import (  # noqa: F401
     STAMP_TABLE, auto_import, auto_import_in_background, mark_imported,
     needs_import)

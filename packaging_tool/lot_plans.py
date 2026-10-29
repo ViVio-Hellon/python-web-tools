@@ -427,6 +427,27 @@ def forget_seen_stamp() -> None:
     _seen_stamp.clear()
 
 
+_flights = None
+
+
+def refresh_bounded(conn: sqlite3.Connection, wait: float) -> bool:
+    """ロット検索の見張りから。**待つのは `wait` 秒まで**(VER4.8.115。`bounded` の説明)。
+
+    以前は見張りの要求の中で共有を読みに行ったので、共有が遅いと要求が返らず、受付が
+    ふさがった(モード切替・設定まで止まる)。間に合わなければ手元の予定で返す ──
+    取り込みは背景で続き、終われば `lot_plans_rev` が進んで画面が引き直す。
+    取り込んだと分かったら True。
+    """
+    global _flights
+    from .bounded import FileFlights
+    if _flights is None:
+        _flights = FileFlights("予定ロットの取り込み直し", refresh_if_changed)
+    outcome = _flights.run(conn, wait)
+    if outcome.error is not None:
+        raise outcome.error
+    return bool(outcome.value) or bool(outcome.late)
+
+
 # ------------------------------------------------------------------
 # 予定ロットを開いたときのパレット(VER4.8.92)
 # ------------------------------------------------------------------

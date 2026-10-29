@@ -86,7 +86,7 @@ def status(mode: str) -> Optional[dict]:
     if info is None:
         return None
     health = launch_guard.probe_health(info.port)
-    if not launch_guard.is_our_app(health, mode):
+    if not launch_guard.is_our_app(health, mode, pid=info.pid):
         return None
     health["_lock"] = {"pid": info.pid, "port": info.port,
                        "started": info.started_text, "app_root": info.app_root}
@@ -108,7 +108,7 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
         return result
 
     health = launch_guard.probe_health(info.port)
-    if not launch_guard.is_our_app(health, mode):
+    if not launch_guard.is_our_app(health, mode, pid=info.pid):
         # 応答しない、または別のアプリ。ロックだけ残っている状態
         if launch_guard.is_process_alive(info.pid):
             return _stop_by_pid(mode, info, result, force=force)
@@ -232,26 +232,10 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopRes
 
 
 def _looks_like_our_process(info) -> bool:
-    """そのPIDが本当にこのアプリか。
-
-    コマンドラインに**このアプリの置き場所**が入っていることを確かめる。
-    別のフォルダにある同じツールや、無関係なPythonを巻き添えにしない。
-    コマンドラインが取れない環境では False にして、止めずに知らせる
-    (誤って別のアプリを落とすより、止まらないほうが害が小さい)。
-    """
+    """そのPIDが本当にこのアプリか(`launch_guard.looks_like_our_process`。起動し直すときも同じ確かめ方)。"""
     import launch_guard
 
-    cmdline = launch_guard.process_command_line(info.pid)
-    if not cmdline:
-        log.warning("pid=%s のコマンドラインを取得できませんでした", info.pid)
-        return False
-
-    root = (info.app_root or str(app_config.APP_ROOT)).replace("\\", "/")
-    normalized = cmdline.replace("\\", "/")
-    if root and root in normalized:
-        return True
-    # 起動スクリプト名でも照合する(相対パスで起動された場合)
-    return "start_app.py" in normalized
+    return launch_guard.looks_like_our_process(info.pid, info.app_root)
 
 
 def _wait_gone(port: int, timeout: float) -> bool:

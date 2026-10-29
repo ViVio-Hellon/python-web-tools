@@ -222,6 +222,11 @@ def current_mode() -> str:
     return current_app.config["MODE"]
 
 
+# モードを切り替えるとき、断る前のアクセス権限の読み直しを待つ上限(秒。VER4.8.115)。
+# 押した操作なので画面の見張りより少し長く待つ。間に合わなければ手元の権限で決める
+MODE_RESYNC_WAIT_SEC = 5.0
+
+
 def set_mode(mode: str) -> bool:
     """モードを切り替える。権限が無ければ False。
 
@@ -241,7 +246,7 @@ def set_mode(mode: str) -> bool:
     if key not in modes.KEYS:
         return False
     if not current_grant().allows_mode(key):
-        if access_control.resync(get_db()):
+        if access_control.resync_bounded(get_db(), MODE_RESYNC_WAIT_SEC):
             g.pop("grant", None)              # 読み直した内容で引き直す
         if not current_grant().allows_mode(key):
             return False
@@ -262,7 +267,7 @@ def grant_allows(mode: str) -> bool:
     from flask import current_app
     if current_grant().allows_mode(mode):
         return True
-    if current_app.config.get("GIVEN_GRANT") is None and access_control.resync(get_db()):
+    if current_app.config.get("GIVEN_GRANT") is None and access_control.resync_bounded(get_db()):
         g.pop("grant", None)                  # 読み直した内容で引き直す
         return current_grant().allows_mode(mode)
     return False
@@ -413,6 +418,9 @@ def _register_trace(app: Flask) -> None:
             info["input"] = trace_log.describe_input(request.get_json(silent=True))
         g.trace_started = time.perf_counter()
         g.trace_token = logging_utils.begin_operation(info)
+        # 返らなければ、どこで止まっているかをログに残す(VER4.8.115。`stall_watch`)
+        from packaging_tool import stall_watch
+        stall_watch.begin(f"{request.method} {request.path}")
 
     @app.after_request
     def _footprint(response):                   # noqa: ANN202 - Flaskのフック
@@ -434,6 +442,8 @@ def _register_trace(app: Flask) -> None:
 
     @app.teardown_request
     def _end_operation(_exc):                   # noqa: ANN202 - Flaskのフック
+        from packaging_tool import stall_watch
+        stall_watch.end()
         token = g.pop("trace_token", None)
         if token is not None:
             try:
@@ -610,6 +620,14 @@ def _error(code: str, message: str, field: str = "") -> dict:
 # 書く要求が重なるのは押し間違いか二重送信で、待たせても誰も困らない。
 _WRITE_LOCK = threading.RLock()
 
+# 書く要求が、前の書く要求の終わりを待つ上限(秒。VER4.8.115)。
+# 前は**いつまでも**待った。前の要求が共有フォルダの応答待ちで止まると、後ろに並んだ要求が
+# 受付のスレッドを1本ずつふさぎ、モード切替・心拍まで返らなくなる(フリーズ)。過ぎたら
+# 「前の操作がまだ終わっていません」で断る(押した人は少し待って押し直せばよい)
+WRITE_WAIT_SEC = 30.0
+# いま書く錠を持っている要求(断るときにログへ書く)
+_write_holder: dict = {}
+
 # 直列化しないもの。**待たせてはいけない**種類の POST。
 #   /api/jobs      … 進捗を見に行くだけ(長い処理の最中に呼ばれる)
 #   /api/mode      … 画面の切り替え。DBを書かない
@@ -672,8 +690,17 @@ def _register_db(app: Flask) -> None:
     @app.before_request
     def _take_write_lock():                     # noqa: ANN202 - Flaskのフック
         if _is_write(request):
-            _WRITE_LOCK.acquire()
+            if not _WRITE_LOCK.acquire(timeout=WRITE_WAIT_SEC):
+                holder = dict(_write_holder)
+                log.warning("前の書く要求が %.0f秒 終わらないので断りました: %s(前の要求: %s。%.0f秒前から)",
+                            WRITE_WAIT_SEC, request.path, holder.get("path", "?"),
+                            time.monotonic() - holder.get("since", time.monotonic()))
+                return jsonify({"error": {
+                    "code": "busy",
+                    "message": ("前の操作がまだ終わっていません(共有フォルダの応答を待っている"
+                                "ことがあります)。少し待ってから、もう一度押してください。")}}), 503
             g.holds_write_lock = True
+            _write_holder.update(path=request.path, since=time.monotonic())
 
     @app.teardown_request
     def _release_write_lock(_exc):              # noqa: ANN202 - Flaskのフック

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -226,6 +227,9 @@ class SettingsViewModel:
     # 取り込みができない状態なら、ボタンを押させる前に理由を出す
     can_import: bool = True
     import_reason: str = ""
+    # 共有フォルダの確認が、待つ上限までに終わらなかった(VER4.8.115)。画面は少しあとで
+    # 引き直す(`shared_facts`)。そのあいだも、ほかの面(ログ・取り込み元・動作)は使える
+    status_pending: bool = False
 
     @property
     def level(self) -> str:
@@ -238,7 +242,7 @@ class SettingsViewModel:
 # ------------------------------------------------------------------
 # いまの状態
 # ------------------------------------------------------------------
-def build(conn=None, startup_modes=None) -> SettingsViewModel:
+def build(conn=None, startup_modes=None, *, fresh: bool = False) -> SettingsViewModel:
     """設定と、見つかっているファイルから画面ぜんぶを組み立てる。
 
     `conn` を渡すと権限の節も出す。省略できるようにしてあるのは、
@@ -247,11 +251,12 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
 
     `startup_modes` は**起動したときに使えたモード**。いま使えるモードと
     食い違っていたら、開き直すまで効かないことを言う(下記 `_access_section`)。
+
+    **共有フォルダを見に行くところは背景で、待つのは上限まで**(VER4.8.115。`shared_facts`)。
+    共有が遅いと設定画面そのものが開けず、ログも見られなかった。`fresh` は置き場所を
+    変えた直後 ── 変える前に始まった確認の答えを使わない。
     """
-    material = _find_material()
-    lots = _find_lots()
-    kanban = _find_kanban()
-    threshold = _find_threshold()
+    facts, pending = shared_facts(STATUS_WAIT_SEC, fresh=fresh)
 
     view = SettingsViewModel(
         master_dir=_typed(config.KEY_MASTER_DB_DIR, config.master_db_dir(),
@@ -291,19 +296,29 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
         lot_filters=_lot_filters(),
         board_usage=_board_usage(conn),
     )
+    if facts is None:
+        shared = []
+    else:
+        shared = [
+            _material_section(facts.material, conn, found=facts.material_probe,
+                              broken=facts.material_guard),
+            facts.kanban_section,
+            facts.threshold_section,
+            facts.lot_section,
+        ]
+    view.status_pending = pending
     view.sections = [
-        _material_section(material, conn),
-        _kanban_section(kanban),
-        _threshold_section(threshold),
-        _lot_section(lots),
+        *([_waiting_section(facts)] if pending or facts is None else []),
+        *shared,
         _access_section(conn, startup_modes),
         _terminal_section(),
     ]
 
     # **押せないのは、読む元が1つも無いときだけ。**
     # 一部が欠けているだけなら、残りは取り込める(欠けは「いまの状態」が
-    # 節ごとに言う)。ここで止めると、届いているものまで入らなくなる
-    if material is None and not lots:
+    # 節ごとに言う)。ここで止めると、届いているものまで入らなくなる。
+    # まだ確かめ終わっていないうちは止めない(分からないのに「できません」と言わない)
+    if facts is not None and facts.material is None and not facts.lots:
         view.can_import = False
         # **どこを探して何が無かったかを言う。** 「1つも見つかりません」
         # だけでは、置き場所が違うのか・名前が違うのか・共有に届いて
@@ -316,6 +331,116 @@ def build(conn=None, startup_modes=None) -> SettingsViewModel:
             f"({' / '.join(config.LOT_DB_FILES.values())})です。"
             "「いまの状態」に節ごとの結果が出ています。")
     return view
+
+
+# ------------------------------------------------------------------
+# 共有フォルダを見に行くところ(VER4.8.115)── 背景の1本で、待つのは上限まで
+# ------------------------------------------------------------------
+# 現場の声:「一度でもフリーズすると起動しなおしても設定タブが開けなくなる。設定も開けなく
+# なるのでログすらみれない」。設定画面は開くたびに、取り込み元のファイルを探し・開き(手元へ
+# 写してから中を見る)・二重登録の防止まで確かめていた。共有が遅いと、それが終わるまで画面が
+# 返らなかった。ここを背景の1本にし、画面は `STATUS_WAIT_SEC` だけ待つ。
+#
+#     間に合った     … いままでどおり
+#     間に合わない   … 前に確かめた結果(無ければ「確かめています」の1枚)で出し、少しあとで
+#                      画面が引き直す(`status_pending`)
+#     走っている最中 … 2本目は始めない
+STATUS_WAIT_SEC = 2.0
+# まだ確かめ終わっていないとき、画面が引き直すまでの間(ミリ秒。画面側が使う)
+STATUS_RETRY_MS = 3000
+
+
+@dataclass
+class SharedFacts:
+    """共有フォルダを見に行って分かったこと。**手元のDBは使わない**(背景のスレッドで集める)。"""
+
+    material: Optional[Path]
+    material_probe: Optional["source_db.Probe"]
+    material_guard: Optional[list[str]]
+    lots: dict[str, Path]
+    kanban_section: "Section"
+    threshold_section: "Section"
+    lot_section: "Section"
+    at: float = 0.0
+
+
+_status_flight = None
+_last_facts: Optional[SharedFacts] = None
+
+
+def _gather_shared() -> SharedFacts:
+    """背景の1本。取り込み元を探して、開いて、確かめる。"""
+    global _last_facts
+    material = _find_material()
+    probe = guard = None
+    if material is not None:
+        probe = source_db.probe(material)
+        if probe.ok:
+            guard = _guard_broken(material)
+    lots = _find_lots()
+    facts = SharedFacts(
+        material=material, material_probe=probe, material_guard=guard, lots=lots,
+        kanban_section=_kanban_section(_find_kanban()),
+        threshold_section=_threshold_section(_find_threshold()),
+        lot_section=_lot_section(lots), at=time.time())
+    _last_facts = facts
+    return facts
+
+
+def shared_facts(wait: float, *, fresh: bool = False) -> tuple[Optional[SharedFacts], bool]:
+    """(分かったこと, まだ確かめている途中か)。待つのは `wait` 秒まで。
+
+    間に合わなければ、前に確かめた結果を返す(1度も無ければ None)。
+    """
+    global _status_flight
+    from ..bounded import Flight
+    if _status_flight is None:
+        _status_flight = Flight("設定画面の状態の確認", _gather_shared)
+    if fresh and _status_flight.running():
+        # 置き場所を変える前に始まった確認。終わるのを待ってから確かめ直す
+        _status_flight.wait_idle(wait)
+    outcome = _status_flight.run(wait)
+    if outcome.error is not None:
+        log.warning("設定画面の状態を確かめられませんでした: %s", outcome.error)
+    if outcome.done and outcome.value is not None:
+        return outcome.value, False
+    return _last_facts, not outcome.done
+
+
+def start_shared_check() -> None:
+    """共有フォルダの確認を、**いま**背景で始める(走っていればそのまま)。
+
+    設定画面は先に発注の取り込み直しを待つので、その間に確認も進めておく(待つ時間を重ねない)。
+    """
+    global _status_flight
+    from ..bounded import Flight
+    if _status_flight is None:
+        _status_flight = Flight("設定画面の状態の確認", _gather_shared)
+    _status_flight.start()
+
+
+def forget_shared_facts() -> None:
+    """試験用。前に確かめた結果を忘れる(走っている確認は終わるまで待つ)。"""
+    global _last_facts
+    if _status_flight is not None:
+        _status_flight.wait_idle(10.0)
+    _last_facts = None
+
+
+def _waiting_section(facts: Optional[SharedFacts]) -> "Section":
+    """確かめ終わっていないときの1枚。**ほかの面は使える**ことも言う。"""
+    section = Section("共有フォルダの確認", mark="待")
+    if facts is None:
+        section.checks.append(Check(
+            "取り込み元", "確かめています", INFO,
+            "共有フォルダの応答を待っています。終わったらこの面を出し直します。"
+            "そのあいだも、取り込み・取り込み元・動作・ログの面は使えます。"))
+    else:
+        section.checks.append(Check(
+            "取り込み元", "確かめ直しています", INFO,
+            f"共有フォルダの応答に時間がかかっているので、{time.strftime('%H:%M:%S', time.localtime(facts.at))} "
+            "に確かめた結果を出しています。終わったらこの面を出し直します。"))
+    return section
 
 
 # 2つ目の名前の欄に並ぶもの(鍵 → 1つ目の名前)。仕掛台帳の3つと LS4LOT(VER4.8.78)
@@ -508,7 +633,10 @@ FIX_IMPORT = ("取り込み直す", "run")
 FIX_DEDUPE = ("--fix を実行(重複を消す)へ", "run")
 
 
-def _material_section(material: Optional[Path], conn=None) -> Section:
+def _material_section(material: Optional[Path], conn=None, *,
+                      found: Optional["source_db.Probe"] = None,
+                      broken: Optional[list[str]] = None) -> Section:
+    """梱包資材マスタの節。`found`・`broken` は背景で確かめた分(`shared_facts`)。渡されなければここで確かめる。"""
     section = Section("梱包資材マスタ", mark="材")
     _check_local_master(section, conn)
     if material is None:
@@ -525,7 +653,8 @@ def _material_section(material: Optional[Path], conn=None) -> Section:
 
     # **開けなかったときは、開いてみて分かったことを全部出す。**
     # 「sqlite3 として読めません」だけでは、現場も私たちも直せない
-    found = source_db.probe(material)
+    if found is None:
+        found = source_db.probe(material)
     if not found.ok:
         section.checks.append(Check("中身", "開けませんでした", NG,
                                     _why_unreadable(found)))
@@ -558,7 +687,7 @@ def _material_section(material: Optional[Path], conn=None) -> Section:
         section.checks.append(Check(
             "任意のテーブル", f"{len(optional_missing)}件が未作成", INFO,
             "無くても動きます: " + ", ".join(optional_missing)))
-    _guard_check(section, material)
+    _guard_check(section, material, broken)
     return section
 
 
@@ -589,7 +718,8 @@ def _link_check(section: Section, material: Path, conn) -> None:
         "次の取り込みで中身を入れ替えて、こちらに切り替えます"))
 
 
-def _guard_check(section: Section, material: Path) -> None:
+def _guard_check(section: Section, material: Path,
+                 broken: Optional[list[str]] = None) -> None:
     """二重登録の防止が効いているか。
 
     書き戻しは送信IDを取り込み元の一意インデックスに賭けています。
@@ -601,6 +731,19 @@ def _guard_check(section: Section, material: Path) -> None:
     **効いているときは黙っています。** 全部の項目に印が付くと、印が
     意味を持たなくなるためです。
     """
+    if broken is None:
+        broken = _guard_broken(material)
+        if broken is None:
+            return
+
+    if broken:
+        section.checks.append(Check(
+            "二重登録の防止", f"効いていません({len(broken)}件)", WARN,
+            "  ".join(broken)))
+
+
+def _guard_broken(material: Path) -> Optional[list[str]]:
+    """二重登録の防止が効いていない表の理由。確かめられなければ None(`_guard_check`)。"""
     from .. import data_sync, outbox_sync
 
     broken: list[str] = []
@@ -614,12 +757,8 @@ def _guard_check(section: Section, material: Path) -> None:
                     broken.append(state.why())
     except source_db.SourceError as exc:       # pragma: no cover - 上で弾く
         log.debug("重複防止の状態を確かめられません: %s", exc)
-        return
-
-    if broken:
-        section.checks.append(Check(
-            "二重登録の防止", f"効いていません({len(broken)}件)", WARN,
-            "  ".join(broken)))
+        return None
+    return broken
 
 
 def _kanban_section(kanban: Optional[Path]) -> Section:
@@ -1542,6 +1681,9 @@ def to_dict(view: SettingsViewModel) -> dict[str, Any]:
         "board_usage": view.board_usage,
         "can_import": view.can_import,
         "import_reason": view.import_reason,
+        # まだ確かめている途中なら、画面が少しあとで引き直す(VER4.8.115)
+        "status_pending": view.status_pending,
+        "status_retry_ms": STATUS_RETRY_MS,
     }
 
 

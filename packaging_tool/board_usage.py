@@ -236,6 +236,31 @@ def forget_seen() -> None:
     _seen_stamp.clear()
 
 
+# 資材選択の画面を出す前に待つ秒数(VER4.8.115)。資材選択は操作のたびに画面を作り直すので短く
+PAGE_WAIT_SEC = 1.0
+_flights = None
+
+
+def refresh_bounded(conn: sqlite3.Connection, wait: float = PAGE_WAIT_SEC) -> bool:
+    """`refresh_if_changed` を**待つ上限つきで**(VER4.8.115。`bounded` の説明)。取り込んだら True。
+
+    資材選択は画面を作り直すたびに使用実績を見に行く。共有が応答しないと、資材選択の
+    要求がそこで止まった(権限が1つの端末の通し点検で見つけた)。間に合わなければ手元の
+    使用実績で出し、取り込みは背景で続ける。止まっている(走っている最中)なら待たない。
+    """
+    global _flights
+    from .bounded import FileFlights
+    if _flights is None:
+        import sys
+        _flights = FileFlights("使用実績の取り込み直し",
+                               lambda c: sys.modules[__name__].refresh_if_changed(c))
+    outcome = _flights.run(conn, wait, wait_if_running=0.0)
+    if outcome.error is not None:
+        log.debug("使用実績を取り込み直せませんでした: %s", outcome.error)
+        return False
+    return bool(outcome.value) or bool(outcome.late)
+
+
 def list_usage(conn: sqlite3.Connection) -> list[UsageRow]:
     """使用枚数の多い順。選定画面の実績一覧に出す。"""
     rows = db.fetch_all(

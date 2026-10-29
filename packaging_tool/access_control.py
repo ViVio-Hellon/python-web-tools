@@ -62,6 +62,7 @@ import os
 import platform
 import re
 import sqlite3
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -279,14 +280,15 @@ class Grant:
         開くモードは端末そのものが決められる ── それを決めているのが
         このマスタだから。
 
-        許されているものが1つならそれ。**複数あるなら強いほう**(資材)から開く(VER4.8.90。
-        現場の声:「アクセス権限を2つ以上付与していたら強いもの優先にしてください」)。
-        前は狭いほう(現場)から開いていた。帯の切替でいつでも移れるのは同じ。
-        強さは `modes.ALL` の並び(後ろほど強い: 現場 → 資材)。
+        許されているものが1つならそれ。**両方あるなら現場から開く**(VER4.8.115。
+        現場の声:「両方の権限があったらデフォルトを現場にしてください」)。
+        VER4.8.90〜4.8.114 は強いほう(資材)から開いていた。帯の切替でいつでも移れるのは同じ。
         """
         from . import modes
         allowed = self.allowed_modes()
-        return allowed[-1] if allowed else modes.DEFAULT
+        if not allowed:
+            return modes.DEFAULT
+        return modes.FIELD if modes.FIELD in allowed else allowed[0]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -582,30 +584,48 @@ def resolve_for_screen(conn: sqlite3.Connection) -> Grant:
     **断りません** ── 手元にある分で続けます(共有に届かない端末でも
     仕事は続く)。
     """
-    import time
-
     from . import modes
-
-    global _screen_resync_at, _screen_resync_stamp
 
     grant = resolve(conn)
     if len(grant.allowed_modes()) >= len(modes.KEYS):
         return grant                            # 足りている。見に行かない
 
-    now = time.time()
-    stamp = _source_stamp()
-    fresh = stamp is not None and stamp != _screen_resync_stamp
-    if not fresh and now - _screen_resync_at < SCREEN_RESYNC_MIN_SEC:
+    # **共有を見に行くのは背景の1本**(VER4.8.115)。取り込み元の姿(大きさ・更新時刻)を見る
+    # だけでも共有への往復で、共有が応答しないと**要求のたびに**そこで止まった(権限が1つの
+    # 端末 = ラインの端末の多くで、心拍もモード切替も)。走っている最中(止まっている)なら待たない
+    global _screen_flights
+    from .bounded import FileFlights
+    if _screen_flights is None:
+        _screen_flights = FileFlights("画面の権限の見張り",
+                                      lambda c: sys.modules[__name__]._screen_check(c))
+    outcome = _screen_flights.run(conn, RESYNC_WAIT_SEC, wait_if_running=0.0)
+    if outcome.error is not None:
+        log.debug("取り込み元を見に行けませんでした: %s", outcome.error)
         return grant
-
-    _screen_resync_at, _screen_resync_stamp = now, stamp
-    if not resync(conn):
+    if not (outcome.value or outcome.late):
         return grant
     after = resolve(conn)
     if after.allowed_modes() != grant.allowed_modes():
         log.info("取り込み元を読み直して権限が変わりました: %s → %s",
                  grant.allowed_modes(), after.allowed_modes())
     return after
+
+
+_screen_flights = None
+
+
+def _screen_check(conn: sqlite3.Connection) -> bool:
+    """背景の1本の中身。取り込み元が変わった・しばらく見ていなければ、アクセス権限を読み直す。"""
+    import time
+
+    global _screen_resync_at, _screen_resync_stamp
+    now = time.time()
+    stamp = _source_stamp()
+    fresh = stamp is not None and stamp != _screen_resync_stamp
+    if not fresh and now - _screen_resync_at < SCREEN_RESYNC_MIN_SEC:
+        return False
+    _screen_resync_at, _screen_resync_stamp = now, stamp
+    return resync(conn)
 
 
 def _source_stamp() -> Optional[tuple[int, int]]:
@@ -798,6 +818,31 @@ def resync(conn: sqlite3.Connection, *, path: Optional[Path] = None) -> bool:
     from . import master_state
     master_state.changed()
     return True
+
+
+# 画面の要求の中で、アクセス権限の読み直しを待つ上限(秒。VER4.8.115)
+RESYNC_WAIT_SEC = 2.0
+_resync_flights = None
+
+
+def resync_bounded(conn: sqlite3.Connection, wait: float = RESYNC_WAIT_SEC) -> bool:
+    """`resync` を**待つ上限つきで**(VER4.8.115。`bounded` の説明)。読み直せたら True。
+
+    共有フォルダが遅いと、画面の要求(モード切替・権限の見張り)がそこで止まり、受付が
+    ふさがった。間に合わなければ手元の権限で続け、読み直しは背景で続ける(終われば
+    `master_state` の世代が進み、開いている画面が読み直す)。
+    """
+    global _resync_flights
+    from .bounded import FileFlights
+    if _resync_flights is None:
+        # `resync` はこのモジュールの名前で引く(試験の差し替えが効くように)
+        _resync_flights = FileFlights("アクセス権限の読み直し",
+                                      lambda c: sys.modules[__name__].resync(c))
+    outcome = _resync_flights.run(conn, wait)
+    if outcome.error is not None:
+        log.warning("アクセス権限を読み直せませんでした: %s", outcome.error)
+        return False
+    return bool(outcome.value) or bool(outcome.late)
 
 
 def startup_grant() -> Grant:

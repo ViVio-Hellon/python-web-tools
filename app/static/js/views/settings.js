@@ -230,6 +230,7 @@ function renderPositions(names, current) {
 }
 
 function renderStatus(state) {
+  followPendingStatus(state);
   renderDistribution(state.distribution);
   el.statusGrid.replaceChildren(
     ...state.sections.map((s) => sectionCard(s, LEVEL_LABEL)));
@@ -449,12 +450,23 @@ function onJobs(state) {
   if (job.ok) master.reload();
 }
 
-async function refreshStatus() {
+async function refreshStatus({ fresh = false } = {}) {
   try {
-    renderStatus(await api.get("/api/settings/state"));
+    renderStatus(await api.get(`/api/settings/state${fresh ? "?fresh=1" : ""}`));
   } catch (err) {
     toastError(err);
   }
+}
+
+// **共有フォルダの確認が終わっていなければ、少しあとで引き直す。** 確認は背景で続いていて、
+// 画面は待たずに出している(共有が遅いと設定画面そのものが開けず、ログも見られなかった)。
+// 引き直しは1つだけ予約する(描き直すたびに重ねない)
+let statusRetry = 0;
+function followPendingStatus(state) {
+  if (statusRetry) { clearTimeout(statusRetry); statusRetry = 0; }
+  if (!state || !state.status_pending) return;
+  statusRetry = setTimeout(() => { statusRetry = 0; refreshStatus(); },
+                           state.status_retry_ms || 3000);
 }
 
 /**
@@ -566,7 +578,10 @@ export function start(state, jobState, masterFrame) {
   el.recompute.addEventListener("click", () =>
     startJob("/api/settings/recompute", {}));
   el.dedupeRun.addEventListener("click", runDedupe);
-  el.refresh.addEventListener("click", refreshStatus);
+  // 押されたら、走っている確認が終わるのを待ってから確かめ直す(押す前の答えを返さない)
+  el.refresh.addEventListener("click", () => refreshStatus({ fresh: true }));
+  // 最初の描画(サーバが出した分)がまだ確かめている途中なら、少しあとで引き直す
+  followPendingStatus(state);
 
   // ボード人気度をCSVに。**書いた場所をそのまま出す** ── 書き出しで
   // いちばん困るのは「書けたのに、どこにあるか分からない」

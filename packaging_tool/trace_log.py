@@ -329,6 +329,8 @@ class ErrorItem:
 
 
 def _read_records(everyone: bool) -> list[dict]:
+    # 書くのは別のスレッド(VER4.8.115)。並んでいる分を書き終えてから読む(待つのは上限まで)
+    logging_utils.flush_logs(1.0)
     rows: list[tuple[str, int, dict]] = []
     seq = 0
     for src in sources(everyone):
@@ -417,6 +419,7 @@ def operation_lines(row: dict, *, limit: int = OP_LINES_LIMIT) -> list[str]:
         return []
     mark = f"[{op_id}]"
     lines: list[str] = []
+    logging_utils.flush_logs(1.0)          # 並んでいる分を書き終えてから読む(VER4.8.115)
     if row.get("_folder"):
         # エラー記録と同じ場所・同じ端末のその日の動作ログ(前の版の形なら前の名前)
         pc = str(row.get("_log_pc") or row.get("pc") or "")
@@ -565,6 +568,7 @@ def slow_operations(day: Optional[date] = None, *, threshold_ms: int = SLOW_MS,
                     limit: int = 200) -> dict[str, Any]:
     """その日の、時間のかかった操作と、画面ごとのまとめ。"""
     day = day or date.today()
+    logging_utils.flush_logs(1.0)          # 並んでいる分を書き終えてから読む(VER4.8.115)
     path = logging_utils.log_path_for(day)
     if not path.exists():
         # 前の版が書いた日(前の場所・前の名前。この端末のもの)
