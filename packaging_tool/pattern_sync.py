@@ -25,16 +25,19 @@ VBA は共有の Access(梱包資材マスタ)へ直接書くので、保存す�
 
 取り込み元に実績の表が無ければ、最初に送るときに作ります(表の名前は
 `config.TBL_PT_*`)。表が無くなっていた(取り込み元を作り直した等)ときは、
-手元の実績を「未送信」に戻して送り直します(送信IDで二重にならない)。
+手元の実績を「未送信」に戻して送り直します(送信IDで二重にならない。送信ID の無い
+実績は、送る前に送信ID を付け、共有に同じ中身の実績があればそれとつなぐ。VER4.8.119)。
+**共有を読めなかったときは送り直さない**(読めないことを「表が無い」にしない)。
 """
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from . import config, db, source_db
+from . import config, db, pattern_copies, source_db
 from . import pattern_store as store
 from .logging_utils import get_logger
 
@@ -129,14 +132,30 @@ def _push_new(conn: sqlite3.Connection, source: source_db.SourceConnection,
     for header in rows:
         local_id = header["実績ID"]
         send_id = header.get("送信ID")
+        if not send_id:
+            # **送信ID の無い実績(送信ID ができる前の実績・取り込んだ実績)は、付けてから送る。**
+            # 送ったあと控える前に落ちても、次は送信ID で見つけて二重に足さない(VER4.8.119)
+            send_id = uuid.uuid4().hex
+            with conn:
+                conn.execute(f"UPDATE {h} SET 送信ID = ? WHERE 実績ID = ?", (send_id, local_id))
+            header["送信ID"] = send_id
         details = store._details(conn, local_id)
+        sign = pattern_copies.detail_signatures(conn, [local_id]).get(local_id, "")
         try:
             with source.transaction() as tx:
                 found = tx.query(f"SELECT 実績ID FROM {h} WHERE 送信ID = ?",
                                  (send_id,)) if send_id else []
+                same = (None if found else
+                        pattern_copies.same_in(tx._conn, header, sign))
                 if found:
                     # 送れていたが、控える前に落ちた。控えるだけ
                     new_id = int(found[0]["実績ID"])
+                elif same is not None:
+                    # **共有に同じ中身の実績がもうある**(登録日時・ヘッダ・明細が同じ)。足さずに
+                    # それとつなぐ。送信ID の無い頃に送った実績を送り直したとき(VER4.8.119)
+                    new_id = same
+                    log.info("同じ実績が共有にあるので足しません: 手元%s → 取り込み元%s",
+                             local_id, new_id)
                 else:
                     # **番号はこちらで振る。** VBA(Access)から作られた取り込み元の
                     # 表は 実績ID がただの列(自動採番ではない)なので、入れないと
@@ -312,10 +331,19 @@ def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
             + "・".join(f"{k}{v}件" for k, v in left.items()) + ")")
         return outcome
 
+    # **読めないことを「表が無い」にしない**(VER4.8.119)。前は表の一覧が読めないと空が返り、
+    # 「実績の表が無い」と見て手元の実績を送り直していた ── 共有を読めない回のたびに、
+    # 送信ID の無い実績が1件ずつ増えた(現場の共有で 2件が 37,154件に。`pattern_copies`)
     try:
-        tables = set(source_db.list_tables(path))
+        tables = set(source_db.list_tables(path, strict=True))
     except source_db.SourceError as exc:
         outcome.error = str(exc)
+        log.warning("実績を取り込めませんでした(共有を読めない。手元の実績は送り直しません): %s", exc)
+        return outcome
+    if not tables:
+        # 表が1つも無いのは、作っている途中か別物。梱包資材マスタとは見ない
+        outcome.error = f"{path.name} に表が1つもありません(作っている途中か、別のファイル)"
+        log.warning("実績を取り込めませんでした: %s。手元の実績は送り直しません", outcome.error)
         return outcome
     if config.TBL_PT_HEADER not in tables:
         outcome.missing = True
@@ -324,7 +352,8 @@ def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
                 f"UPDATE {_q(config.TBL_PT_HEADER)} SET 取込元実績ID = NULL "
                 "WHERE 取込元実績ID IS NOT NULL").rowcount
         if n:
-            log.warning("取り込み元に実績の表がありません。手元の%s件を送り直します", n)
+            log.warning("取り込み元に実績の表がありません。手元の%s件を送り直します(%s)", n, path,
+                        extra={"keep": True, "kind": "実績の送り直し"})
         return outcome
 
     try:

@@ -65,6 +65,22 @@ class KeptNoteTests(TraceTestCase):
         self.assertTrue(item.ref)
         self.assertIsNotNone(trace_log.find_error(item.ref))
 
+    def test_指定したログの出力先にも種類つきで出る(self) -> None:
+        """現場の声:「指定したパスには出さないんですか？」── 出す。その日のログにも、
+        エラー・注意の記録(jsonl)にも、設定で指定した `<出力先>/packagingtool/` に書く。"""
+        from datetime import date
+        from tests.test_trace_log import PW
+        shared = self.root / "指定した出力先"
+        self.assertTrue(trace_log.set_log_dir(str(shared), PW).ok)
+        log.warning("時間のかかった操作: GET /selection 45000ms",
+                    extra={"keep": True, "kind": "時間のかかった操作"})
+        logging_utils.flush_logs(5.0)
+        folder = shared / "packagingtool"
+        day = (folder / f"packagingtool_LINE-3_{date.today():%Y%m%d}.log").read_text("utf-8")
+        self.assertIn("時間のかかった操作: GET /selection", day)
+        [kept] = self.records(folder)
+        self.assertEqual(kept["kind"], "時間のかかった操作")
+
     def test_返らない操作はどこで待っていたかと操作ごと残る(self) -> None:
         operation = {"id": "op-1", "method": "GET", "path": "/selection"}
         token = logging_utils.begin_operation(operation)

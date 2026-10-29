@@ -843,8 +843,24 @@ def probe(path: Path) -> Probe:
 # ==================================================================
 # 読む
 # ==================================================================
-def list_tables(path: Path) -> list[str]:
-    """このファイルにあるテーブルの一覧(sqlite の内部表は除く)。"""
+def list_tables(path: Path, *, strict: bool = False) -> list[str]:
+    """このファイルにあるテーブルの一覧(sqlite の内部表は除く)。
+
+    読めないときはふだん空を返す(案内に使うだけの呼び手のため)。**「表が無い」で何かを
+    決める呼び手は `strict=True`** で、読めないときは `SourceError` を受け取る ──
+    空のままだと「読めなかった」が「表が無い」に化ける(VER4.8.119。実績の取り込みが、
+    読めなかっただけの共有を「実績の表が無い」と見て、手元の実績を何度も送り直していた)。
+    """
+    if strict:
+        try:
+            with _opened(Path(path), read_only=True) as conn:
+                with identifiers_as_utf8(conn):
+                    rows = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                        " AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+        except sqlite3.Error as exc:
+            raise SourceError(f"{Path(path).name} の表の一覧を読めません: {exc}") from exc
+        return [r["name"] for r in rows]
     try:
         with _opened(Path(path), read_only=True) as conn:
             with identifiers_as_utf8(conn):

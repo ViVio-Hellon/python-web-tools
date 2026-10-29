@@ -243,6 +243,122 @@ class ImportGateTests(SyncTestCase):
         self.assertEqual(self.push(self.a).sent, 1)
 
 
+class CopiesTests(SyncTestCase):
+    """実績の写しが増えないこと・増えた写しを消せること(VER4.8.119)。
+
+    現場の共有では、送信ID の無い2件(2026-09-23 に覚えた実績)が 37,154件になっていた。
+    共有を読めなかった回を「実績の表が無い」と見て、手元の実績を送り直していたため。
+    """
+
+    def old_pattern_in_b(self, **over) -> int:
+        """送信ID の無い実績(送信ID ができる前の実績)を共有に置き、B に取り込んでおく。"""
+        save(self.a, **over)
+        self.push(self.a)
+        with closing(sqlite3.connect(self.path)) as raw, raw:
+            raw.execute(f'UPDATE "{H}" SET 送信ID = NULL')
+        sync.import_from(self.b, self.path)
+        return self.count()
+
+    def count(self) -> int:
+        return self.source(f'SELECT COUNT(*) FROM "{H}"')[0][0]
+
+    def test_共有を読めない回は送り直さない(self) -> None:
+        self.assertEqual(self.old_pattern_in_b(), 1)
+        real = source_db._opened
+
+        def unreadable(path, *, read_only):
+            if read_only:
+                raise source_db.SourceError("database is locked")
+            return real(path, read_only=read_only)
+        for _ in range(3):                                  # 共有を読めない回が続いても
+            with mock.patch.object(source_db, "_opened", side_effect=unreadable):
+                outcome = sync.import_from(self.b, self.path)
+            self.assertFalse(outcome.missing)
+            self.assertIn("database is locked", outcome.error)
+            self.assertEqual(sync.pending(self.b), {})      # 手元の実績を未送信に戻さない
+            self.push(self.b)
+        self.assertEqual(self.count(), 1)
+
+    def test_表が1つも無いファイルは梱包資材マスタと見ない(self) -> None:
+        self.old_pattern_in_b()
+        empty = self.path.with_name("作っている途中.sqlite3")
+        with closing(sqlite3.connect(empty)) as raw:
+            raw.execute("PRAGMA user_version = 1")          # sqlite3 だが表が1つも無い
+        outcome = sync.import_from(self.b, empty)
+        self.assertFalse(outcome.missing)
+        self.assertEqual(sync.pending(self.b), {})
+
+    def test_送信IDの無い実績を送り直しても足さない(self) -> None:
+        self.old_pattern_in_b()
+        with self.b:
+            self.b.execute(f'UPDATE "{H}" SET 取込元実績ID = NULL')   # なにかで未送信に戻った
+        pushed = self.push(self.b)
+        self.assertEqual((pushed.sent, pushed.errors), (1, []))
+        self.assertEqual(self.count(), 1)                    # 同じ中身の実績につないだ
+        [(linked, send_id)] = self.b.execute(f'SELECT 取込元実績ID, 送信ID FROM "{H}"').fetchall()
+        self.assertEqual(linked, self.source(f'SELECT 実績ID FROM "{H}"')[0][0])
+        self.assertTrue(send_id)                             # 次からは送信ID で見分ける
+
+    def test_中身が違えば同じ登録日時でも足す(self) -> None:
+        self.old_pattern_in_b()
+        with self.b:
+            self.b.execute(f'UPDATE "{H}" SET 取込元実績ID = NULL, LotNo = ?', ("L-other",))
+        self.push(self.b)
+        self.assertEqual(self.count(), 2)
+
+    def make_copies(self, n: int) -> int:
+        """共有に、送信ID の無い実績1件と、その写し n 件を作る(現場の共有と同じ形)。"""
+        self.old_pattern_in_b()
+        save(self.a, LotNo="L-別")                          # 写しの無い実績
+        self.push(self.a)
+        with closing(sqlite3.connect(self.path)) as raw, raw:
+            [first] = raw.execute(f'SELECT MIN(実績ID) FROM "{H}"').fetchone()
+            cols = [r[1] for r in raw.execute(f'PRAGMA table_info("{H}")') if r[1] != "実績ID"]
+            for _ in range(n):
+                cur = raw.execute(f'INSERT INTO "{H}" ({", ".join(chr(34) + c + chr(34) for c in cols)}) '
+                                  f'SELECT {", ".join(chr(34) + c + chr(34) for c in cols)} FROM "{H}" WHERE 実績ID = ?',
+                                  (first,))
+                new = cur.lastrowid
+                for table, columns, _order in ps.DETAIL_TABLES:
+                    names = ", ".join(f'"{c}"' for c, _ in columns)
+                    raw.execute(f'INSERT INTO "{table}" (実績ID, {names}) SELECT ?, {names} FROM "{table}"'
+                                ' WHERE 実績ID = ? ORDER BY rowid', (new, first))
+        return first
+
+    def test_写しを数えて消す_元と明細と別の実績は残る(self) -> None:
+        from packaging_tool import dedupe, pattern_copies
+        first = self.make_copies(5)
+        sync.import_from(self.b, self.path)
+        self.assertEqual(dedupe.local_duplicates(self.b), {H: 5})     # 設定の「いまの状態」に出る
+        self.assertEqual(len(dedupe.count_patterns(self.path).drop), 5)
+
+        fixed = dedupe.fix_shared(self.path)
+        self.assertTrue(fixed.ok, fixed.error)
+        self.assertTrue(Path(fixed.backup).exists())                  # 控えを取ってから
+        self.assertEqual(fixed.removed[H], 5)
+        self.assertIn("写し 5件", fixed.summary())
+        self.assertEqual(self.count(), 2)
+        self.assertEqual(self.source(f'SELECT MIN(実績ID) FROM "{H}"')[0][0], first)
+        for table, _cols, _order in ps.DETAIL_TABLES:                 # 元の明細は残り、写しの明細は消えた
+            kept = self.source(f'SELECT COUNT(*) FROM "{table}" WHERE 実績ID = ?', (first,))[0][0]
+            total = self.source(f'SELECT COUNT(*) FROM "{table}"')[0][0]
+            self.assertEqual(total, kept * 2, table)
+
+        sync.import_from(self.b, self.path)                            # 端末は取り込みで直る
+        self.assertEqual(len(ps.get_pattern_list(self.b)), 2)
+        self.assertEqual(dedupe.local_duplicates(self.b), {})
+        self.assertEqual(dedupe.fix_shared(self.path).total, 0)        # 2回目は何もしない
+        self.assertEqual(pattern_copies.find(sqlite3.connect(self.path)).drop, [])
+
+    def test_明細が違えば写しではない(self) -> None:
+        from packaging_tool import dedupe
+        self.make_copies(2)
+        with closing(sqlite3.connect(self.path)) as raw, raw:
+            [last] = raw.execute(f'SELECT MAX(実績ID) FROM "{H}"').fetchone()
+            raw.execute(f'UPDATE "{config.TBL_PT_PLACE}" SET 座標X = 99 WHERE 実績ID = ?', (last,))
+        self.assertEqual(len(dedupe.count_patterns(self.path).drop), 1)
+
+
 class VbaTableTests(SyncTestCase):
     def test_VBAが作った表に送信IDが無ければ足す(self) -> None:
         cols = ", ".join(f'"{n}" {t}' for n, t in ps.HEADER_COLUMNS if n != "送信ID")

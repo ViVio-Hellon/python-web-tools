@@ -1008,6 +1008,17 @@ def _check_local_master(section: Section, conn) -> None:
                 "(同じ1件が2回以上入ったもの)。"
                 "「取り込み」の面の「--fix を実行(重複を消す)」を押すと消えます。"))
             section.action = FIX_DEDUPE
+    # **実績の写し**(同じ1件の実績が何件も入ったもの。VER4.8.119)。現場の共有で 2件が 37,154件に
+    # なり、取り込み・資材選択を重くしていた。共有から取り込んだものなので、共有を片付ければ消える
+    from .. import config as _config, pattern_copies
+    copies = pattern_copies.local_count(conn)
+    if copies:
+        section.checks.append(Check(
+            "重複", f"{_config.TBL_PT_HEADER} に写し {copies}件", WARN,
+            "同じ1件の実績(登録日時・中身が同じ)が何件も入っています。共有の梱包資材マスタから"
+            "取り込んだものです。「取り込み」の面の「--fix を実行(重複を消す)」を押すと、控えを"
+            "取ってから共有の写しを消し、この端末も取り込み直します(ほかの端末は次の取り込みで直ります)。"))
+        section.action = FIX_DEDUPE
 
     # 書き方のゆれ。**拾えてはいるが、直しておいたほうが確実**。
     # 「5x10」と小文字で書かれた行は、そろえてから固定表に当てている

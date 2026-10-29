@@ -245,6 +245,7 @@ class FixResult:
     backup: str = ""                                     # 控えの置き場所(消さなかったときは空)
     removed: dict[str, int] = field(default_factory=dict)
     truncated: dict[str, int] = field(default_factory=dict)  # removed のうち切り捨ての写し
+    patterns: list[str] = field(default_factory=list)       # 消した実績の写しの組(何の写しか)
     error: str = ""
 
     @property
@@ -261,16 +262,35 @@ class FixResult:
         lines += [f"  {t}: {n}件" + (f"(うち切り捨ての写し {self.truncated[t]}件。小数のある元の行を残しました)"
                                        if self.truncated.get(t) else "")
                   for t, n in self.removed.items() if n]
+        if self.patterns:
+            lines.append("  実績の写し(いちばん小さい実績ID を残しました。明細の行数は上の表ごとの数):")
+            lines += [f"    {text}" for text in self.patterns]
         return "\n".join(lines)
+
+
+def count_patterns(path: Path) -> "pattern_copies.Copies":
+    """共有の実績の写し(`pattern_copies`。VER4.8.119)。読むだけ(手元へ写して読む)。"""
+    from . import pattern_copies
+    try:
+        with source_db._opened(Path(path), read_only=True) as conn:
+            return pattern_copies.find(conn)
+    except sqlite3.Error as exc:
+        raise source_db.SourceError(f"実績を読めません: {exc}") from exc
 
 
 def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
     """共有の重複を消す。消すものがあれば**控えを取ってから**、数え直しと削除を1つの
-    書き込みトランザクションで行う。消すものが無ければ何も書かない(控えも取らない)。"""
+    書き込みトランザクションで行う。消すものが無ければ何も書かない(控えも取らない)。
+
+    表を指定しないときは、実績の写し(同じ1件の実績が何件も入ったもの。`pattern_copies`)も消す。
+    """
+    from . import pattern_copies
     result = FixResult()
     names = _tables(tables)
+    patterns = tables is None
     try:
         counted = count_path(path, names)
+        copies = count_patterns(path) if patterns else pattern_copies.Copies()
     except source_db.SourceError as exc:
         return FixResult(ok=False, error=str(exc))
     # **読めなかった表があるのに「重複はありませんでした」と言わない**
@@ -278,7 +298,7 @@ def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
     if broken:
         return FixResult(ok=False, error="共有を読めませんでした(" + " / ".join(broken) + ")")
     before = [c for c in counted if c.remove]
-    if not before:
+    if not before and not copies.drop:
         return result
     try:
         result.backup = str(backup(path))
@@ -300,6 +320,16 @@ def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
                 result.removed[table] = len(counted.remove)
                 if counted.truncated:
                     result.truncated[table] = len(counted.truncated)
+            if patterns:
+                # 実績の写しも、鍵を取ったあとで数え直してから消す
+                try:
+                    copies = pattern_copies.find(tx._conn)
+                    gone = pattern_copies.remove(tx._conn, copies)
+                except sqlite3.Error as exc:
+                    raise source_db.SourceError(f"実績の写しを消せません: {exc}") from exc
+                if gone:
+                    result.patterns = copies.describe()
+                    result.removed.update(gone)
     except source_db.SourceError as exc:
         log.warning("共有の重複を消せませんでした: %s", exc)
         return FixResult(ok=False, backup=result.backup,
@@ -310,6 +340,7 @@ def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
 
 def local_duplicates(conn: sqlite3.Connection) -> dict[str, int]:
     """手元の作業用DBの重なり(設定画面の警告と同じ数え方)。"""
+    from . import config, pattern_copies
     out = {}
     for table in _tables(None):
         try:
@@ -318,6 +349,9 @@ def local_duplicates(conn: sqlite3.Connection) -> dict[str, int]:
             continue                                     # 表が無い(古い手元DB)
         if counted.drop:
             out[table] = len(counted.drop)
+    copies = pattern_copies.local_count(conn)
+    if copies:
+        out[config.TBL_PT_HEADER] = copies
     return out
 
 
