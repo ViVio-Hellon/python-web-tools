@@ -348,7 +348,8 @@ class CopiesTests(SyncTestCase):
         self.assertEqual(len(ps.get_pattern_list(self.b)), 2)
         self.assertEqual(dedupe.local_duplicates(self.b), {})
         self.assertEqual(dedupe.fix_shared(self.path).total, 0)        # 2回目は何もしない
-        self.assertEqual(pattern_copies.find(sqlite3.connect(self.path)).drop, [])
+        with closing(sqlite3.connect(self.path)) as raw:              # 閉じる(Windows は開いたままだと消せない)
+            self.assertEqual(pattern_copies.find(raw).drop, [])
 
     def test_明細が違えば写しではない(self) -> None:
         from packaging_tool import dedupe
