@@ -847,6 +847,14 @@ def import_master(conn: sqlite3.Connection, source_path: Optional[Path] = None,
     """梱包資材マスタを取り込む(本体は `_import_master`。説明もそちら)。"""
     result = _with_diag("マスタの取り込み",
                         lambda: _import_master(conn, source_path, **kw))
+    # 取り込めないのが続いたら画面の記録に出す(VER4.8.120。`trouble`)
+    from . import trouble
+    errors = list(getattr(result, "errors", []) or [])
+    if errors:
+        trouble.failed(log, "マスタの取り込み", trouble.KIND_UNREADABLE,
+                       "共有の梱包資材マスタの取り込み", " / ".join(errors[:3]))
+    else:
+        trouble.ok(log, "マスタの取り込み")
     if getattr(result, "imported", None):
         # 開いている画面へ「マスタが変わった」を知らせる(VER4.8.94)
         from . import master_state

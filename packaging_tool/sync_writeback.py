@@ -364,6 +364,25 @@ def _unsent_writeback_tables(conn: sqlite3.Connection) -> dict[str, int]:
 
 def write_back(conn: sqlite3.Connection,
                source_path: Optional[Path] = None) -> WriteBackResult:
+    """手元で増えた行を取り込み元へ送る(中身は `_write_back`)。
+
+    **送れないのが続いたら画面の記録に出す**(VER4.8.120。`trouble`)。1回きりで次に送れたものは
+    その日のログにだけ書く。続いていたものが直ったら「直った」も出す。
+    """
+    from . import trouble
+    result = _write_back(conn, source_path)
+    key = "書き戻し"
+    if result.errors or result.skipped_reason:
+        reason = result.skipped_reason or " / ".join(result.errors[:3])
+        trouble.failed(log, key, trouble.KIND_UNSENDABLE,
+                       "共有への発注・受払・コメントなどの送信", reason)
+    else:
+        trouble.ok(log, key)
+    return result
+
+
+def _write_back(conn: sqlite3.Connection,
+                source_path: Optional[Path] = None) -> WriteBackResult:
     """手元で増えた行を取り込み元へ送る(倉庫発注・入出庫履歴)。
 
     取り込み元に届かない端末では**何もせずに理由だけ返す**。手元の登録は
@@ -438,6 +457,14 @@ def ensure_guards(path: Path) -> list[str]:
             else:
                 lines.append(f"二重登録の防止: {spec.access_table} は用意できません"
                              f"でした ── {after.why()}")
+        # 実績(パレット実績ヘッダ)の「同じ実績は1件だけ」(VER4.8.120。`pattern_copies`)
+        from . import pattern_copies
+        if config.TBL_PT_HEADER in names and pattern_copies.guard_state(source):
+            if pattern_copies.ensure_guard(source):
+                lines.append(f"二重登録の防止: {config.TBL_PT_HEADER} に「同じ実績は1件だけ」を付けました")
+            else:
+                lines.append(f"二重登録の防止: {config.TBL_PT_HEADER} は用意できませんでした ── "
+                             f"{pattern_copies.guard_state(source)}")
     finally:
         source.close()
     for line in lines:

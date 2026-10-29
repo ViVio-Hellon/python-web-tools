@@ -391,9 +391,24 @@ def _open(path: Path, *, read_only: bool,
         if failed:
             log.warning("%s は %s で開きました(%s)", path.name, name,
                         " / ".join(f"{n}: {why}" for n, why in failed))
+        if read_only:
+            # **手元へ写して読めないのが続いたら画面の記録に出す**(VER4.8.120。`trouble`)。
+            # 写せないと共有の上で直接読むことになり、上流の差し替えを止める
+            from . import trouble
+            key = f"写し|{resolved}"
+            copy_why = next((why for n, why in failed if n == WAY_COPY), "")
+            if copy_why:
+                trouble.failed(log, key, trouble.KIND_NO_COPY,
+                               f"{path.name} を手元へ写して読むこと", copy_why)
+            elif name == WAY_COPY:
+                trouble.ok(log, key)
         return conn, name
 
     reasons = " / ".join(f"{n}: {why}" for n, why in log_to if why)
+    if read_only:
+        from . import trouble
+        trouble.failed(log, f"写し|{resolved}", trouble.KIND_NO_COPY,
+                       f"{path.name} を手元へ写して読むこと", reasons)
     if copy_only:
         log.warning("%s は手元へ写せなかったので読みません(仕掛台帳は共有の上で直接読まない): %s",
                     path, reasons)

@@ -246,3 +246,120 @@ def local_count(conn: sqlite3.Connection) -> int:
         return 0
     _local_cache["local"] = (stamp, count)
     return count
+
+
+# ------------------------------------------------------------------
+# 共有の側の守り: 「同じ実績は1件だけ」(VER4.8.120)
+# ------------------------------------------------------------------
+# VER4.8.1 で発注・コメントなど7つの表に付けた「同じ番号は1つだけ」と同じ考え。**共有のファイルそのもの**に
+# 一意索引を付けるので、古い版の端末から送られても・ツールを通さずに書かれても、同じ実績の2件目は入らない。
+# 実績には一生変わらない番号が無い(送信ID は送るたびに振る印)ので、**中身**で決める:
+# 写しの決まり(`KEY_NAMES`。登録日時の秒・ヘッダの中身)が同じなら同じ実績。空欄は '' に寄せる
+# (一意索引は NULL どうしを別物として扱うので、寄せないと空欄のある実績が素通りする)。
+# 登録日時が空の古い行は対象外(その行どうしは比べない)。明細は索引に入らないが、登録日時が秒まで
+# 同じで中身が同じ実績を人が2回覚えることはできない。
+GUARD_INDEX = "UX_パレット実績ヘッダ_同じ実績"
+_GUARD_WHERE = "登録日時 IS NOT NULL AND 登録日時 <> ''"
+_guard_cache: dict[str, tuple[Any, bool]] = {}
+
+
+def _guard_exprs() -> str:
+    return ", ".join(f"COALESCE({_q(n)}, '')" for n in KEY_NAMES)
+
+
+def guard_duplicates(source: Any) -> int:
+    """共有で、同じ実績(索引の決まりで)が2件以上ある組の数。これがあると索引を付けられない。"""
+    found = source.query(f"SELECT COUNT(*) AS 組 FROM (SELECT 1 FROM {_q(H)} WHERE {_GUARD_WHERE}"
+                         f" GROUP BY {_guard_exprs()} HAVING COUNT(*) > 1)")
+    return int(found[0]["組"]) if found else 0
+
+
+def guard_state(source: Any) -> Optional[str]:
+    """守りが効いているか。**読むだけ**。効いていれば ""、効いていなければ理由、実績の表がまだ無ければ None。"""
+    try:
+        if H not in source.table_names():
+            return None
+        if any(r.get("name") == GUARD_INDEX for r in source.query(f"PRAGMA index_list({_q(H)})")):
+            return ""
+        have = {r.get("name") for r in source.query(f"PRAGMA table_info({_q(H)})")}
+        lacking = [n for n in KEY_NAMES if n not in have]
+        if lacking:
+            return f"{H} に列がありません({', '.join(lacking)})"
+        n = guard_duplicates(source)
+    except source_db.SourceError as exc:
+        return f"確かめられません({exc})"
+    if n:
+        return (f"{H} に同じ実績が {n}組 あるので「同じ実績は1件だけ」を付けられません。"
+                "「取り込み」の面の「--fix を実行(重複を消す)」で消すと付きます")
+    return f"{H} に「同じ実績は1件だけ」がまだ付いていません(次に取り込むか送るときに付けます)"
+
+
+def ensure_guard(source: Any) -> bool:
+    """共有の実績の表に「同じ実績は1件だけ」の一意索引を付ける。付いていれば True。
+
+    付けられないのは、もう同じ実績が2件以上あるとき(写しの残り)か、列が足りないとき。そのときも
+    送ることは止めない(画面の「いまの状態」と、画面の記録に1日1件出す)。ファイルの姿ごとに覚えて、
+    毎回は試さない。
+    """
+    from . import outbox_sync, trouble
+    from .logging_utils import get_logger
+    log = get_logger("pattern_copies")
+    key = str(source.path)
+    stamp = outbox_sync._file_stamp(source.path)
+    cached = _guard_cache.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    try:
+        if H not in source.table_names():
+            return False
+        if any(r.get("name") == GUARD_INDEX for r in source.query(f"PRAGMA index_list({_q(H)})")):
+            _guard_cache[key] = (stamp, True)
+            return True
+        have = {r.get("name") for r in source.query(f"PRAGMA table_info({_q(H)})")}
+    except source_db.SourceError as exc:
+        log.debug("実績の守りを確かめられません: %s", exc)
+        return False
+    lacking = [n for n in KEY_NAMES if n not in have]
+    if lacking:
+        trouble.once(log, f"実績の守り|{key}", trouble.KIND_GUARD_OFF,
+                     "共有の実績に「同じ実績は1件だけ」を付けられません(列がありません: %s)",
+                     ", ".join(lacking), every=86400)
+        _guard_cache[key] = (stamp, False)
+        return False
+    try:
+        source.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {_q(GUARD_INDEX)} ON {_q(H)}"
+                       f" ({_guard_exprs()}) WHERE {_GUARD_WHERE}")
+    except source_db.SourceError as exc:
+        if source_db.is_lock_error(str(exc)):
+            log.debug("実績の守り: ロック競合のため今回は見送ります(次回再試行)")
+            return False
+        try:
+            n = guard_duplicates(source)
+        except source_db.SourceError:
+            n = 0
+        trouble.once(log, f"実績の守り|{key}", trouble.KIND_GUARD_OFF,
+                     "共有の実績に「同じ実績は1件だけ」を付けられません(同じ実績が %s組 あります。"
+                     "設定の「--fix を実行(重複を消す)」で消すと付きます): %s", n, exc, every=86400)
+        _guard_cache[key] = (stamp, False)
+        return False
+    log.info("共有の実績に「同じ実績は1件だけ」を付けました(%s)", source.path)
+    _guard_cache[key] = (outbox_sync._file_stamp(source.path), True)
+    return True
+
+
+def same_header_in(conn: sqlite3.Connection, header: dict[str, Any]) -> Optional[int]:
+    """守りの決まり(ヘッダの中身)で同じ実績があればその実績ID(いちばん小さい番号)。"""
+    when = header.get("登録日時")
+    if when is None or str(when).strip() == "":
+        return None
+    cursor = conn.execute(f"SELECT * FROM {_q(H)} WHERE 登録日時 = ?", (when,))
+    names = [d[0] for d in cursor.description or []]
+    key = header_key(header)
+    found = sorted(store.pt_long(r.get("実績ID")) for r in (dict(zip(names, raw)) for raw in cursor)
+                   if header_key(r) == key)
+    return next((pid for pid in found if pid > 0), None)
+
+
+def forget_guard() -> None:
+    """覚えている守りの様子を消す(試験用・片付けのあと)。"""
+    _guard_cache.clear()

@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from . import config, db, pattern_copies, source_db
+from . import config, db, pattern_copies, source_db, trouble
 from . import pattern_store as store
 from .logging_utils import get_logger
 
@@ -152,10 +152,13 @@ def _push_new(conn: sqlite3.Connection, source: source_db.SourceConnection,
                     new_id = int(found[0]["実績ID"])
                 elif same is not None:
                     # **共有に同じ中身の実績がもうある**(登録日時・ヘッダ・明細が同じ)。足さずに
-                    # それとつなぐ。送信ID の無い頃に送った実績を送り直したとき(VER4.8.119)
+                    # それとつなぐ。送信ID の無い頃に送った実績を送り直したとき(VER4.8.119)。
+                    # 送り直しが起きたしるしなので、画面の記録にも出す(VER4.8.120)
                     new_id = same
-                    log.info("同じ実績が共有にあるので足しません: 手元%s → 取り込み元%s",
-                             local_id, new_id)
+                    trouble.once(log, f"実績の二重|{source.path}", trouble.KIND_STOPPED_DUPLICATE,
+                                 "同じ実績が共有にあるので足しませんでした(送り直しを止めた): "
+                                 "手元%s → 取り込み元%s(%s)", local_id, new_id,
+                                 pattern_copies.label(header))
                 else:
                     # **番号はこちらで振る。** VBA(Access)から作られた取り込み元の
                     # 表は 実績ID がただの列(自動採番ではない)なので、入れないと
@@ -163,9 +166,22 @@ def _push_new(conn: sqlite3.Connection, source: source_db.SourceConnection,
                     # 別の端末と同じ番号にはならない
                     new_id = int(tx.query(
                         f"SELECT COALESCE(MAX(実績ID), 0) + 1 AS n FROM {h}")[0]["n"])
-                    tx.insert(config.TBL_PT_HEADER, {
-                        "実績ID": new_id,
-                        **{n: header.get(n) for n in SOURCE_HEADER_NAMES}})
+                    try:
+                        tx.insert(config.TBL_PT_HEADER, {
+                            "実績ID": new_id,
+                            **{n: header.get(n) for n in SOURCE_HEADER_NAMES}})
+                    except sqlite3.IntegrityError:
+                        # 共有の守り(同じ実績は1件だけ。VER4.8.120)が断った。登録日時・ヘッダが同じで
+                        # 明細だけ違う実績が共有にある。足さずにそれとつなぐ(送り直しを止めた)
+                        twin = pattern_copies.same_header_in(tx._conn, header)
+                        if twin is None:
+                            raise
+                        trouble.once(log, f"実績の二重|{source.path}", trouble.KIND_STOPPED_DUPLICATE,
+                                     "同じ登録日時・中身の実績が共有にあるので足しませんでした"
+                                     "(明細だけ違う): 手元%s → 取り込み元%s(%s)", local_id, twin,
+                                     pattern_copies.label(header))
+                        new_id = twin
+                        details = [[] for _ in store.DETAIL_TABLES]
                     for (table, columns, _order), rows_ in zip(store.DETAIL_TABLES, details):
                         names = [n for n, _ in columns]
                         for row in rows_:
@@ -256,13 +272,24 @@ def push(conn: sqlite3.Connection,
         ensure_source_tables(source)
     except source_db.SourceError as exc:
         result.errors.append(f"実績の表を用意できませんでした: {exc}")
+        trouble.failed(log, f"実績の送信|{source.path}", trouble.KIND_UNSENDABLE,
+                       f"共有({Path(source.path).name})への実績の送信", exc)
         return result
+    # 共有の側の守り(同じ実績は1件だけ)。付けられなくても送ることは止めない(VER4.8.120)
+    pattern_copies.ensure_guard(source)
     _push_deletes(conn, source, result)   # 先に消す(消したものに回数を足さない)
     _push_new(conn, source, result)
     _push_usage(conn, source, result)
     if result.total:
         log.info("実績を取り込み元へ反映: 追加%s 使用回数%s 削除%s",
                  result.sent, result.usage, result.deleted)
+    # しくじりが続いたら画面の記録に出す(VER4.8.120。`trouble`)
+    key = f"実績の送信|{source.path}"
+    if result.errors:
+        trouble.failed(log, key, trouble.KIND_UNSENDABLE,
+                       f"共有({Path(source.path).name})への実績の送信", " / ".join(result.errors[:3]))
+    else:
+        trouble.ok(log, key)
     return result
 
 
@@ -305,6 +332,22 @@ def _same(now: Any, was: Any) -> bool:
 
 
 def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
+    """取り込み元の実績を手元へ取り込む(中身は `_import_from`)。
+
+    **しくじりが続いたら画面の記録に出す**(VER4.8.120。`trouble`)。1回きりで次に読めたものは
+    その日のログにだけ書く。続いていたものが直ったら「直った」も出す。
+    """
+    outcome = _import_from(conn, path)
+    key = f"実績の取り込み|{path}"
+    if outcome.error:
+        trouble.failed(log, key, trouble.KIND_UNREADABLE,
+                       f"共有({path.name})からの実績の取り込み", outcome.error)
+    elif not outcome.skipped_reason:
+        trouble.ok(log, key)
+    return outcome
+
+
+def _import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
     """取り込み元の実績を手元へ取り込む。**変わった実績だけ書く**(VER4.8.118)。
 
     前は毎回**総入れ替え**だった。共有の梱包資材マスタは、どの端末が発注・受払・コメントを
@@ -352,8 +395,8 @@ def import_from(conn: sqlite3.Connection, path: Path) -> ImportOutcome:
                 f"UPDATE {_q(config.TBL_PT_HEADER)} SET 取込元実績ID = NULL "
                 "WHERE 取込元実績ID IS NOT NULL").rowcount
         if n:
-            log.warning("取り込み元に実績の表がありません。手元の%s件を送り直します(%s)", n, path,
-                        extra={"keep": True, "kind": "実績の送り直し"})
+            trouble.once(log, f"実績の送り直し|{path}", trouble.KIND_RESENT,
+                         "取り込み元に実績の表がありません。手元の%s件を送り直します(%s)", n, path)
         return outcome
 
     try:

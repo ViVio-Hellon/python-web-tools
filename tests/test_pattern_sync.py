@@ -311,7 +311,10 @@ class CopiesTests(SyncTestCase):
         self.old_pattern_in_b()
         save(self.a, LotNo="L-別")                          # 写しの無い実績
         self.push(self.a)
+        from packaging_tool import pattern_copies
         with closing(sqlite3.connect(self.path)) as raw, raw:
+            # 守り(VER4.8.120)の無い、前の共有の形にしてから写しを作る
+            raw.execute(f'DROP INDEX IF EXISTS "{pattern_copies.GUARD_INDEX}"')
             [first] = raw.execute(f'SELECT MIN(実績ID) FROM "{H}"').fetchone()
             cols = [r[1] for r in raw.execute(f'PRAGMA table_info("{H}")') if r[1] != "実績ID"]
             for _ in range(n):
@@ -350,6 +353,14 @@ class CopiesTests(SyncTestCase):
         self.assertEqual(dedupe.fix_shared(self.path).total, 0)        # 2回目は何もしない
         with closing(sqlite3.connect(self.path)) as raw:              # 閉じる(Windows は開いたままだと消せない)
             self.assertEqual(pattern_copies.find(raw).drop, [])
+            # 片付けたら共有の側の守りがすぐ付き、ツールを通さない写しも入らない(VER4.8.120)
+            indexes = [r[1] for r in raw.execute(f'PRAGMA index_list("{H}")')]
+            self.assertIn(pattern_copies.GUARD_INDEX, indexes)
+            cols = [r[1] for r in raw.execute(f'PRAGMA table_info("{H}")') if r[1] != "実績ID"]
+            quoted = ", ".join(chr(34) + c + chr(34) for c in cols)
+            with self.assertRaises(sqlite3.IntegrityError):
+                raw.execute(f'INSERT INTO "{H}" ({quoted}) SELECT {quoted} FROM "{H}" WHERE 実績ID = ?',
+                            (first,))
 
     def test_明細が違えば写しではない(self) -> None:
         from packaging_tool import dedupe

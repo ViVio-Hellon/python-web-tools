@@ -781,6 +781,11 @@ def _guard_broken(material: Path) -> Optional[list[str]]:
                 state = outbox_sync.guard_state(src, spec)
                 if not state.ok:
                     broken.append(state.why())
+            # 実績の「同じ実績は1件だけ」(VER4.8.120)
+            from .. import pattern_copies
+            why = pattern_copies.guard_state(src)
+            if why:
+                broken.append(why)
     except source_db.SourceError as exc:       # pragma: no cover - 上で弾く
         log.debug("重複防止の状態を確かめられません: %s", exc)
         return None

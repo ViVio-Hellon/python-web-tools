@@ -334,7 +334,17 @@ def fix_shared(path: Path, tables: Optional[Iterable[str]] = None) -> FixResult:
         log.warning("共有の重複を消せませんでした: %s", exc)
         return FixResult(ok=False, backup=result.backup,
                          error=f"{exc}(何も消していません。控え: {result.backup})")
-    log.info("共有の重複を消しました: %s(控え %s)", result.removed, result.backup)
+    from . import trouble
+    trouble.once(log, f"重複を消した|{path}", trouble.KIND_CLEANED,
+                 "共有の重複を消しました: %s(控え %s)", result.removed, result.backup, every=0)
+    if result.patterns:
+        # 写しが消えたので、共有の側の守り(同じ実績は1件だけ)をすぐ付ける(VER4.8.120)
+        pattern_copies.forget_guard()
+        try:
+            with source_db.connect(path) as src:
+                pattern_copies.ensure_guard(src)
+        except source_db.SourceError as exc:
+            log.warning("片付けのあと、実績の守りを付けられませんでした(次の取り込みで付けます): %s", exc)
     return result
 
 
