@@ -224,7 +224,8 @@ def current_mode() -> str:
 
 # モードを切り替えるとき、断る前のアクセス権限の読み直しを待つ上限(秒。VER4.8.115)。
 # 押した操作なので画面の見張りより少し長く待つ。間に合わなければ手元の権限で決める
-MODE_RESYNC_WAIT_SEC = 5.0
+from packaging_tool.bounded import wait_seconds as _wait_seconds  # noqa: E402
+MODE_RESYNC_WAIT_SEC = _wait_seconds(5.0)
 
 
 def set_mode(mode: str) -> bool:

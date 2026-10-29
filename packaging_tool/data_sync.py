@@ -95,19 +95,20 @@ from .sync_import import (  # noqa: F401
     ImportResult, duplicate_count, import_all, import_lot_ledger,
     import_master, import_tables)
 from .sync_refresh import OrderRefresh, refresh_orders  # noqa: F401
+from .bounded import wait_seconds as _wait_seconds  # noqa: E402
 
 
 # ==================================================================
 # 画面の要求から呼ぶ取り込み直し(VER4.8.115)── 待つのは上限まで
 # ==================================================================
 # 画面を出す前に待つ秒数。共有が遅いときは手元の値で出す(取り込みは背景で続く)
-PAGE_WAIT_SEC = 2.0
+PAGE_WAIT_SEC = _wait_seconds(2.0)
 # 設定画面を出す前に待つ秒数。設定画面で発注の取り込み直しが効くのはボード人気度だけなので短く
-SETTINGS_WAIT_SEC = 1.0
+SETTINGS_WAIT_SEC = _wait_seconds(1.0)
 # 送る・確かめる・取り消すの前に待つ秒数。ほかの端末が先に動かしたことを知りたいので少し長く
-ACTION_WAIT_SEC = 5.0
+ACTION_WAIT_SEC = _wait_seconds(5.0)
 # 「取り込み直す」を押したときに待つ秒数
-BUTTON_WAIT_SEC = 10.0
+BUTTON_WAIT_SEC = _wait_seconds(10.0)
 # 間に合わなかったときの一言(倉庫連携の「取り込み直す」・見張り)
 PENDING_MESSAGE = ("取り込み元の応答を待っています(背景で取り込みを続けています。"
                    "届いたら一覧が変わります)。")
@@ -177,7 +178,7 @@ def queued_note() -> str:
 
 
 # 「共有の取り込み元が見えるか」を、送ったあとの一言のために待つ上限(秒。VER4.8.115)
-REACH_WAIT_SEC = 1.0
+REACH_WAIT_SEC = _wait_seconds(1.0)
 _reach_flight = None
 
 

@@ -34,6 +34,24 @@ from .logging_utils import get_logger
 
 log = get_logger("bounded")
 
+# 試験だけ、画面の要求が待つ上限をまとめて長くできる(環境変数。秒)。Windows の試験機は
+# 届かない既定の置き場所(UNC)を見に行くだけで数秒かかり、上限で「確かめています」が
+# 正しく出ると、結果を確かめる試験が日によって落ちる。上限そのものを確かめる試験は、
+# 自分で短い値を入れる
+WAIT_ENV = "PACKAGING_TOOL_WAIT_SEC"
+
+
+def wait_seconds(default: float) -> float:
+    """画面の要求が待つ上限(秒)。ふだんは `default`。"""
+    import os
+    raw = os.environ.get(WAIT_ENV, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(default, float(raw))
+    except ValueError:
+        return default
+
 
 @dataclass
 class Outcome:

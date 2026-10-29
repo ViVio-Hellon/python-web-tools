@@ -47,6 +47,13 @@ if not os.environ.get("PACKAGING_TOOL_LOG_DIR"):
     atexit.register(_remove_tree, _log_dir)
 
 
+# --- 1.5 画面の要求が待つ上限を長くする(VER4.8.115) ------------------------
+# 共有を見に行く仕事は背景で走り、画面は上限まで待つ(`packaging_tool.bounded`)。Windows の
+# 試験機は届かない既定の置き場所(UNC)を見に行くだけで数秒かかるので、上限のままだと結果を
+# 確かめる試験が日によって落ちる。上限そのものを確かめる試験は、自分で短い値を入れる
+os.environ.setdefault("PACKAGING_TOOL_WAIT_SEC", "60")
+
+
 # --- 2. 利用者設定とローカル領域も一時フォルダへ ----------------------
 # `user_settings` は `<リポジトリ>/data/user_config.json` に書く。
 # 設定画面のテストは置き場所の設定を保存するので、そのまま流すと

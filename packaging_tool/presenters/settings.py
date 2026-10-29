@@ -27,6 +27,7 @@ from typing import Any, Optional
 from .. import (admin_password, config, data_sync, floor_plan, jobs, location_service,
                 lot_browse_session, lot_query, source_db, spec_sheet,
                 user_settings)
+from ..bounded import wait_seconds as _wait_seconds
 from ..logging_utils import get_logger
 
 log = get_logger("presenters.settings")
@@ -345,7 +346,7 @@ def build(conn=None, startup_modes=None, *, fresh: bool = False) -> SettingsView
 #     間に合わない   … 前に確かめた結果(無ければ「確かめています」の1枚)で出し、少しあとで
 #                      画面が引き直す(`status_pending`)
 #     走っている最中 … 2本目は始めない
-STATUS_WAIT_SEC = 2.0
+STATUS_WAIT_SEC = _wait_seconds(2.0)
 # まだ確かめ終わっていないとき、画面が引き直すまでの間(ミリ秒。画面側が使う)
 STATUS_RETRY_MS = 3000
 
@@ -362,15 +363,32 @@ class SharedFacts:
     threshold_section: "Section"
     lot_section: "Section"
     at: float = 0.0
+    # どの置き場所の設定で確かめたか(`_config_signature`)。設定が違えば使わない
+    signature: tuple = ()
 
 
 _status_flight = None
 _last_facts: Optional[SharedFacts] = None
 
 
+def _config_signature() -> tuple:
+    """いまの置き場所の設定(どこを見るか)。**確かめた結果がどの設定のものか**を見分けるため。
+
+    置き場所を保存した直後に確かめ直しが間に合わないと、前の置き場所で確かめた結果が
+    出ていた(新しい置き場所にファイルがあるのに「1つも見つかりません」)。
+    """
+    try:
+        return (str(config.master_db_dir()), tuple(str(d) for d in config.lot_db_dirs()),
+                str(config.kanban_db_dir()), str(config.threshold_db_dir()),
+                str(config.ls4_db_dir() or ""), tuple(sorted(_second_names().items())))
+    except Exception:                               # noqa: BLE001 - 分からなければ毎回別物
+        return (time.time(),)
+
+
 def _gather_shared() -> SharedFacts:
     """背景の1本。取り込み元を探して、開いて、確かめる。"""
     global _last_facts
+    signature = _config_signature()
     material = _find_material()
     probe = guard = None
     if material is not None:
@@ -382,7 +400,7 @@ def _gather_shared() -> SharedFacts:
         material=material, material_probe=probe, material_guard=guard, lots=lots,
         kanban_section=_kanban_section(_find_kanban()),
         threshold_section=_threshold_section(_find_threshold()),
-        lot_section=_lot_section(lots), at=time.time())
+        lot_section=_lot_section(lots), at=time.time(), signature=signature)
     _last_facts = facts
     return facts
 
@@ -390,7 +408,8 @@ def _gather_shared() -> SharedFacts:
 def shared_facts(wait: float, *, fresh: bool = False) -> tuple[Optional[SharedFacts], bool]:
     """(分かったこと, まだ確かめている途中か)。待つのは `wait` 秒まで。
 
-    間に合わなければ、前に確かめた結果を返す(1度も無ければ None)。
+    間に合わなければ、前に確かめた結果を返す(1度も無ければ None)。**ほかの置き場所の設定で
+    確かめた結果は返さない**(置き場所を保存した直後に、前の置き場所の答えを出さない)。
     """
     global _status_flight
     from ..bounded import Flight
@@ -399,12 +418,19 @@ def shared_facts(wait: float, *, fresh: bool = False) -> tuple[Optional[SharedFa
     if fresh and _status_flight.running():
         # 置き場所を変える前に始まった確認。終わるのを待ってから確かめ直す
         _status_flight.wait_idle(wait)
+    signature = _config_signature()
     outcome = _status_flight.run(wait)
+    if (outcome.done and outcome.value is not None
+            and outcome.value.signature != signature):
+        # 前の置き場所で始まった確認に乗った。いまの置き場所で確かめ直す
+        outcome = _status_flight.run(wait)
     if outcome.error is not None:
         log.warning("設定画面の状態を確かめられませんでした: %s", outcome.error)
-    if outcome.done and outcome.value is not None:
+    if (outcome.done and outcome.value is not None
+            and outcome.value.signature == signature):
         return outcome.value, False
-    return _last_facts, not outcome.done
+    stale = _last_facts if _last_facts is not None and _last_facts.signature == signature else None
+    return stale, True
 
 
 def start_shared_check() -> None:

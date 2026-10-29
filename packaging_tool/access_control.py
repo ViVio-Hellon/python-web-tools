@@ -821,7 +821,8 @@ def resync(conn: sqlite3.Connection, *, path: Optional[Path] = None) -> bool:
 
 
 # 画面の要求の中で、アクセス権限の読み直しを待つ上限(秒。VER4.8.115)
-RESYNC_WAIT_SEC = 2.0
+from .bounded import wait_seconds as _wait_seconds  # noqa: E402
+RESYNC_WAIT_SEC = _wait_seconds(2.0)
 _resync_flights = None
 
 

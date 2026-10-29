@@ -189,6 +189,31 @@ class SettingsOpensTests(unittest.TestCase):
         self.assertFalse(again.status_pending)
         self.assertIn("梱包資材マスタ", [s.title for s in again.sections])
 
+    def test_置き場所を変えた直後に前の置き場所の答えを出さない(self) -> None:
+        """前は、確かめ直しが間に合わないと前の置き場所で確かめた結果が出ていた
+        (新しい置き場所にファイルがあるのに「1つも見つかりません」・取り込めない)。"""
+        with mock.patch.object(presenter, "STATUS_WAIT_SEC", 60.0):
+            presenter.build(self.conn)                       # 前の置き場所で確かめた
+        release = threading.Event()
+        self.addCleanup(release.set)
+        real = presenter._find_material
+
+        def slow():
+            release.wait(5)
+            return real()
+
+        with mock.patch.object(presenter, "_config_signature", return_value=("別の置き場所",)), \
+             mock.patch.object(presenter, "_find_material", side_effect=slow), \
+             mock.patch.object(presenter, "STATUS_WAIT_SEC", 0.2):
+            view = presenter.build(self.conn, fresh=True)
+            release.set()
+            presenter._status_flight.wait_idle(60)
+        self.assertTrue(view.status_pending)
+        self.assertEqual(view.sections[0].title, "共有フォルダの確認")
+        self.assertEqual(view.sections[0].checks[0].value, "確かめています",
+                         "前の置き場所の結果を出しています")
+        self.assertTrue(view.can_import)
+
     def test_間に合えばいままでどおり(self) -> None:
         with mock.patch.object(presenter, "STATUS_WAIT_SEC", 60.0):   # 試験機の UNC 待ちを見込む
             view = presenter.build(self.conn)

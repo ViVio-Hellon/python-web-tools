@@ -41,6 +41,7 @@ from typing import Optional
 
 from . import db
 from .board_selection_service import BOARD_ROWS_ONLY
+from .bounded import wait_seconds as _wait_seconds
 from .logging_utils import get_logger
 from .models import PlacedBoardModel
 
@@ -237,7 +238,7 @@ def forget_seen() -> None:
 
 
 # 資材選択の画面を出す前に待つ秒数(VER4.8.115)。資材選択は操作のたびに画面を作り直すので短く
-PAGE_WAIT_SEC = 1.0
+PAGE_WAIT_SEC = _wait_seconds(1.0)
 _flights = None
 
 
