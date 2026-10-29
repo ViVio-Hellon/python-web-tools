@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -555,6 +556,24 @@ class UntypedFileTests(FitSettingTestCase):
         self.assertEqual(self.local("P-1")["巾適合min"], 1000)
         self.assertTrue(fit_setting.undo(self.conn, done.log_no).ok)
         self.assertEqual(self.bands(lo=1001, hi=1050), [("1001", "1050", "991", "1040")])
+
+    def test_更新日時はその列の書き方にそろえる(self) -> None:
+        """現場の閾値マスタの更新日時は `2026-09-07T15:23:55`(梱包資材マスタは `2026/03/16 14:57:18`)。
+        書くときもその列の書き方で書く(書き方が混ざらないように)。元に戻すと元の値に戻る。"""
+        conn = sqlite3.connect(self.threshold)
+        conn.execute("UPDATE PalletHabaThreshold SET 更新日時 = '2026-09-07T15:23:55'")
+        conn.commit()
+        conn.close()
+        self.sync()
+        plan = fit_setting.plan_fit(self.conn, {"width": 1035, "length": 3150, "group": self.group(1035, 3150),
+                                                "w_min": 1000, "w_max": 1020, "l_min": 2641, "l_max": 3140})
+        done = fit_setting.apply(self.conn, plan.id)
+        self.assertTrue(done.ok, done.message)
+        stamps = [r[0] for r in self.shared(self.threshold, "SELECT 更新日時 FROM PalletHabaThreshold")]
+        self.assertTrue(all(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", s) for s in stamps), stamps)
+        self.assertTrue(fit_setting.undo(self.conn, done.log_no).ok)
+        self.assertEqual({r[0] for r in self.shared(self.threshold, "SELECT 更新日時 FROM PalletHabaThreshold")},
+                         {"2026-09-07T15:23:55"})
 
     def test_サイズを直しても文字のまま_コードを変えても形をそろえる(self) -> None:
         plan = fit_setting.plan_size(self.conn, {"width": 1035, "length": 3150, "group": self.group(1035, 3150),

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import shutil
 import sqlite3
 import threading
@@ -57,6 +58,9 @@ LOG_TABLE = "パレット適合の変更記録"
 # 分けた帯の備考の頭。**この画面が分けた帯**を見分ける(元に戻す・つなぎ直すとき)
 SPLIT_MARK = "パレット適合設定で分けた"
 ADDED_MARK = "パレット適合設定で足した"
+
+# 書く日時の列(書き方をその列にそろえる)
+STAMP_COLUMNS = ("更新日時",)
 
 FILE_THRESHOLD = "threshold"
 FILE_MASTER = "master"
@@ -1164,13 +1168,40 @@ def _like(sample: Any, value: Any) -> Any:
     return value
 
 
+_STAMP_MINE = re.compile(r"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}$")
+_STAMP_FORMS = ((re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"), "%Y-%m-%dT%H:%M:%S"),
+                (re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"), "%Y-%m-%d %H:%M:%S"))
+
+
+def _stamp_like(sample: Any, value: Any) -> Any:
+    """更新日時も、その列にいま入っている書き方にそろえる。
+
+    現場の閾値マスタは `2026-09-07T15:23:55`、梱包資材マスタは `2026/03/16 14:57:18`。
+    分からない書き方なら、こちらの書き方(`_now`)のまま。
+    """
+    if not (isinstance(sample, str) and isinstance(value, str) and _STAMP_MINE.match(value)):
+        return value
+    for pattern, form in _STAMP_FORMS:
+        if pattern.match(sample.strip()):
+            return datetime.strptime(value, "%Y/%m/%d %H:%M:%S").strftime(form)
+    return value
+
+
 def _typed(tx: Any, table: str, values: dict[str, Any], before: dict[str, Any]) -> dict[str, Any]:
-    """書く値を、その行(無ければ表の1行目)の値の形にそろえる(`_like`)。"""
+    """書く値を、その行(無ければ表の1行目)の値の形にそろえる(`_like`・`_stamp_like`)。"""
     sample = before
     if not sample:
         rows = tx.query(f"SELECT * FROM {source_db.quote_identifier(table)} LIMIT 1")
         sample = rows[0] if rows else {}
-    return {k: (_like(sample.get(k), v) if k in sample else v) for k, v in values.items()}
+    out = {}
+    for k, v in values.items():
+        if k not in sample:
+            out[k] = v
+        elif k in STAMP_COLUMNS:
+            out[k] = _stamp_like(sample.get(k), v)
+        else:
+            out[k] = _like(sample.get(k), v)
+    return out
 
 
 def _run_ops(path: Path, ops: list[Op], *,
