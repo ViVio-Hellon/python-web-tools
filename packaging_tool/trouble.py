@@ -39,6 +39,7 @@ KIND_RESENT = "実績の送り直し"
 KIND_STOPPED_DUPLICATE = "二重を止めた"
 KIND_CLEANED = "重複を消した"
 KIND_GUARD_OFF = "二重登録の防止が効いていない"
+KIND_BROKEN_SETTINGS = "設定ファイルが壊れている"
 KIND_SLOW_IMPORT = "時間のかかった取り込み"
 
 # 取り込み(裏の取り込み直しも含む)がこの秒数を超えたら、画面の記録に出す(VER4.8.121)。

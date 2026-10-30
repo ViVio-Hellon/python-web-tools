@@ -147,14 +147,81 @@ class StrictReadTests(unittest.TestCase):
 
 
 class SettingsUnreadableTests(TmpCase):
-    def test_この端末の設定を読めなければ配布設定を読まない(self) -> None:
-        bundle = mock.Mock(settings={"position": "HVC"}, maps={})
-        with mock.patch.object(user_settings, "load_all_strict",
-                               side_effect=user_settings.SettingsUnreadable("読めない")), \
-                mock.patch.object(user_settings, "save") as saved:
-            result = distribution._apply(bundle, overwrite=False)
-        self.assertFalse(result.ok)
+    """配布設定: **たまたま読めない**なら読み直して読む、**壊れている**ならそう言って読まない(VER4.8.123)。
+
+    現場の声:「配布設定を読まないのは問題なのでは...？壊れていて読めないのかたまたま読めないのかで変わる」
+    「たまたま読めない→リトライ / 壊れていて読めない→『ファイルが壊れて読めないので配布は読みませんでした』」
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from packaging_tool import config
+        for target, attr, value in ((config, "USER_CONFIG_PATH", self.root / "user_config.json"),
+                                    (user_settings, "READ_RETRY_SEC", (0.0, 0.0)),
+                                    (distribution, "_problem", ""),
+                                    (distribution, "RETRY_EVERY_SEC", 0.05)):
+            patcher = mock.patch.object(target, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        user_settings._last_good.clear()
+        self.addCleanup(user_settings._last_good.clear)
+        self.cfg = self.root / "user_config.json"
+
+    def bundle(self):
+        return mock.Mock(settings={"position": "HVC"}, maps={}, fingerprint=lambda: "f1")
+
+    def test_壊れていれば読まず_壊れていると言う(self) -> None:
+        self.cfg.write_text('{"position": "L-1", ', encoding="utf-8")         # 書きかけのまま止まった
+        with mock.patch.object(user_settings, "save") as saved:
+            result = distribution._apply(self.bundle(), overwrite=False)
+        self.assertEqual(result.reason, distribution.REFUSE_BROKEN)
+        self.assertIn("壊れていて読めない", result.message)
+        self.assertIn("壊れていて読めない", distribution.summary()["problem"])
         saved.assert_not_called()
+        self.assertEqual(user_settings.state()[0], "broken")
+
+    def test_たまたま読めなくても読み直して読めれば配布設定を読む(self) -> None:
+        self.cfg.write_text('{"theme": "dark"}', encoding="utf-8")
+        real = Path.read_bytes
+        calls = []
+
+        def flaky(path):
+            if path == self.cfg and len(calls) < 1:
+                calls.append(path)
+                raise PermissionError("ほかが掴んでいる")
+            return real(path)
+        with mock.patch.object(Path, "read_bytes", flaky):
+            result = distribution._apply(self.bundle(), overwrite=False)
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(user_settings.load_all_strict()["position"], "HVC")   # 配布の値が入った
+        self.assertEqual(user_settings.load_all_strict()["theme"], "dark")     # この端末の値は残った
+
+    def test_読み直してもたまたま読めなければ裏で読み直し_読めたら読む(self) -> None:
+        self.cfg.write_text('{"theme": "dark"}', encoding="utf-8")
+        real = Path.read_bytes
+        blocked = {"on": True}
+
+        def flaky(path):
+            if path == self.cfg and blocked["on"]:
+                raise PermissionError("ほかが掴んでいる")
+            return real(path)
+        bundle = self.bundle()
+        with mock.patch.object(Path, "read_bytes", flaky), \
+                mock.patch.object(distribution, "read", return_value=bundle):
+            first = distribution.apply_on_start()
+            self.assertEqual(first.reason, distribution.REFUSE_UNREADABLE)
+            self.assertIn("あとで読み直します", distribution.summary()["problem"])
+            distribution._retrying.wait(0)                                  # 裏で読み直している
+            blocked["on"] = False
+            for _ in range(200):
+                if not distribution._retrying.is_set():
+                    break
+                import time as _t
+                _t.sleep(0.05)
+        self.assertFalse(distribution._retrying.is_set())
+        got = user_settings.load_all_strict()
+        self.assertEqual((got["theme"], got["position"]), ("dark", "HVC"))   # この端末の値は残し、配布の値を読んだ
+        self.assertEqual(distribution.summary()["problem"], "")
 
     def test_設定を読めなければ既定の管理者パスワードで通さない(self) -> None:
         from packaging_tool import config

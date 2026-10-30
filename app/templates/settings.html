@@ -649,6 +649,7 @@
       <span class="st st--{{ 'ok' if dist.exists else 'warn' }}" id="distState">{{ "あり" if dist.exists else "なし" }}</span>
     </header>
     <div class="pad">
+      {% if dist.problem %}<p class="status status--warn" id="distProblem" role="alert">{{ dist.problem }}</p>{% endif %}
       <p class="why" id="distMeta">{% if dist.exists %}{{ dist.created_at }} に {{ dist.created_on }} で作成{% else %}まだありません。下で書き出すと、ツールのフォルダの直下に「配布設定」フォルダができます。{% endif %}</p>
       <div class="tablewrap">
         <table class="table">

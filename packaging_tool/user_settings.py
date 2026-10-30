@@ -38,43 +38,70 @@ UNSET_LABEL = "未登録"
 
 
 class SettingsUnreadable(RuntimeError):
-    """設定ファイルは**あるのに読めない**(ほかが掴んでいる・書きかけ・壊れている)。
+    """設定ファイルは**あるのに読めない**。
 
     「無い」(初めての端末)とは分ける。読めないのに空とみなして保存すると、保存した1つ以外の
     設定がぜんぶ消える(別ツールで起きた: 保存するたびにほかの設定が消え、配布設定で PC の値が
     上書きされた)。**読めないときは書かない・消さない・覚えない**(VER4.8.122)。
+
+    `broken` … **壊れていて読めない**(読み直しても中身が設定の形にならない)。
+    そうでなければ**たまたま読めない**(ほかが掴んでいる・書いている最中など。読み直せば読める見込み)。VER4.8.123
     """
+
+    def __init__(self, message: str, *, broken: bool = False) -> None:
+        super().__init__(message)
+        self.broken = broken
 
 
 _lock = threading.RLock()
 # 最後に**読めた**中身。読めないあいだの読み取りはこれで答える(書くときには使わない)
 _last_good: dict[str, Any] = {}
+# 読み直すまでの待ち(秒)。**たまたま読めない**(掴まれている・書いている最中)なら、これで読めることが多い
+READ_RETRY_SEC: tuple[float, ...] = (0.2, 0.5, 1.0)
 
 
-def _read() -> dict[str, Any]:
-    """設定ファイル全体を読む。**無ければ空**、あるのに読めなければ `SettingsUnreadable`。
+def _read_once() -> dict[str, Any]:
+    """設定ファイル全体を1回読む。**無ければ空**、あるのに読めなければ `SettingsUnreadable`。
 
     無いかどうかは開いてみて決める(`exists()` は、届かない・権限が無いときも False を返すので使わない)。
     メモ帳で保存すると付く BOM も読む。
     """
     path = config.USER_CONFIG_PATH
     try:
-        text = path.read_text(encoding="utf-8-sig")
+        raw = path.read_bytes()
     except FileNotFoundError:
         return {}
     except OSError as exc:
         raise SettingsUnreadable(f"{path} を読めません: {exc}") from exc
     try:
-        data = json.loads(text)
-    except ValueError as exc:
-        raise SettingsUnreadable(f"{path} の中身を読めません(書きかけか壊れています): {exc}") from exc
+        data = json.loads(raw.decode("utf-8-sig"))
+    except ValueError as exc:             # 文字の並びとして読めない・JSON の形でない
+        raise SettingsUnreadable(f"{path} の中身を読めません: {exc}", broken=True) from exc
     if not isinstance(data, dict):
-        raise SettingsUnreadable(f"{path} の中身が設定の形ではありません")
+        raise SettingsUnreadable(f"{path} の中身が設定の形ではありません", broken=True)
     return data
 
 
+def _read(*, retry: bool = True) -> dict[str, Any]:
+    """`_read_once` を、読めなければ少し待って読み直す(`READ_RETRY_SEC`)。
+
+    中身が設定の形でないときも読み直す(ほかが書いている最中の、書きかけを読んだのかもしれない)。
+    読み直しても同じなら、最後の答え(壊れている / たまたま読めない)をそのまま上げる。
+    """
+    delays = READ_RETRY_SEC if retry else ()
+    for delay in (*delays, None):
+        try:
+            return _read_once()
+        except SettingsUnreadable:
+            if delay is None:
+                raise
+            time.sleep(delay)
+    raise AssertionError("ここには来ない")
+
+
 def load_all_strict() -> dict[str, Any]:
-    """設定ファイル全体。**読めなければ `SettingsUnreadable`**(読んだ中身で何かを決めて書く呼び手用)。"""
+    """設定ファイル全体。**読めなければ `SettingsUnreadable`**(読み直してから。読んだ中身で何かを決めて
+    書く呼び手用)。"""
     with _lock:
         data = _read()
         _last_good.clear()
@@ -83,30 +110,51 @@ def load_all_strict() -> dict[str, Any]:
 
 
 def load_all() -> dict[str, Any]:
-    """設定ファイル全体を読む(画面に出す・既定値で続けてよい呼び手用)。
+    """設定ファイル全体を読む(画面に出す・既定値で続けてよい呼び手用。読み直しは待たない)。
 
     読めないときは、前に読めた中身で答える(一度も読めていなければ空 = 既定値)。**この答えを
     もとに書いてはいけない**(書くのは `save`。`save` は自分で読み直し、読めなければ書かない)。
     """
     try:
-        return load_all_strict()
+        with _lock:
+            data = _read(retry=False)
+            _last_good.clear()
+            _last_good.update(data)
+            return dict(data)
     except SettingsUnreadable as exc:
         _note_unreadable(exc)
         with _lock:
             return dict(_last_good)
 
 
-def readable() -> tuple[bool, str]:
+def readable(*, retry: bool = True) -> tuple[bool, str]:
     """いま設定ファイルを読めるか(読めなければ理由)。"""
     try:
-        load_all_strict()
+        with _lock:
+            _read(retry=retry)
     except SettingsUnreadable as exc:
         return False, str(exc)
     return True, ""
 
 
+def state() -> tuple[str, str]:
+    """設定ファイルの様子("ok" / "broken" / "unreadable", 理由)。読み直しは待たない(画面用)。"""
+    try:
+        with _lock:
+            _read(retry=False)
+    except SettingsUnreadable as exc:
+        return ("broken" if exc.broken else "unreadable"), str(exc)
+    return "ok", ""
+
+
 def _note_unreadable(exc: Exception) -> None:
     from . import trouble
+    if getattr(exc, "broken", False):
+        # **壊れている**のは待っても直らない。すぐ画面の記録に出す(1日1件)
+        trouble.once(log, "設定ファイルが壊れている", trouble.KIND_BROKEN_SETTINGS,
+                     "この端末の設定ファイルが壊れていて読めません(前に読めた値で続けます。保存はしません。"
+                     "ファイルを直すか、消すと既定値から始まります): %s", exc, every=86400)
+        return
     trouble.failed(log, "設定ファイル", trouble.KIND_UNREADABLE,
                    "この端末の設定ファイル(user_config.json)の読み取り", exc)
     log.warning("設定ファイルを読めません(前に読めた値で続けます。保存はしません): %s", exc)

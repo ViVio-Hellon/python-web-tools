@@ -57,6 +57,7 @@ import json
 import os
 import platform
 import shutil
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -201,6 +202,8 @@ def summary() -> dict[str, Any]:
                   for k, label, default in ITEMS],
         "maps": [{"key": k, "label": label} for k, label in MAPS],
         "applied_at": applied.get("at", "") if isinstance(applied, dict) else "",
+        # 配布設定を読めなかった理由(この端末の設定ファイルを読めない・壊れている。VER4.8.123)
+        "problem": _problem,
         "contents": [],
         "created_at": "",
         "created_on": "",
@@ -430,20 +433,41 @@ def _file_digest(path: Path) -> str:
         return ""
 
 
-REFUSE_UNREADABLE = "settings_unreadable"
+REFUSE_UNREADABLE = "settings_unreadable"     # たまたま読めない(あとで読み直す)
+REFUSE_BROKEN = "settings_broken"             # 壊れていて読めない
+
+# 配布設定を読めなかった理由(設定画面に出す)。読めたら空に戻す
+_problem = ""
+# たまたま読めなかったとき、裏で読み直す間隔と回数(VER4.8.123。15秒ごとに10分まで)
+RETRY_EVERY_SEC = 15.0
+RETRY_TIMES = 40
+_retrying = threading.Event()
+
+
+def problem() -> str:
+    """配布設定をいま読めていない理由(読めていれば空)。設定画面に出す。"""
+    return _problem
 
 
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
+    global _problem
     result = Result()
-    # **この端末の設定ファイルを読めないときは、配布設定を読まない**(VER4.8.122)。空とみなすと
-    # 「この端末に無いもの」が全部になり、この端末で入れた値まで配布の値で上書きする(別ツールで起きた)
+    # **この端末の設定ファイルを読めないときは、空とみなして配布設定を当てない**(VER4.8.122)。空とみなすと
+    # 「この端末に無いもの」が全部になり、この端末で入れた値まで配布の値で上書きする(別ツールで起きた)。
+    # 読めない理由で分ける(VER4.8.123): **たまたま読めない**なら読み直してから(`load_all_strict` が
+    # 少し待って読み直す。それでもだめなら裏で読み直す。`apply_on_start`)、**壊れている**なら、そう言って読まない
     try:
         current = user_settings.load_all_strict()
     except user_settings.SettingsUnreadable as exc:
-        log.warning("配布設定を読みませんでした(この端末の設定ファイルを読めないため): %s", exc,
-                    extra={"keep": True, "kind": "設定を保存できない"})
-        return Result(False, f"この端末の設定ファイルを読めないので、配布設定は読みませんでした({exc})。",
-                      REFUSE_UNREADABLE)
+        if exc.broken:
+            _problem = (f"この端末の設定ファイルが壊れていて読めないので、配布設定は読みませんでした({exc})。"
+                        "ファイルを直すか消すと、次の起動で配布設定を読みます。")
+            log.warning("%s", _problem, extra={"keep": True, "kind": "設定ファイルが壊れている"})
+            return Result(False, _problem, REFUSE_BROKEN)
+        _problem = (f"この端末の設定ファイルをいま読めないので、配布設定はあとで読み直します({exc})。")
+        log.warning("%s", _problem)
+        return Result(False, _problem, REFUSE_UNREADABLE)
+    _problem = ""
     record = _applied_record()
     # 前に読んだものと違う配布設定か(初めてなら「前」は無い)
     renewed = bool(record.get("fingerprint")) and record["fingerprint"] != bundle.fingerprint()
@@ -493,16 +517,54 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
 
 
 def apply_on_start() -> Result:
-    """起動時に呼ぶ。`配布設定\\` があれば、**その端末に無いものだけ**読む。"""
+    """起動時に呼ぶ。`配布設定\\` があれば、**その端末に無いものだけ**読む。
+
+    この端末の設定ファイルを**たまたま読めない**ときは、裏で読み直して、読めたら配布設定を読む
+    (VER4.8.123。読まないままにしない)。**壊れている**ときは読まず、設定画面と記録にそう出す。
+    """
     bundle = read()
     if bundle is None:
         return Result(True, "")
     result = _apply(bundle, overwrite=False)
+    if result.reason == REFUSE_UNREADABLE:
+        _retry_in_background()
     if result.applied:
         log.info("配布設定を読み込みました: %s(すでにあったので読まなかったもの: %s)",
                  ", ".join(result.applied), ", ".join(result.kept) or "なし")
         result.message = "配布設定を読み込みました"
     return result
+
+
+def _retry_in_background(*, every: float | None = None, times: int | None = None) -> bool:
+    """**たまたま読めなかった**ときに、裏で読み直して配布設定を読む。走らせたら True(同時に2本は走らせない)。"""
+    if _retrying.is_set():
+        return False
+    _retrying.set()
+    wait = RETRY_EVERY_SEC if every is None else every
+    count = RETRY_TIMES if times is None else times
+
+    def runner() -> None:
+        try:
+            for _ in range(count):
+                time.sleep(wait)
+                bundle = read()
+                if bundle is None:
+                    return
+                result = _apply(bundle, overwrite=False)
+                if result.reason == REFUSE_UNREADABLE:
+                    continue
+                if result.applied:
+                    log.info("配布設定を読み直して読み込みました: %s(すでにあったので読まなかったもの: %s)",
+                             ", ".join(result.applied), ", ".join(result.kept) or "なし")
+                return
+            log.warning("配布設定を読めませんでした(この端末の設定ファイルを%s回読み直しても読めませんでした)。"
+                        "次の起動でもう一度読みます", count,
+                        extra={"keep": True, "kind": "設定を保存できない"})
+        finally:
+            _retrying.clear()
+
+    threading.Thread(target=runner, daemon=True, name="distribution-retry").start()
+    return True
 
 
 def reapply(password: str) -> Result:
@@ -514,6 +576,9 @@ def reapply(password: str) -> Result:
     if bundle is None:
         return Result(False, "配布設定が置かれていません。", REFUSE_BAD_INPUT)
     result = _apply(bundle, overwrite=True)
+    if result.reason == REFUSE_UNREADABLE:
+        return Result(False, "この端末の設定ファイルをいま読めないので、読み込み直していません。"
+                             "少し待ってから、もう一度押してください。", REFUSE_UNREADABLE)
     if not result.ok:
         return result
     _reload_map_sessions()

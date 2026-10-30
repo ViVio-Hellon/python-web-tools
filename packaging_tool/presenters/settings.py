@@ -999,6 +999,18 @@ def _check_local_master(section: Section, conn) -> None:
     「パレット検索が当たらない」という形でしか表面化せず、原因に
     辿り着けない。**最初に気づけるようにする。**
     """
+    # **この端末の設定ファイル**(VER4.8.123)。壊れていると、保存も配布設定の読み込みもしない
+    from .. import user_settings
+    kind, why = user_settings.state()
+    if kind == "broken":
+        section.checks.append(Check(
+            "設定ファイル", "壊れていて読めません", WARN,
+            f"{why}。前に読めた値で動いていますが、設定の保存と配布設定の読み込みはしません"
+            "(ほかの設定を消さないため)。ファイルを直すか、消すと既定値から始まります。"))
+    elif kind == "unreadable":
+        section.checks.append(Check(
+            "設定ファイル", "いま読めません", WARN,
+            f"{why}。ほかが一時的に掴んでいるのかもしれません。読めるようになるまで保存はしません。"))
     if conn is None:
         return                                  # DBを開けない状態(§設定は開く)
     # **中身が同じ行**が溜まっていないか。取り込みのたびに倍になる不具合
