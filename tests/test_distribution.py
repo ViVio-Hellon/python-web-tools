@@ -212,6 +212,22 @@ class ApplyTests(DistributionTestCase):
         self.assertTrue(admin_password.verify(NEW_PW))
         self.assertIsNone(user_settings.get(user_settings.KEY_POSITION))
 
+    def test_ログの出力先も配り_読み込んだらその場で切り替える(self) -> None:
+        """VER4.8.124。現場の声:「ログの出力パスも配布設定に入れてほしい」。"""
+        from packaging_tool import trace_log
+        shared_log = self.root / "共有ログ"
+        shared_log.mkdir()
+        self.configure_source()
+        user_settings.save(config.KEY_LOG_DIR, str(shared_log))
+        self.assertTrue(self.export().ok)
+        self.assertEqual(self.written()["settings"][config.KEY_LOG_DIR], str(shared_log))
+        self.dest.use()
+        with mock.patch.object(trace_log, "apply_log_dir") as applied:
+            result = distribution.apply_on_start()
+        self.assertIn("ログの出力先", result.applied)
+        self.assertEqual(user_settings.get(config.KEY_LOG_DIR), str(shared_log))
+        applied.assert_called_once()                     # 次の行から新しい場所へ書く
+
     def test_既存データがある項目は読み込まない(self) -> None:
         self.distributed()
         user_settings.save(config.KEY_LOT_DB_DIR, r"\\この端末\台帳")

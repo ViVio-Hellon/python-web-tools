@@ -336,14 +336,30 @@ class BuildTests(unittest.TestCase):
             with self.subTest(group=name):
                 self.assertLessEqual(len(items), 5)
 
+    def test_検査番号はSIKALOTの値_0埋めや空ならSIKAHIKIの値(self) -> None:
+        """VER4.8.124。現場の決め:「SIKALOT で空・0埋めの場合は SIKAHIKI 参照」。"""
+        from packaging_tool import lot_service
+        insert_lot(self.conn, 検査番号="K1234567")
+        self.assertEqual(self.field("inspection_no").value, "K1234567")
+        self.conn.execute("UPDATE 仕掛ロット SET 検査番号 = '00000000'")
+        self.conn.execute("INSERT INTO 仕掛引当 (ロット番号, 受注番号, 検査番号) VALUES (?, 'J1', '00000000')",
+                          ("1234567",))
+        self.assertEqual(self.field("inspection_no").value, "未決定")
+        self.conn.execute("INSERT INTO 仕掛引当 (ロット番号, 受注番号, 検査番号) VALUES (?, 'J2', 'H7654321')",
+                          ("1234567",))
+        self.assertEqual(self.field("inspection_no").value, "H7654321(引当より)")
+        self.assertTrue(lot_service.is_undecided_inspection_no("０００"))
+        self.assertTrue(lot_service.is_undecided_inspection_no(" "))
+        self.assertFalse(lot_service.is_undecided_inspection_no("0012"))
+
     def test_平らな並びはVBAのまま(self) -> None:
-        """まとまりを付けても順序は動かさない。"""
+        """まとまりを付けても順序は動かさない(VBA の12項目のあとに、VER4.8.124 で検査番号を足した)。"""
         self.assertEqual(
             [key for _, key in presenter.LOT_FIELDS],
             ["yoto_code", "yoto_name", "zaishitsu", "choshitsu",
              "thickness", "width", "length",
              "order_thickness", "order_width", "order_length",
-             "design_course", "actual_course"])
+             "design_course", "actual_course", "inspection_no"])
 
     # --- 設備コースは1行を丸ごと使う ---
     def test_設備コースは折り返さず1行使う(self) -> None:
@@ -567,6 +583,9 @@ class LotPageTests(LotWebTestCase):
         "BOX実績_板幅": "行ごとの値。一覧は最終実績を出す",
         "BOX実績_板丈": "行ごとの値。一覧は最終実績を出す",
         "BOX実績_枚本数": "行ごとの値。一覧は最終実績を出す",
+        # 0埋め(まだ決まっていない)のときは仕掛引当の値で補ってロット情報の画面に出す(VER4.8.124)。
+        # 一覧の生の値では 00000000 のままで、決まっていないのか読み違いか分からない
+        "検査番号": "0埋めのときは仕掛引当で補う。ロット情報の画面に出す",
     }
 
     def test_取り込んだ列は出すか理由があるかのどちらか(self) -> None:

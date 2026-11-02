@@ -626,7 +626,10 @@ CREATE TABLE IF NOT EXISTS 仕掛ロット (
     -- 試験指示票(先行データ)の要否判定に使う(VBA `AdvanceCheck`)。
     -- 品質グレード_表面処理が"S"/"T"以外で、かつ製造板厚が3mm以下または
     -- 用途コードの先頭が"T"/"D1"/"D2"のいずれかなら要
-    品質グレード_表面処理  TEXT NOT NULL DEFAULT ''
+    品質グレード_表面処理  TEXT NOT NULL DEFAULT '',
+    -- 検査番号(VER4.8.124。ロット情報の画面に出す)。ロットに1つ決まる値だが、まだ決まっていないと
+    -- 0埋め(例 00000000)か空。そのときは仕掛引当(SIKAHIKI)の検査番号を見る(`lot_service._inspection_no`)
+    検査番号  TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_sikakari_lot_no ON 仕掛ロット(ロット番号);
@@ -677,7 +680,9 @@ CREATE TABLE IF NOT EXISTS 仕掛引当 (
     -- 引当番号は8桁の番号。数値で持つと 6.0717e+07 のような指数表記になり、
     -- 現場が読めないうえ先頭の0も落ちる。計算には一切使わないのでTEXT。
     -- 並び順(ORDER BY 引当番号)は全件8桁固定なので文字列でも数値と一致する
-    引当番号     TEXT NOT NULL DEFAULT ''
+    引当番号     TEXT NOT NULL DEFAULT '',
+    -- 検査番号(VER4.8.124)。仕掛ロットの検査番号が空か0埋めのときに見る
+    検査番号     TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_sikakari_hiki_lot ON 仕掛引当(ロット番号);

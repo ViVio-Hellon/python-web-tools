@@ -220,7 +220,9 @@ def find_lot_dbs(directory: Optional[Path] = None) -> dict[str, Path]:
 
 # 2つ目のファイルに**無くてよい**列(取り込みが読む列のうち)。BOX実績_板厚・板幅・板丈 は、
 # BOX最終実績_* が無い古い形式の写しのときだけ使う予備(`lot_service._box_final`)。2つ目は BOX最終実績_* を持つ
-SECOND_NOT_NEEDED = frozenset({"BOX実績_板厚", "BOX実績_板幅", "BOX実績_板丈"})
+SECOND_NOT_NEEDED = frozenset({"BOX実績_板厚", "BOX実績_板幅", "BOX実績_板丈",
+                               # 検査番号は1つ目が無ければ仕掛引当で補う(VER4.8.124)。2つ目に無くても足りる
+                               "検査番号"})
 
 
 def second_missing_columns(path: Path, table: str) -> list[str]:

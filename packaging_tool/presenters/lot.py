@@ -50,6 +50,10 @@ LOT_FIELD_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ("設計_設備コース", "design_course"),
         ("実績_設備コース", "actual_course"),
     )),
+    # 検査番号(VER4.8.124。現場の依頼)。仕掛ロットが0埋め・空なら仕掛引当の値(`lot_service._inspection_no`)
+    ("検査", (
+        ("検査番号", "inspection_no"),
+    )),
 )
 
 # 平らに並べたもの。**順序はVBA `capLot` のまま**で、上のまとまりは
@@ -321,6 +325,10 @@ def _lot_field(lot: lot_service.LotInfo, group: str, label: str, key: str) -> Fi
         text = lot_service.format_thickness(value)
     elif key in DIMENSION_FIELDS:
         text = lot_service.format_dimension(value)
+    elif key == "inspection_no":
+        # まだ決まっていない(仕掛ロットも仕掛引当も0埋め・空)なら、そう言う。仕掛引当から採ったらそう添える
+        text = (f"{value}(引当より)" if value and lot.inspection_from == "SIKAHIKI"
+                else str(value) if value else "未決定")
     else:
         text = str(value)
     return Field(

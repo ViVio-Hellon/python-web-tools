@@ -96,6 +96,9 @@ ITEMS: tuple[tuple[str, str, bool], ...] = (
     (config.KEY_AUTO_IMPORT, "起動時の自動取り込み", True),
     (config.KEY_EXPORT_DIR, "書き出し先", True),
     (config.KEY_ORDER_CSV_DIR, "発注CSVの出力先", True),
+    # ログの出力先(VER4.8.124。現場の声:「ログの出力パスも配布設定に入れてほしい」)。読み込んだらその場で
+    # 書き先を切り替える(`trace_log.apply_log_dir`)。届かないフォルダなら既定の場所に書き、理由を出す
+    (config.KEY_LOG_DIR, "ログの出力先", True),
     (admin_password.KEY, "管理者パスワード", True),
     (user_settings.KEY_POSITION, "拠点(ラインごとに違う)", False),
 )
@@ -513,6 +516,10 @@ def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
             result.applied.append(MAP_LABELS[key])
             given_maps[key] = _file_digest(dest)
     _mark_applied(bundle, given, given_maps, touched=bool(result.applied))
+    if ITEM_LABELS[config.KEY_LOG_DIR] in result.applied:
+        # ログの出力先を読み込んだ。**次の行から**新しい場所へ書く(前の場所にも移ったことを残す)
+        from . import trace_log
+        trace_log.apply_log_dir()
     return result
 
 

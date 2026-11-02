@@ -184,6 +184,10 @@ class LotInfo:
     final_process_count: int = 0
     final_process_text: str = ""   # 見せる値(元の値のまま。2.9 なら "2.9")
     quality_surface: str = ""    # 品質グレード_表面処理(試験指示票の要否判定に使う)
+    # 検査番号(VER4.8.124)。仕掛ロットの値が空か0埋め(まだ決まっていない)なら仕掛引当の値。
+    # どちらも決まっていなければ空。`inspection_from` はどちらから採ったか(SIKALOT / SIKAHIKI / 空)
+    inspection_no: str = ""
+    inspection_from: str = ""
     # 包装仕様NOの書き換え判定(flag4)、試験指示票の要否判定
     # (AdvanceCheck flag1)のどちらも BOX実績に差し替える前の「製造板厚」を
     # 見るため、表示用の thickness とは別に保持する
@@ -422,6 +426,45 @@ def _load_box_choices(conn: sqlite3.Connection, lot_no: str) -> list[BoxChoice]:
     return out
 
 
+# 検査番号が「まだ決まっていない」ときの書き方(0埋め・空)。全角の0も0として見る
+_ZERO_CHARS = frozenset("0０")
+
+
+def is_undecided_inspection_no(value: object) -> bool:
+    """検査番号が**まだ決まっていない**か(空、または0だけ。例 00000000)。VER4.8.124"""
+    text = str(value or "").strip().replace("\u3000", "")
+    return not text or set(text) <= _ZERO_CHARS
+
+
+def _row_get(row, key: str) -> object:
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def _inspection_no(conn, lot_no: str, from_lot: object) -> tuple[str, str]:
+    """ロットの検査番号と、どこから採ったか(VER4.8.124)。
+
+    現場の決め:「SIKALOT に検査番号列があるが、0埋めされてまだ決まっていないことがある。SIKAHIKI にも
+    検査番号列があるので、SIKALOT で空・0埋めの場合は SIKAHIKI 参照」。
+    SIKAHIKI に同じロットの行が何行かあり、決まった値が2つ以上あれば「・」でつないで全部出す(1つに決めない)。
+    """
+    if not is_undecided_inspection_no(from_lot):
+        return str(from_lot).strip(), "SIKALOT"
+    try:
+        rows = conn.execute("SELECT 検査番号 FROM 仕掛引当 WHERE ロット番号 = ? ORDER BY 管理番号",
+                            (lot_no,)).fetchall()
+    except sqlite3.Error:
+        return "", ""
+    found: list[str] = []
+    for r in rows:
+        value = str(r[0] or "").strip()
+        if not is_undecided_inspection_no(value) and value not in found:
+            found.append(value)
+    return ("・".join(found), "SIKAHIKI") if found else ("", "")
+
+
 def _box_final_problem(row: Any) -> str:
     """1つ目の BOX最終実績寸法が使えない理由。使えるなら空。
 
@@ -501,6 +544,7 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str,
         quality_surface=str(row["品質グレード_表面処理"] or ""),
         manufactured_thickness=row["製造板厚"],
     )
+    lot.inspection_no, lot.inspection_from = _inspection_no(conn, lot_no, _row_get(row, "検査番号"))
     if not course:
         lot.course_unknown = _course_unknown(conn, lot_no)
     # 1つ目で BOX最終実績寸法が空、または HOT の値 → 2つ目の同じロットの行から選べるようにする
