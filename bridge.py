@@ -36,6 +36,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+# **ツールのフォルダの中に __pycache__ を書かない**(VER4.8.125。下で置き場所を外へ向けるまで書かない)
+sys.dont_write_bytecode = True
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -43,6 +45,8 @@ from typing import Any, BinaryIO, Callable, Optional
 
 APP_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(APP_ROOT))
+from packaging_tool import app_config as _app_config  # noqa: E402
+_app_config.use_local_pycache()
 
 # 同時に捌く要求の数。画面は「操作 + 進捗の見張り + 心拍 + 静的ファイル」を
 # 同時に投げる。書く要求はアプリ側の錠が1つずつ通す(`app._WRITE_LOCK`)

@@ -3,11 +3,14 @@
 業務ツール統合ランチャーは `stop.bat` を呼び、戻り値と出力を読む(docs/ランチャー連携.md)。
 
     0  止めた / もともと動いていない
-    1  止められなかった、またはデスクトップ版(exe の窓)が動いている
-    2  止めなかった(保存していない図・実行中の処理。`--force` で止める)
+    1  止められなかった
+    3  止めなかった(処理中: 保存していない図・実行中の処理。`--force` で止める)
+
+出力の**1行目は理由**(ランチャー 1.8.9: 管理者の一覧と利用者への知らせに出す)。
+デスクトップ版(exe の窓)も止める(窓に「閉じて」と頼む。× と同じ。`--force` なら強制)。VER4.8.125
 
 以前は 0 以外を全部 1 にしていたうえ、**デスクトップ版が動いていても「起動していません」で
-0 を返していた**(ブラウザ版のロックだけを見ていた)。
+0 を返していた**(ブラウザ版のロックだけを見ていた)。VER4.8.124 までは処理中が 2、デスクトップ版は止めなかった。
 """
 from __future__ import annotations
 
@@ -75,7 +78,8 @@ class DesktopMarkerTests(_LocalDir):
 
 
 class ExitCodeTests(_LocalDir):
-    def run_main(self, results: dict, *, desktop=None) -> tuple[int, str]:
+    def run_main(self, results: dict, *, desktop=None, desktop_kind="stopped",
+                 argv=("--all",)) -> tuple[int, str]:
         def fake_stop(mode, *, force=False):
             result = process_manager.StopResult(mode)
             kind = results.get(mode, "stopped")
@@ -85,40 +89,76 @@ class ExitCodeTests(_LocalDir):
             result.message = kind
             return result
 
+        def fake_desktop(info, *, force=False):
+            self.desktop_force = force
+            result = process_manager.StopResult("デスクトップ版")
+            result.stopped = desktop_kind == "stopped" or force
+            if not result.stopped:
+                result.busy_jobs = ["デスクトップ版の窓で、保存していない図・実行中の処理を確かめています"]
+            result.message = desktop_kind
+            return result
+
         out = io.StringIO()
         with mock.patch.object(process_manager, "stop", side_effect=fake_stop), \
+                mock.patch.object(process_manager, "stop_desktop", side_effect=fake_desktop), \
                 mock.patch.object(launch_guard, "desktop_running", return_value=desktop), \
                 redirect_stdout(out):
-            code = process_manager.main(["--all"])
+            code = process_manager.main(list(argv))
         return code, out.getvalue()
 
     def test_止めた(self) -> None:
         self.assertEqual(self.run_main({})[0], 0)
 
-    def test_保存していない図があれば2(self) -> None:
-        self.assertEqual(self.run_main({"field": "busy"})[0], 2)
+    def test_処理中なら3_1行目に理由(self) -> None:
+        """ランチャー 1.8.9: 処理中で止めないときは 0 以外(おすすめは 3)、1行目に理由。"""
+        code, out = self.run_main({"field": "busy"})
+        self.assertEqual(code, 3)
+        self.assertEqual(out.splitlines()[0], "処理中のため止めません: 保存していない変更(配置編集)")
 
-    def test_止められなければ1(self) -> None:
-        self.assertEqual(self.run_main({"material": "failed"})[0], 1)
+    def test_止められなければ1_1行目に理由(self) -> None:
+        code, out = self.run_main({"material": "failed"})
+        self.assertEqual(code, 1)
+        self.assertTrue(out.splitlines()[0].startswith("止められませんでした: "), out)
 
     def test_両方なら止められなかったほうを返す(self) -> None:
         self.assertEqual(self.run_main({"field": "failed", "material": "busy"})[0], 1)
         self.assertEqual(self.run_main({"field": "busy", "material": "failed"})[0], 1)
 
-    def test_デスクトップ版が動いていれば1で知らせる(self) -> None:
-        """**「起動していません」で 0 を返さない。** 止めもしない(窓の × で閉じる)。"""
-        code, out = self.run_main({}, desktop={"pid": 1, "mode": "field"})
-        self.assertEqual(code, 1)
-        self.assertIn("デスクトップ版", out)
-        self.assertIn("窓の ×", out)
+    def test_デスクトップ版も止める_窓で訊いていれば処理中(self) -> None:
+        """前は止めずに 1 を返していた(ランチャーが更新のために止められなかった)。"""
+        self.assertEqual(self.run_main({}, desktop={"pid": 1, "mode": "field"})[0], 0)
+        code, out = self.run_main({}, desktop={"pid": 1, "mode": "field"}, desktop_kind="asking")
+        self.assertEqual(code, 3)
+        self.assertIn("デスクトップ版の窓", out.splitlines()[0])
 
-    def test_止めなかった理由を先に出す(self) -> None:
-        """ランチャー(1.7.1〜)は 0 以外のとき、出力のはじめの2行を理由として見せる
-        (`process_manager._first_lines`)。「起動していません」を先に出さない。"""
-        _, out = self.run_main({"material": "busy"})
-        self.assertTrue(out.splitlines()[0].startswith("[--] material"), out)
-        _, out = self.run_main({}, desktop={"pid": 1, "mode": "field"})
-        self.assertIn("デスクトップ版", out.splitlines()[0])
+    def test_forceならデスクトップ版も強制で止める(self) -> None:
+        code, _ = self.run_main({}, desktop={"pid": 1, "mode": "field"}, desktop_kind="asking",
+                                argv=("--all", "--force"))
+        self.assertEqual(code, 0)
+        self.assertTrue(self.desktop_force)
+
+
+class StopDesktopTests(_LocalDir):
+    def test_窓が閉じれば止めた_残れば処理中_forceなら強制(self) -> None:
+        info = {"pid": 100, "exe_pid": 99, "mode": "field"}
+        with mock.patch.object(launch_guard, "is_process_alive", return_value=True), \
+                mock.patch.object(process_manager, "_close_window") as close, \
+                mock.patch.object(process_manager, "_wait_pid_gone", return_value=True):
+            got = process_manager.stop_desktop(info)
+        self.assertTrue(got.stopped)
+        close.assert_called_once_with(99, force=False)                 # 窓(exe)に閉じる合図
+        with mock.patch.object(launch_guard, "is_process_alive", return_value=True), \
+                mock.patch.object(process_manager, "_close_window"), \
+                mock.patch.object(process_manager, "_wait_pid_gone", return_value=False):
+            got = process_manager.stop_desktop(info)
+        self.assertFalse(got.stopped)
+        self.assertTrue(got.busy_jobs)
+        with mock.patch.object(launch_guard, "is_process_alive", return_value=True), \
+                mock.patch.object(process_manager, "_close_window") as close, \
+                mock.patch.object(process_manager, "_wait_pid_gone", return_value=True):
+            got = process_manager.stop_desktop(info, force=True)
+        self.assertTrue(got.stopped)
+        close.assert_called_once_with(99, force=True)
 
     def test_状態にデスクトップ版を出す(self) -> None:
         out = io.StringIO()

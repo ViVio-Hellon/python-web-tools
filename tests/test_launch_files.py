@@ -386,11 +386,22 @@ class LauncherContractTests(unittest.TestCase):
         """ランチャーは起動ファイルの隣の `stop.bat` を使い、「強制終了する」のときは
         `--force` を付けて呼ぶ。引数を `process_manager.py` へ渡していること。"""
         commands = _commands(read_text("stop.bat"))
-        self.assertTrue(any(c.startswith("python process_manager.py --all %*") for c in commands))
+        self.assertTrue(any(c.startswith('python "%~dp0process_manager.py" --all %ARGS%')
+                            for c in commands), commands)
+
+    def test_stop_batは_nopause_と_STOP_NOPAUSE_で一時停止を飛ばす(self) -> None:
+        """ランチャー 1.8.9 は STOP_NOPAUSE=1 を付けて呼ぶ。pause はどれもその条件の下に置く(VER4.8.125)。"""
+        commands = _commands(read_text("stop.bat"))
+        self.assertIn('set "NOPAUSE=%STOP_NOPAUSE%"', commands)
+        self.assertTrue(any('/i "%~1"=="/nopause"' in c for c in commands))
+        pauses = [c for c in commands if c.split()[-1].lower() == "pause"]
+        self.assertTrue(pauses)
+        for line in pauses:
+            self.assertEqual(line, 'if not "%NOPAUSE%"=="1" pause')
 
     def test_stop_batは戻り値をそのまま返す(self) -> None:
-        """0 = 止めた / 1 = 止められなかった・デスクトップ版が動いている /
-        2 = 止めなかった(保存していない図・実行中の処理)。以前は 0 以外を全部 1 にしていた。
+        """0 = 止めた / 1 = 止められなかった / 3 = 止めなかった(処理中。VER4.8.125。前は 2)。
+        以前は 0 以外を全部 1 にしていた。
         `endlocal` のあとに `%RC%` を読むと空になるので、同じ行で返す。"""
         commands = _commands(read_text("stop.bat"))
         self.assertIn('set "RC=%errorlevel%"', commands)

@@ -28,8 +28,13 @@ APP_NAME = "PackagingTool"
 # プロジェクトルート (このファイルの2つ上の階層)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# SQLite DBファイルパス。環境変数で共有フォルダ上のパスに差し替え可能。
-DB_PATH = Path(os.environ.get("PACKAGING_TOOL_DB_PATH", str(BASE_DIR / "data" / "packaging_tool.db")))
+# SQLite DBファイルパス。環境変数で差し替え可能。
+#
+# **ツールのフォルダの外**(ローカル領域の `data\`)に置く(VER4.8.125)。業務ツール統合ランチャー 1.8.9 は、
+# 更新のたびにツールのフォルダを丸ごと上書きする。中に置くと更新で消え、共有のフォルダから動かすと何台もの
+# PC が同じファイルに書く。前の版の場所(`<ツール>\data\`)にあるものは、最初の起動で写す(`legacy_data`)
+DB_PATH = Path(os.environ.get("PACKAGING_TOOL_DB_PATH",
+                              str(app_config.local_dir("data") / "packaging_tool.db")))
 
 # ログ出力先ディレクトリ。
 #
@@ -62,8 +67,11 @@ def log_dir() -> Path:
     """いまログを書いているフォルダ。設定画面で指定があればそちら。"""
     return _active_log_dir or LOG_DIR
 
-# ローカル設定ファイル(レジストリ代替: ライン選択などの永続化に使用)
-USER_CONFIG_PATH = Path(os.environ.get("PACKAGING_TOOL_CONFIG_PATH", str(BASE_DIR / "data" / "user_config.json")))
+# ローカル設定ファイル(レジストリ代替: ライン選択などの永続化に使用)。
+# 現場で変えた値は**ツールのフォルダの外**(VER4.8.125。既定値は `config/app.json` とこのモジュール ──
+# 版と一緒に更新される。2段にする)
+USER_CONFIG_PATH = Path(os.environ.get("PACKAGING_TOOL_CONFIG_PATH",
+                                       str(app_config.local_dir("data") / "user_config.json")))
 
 # ------------------------------------------------------------------
 # 取り込み元(sqlite3)の置き場所
@@ -130,7 +138,8 @@ THRESHOLD_DB_NAME = os.environ.get("PACKAGING_TOOL_THRESHOLD_DB",
 # 共有ではなくこのツールのフォルダの下にする ── 共有に届かない端末でも
 # 書き出しそのものは必ず成功させる。
 DEFAULT_EXPORT_DIR = Path(os.environ.get(
-    "PACKAGING_TOOL_EXPORT_DIR", str(BASE_DIR / "export")))
+    # 作ったファイルも**ツールのフォルダの外**(VER4.8.125。更新で消えないように)
+    "PACKAGING_TOOL_EXPORT_DIR", str(app_config.local_dir("export"))))
 
 # 仕掛台帳(ロット検索用)の置き場所。
 #   \\nlmsrvngy03\Read\【New】仕掛\台帳\

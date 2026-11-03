@@ -37,9 +37,9 @@ JSON はコメントを書けないので、各キーの説明はこのモジュ
 「アプリ本体と、実行中に変化するファイルを分ける」ことであり、DBと利用者設定は
 まさにそれにあたる。`cache`/`work` と違って消せないので、独立した名前にしている。
 
-**この段階(Phase 0)では値を定義するだけで、DBの実際の移動は行わない。**
-`config.DB_PATH` は従来どおり `<リポジトリ>/data/` を指している。
-移動は Phase 2(起動基盤)で、旧ファイルを残したまま行う。
+**VER4.8.125 から、DB・利用者設定・直した図・書き出したファイル(`export\\`)はここに置く**(前は
+`<ツール>\\data\\`・`<ツール>\\export\\`)。業務ツール統合ランチャー 1.8.9 が更新のたびにツールのフォルダを
+丸ごと上書きするため。前の場所にあるものは、最初の起動で写す(`legacy_data.migrate`。前の場所は消さない)。
 """
 from __future__ import annotations
 
@@ -332,7 +332,7 @@ def local_root() -> Path:
 
 
 # 領域の名前。実体の作成は `ensure_local_dirs()` で行う
-LOCAL_SUBDIRS = ("runtime", "logs", "pycache", "cache", "work", "backup", "data")
+LOCAL_SUBDIRS = ("runtime", "logs", "pycache", "cache", "work", "backup", "data", "export")
 
 
 def local_dir(name: str) -> Path:
@@ -341,6 +341,28 @@ def local_dir(name: str) -> Path:
         raise ValueError(
             f"未知のローカル領域: {name!r} (使えるのは {', '.join(LOCAL_SUBDIRS)})")
     return local_root() / name
+
+
+def use_local_pycache() -> None:
+    """Python のバイトコード(`__pycache__`)を**ツールのフォルダの外**(ローカル領域の `pycache\\`)へ書く(VER4.8.125)。
+
+    業務ツール統合ランチャー 1.8.9 は更新のたびにツールのフォルダを丸ごと上書きする。フォルダの中に
+    `__pycache__` を書くと、共有のフォルダから動かしている PC が何台も同じ場所へ書き、掴んだファイルが上書きを
+    止める。入口(`start_app.py`・`bridge.py`・`process_manager.py`)は、先に `sys.dont_write_bytecode` を立てて
+    から呼ぶ(ここで置き場所を外へ向けたら書くのを戻す)。子の Python(Access の変換)にも環境変数で伝わる。
+    置き場所を作れなければ書かないまま(遅くなるだけで動く)。
+    """
+    import sys
+    prefix = os.environ.get("PYTHONPYCACHEPREFIX", "").strip()
+    target = Path(prefix) if prefix else local_dir("pycache")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    sys.pycache_prefix = str(target)
+    os.environ["PYTHONPYCACHEPREFIX"] = str(target)
+    # 書かないと決めてある(`PYTHONDONTWRITEBYTECODE`・`python -B`)ならそのまま
+    sys.dont_write_bytecode = bool(os.environ.get("PYTHONDONTWRITEBYTECODE")) or bool(sys.flags.dont_write_bytecode)
 
 
 def ensure_local_dirs() -> Path:

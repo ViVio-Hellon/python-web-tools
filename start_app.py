@@ -24,6 +24,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+# **ツールのフォルダの中に __pycache__ を書かない**(VER4.8.125。下で置き場所を外へ向けるまで書かない)
+sys.dont_write_bytecode = True
 import threading
 import time
 import webbrowser
@@ -32,6 +34,8 @@ from typing import Optional
 
 APP_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(APP_ROOT))
+from packaging_tool import app_config as _app_config  # noqa: E402
+_app_config.use_local_pycache()
 
 # 起動の起点。**待機画面が出るまでの時間**をログに残すために持つ ──
 # 「遅い」という感想を、測れる数字にしておく
@@ -187,6 +191,10 @@ def run_environment_checks(*, bridge: bool = False) -> Path:
     check_packages(BRIDGE_PACKAGES if bridge else None)
     root = check_writable()
     check_config()
+    # 前の版がツールのフォルダの中に書いていたもの(DB・この端末の設定・直した図)を、外へ写す(VER4.8.125)。
+    # **設定やDBを読むより先に**(読んでから写すと、写す前の既定値で動き出す)
+    from packaging_tool import legacy_data
+    legacy_data.migrate()
     return root
 
 

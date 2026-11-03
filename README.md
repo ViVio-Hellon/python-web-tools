@@ -1,4 +1,4 @@
-# 梱包資材総合ツール (Python / SQLite版) — VER4.8.124
+# 梱包資材総合ツール (Python / SQLite版) — VER4.8.125
 
 Excel VBA + Access で作られていた梱包資材管理ツールの Python 移植版です。
 画面は **Flask + HTML/CSS/JS**、業務ロジックは Python、データは SQLite。
@@ -746,7 +746,7 @@ python process_manager.py --all          # 現場・資材の両方を止める
 > にあります。起動・データ取り込み・画面の流れ・印刷・モードの見分け方まで
 > 一通り書いてあるので、まずはそちらをどうぞ。
 
-初回起動時にDB(`data/packaging_tool.db`)が自動作成されます。
+初回起動時にDB(`%LOCALAPPDATA%\PackagingTool\data\packaging_tool.db`。VER4.8.124 までは `data/packaging_tool.db`)が自動作成されます。
 起動は `Start.vbs`(コマンドからは `python start_app.py`)です ──
 **`python -m packaging_tool` では起動しません。** tkinter版だったころの
 入口で、Web版には `__main__.py` がありません。
@@ -782,7 +782,7 @@ PACKAGING_TOOL_LOT_DB_DIR=/path/to/開発用/台帳   # 仕掛台帳
 
 ### 取り込み元(sqlite3)からデータを取り込む
 
-このツールは**手元のDB(`data/packaging_tool.db`)しか見ません**。
+このツールは**手元のDB(`%LOCALAPPDATA%\PackagingTool\data\packaging_tool.db`)しか見ません**。
 共有フォルダに置かれた取り込み元の`.sqlite3`を、使う前に手元へ写します。
 普段は**設定画面(`/settings`)の「取り込みと反映」から1回押すだけ**です。
 画面を開かずに流したいとき(タスクスケジューラなど)だけ、同じ処理を

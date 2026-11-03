@@ -10,17 +10,33 @@ rem  影響を受けません(基盤仕様書 2.8)。
 rem ===================================================================
 setlocal
 
+rem  /nopause か 環境変数 STOP_NOPAUSE=1 で、最後の pause を飛ばす(業務ツール統合ランチャー 1.8.9 は
+rem  STOP_NOPAUSE=1 を付けて呼ぶ)。/nopause は process_manager.py へは渡さない
+set "NOPAUSE=%STOP_NOPAUSE%"
+set "ARGS="
+:args
+if "%~1"=="" goto :argsdone
+if /i "%~1"=="/nopause" (
+    set "NOPAUSE=1"
+) else (
+    set ARGS=%ARGS% %1
+)
+shift
+goto :args
+:argsdone
+
 rem  共有フォルダに置かれていても動くよう pushd を使う(start.bat と同じ)
 pushd "%~dp0" || (
     echo [エラー] このフォルダに移動できませんでした: %~dp0
-    pause
+    if not "%NOPAUSE%"=="1" pause
     exit /b 1
 )
 title 梱包資材総合ツール - 停止
 
 rem  戻り値は process_manager.py の値をそのまま返す(業務ツール統合ランチャーが読む)
-rem      0 = 止めた・動いていない / 1 = 止められなかった・デスクトップ版が動いている
-rem      2 = 止めなかった: 保存していない図・実行中の処理がある。--force で止める
+rem      0 = 止めた・動いていない / 1 = 止められなかった
+rem      3 = 止めなかった(処理中): 保存していない図・実行中の処理がある。--force で止める
+rem  出力の1行目は理由(ランチャーが管理者の一覧と利用者への知らせに出す)
 set "RC=1"
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -28,7 +44,7 @@ if errorlevel 1 (
     goto :failed
 )
 
-python process_manager.py --all %*
+python "%~dp0process_manager.py" --all %ARGS%
 set "RC=%errorlevel%"
 if not "%RC%"=="0" (
     echo.
@@ -43,6 +59,6 @@ endlocal
 exit /b 0
 
 :failed
-pause
+if not "%NOPAUSE%"=="1" pause
 popd
 endlocal & exit /b %RC%

@@ -25,13 +25,16 @@
 戻り値(`stop.bat` もそのまま返す。業務ツール統合ランチャーが読む):
 
     0  止めた / もともと動いていない
-    1  止められなかった(応答しない・このアプリか確かめられない)、
-       またはデスクトップ版(exe の窓)が動いている
-    2  止めなかった(保存していない図・実行中の処理がある。`--force` で止める)
+    1  止められなかった(応答しない・このアプリか確かめられない)
+    3  止めなかった(処理中: 保存していない図・実行中の処理がある。`--force` で止める)
+       ── ランチャー 1.8.9 のおすすめに合わせた(VER4.8.125。前は 2)
 
-**デスクトップ版(exe の窓)は止めない。** 窓の × か画面の「終了」で閉じる
-(閉じるときに保存していない図・実行中の処理を訊くため)。ランチャーは exe の窓に
-「閉じて」と頼んで止める(× と同じ)。
+**標準出力の1行目に理由を書く**(ランチャーが管理者の一覧と利用者への知らせに出す)。
+例「処理中のため止めません: Access の変換(表を持ってくる)」。
+
+**デスクトップ版(exe の窓)も止める**(VER4.8.125。前は止めなかった)。窓に「閉じて」と頼む
+(窓の × と同じ。保存していない図・実行中の処理があれば窓で訊く)。そのあいだ窓が残っていれば
+「処理中」として 3 を返す。`--force` なら窓とその子(Python)をまとめて止める。
 """
 from __future__ import annotations
 
@@ -40,6 +43,8 @@ import json
 import os
 import signal
 import sys
+# **ツールのフォルダの中に __pycache__ を書かない**(VER4.8.125。下で置き場所を外へ向けるまで書かない)
+sys.dont_write_bytecode = True
 import time
 import urllib.error
 import urllib.request
@@ -48,6 +53,8 @@ from typing import Optional
 
 APP_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(APP_ROOT))
+from packaging_tool import app_config as _app_config  # noqa: E402
+_app_config.use_local_pycache()
 
 from packaging_tool import app_config, modes  # noqa: E402
 from packaging_tool.logging_utils import get_logger  # noqa: E402
@@ -56,6 +63,10 @@ log = get_logger("process_manager")
 
 # 正常終了を要求したあと、実際に落ちるのを待つ上限(秒)
 GRACEFUL_WAIT_SEC = 8.0
+# 戻り値(`main`)。ランチャー 1.8.9 のおすすめ: 処理中で止めないときは 3
+EXIT_OK = 0
+EXIT_FAILED = 1
+EXIT_BUSY = 3
 # PIDで落としたあと、消えるのを待つ上限(秒)
 FORCE_WAIT_SEC = 5.0
 
@@ -139,6 +150,67 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
 
     # --- 2. 応答しないときだけPIDを使う ---
     return _stop_by_pid(mode, info, result, force=force)
+
+
+# ------------------------------------------------------------------
+# デスクトップ版(exe の窓)
+# ------------------------------------------------------------------
+# 窓に「閉じて」と頼んでから、消えるのを待つ上限(秒)。保存していない図・実行中の処理があれば
+# 窓が訊いて残るので、待ちきれなければ「処理中」とみなす
+DESKTOP_WAIT_SEC = 10.0
+
+
+def stop_desktop(desktop: dict, *, force: bool = False) -> StopResult:
+    """デスクトップ版の窓を止める(VER4.8.125)。
+
+    ふだんは窓に「閉じて」と頼む(× と同じ。Windows は `taskkill` の /F なしで窓に閉じる合図を送る)。
+    窓が閉じる前に、保存していない図・実行中の処理を訊く ── そのあいだ窓は残るので「処理中」。
+    `force` なら窓とその子(Python)をまとめて止める(窓の中で保存していないものは捨てる)。
+    """
+    import launch_guard
+
+    result = StopResult("デスクトップ版")
+    exe_pid = int(desktop.get("exe_pid") or 0)
+    py_pid = int(desktop.get("pid") or 0)
+    target = exe_pid if exe_pid > 0 and launch_guard.is_process_alive(exe_pid) else py_pid
+    if target <= 0 or not launch_guard.is_process_alive(target):
+        result.stopped = True
+        result.method = "already-gone"
+        result.message = "すでに終了していました"
+        return result
+    _close_window(target, force=force)
+    if _wait_pid_gone(target, DESKTOP_WAIT_SEC if not force else FORCE_WAIT_SEC):
+        if py_pid > 0:
+            _wait_pid_gone(py_pid, FORCE_WAIT_SEC)
+        result.stopped = True
+        result.method = "force" if force else "close"
+        result.message = "強制終了しました" if force else "窓を閉じました"
+        return result
+    if force:
+        result.message = (f"強制終了を頼みましたが、pid {target} がまだ残っています。"
+                          "タスクマネージャーで 梱包資材総合ツール.exe を確かめてください")
+        return result
+    result.busy_jobs = ["デスクトップ版の窓で、保存していない図・実行中の処理を確かめています"]
+    result.message = ("窓が閉じませんでした(保存していない図・実行中の処理を窓で訊いています)。\n"
+                      "    窓で答えるか、捨てて・中断して止めるには --force を付けてください")
+    return result
+
+
+def _close_window(pid: int, *, force: bool) -> None:
+    """窓に閉じる合図を送る(`force` なら子ごと強制終了)。"""
+    import subprocess
+    if os.name == "nt":
+        args = ["taskkill", "/PID", str(pid)] + (["/T", "/F"] if force else [])
+        try:
+            subprocess.run(args, capture_output=True, timeout=15,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("窓に閉じる合図を送れませんでした: %s", exc)
+        return
+    try:
+        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM) if force else signal.SIGTERM)
+    except OSError as exc:
+        log.warning("窓に閉じる合図を送れませんでした: %s", exc)
 
 
 def _request_shutdown(port: int, token: str, *, force: bool) -> dict:
@@ -294,29 +366,33 @@ def main(argv: Optional[list[str]] = None) -> int:
                       f"ready={health['ready']} 起動={lock['started']}")
         return 0
 
-    code = 0
     results = [stop(mode, force=args.force) for mode in targets]
-    for result in results:
-        if not result.stopped:
-            # 断られた(2)より、止められなかった(1)を先に知らせる
-            code = 1 if code == 1 or not result.busy_jobs else 2
-    # **止めなかった理由を先に出す。** ランチャー(1.7.1〜)は stop.bat が 0 以外で
-    # 終わると、出力の**はじめの2行**を理由として利用者に見せる。「起動していません」が
-    # 先に来ると、理由がそれになる
     if desktop is not None:
-        print(DESKTOP_MESSAGE)
-        code = code or 1
-    for result in sorted(results, key=lambda r: r.stopped):
-        print(result)
+        results.append(stop_desktop(desktop, force=args.force))
+    code, lines = report(results)
+    for line in lines:
+        print(line)
     return code
 
 
-# デスクトップ版は止めない。**「起動していません」で 0 を返さない** ──
-# 以前はブラウザ版のロックだけを見ていたので、exe の窓が動いていても
-# 「止めた」と同じ答えになっていた
-DESKTOP_MESSAGE = ("[--] デスクトップ版(exe の窓)が動いています。stop.bat では止めません。\n"
-                   "    窓の × か画面の「終了」で閉じてください"
-                   "(保存していない図・実行中の処理があれば訊きます)")
+def report(results: list[StopResult]) -> tuple[int, list[str]]:
+    """戻り値と、出力する行。**1行目は理由**(ランチャー 1.8.9: 管理者の一覧と利用者への知らせに出る)。
+
+    止められなかった(1)を、処理中で止めなかった(3)より先に言う。全部止まれば 0。
+    """
+    failed = [r for r in results if not r.stopped and not r.busy_jobs]
+    busy = [r for r in results if not r.stopped and r.busy_jobs]
+    if failed:
+        first = f"止められませんでした: {failed[0].message.splitlines()[0]}"
+        code = EXIT_FAILED
+    elif busy:
+        jobs = [job for r in busy for job in r.busy_jobs]
+        first = f"処理中のため止めません: {'、'.join(jobs)}"
+        code = EXIT_BUSY
+    else:
+        return EXIT_OK, [str(r) for r in results]
+    rest = [str(r) for r in sorted(results, key=lambda r: r.stopped)]
+    return code, [first, *rest]
 
 
 if __name__ == "__main__":
