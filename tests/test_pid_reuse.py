@@ -50,6 +50,13 @@ class _LocalDir(unittest.TestCase):
         return info
 
 
+class PlatformTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform in ("win32", "linux"), "Windows と Linux で確かめる")
+    def test_WindowsとLinuxでは起動時刻が取れる(self) -> None:
+        """取れないと下の試験が「取れない環境」で飛ばされ、Windows で確かめたことにならない。"""
+        self.assertIsNotNone(launch_guard.process_started_at(ME))
+
+
 @unittest.skipIf(launch_guard.process_started_at(ME) is None, "起動時刻を取れない環境")
 class StartTimeTests(_LocalDir):
     def test_自分の起動時刻が取れる(self) -> None:
