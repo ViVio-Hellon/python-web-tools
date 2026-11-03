@@ -139,27 +139,89 @@ class ExitCodeTests(_LocalDir):
 
 
 class StopDesktopTests(_LocalDir):
-    def test_窓が閉じれば止めた_残れば処理中_forceなら強制(self) -> None:
-        info = {"pid": 100, "exe_pid": 99, "mode": "field"}
-        with mock.patch.object(launch_guard, "is_process_alive", return_value=True), \
-                mock.patch.object(process_manager, "_close_window") as close, \
-                mock.patch.object(process_manager, "_wait_pid_gone", return_value=True):
-            got = process_manager.stop_desktop(info)
+    """デスクトップ版の窓を止める(VER4.8.125)。"""
+
+    INFO = {"pid": 100, "exe_pid": 99, "exe_pid_from": "env", "mode": "field"}
+
+    def stop(self, info=None, *, force=False, alive=True, sent=1, gone=True):
+        with mock.patch.object(launch_guard, "is_process_alive",
+                               side_effect=alive if callable(alive) else (lambda pid: alive)), \
+                mock.patch.object(process_manager, "_ask_windows_to_close", return_value=sent) as ask, \
+                mock.patch.object(process_manager, "_kill_tree") as kill, \
+                mock.patch.object(process_manager, "_wait_pid_gone", return_value=gone):
+            got = process_manager.stop_desktop(info or self.INFO, force=force)
+        return got, ask, kill
+
+    def test_見えている窓に閉じてと頼み_閉じれば止めた(self) -> None:
+        got, ask, kill = self.stop()
         self.assertTrue(got.stopped)
-        close.assert_called_once_with(99, force=False)                 # 窓(exe)に閉じる合図
-        with mock.patch.object(launch_guard, "is_process_alive", return_value=True), \
-                mock.patch.object(process_manager, "_close_window"), \
-                mock.patch.object(process_manager, "_wait_pid_gone", return_value=False):
-            got = process_manager.stop_desktop(info)
+        ask.assert_called_once_with({99})                              # 窓(exe)に。Python ではない
+        kill.assert_not_called()
+
+    def test_窓が残れば処理中(self) -> None:
+        got, _ask, _kill = self.stop(gone=False)
         self.assertFalse(got.stopped)
         self.assertTrue(got.busy_jobs)
-        with mock.patch.object(launch_guard, "is_process_alive", return_value=True), \
-                mock.patch.object(process_manager, "_close_window") as close, \
-                mock.patch.object(process_manager, "_wait_pid_gone", return_value=True):
-            got = process_manager.stop_desktop(info, force=True)
-        self.assertTrue(got.stopped)
-        close.assert_called_once_with(99, force=True)
 
+    def test_forceなら窓と子をまとめて止める(self) -> None:
+        got, ask, kill = self.stop(force=True)
+        self.assertTrue(got.stopped)
+        ask.assert_not_called()
+        kill.assert_called_once_with(99)
+
+    def test_窓が見つからなければ止められなかったと言う(self) -> None:
+        got, _ask, _kill = self.stop(sent=0)
+        self.assertFalse(got.stopped)
+        self.assertFalse(got.busy_jobs)                                # 処理中ではない(1 で返る)
+
+    def test_親の番号しか無く_このツールの窓と確かめられなければ止めない(self) -> None:
+        """前の版の外枠では Python の親(py.exe のこともある)を書いていた。違うプロセスを止めない。"""
+        info = {**self.INFO, "exe_pid_from": "parent"}
+        with mock.patch.object(process_manager, "_looks_like_our_exe", return_value=False):
+            got, ask, kill = self.stop(info)
+        self.assertFalse(got.stopped)
+        ask.assert_not_called()
+        kill.assert_not_called()
+
+    def test_窓が居なくて_Pythonだけ残っていれば止める(self) -> None:
+        got, ask, kill = self.stop(alive=lambda pid: pid == 100)
+        self.assertTrue(got.stopped)
+        ask.assert_not_called()
+        kill.assert_called_once_with(100)
+
+    def test_外枠が渡した窓の番号を印に書く(self) -> None:
+        with mock.patch.dict(os.environ, {"PACKAGING_TOOL_EXE_PID": "4242"}):
+            launch_guard.write_desktop_marker("field")
+        raw = launch_guard.read_desktop_marker()
+        self.assertEqual((raw["exe_pid"], raw["exe_pid_from"]), (4242, "env"))
+        os.environ.pop("PACKAGING_TOOL_EXE_PID", None)
+        launch_guard.write_desktop_marker("field")
+        self.assertEqual(launch_guard.read_desktop_marker()["exe_pid_from"], "parent")
+
+
+class DesktopTargetsTests(_LocalDir):
+    def test_Pythonが落ちて窓だけ残っていても_このツールのexeなら止める相手にする(self) -> None:
+        path = launch_guard.desktop_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"pid": 1, "exe_pid": 99, "exe_pid_from": "env"}), encoding="utf-8")
+        with mock.patch.object(launch_guard, "is_process_alive", side_effect=lambda pid: pid == 99), \
+                mock.patch.object(process_manager, "_looks_like_our_exe", return_value=True), \
+                mock.patch.object(process_manager, "_our_exe_pids", return_value=set()):
+            found = process_manager.desktop_targets(None)
+        self.assertEqual([t["exe_pid"] for t in found], [99])
+
+    def test_印が無くても_このツールのフォルダのexeが動いていれば止める相手にする(self) -> None:
+        with mock.patch.object(process_manager, "_our_exe_pids", return_value={77}):
+            found = process_manager.desktop_targets(None)
+        self.assertEqual([(t["exe_pid"], t["exe_pid_from"]) for t in found], [(77, "path")])
+
+    def test_同じ窓を2回数えない(self) -> None:
+        desktop = {"pid": 1, "exe_pid": 77, "exe_pid_from": "env"}
+        with mock.patch.object(process_manager, "_our_exe_pids", return_value={77}):
+            self.assertEqual(len(process_manager.desktop_targets(desktop)), 1)
+
+
+class ExitCodeStatusTests(_LocalDir):
     def test_状態にデスクトップ版を出す(self) -> None:
         out = io.StringIO()
         with mock.patch.object(launch_guard, "desktop_running",

@@ -19,7 +19,7 @@ mod bridge;
 mod pages;
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -248,9 +248,21 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 // ------------------------------------------------------------------
 // 終わり方
 // ------------------------------------------------------------------
+/// 終わり方を確かめている最中か(VER4.8.126)。確かめの窓を出しているあいだに、もう一度「閉じて」が
+/// 来ても(× を続けて押した・stop.bat やランチャーが1分ごとに止め直す)、窓を重ねて出さない
+static CONFIRMING: AtomicBool = AtomicBool::new(false);
+
 /// いちばん大きい窓の × を押した。**画面の「終了」と同じ確認を通る**
 /// (保存していない配置図・実行中の取り込みがあれば訊く)。
 fn confirm_close(app: AppHandle, bridge: Arc<Bridge>) {
+    if CONFIRMING.swap(true, Ordering::SeqCst) {
+        // もう確かめている。いま出ている窓を前に出すだけ
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+        return;
+    }
     thread::spawn(move || {
         let json = vec![("Content-Type".to_string(), "application/json".to_string())];
         let ask = bridge.call("POST", "/api/shutdown", "", json.clone(), b"{}");
@@ -270,6 +282,9 @@ fn confirm_close(app: AppHandle, bridge: Arc<Bridge>) {
                 if chose_quit(&answer) {
                     let _ = bridge.call("POST", "/api/shutdown", "", json, br#"{"force": true}"#);
                     exit_soon(app);
+                } else {
+                    // 「やめる」。次の「閉じて」でまた確かめる
+                    CONFIRMING.store(false, Ordering::SeqCst);
                 }
             }
             // 200: Python が「終わってよい」を知らせてくる。来なくても少し待って終える

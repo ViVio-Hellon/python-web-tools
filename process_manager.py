@@ -163,32 +163,53 @@ DESKTOP_WAIT_SEC = 10.0
 def stop_desktop(desktop: dict, *, force: bool = False) -> StopResult:
     """デスクトップ版の窓を止める(VER4.8.125)。
 
-    ふだんは窓に「閉じて」と頼む(× と同じ。Windows は `taskkill` の /F なしで窓に閉じる合図を送る)。
-    窓が閉じる前に、保存していない図・実行中の処理を訊く ── そのあいだ窓は残るので「処理中」。
-    `force` なら窓とその子(Python)をまとめて止める(窓の中で保存していないものは捨てる)。
+    ふだんは窓に「閉じて」と頼む(**見えている窓にだけ WM_CLOSE**。窓の × と同じで、ランチャーの［ツール停止］・
+    CI の確かめ `scripts/desktop_smoke.py` と同じ頼み方)。窓は閉じる前に、保存していない図・実行中の処理を訊く ──
+    そのあいだ窓は残るので「処理中」。`force` なら窓とその子(Python)をまとめて止める(保存していないものは捨てる)。
+
+    止める相手は**この窓だと確かめられたものだけ**(番号は使い回されるので、別のプロセスを止めない):
+      - 外枠が環境変数で渡した窓の番号(`exe_pid_from` = env)・このツールのフォルダの exe として見つけたもの(path)・
+        確かめ済みのもの(checked)はそのまま
+      - 親の番号しか無いとき(前の版の外枠。py.exe のこともある)は、コマンドラインがこのツールの exe のときだけ
     """
     import launch_guard
 
     result = StopResult("デスクトップ版")
-    exe_pid = int(desktop.get("exe_pid") or 0)
     py_pid = int(desktop.get("pid") or 0)
-    target = exe_pid if exe_pid > 0 and launch_guard.is_process_alive(exe_pid) else py_pid
-    if target <= 0 or not launch_guard.is_process_alive(target):
+    exe_pid = int(desktop.get("exe_pid") or 0)
+    if exe_pid <= 0 or not launch_guard.is_process_alive(exe_pid):
+        if py_pid > 0 and launch_guard.is_process_alive(py_pid):
+            # 窓が居ないのに Python だけ残っている(外枠が落ちた)。Python を止める(bridge.py だと確かめ済み)
+            return _stop_lone_python(py_pid, result)
         result.stopped = True
         result.method = "already-gone"
         result.message = "すでに終了していました"
         return result
-    _close_window(target, force=force)
-    if _wait_pid_gone(target, DESKTOP_WAIT_SEC if not force else FORCE_WAIT_SEC):
-        if py_pid > 0:
-            _wait_pid_gone(py_pid, FORCE_WAIT_SEC)
-        result.stopped = True
-        result.method = "force" if force else "close"
-        result.message = "強制終了しました" if force else "窓を閉じました"
+    if desktop.get("exe_pid_from") not in ("env", "path", "checked") and not _looks_like_our_exe(exe_pid):
+        result.message = (f"窓(pid {exe_pid})がこのツールのものか確かめられないので止めません。"
+                          "窓の × で閉じてください")
         return result
     if force:
-        result.message = (f"強制終了を頼みましたが、pid {target} がまだ残っています。"
+        _kill_tree(exe_pid)
+        if _wait_pid_gone(exe_pid, FORCE_WAIT_SEC):
+            _finish_python(py_pid)
+            result.stopped = True
+            result.method = "force"
+            result.message = "強制終了しました"
+            return result
+        result.message = (f"強制終了を頼みましたが、pid {exe_pid} がまだ残っています。"
                           "タスクマネージャーで 梱包資材総合ツール.exe を確かめてください")
+        return result
+    sent = _ask_windows_to_close({exe_pid})
+    if sent == 0:
+        result.message = ("窓が見つからないので、閉じてと頼めませんでした。"
+                          "窓の × で閉じるか、--force を付けてください")
+        return result
+    if _wait_pid_gone(exe_pid, DESKTOP_WAIT_SEC):
+        _finish_python(py_pid)
+        result.stopped = True
+        result.method = "close"
+        result.message = "窓を閉じました"
         return result
     result.busy_jobs = ["デスクトップ版の窓で、保存していない図・実行中の処理を確かめています"]
     result.message = ("窓が閉じませんでした(保存していない図・実行中の処理を窓で訊いています)。\n"
@@ -196,21 +217,137 @@ def stop_desktop(desktop: dict, *, force: bool = False) -> StopResult:
     return result
 
 
-def _close_window(pid: int, *, force: bool) -> None:
-    """窓に閉じる合図を送る(`force` なら子ごと強制終了)。"""
+EXE_NAMES = ("梱包資材総合ツール", "packagingtool", "packaging-tool-desktop")
+# このツールのフォルダに置く exe の名前(配るとき `梱包資材総合ツール.exe`、CI が作る名前 `PackagingTool.exe`)
+EXE_FILES = ("梱包資材総合ツール.exe", "PackagingTool.exe")
+
+
+def desktop_targets(desktop: Optional[dict]) -> list[dict]:
+    """止めるデスクトップ版の窓(VER4.8.125)。
+
+    1. 中の Python が置いた印(`desktop_running`。Python が生きていて bridge.py を動かしている)
+    2. 印はあるが Python が居ない(落ちた): 窓(exe)だけ残っていれば。**このツールの exe だと確かめられたときだけ**
+    3. 印が無くても、**このツールのフォルダの exe** が動いていれば(Python が見つからず理由の画面のまま、など)。
+       窓が残っていると exe のファイルを掴んだままで、更新の上書きが止まる
+    """
+    import launch_guard
+
+    found: list[dict] = []
+    if desktop is not None:
+        found.append(desktop)
+    else:
+        raw = launch_guard.read_desktop_marker()
+        exe_pid = int((raw or {}).get("exe_pid") or 0)
+        if exe_pid > 0 and launch_guard.is_process_alive(exe_pid) and _looks_like_our_exe(exe_pid):
+            found.append({**raw, "pid": 0, "exe_pid_from": "checked"})
+    known = {int(d.get("exe_pid") or 0) for d in found}
+    for pid in _our_exe_pids():
+        if pid not in known:
+            found.append({"pid": 0, "exe_pid": pid, "exe_pid_from": "path"})
+    return found
+
+
+def _our_exe_pids() -> set[int]:
+    """**このツールのフォルダにある exe** で動いているプロセスの番号(Windows だけ。取れなければ空)。"""
+    if os.name != "nt":
+        return set()
+    import subprocess
+    root = str(APP_ROOT).replace("'", "''")
+    names = " -or ".join(f"$_.Name -ieq '{n}'" for n in EXE_FILES)
+    script = ("Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and "
+              f"([IO.Path]::GetDirectoryName($_.ExecutablePath) -ieq '{root}') -and ({names}) }} | "
+              "ForEach-Object { $_.ProcessId }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                             capture_output=True, text=True, timeout=20,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("このツールの exe を探せませんでした: %s", exc)
+        return set()
+    return {int(t) for t in (out.stdout or "").split() if t.strip().isdigit()}
+
+
+def _looks_like_our_exe(pid: int) -> bool:
+    """そのプロセスがこのツールの exe か(コマンドラインで見る。取れなければ違うとみなす)。"""
+    import launch_guard
+    command = (launch_guard.process_command_line(pid) or "").lower()
+    return bool(command) and any(name in command for name in EXE_NAMES)
+
+
+def _finish_python(py_pid: int) -> None:
+    """窓が終わったあと、中の Python も終わるのを待つ(外枠は終わるとき子をまとめて止める。VER4.8.84)。
+    残っていれば止める(フォルダを掴んだままにしない)。"""
+    import launch_guard
+    if py_pid > 0 and not _wait_pid_gone(py_pid, FORCE_WAIT_SEC) and launch_guard.is_process_alive(py_pid):
+        _kill_tree(py_pid)
+        _wait_pid_gone(py_pid, FORCE_WAIT_SEC)
+
+
+def _stop_lone_python(py_pid: int, result: StopResult) -> StopResult:
+    _kill_tree(py_pid)
+    if _wait_pid_gone(py_pid, FORCE_WAIT_SEC):
+        result.stopped = True
+        result.method = "python"
+        result.message = "窓は終わっていて、残っていた Python を止めました"
+    else:
+        result.message = f"残っていた Python(pid {py_pid})を止められませんでした"
+    return result
+
+
+def _kill_tree(pid: int) -> None:
+    """そのプロセスと子をまとめて止める(Windows は taskkill /T /F)。"""
     import subprocess
     if os.name == "nt":
-        args = ["taskkill", "/PID", str(pid)] + (["/T", "/F"] if force else [])
         try:
-            subprocess.run(args, capture_output=True, timeout=15,
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.SubprocessError) as exc:
-            log.warning("窓に閉じる合図を送れませんでした: %s", exc)
+            log.warning("強制終了を頼めませんでした: %s", exc)
         return
     try:
-        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM) if force else signal.SIGTERM)
+        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
     except OSError as exc:
-        log.warning("窓に閉じる合図を送れませんでした: %s", exc)
+        log.warning("強制終了を頼めませんでした: %s", exc)
+
+
+def _ask_windows_to_close(pids: set[int]) -> int:
+    """そのプロセスの**見えている最上位の窓**(持ち主のいる窓は除く)に WM_CLOSE を送る。送った窓の数。
+
+    ランチャーの `desktop._windows_of`・`scripts/desktop_smoke.py` の `ask_to_close` と同じ選び方。
+    見えない窓(外枠の中の仕組みの窓)には送らない。Windows 以外では SIGTERM(試験・開発用)。
+    """
+    if os.name != "nt":
+        sent = 0
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                sent += 1
+            except OSError:
+                pass
+        return sent
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    found: list = []
+
+    def visit(hwnd, _param):
+        if user32.IsWindowVisible(hwnd) and not user32.GetWindow(hwnd, 4):   # 4 = GW_OWNER
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value in pids:
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(callback_type(visit), 0)
+    return sum(1 for hwnd in found if user32.PostMessageW(hwnd, 0x0010, 0, 0))   # 0x0010 = WM_CLOSE
 
 
 def _request_shutdown(port: int, token: str, *, force: bool) -> dict:
@@ -367,8 +504,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     results = [stop(mode, force=args.force) for mode in targets]
-    if desktop is not None:
-        results.append(stop_desktop(desktop, force=args.force))
+    for window in desktop_targets(desktop):
+        results.append(stop_desktop(window, force=args.force))
     code, lines = report(results)
     for line in lines:
         print(line)

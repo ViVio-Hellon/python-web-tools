@@ -691,6 +691,17 @@ def desktop_marker_path() -> Path:
     return app_config.local_dir("runtime") / DESKTOP_MARKER
 
 
+def _env_exe_pid() -> int:
+    try:
+        return int(os.environ.get("PACKAGING_TOOL_EXE_PID", "") or 0)
+    except ValueError:
+        return 0
+
+
+def _exe_pid() -> int:
+    return _env_exe_pid() or os.getppid()
+
+
 def write_desktop_marker(mode: str) -> None:
     """デスクトップ版の Python が動き始めた。書けなくても起動は止めない。"""
     path = desktop_marker_path()
@@ -698,7 +709,10 @@ def write_desktop_marker(mode: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
             "app_id": app_config.app_id(), "mode": mode, "pid": os.getpid(),
-            "exe_pid": os.getppid(), "started_at": time.time(),
+            # 窓(exe)の番号。外枠が環境変数で渡す(VER4.8.126)。Python の親は py.exe のこともあるので、
+            # 渡されていなければ親の番号を「確かめが要るもの」として書く(stop.bat が窓か確かめてから止める)
+            "exe_pid": _exe_pid(), "exe_pid_from": "env" if _env_exe_pid() else "parent",
+            "started_at": time.time(),
             "app_root": str(app_config.APP_ROOT)}, ensure_ascii=False), encoding="utf-8")
     except OSError as exc:
         log.warning("デスクトップ版の印を書けませんでした (%s): %s", path, exc)
@@ -713,6 +727,15 @@ def remove_desktop_marker() -> None:
             path.unlink()
     except (OSError, ValueError):
         pass
+
+
+def read_desktop_marker() -> Optional[dict]:
+    """デスクトップ版の印の中身(読めなければ None)。動いているかは見ない(`desktop_running`)。"""
+    try:
+        raw = json.loads(desktop_marker_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return raw if isinstance(raw, dict) else None
 
 
 def desktop_running() -> Optional[dict]:

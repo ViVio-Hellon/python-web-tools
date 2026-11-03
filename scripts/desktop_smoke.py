@@ -9,7 +9,7 @@
     3. exe を止めると Python も終わる(取り残さない)
     4. **ランチャーからの扱い**(docs/ランチャー連携.md)
        - 2回目に起動した exe は、窓を出さずにすぐ終わる(戻り値 0)。1つ目は動いたまま
-       - Windows: 窓に「閉じて」(WM_CLOSE)と頼むと、×と同じ確かめを通って
+       - Windows: stop.bat(STOP_NOPAUSE=1)で止めると、窓に「閉じて」(WM_CLOSE)と頼み、×と同じ確かめを通って
          **自分で**終わる(戻り値 0。Python も残らない)。業務ツール統合ランチャーの
          ［ツール停止］はこのやり方で止める(`launcher/desktop.py` の close_windows)
 
@@ -244,17 +244,23 @@ def main() -> int:
         ok = second_launch_exits(args.exe, env, app) and ok
         closed = False
         if WINDOWS:
-            # ランチャーの［ツール停止］と同じ: 窓に「閉じて」と頼み、自分で終わるのを待つ
-            sent = ask_to_close({app.pid, *children(app.pid)})
+            # **stop.bat で止める**(VER4.8.126)。業務ツール統合ランチャー 1.8.9 の「更新のため全 PC で止める」は
+            # stop.bat を STOP_NOPAUSE=1 で呼ぶ。stop.bat は窓に「閉じて」と頼む(見えている窓に WM_CLOSE。
+            # 下の `ask_to_close` と同じ頼み方)。本物の cmd で stop.bat の書き方ごと通す
+            stop = subprocess.run(["cmd", "/c", str(ROOT / "stop.bat")],
+                                  env=dict(env, STOP_NOPAUSE="1"), cwd=str(ROOT),
+                                  capture_output=True, timeout=120)
+            out = stop.stdout.decode("cp932", "replace")
             try:
-                code = app.wait(timeout=30) if sent else None
+                code = app.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 code = None
-            if code == 0 and "停止要求を受け付けました" in latest_log(work):
+            if stop.returncode == 0 and code == 0 and "停止要求を受け付けました" in latest_log(work):
                 closed = True
-                print(f"[OK] 窓に「閉じて」と頼むと、終了の確かめを通って自分で終わりました(窓 {sent} 枚)")
+                print("[OK] stop.bat(STOP_NOPAUSE=1)で、窓が終了の確かめを通って自分で終わりました(戻り値 0)")
             else:
-                print(f"[NG] 窓に「閉じて」と頼んでも終わりませんでした(窓 {sent} 枚・戻り値 {code})")
+                print(f"[NG] stop.bat で止まりませんでした(stop.bat の戻り値 {stop.returncode}・exe の戻り値 {code})")
+                print(out[-2000:])
                 ok = False
         if not closed and app.poll() is None:
             app.terminate()

@@ -228,6 +228,9 @@ impl Bridge {
             .arg(script)
             .current_dir(&self.root)
             .env("PACKAGING_TOOL_TOKEN", &self.token)
+            // 窓(この exe)の番号。stop.bat が窓に「閉じて」と頼む相手(VER4.8.126)。
+            // Python の親は py.exe のこともあるので、親の番号ではなくこれを使う
+            .env("PACKAGING_TOOL_EXE_PID", std::process::id().to_string())
             .env("PYTHONIOENCODING", "utf-8")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
