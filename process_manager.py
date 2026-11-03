@@ -120,14 +120,12 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
 
     health = launch_guard.probe_health(info.port)
     if not launch_guard.is_our_app(health, mode, pid=info.pid):
-        # 応答しない、または別のアプリ。ロックだけ残っている状態
-        if launch_guard.is_process_alive(info.pid):
+        # 応答しない、または別のアプリ。ロックだけ残っている状態。
+        # **番号と起動時刻の両方で**書いた本人か見る(VER4.8.127。PC の終了・再起動のあと、別のプログラムが
+        # 同じ番号を持つことがある。前は番号だけで見て「このアプリではないので止めません」で終わり、ロックも残った)
+        if launch_guard.lock_owner_alive(info):
             return _stop_by_pid(mode, info, result, force=force)
-        launch_guard.remove_lock(mode, expect=info)
-        result.stopped = True
-        result.method = "stale-lock"
-        result.message = "動いていませんでした(残っていたロックを片付けました)"
-        return result
+        return _clean_stale_lock(mode, info, result)
 
     # --- 1. 正常終了を要求する ---
     asked = _request_shutdown(info.port, info.token, force=force)
@@ -177,13 +175,16 @@ def stop_desktop(desktop: dict, *, force: bool = False) -> StopResult:
     result = StopResult("デスクトップ版")
     py_pid = int(desktop.get("pid") or 0)
     exe_pid = int(desktop.get("exe_pid") or 0)
-    if exe_pid <= 0 or not launch_guard.is_process_alive(exe_pid):
-        if py_pid > 0 and launch_guard.is_process_alive(py_pid):
+    if not _exe_alive(desktop):
+        if _python_alive(desktop):
             # 窓が居ないのに Python だけ残っている(外枠が落ちた)。Python を止める(bridge.py だと確かめ済み)
             return _stop_lone_python(py_pid, result)
         result.stopped = True
         result.method = "already-gone"
         result.message = "すでに終了していました"
+        if desktop.get("started_at"):
+            launch_guard.remove_desktop_marker(expect=desktop)
+            result.message = f"すでに終了していました(残っていた印を{CLEANED_HINT})"
         return result
     if desktop.get("exe_pid_from") not in ("env", "path", "checked") and not _looks_like_our_exe(exe_pid):
         result.message = (f"窓(pid {exe_pid})がこのツールのものか確かめられないので止めません。"
@@ -192,7 +193,7 @@ def stop_desktop(desktop: dict, *, force: bool = False) -> StopResult:
     if force:
         _kill_tree(exe_pid)
         if _wait_pid_gone(exe_pid, FORCE_WAIT_SEC):
-            _finish_python(py_pid)
+            _finish_python(desktop)
             result.stopped = True
             result.method = "force"
             result.message = "強制終了しました"
@@ -206,7 +207,7 @@ def stop_desktop(desktop: dict, *, force: bool = False) -> StopResult:
                           "窓の × で閉じるか、--force を付けてください")
         return result
     if _wait_pid_gone(exe_pid, DESKTOP_WAIT_SEC):
-        _finish_python(py_pid)
+        _finish_python(desktop)
         result.stopped = True
         result.method = "close"
         result.message = "窓を閉じました"
@@ -238,8 +239,12 @@ def desktop_targets(desktop: Optional[dict]) -> list[dict]:
     else:
         raw = launch_guard.read_desktop_marker()
         exe_pid = int((raw or {}).get("exe_pid") or 0)
-        if exe_pid > 0 and launch_guard.is_process_alive(exe_pid) and _looks_like_our_exe(exe_pid):
+        if (exe_pid > 0 and launch_guard.is_process_alive(exe_pid)
+                and launch_guard.desktop_exe_alive(raw) is not False and _looks_like_our_exe(exe_pid)):
             found.append({**raw, "pid": 0, "exe_pid_from": "checked"})
+        elif raw is not None:
+            # 窓も Python も居ない(PC の終了・再起動のあと、など)。残った印を片付ける(VER4.8.127)
+            launch_guard.remove_desktop_marker(expect=raw)
     known = {int(d.get("exe_pid") or 0) for d in found}
     for pid in _our_exe_pids():
         if pid not in known:
@@ -274,11 +279,37 @@ def _looks_like_our_exe(pid: int) -> bool:
     return bool(command) and any(name in command for name in EXE_NAMES)
 
 
-def _finish_python(py_pid: int) -> None:
-    """窓が終わったあと、中の Python も終わるのを待つ(外枠は終わるとき子をまとめて止める。VER4.8.84)。
-    残っていれば止める(フォルダを掴んだままにしない)。"""
+def _exe_alive(desktop: dict) -> bool:
+    """止める相手の窓(exe)がまだ動いているか。印から来たものは**番号と起動時刻で**本人か見る(VER4.8.127)。"""
     import launch_guard
-    if py_pid > 0 and not _wait_pid_gone(py_pid, FORCE_WAIT_SEC) and launch_guard.is_process_alive(py_pid):
+    exe_pid = int(desktop.get("exe_pid") or 0)
+    if exe_pid <= 0 or not launch_guard.is_process_alive(exe_pid):
+        return False
+    if desktop.get("started_at") and launch_guard.desktop_exe_alive(desktop) is False:
+        log.info("印の窓 pid=%s は動いていますが、別のプログラムです(番号の使い回し)", exe_pid)
+        return False
+    return True
+
+
+def _python_alive(desktop: dict) -> bool:
+    """印を書いた Python(bridge.py)がまだ動いているか。番号と起動時刻、取れなければコマンドラインで見る。"""
+    import launch_guard
+    py_pid = int(desktop.get("pid") or 0)
+    if py_pid <= 0 or not launch_guard.is_process_alive(py_pid):
+        return False
+    same = launch_guard.desktop_python_alive(desktop) if desktop.get("started_at") else None
+    if same is not None:
+        return same
+    # 起動時刻が取れない: `desktop_running` と同じ確かめ方(取れたコマンドラインが bridge.py でなければ別物)
+    command = launch_guard.process_command_line(py_pid)
+    return not command or "bridge.py" in command
+
+
+def _finish_python(desktop: dict) -> None:
+    """窓が終わったあと、中の Python も終わるのを待つ(外枠は終わるとき子をまとめて止める。VER4.8.84)。
+    残っていれば止める(フォルダを掴んだままにしない)。本人と確かめられたときだけ。"""
+    py_pid = int(desktop.get("pid") or 0)
+    if py_pid > 0 and not _wait_pid_gone(py_pid, FORCE_WAIT_SEC) and _python_alive(desktop):
         _kill_tree(py_pid)
         _wait_pid_gone(py_pid, FORCE_WAIT_SEC)
 
@@ -386,18 +417,35 @@ def _request_shutdown(port: int, token: str, *, force: bool) -> dict:
         return {"ok": False}
 
 
+CLEANED_HINT = "片付けました。Start.vbs で起動できます"
+
+
+def _clean_stale_lock(mode: str, info, result: StopResult) -> StopResult:
+    """ツールは動いていない(ロックだけ残っている)。**ロックを片付ける**(プロセスは止めない)。"""
+    import launch_guard
+
+    launch_guard.remove_lock(mode, expect=info)
+    log.info("%s: 動いていないのにロックが残っていました(pid=%s)。%s", mode, info.pid, CLEANED_HINT)
+    result.stopped = True
+    result.method = "stale-lock"
+    result.message = f"動いていませんでした(残っていたロックを{CLEANED_HINT})"
+    return result
+
+
 def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopResult:
     """PIDで止める。**落とす前に本当にこのアプリかを確かめる。**"""
     import launch_guard
 
-    if not launch_guard.is_process_alive(info.pid):
-        launch_guard.remove_lock(mode, expect=info)
-        result.stopped = True
-        result.method = "already-gone"
-        result.message = "すでに終了していました"
-        return result
+    if not launch_guard.lock_owner_alive(info):
+        return _clean_stale_lock(mode, info, result)
 
     if not _looks_like_our_process(info):
+        command = launch_guard.process_command_line(info.pid)
+        if command and "bridge.py" not in command:
+            # コマンドラインが取れて、このツールではない = 別のプログラムが同じ番号を使っている。
+            # このツールは動いていないので、止めずにロックだけ片付ける
+            log.info("pid=%s は別のプログラムです(番号の使い回し): %s", info.pid, command[:200])
+            return _clean_stale_lock(mode, info, result)
         result.message = (
             f"pid {info.pid} はこのアプリではないようなので止めません。\n"
             f"    手動で確認してください(ロック: {launch_guard.lock_path(mode)})")

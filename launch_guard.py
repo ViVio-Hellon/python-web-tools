@@ -63,6 +63,9 @@ class LockInfo:
     # 逆に、悪意あるWebページはローカルのファイルを読めないため、
     # トークンによる防御(別オリジンからの操作を弾く)はそのまま効く。
     token: str = ""
+    # **このプロセスが起動した時刻**(VER4.8.127)。番号は使い回されるので、番号と起動時刻の両方が
+    # 合うときだけ「書いた本人が動いている」とみなす(`lock_owner_alive`)。前の版のロックには無い(0)
+    proc_started: float = 0.0
 
     @property
     def started_text(self) -> str:
@@ -173,7 +176,8 @@ def try_acquire(mode: str) -> bool:
     info = LockInfo(
         app_id=app_config.app_id(), mode=mode, pid=os.getpid(),
         port=STARTING_PORT, url="", started_at=time.time(),
-        python=sys.executable, app_root=str(app_config.APP_ROOT))
+        python=sys.executable, app_root=str(app_config.APP_ROOT),
+        proc_started=process_started_at(os.getpid()) or 0.0)
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
@@ -224,6 +228,86 @@ def _is_alive_windows(pid: int) -> bool:
         log.warning("tasklist を実行できませんでした: %s", exc)
         return True              # 分からないときは「生きている」に倒す
     return f'"{pid}"' in out.stdout
+
+
+# 起動時刻を比べるときの許し幅(秒)。時計の刻み・書くまでの間を吸収する
+START_TOLERANCE_SEC = 2.0
+
+
+def process_started_at(pid: int) -> Optional[float]:
+    """そのプロセスが**起動した時刻**(time.time() と同じ秒)。分からなければ None。
+
+    番号(PID)は使い回される ── PC を終了・再起動したあと、まったく別のプログラムが同じ番号を
+    持つことがある。番号だけで「動いている」とみなすと、残ったロックをいつまでも「起動中」と見る。
+    Windows は GetProcessTimes(外部コマンドを使わない。ハンドルは必ず閉じる)、Linux は /proc。
+    """
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        return _started_at_windows(pid)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        ticks = int(stat.rsplit(")", 1)[1].split()[19])     # 22番目の項目 starttime(起動からの刻み)
+        boot = next(float(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
+                    if line.startswith("btime "))
+        return boot + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def _started_at_windows(pid: int) -> Optional[float]:
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))    # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+                return None
+            created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        finally:
+            kernel32.CloseHandle(handle)
+        return created / 10_000_000 - 11_644_473_600             # 1601年からの 100ns → 1970年からの秒
+    except (OSError, AttributeError, ValueError) as exc:
+        log.info("pid=%s の起動時刻を取れませんでした: %s", pid, exc)
+        return None
+
+
+def is_same_process(pid: int, proc_started: float = 0.0, written_at: float = 0.0) -> Optional[bool]:
+    """その番号のプロセスが、**ファイルを書いた本人か**。分からなければ None(呼び手は前の確かめ方へ)。
+
+        居ない                                   → False
+        起動時刻を書いてある(VER4.8.127〜)     → 番号と起動時刻の両方が合えば True
+        書いていない(前の版のファイル)         → **書いた時刻より後に起動したプロセスは本人ではない**(False)
+    """
+    pid = int(pid or 0)
+    if not is_process_alive(pid):
+        return False
+    started = process_started_at(pid)
+    if started is None:
+        return None
+    if proc_started:
+        return abs(started - float(proc_started)) <= START_TOLERANCE_SEC
+    if written_at:
+        return started <= float(written_at) + START_TOLERANCE_SEC
+    return None
+
+
+def lock_owner_alive(info: "LockInfo") -> bool:
+    """ロックを書いたプロセスが**まだ動いているか**(番号の使い回しを本人と取り違えない。VER4.8.127)。"""
+    same = is_same_process(info.pid, info.proc_started, info.started_at)
+    if same is None:
+        return is_process_alive(info.pid)        # 起動時刻が取れないときは前のまま(番号だけ)
+    if not same and is_process_alive(info.pid):
+        log.info("ロックの pid=%s は動いていますが、書いた本人ではありません(番号の使い回し)", info.pid)
+    return same
 
 
 def process_command_line(pid: int) -> str:
@@ -476,8 +560,8 @@ def check_existing(mode: str) -> GuardResult:
     if info is None:
         return GuardResult(True, reason="ロックなし")
 
-    if not is_process_alive(info.pid):
-        log.info("死んだロックを掃除します (pid=%s は不在)", info.pid)
+    if not lock_owner_alive(info):
+        log.info("死んだロックを掃除します (pid=%s は不在、または番号の使い回し)", info.pid)
         remove_lock(mode, expect=info)
         return GuardResult(True, reason=f"ロックは残っていたがpid {info.pid} は不在")
 
@@ -558,7 +642,7 @@ def _wait_for_starting(mode: str, info: "LockInfo") -> GuardResult:
             return GuardResult(False, url=now.url, existing=now,
                                reason="起動中だった1つ目に合流します")
         last = now
-        if not is_process_alive(now.pid):
+        if not lock_owner_alive(now):
             remove_lock(mode, expect=now)
             return GuardResult(True, reason="起動中のプロセスが居なくなりました")
 
@@ -673,6 +757,7 @@ def build_lock_info(mode: str, port: int, token: str = "") -> LockInfo:
         python=sys.executable,
         app_root=str(app_config.APP_ROOT),
         token=token,
+        proc_started=process_started_at(os.getpid()) or 0.0,
     )
 
 
@@ -712,21 +797,47 @@ def write_desktop_marker(mode: str) -> None:
             # 窓(exe)の番号。外枠が環境変数で渡す(VER4.8.126)。Python の親は py.exe のこともあるので、
             # 渡されていなければ親の番号を「確かめが要るもの」として書く(stop.bat が窓か確かめてから止める)
             "exe_pid": _exe_pid(), "exe_pid_from": "env" if _env_exe_pid() else "parent",
+            # 起動時刻(VER4.8.127)。番号は使い回されるので、stop.bat は番号と起動時刻の両方で本人か確かめる
+            "proc_started": process_started_at(os.getpid()) or 0.0,
+            "exe_started": process_started_at(_exe_pid()) or 0.0,
             "started_at": time.time(),
             "app_root": str(app_config.APP_ROOT)}, ensure_ascii=False), encoding="utf-8")
     except OSError as exc:
         log.warning("デスクトップ版の印を書けませんでした (%s): %s", path, exc)
 
 
-def remove_desktop_marker() -> None:
-    """自分の印だけを消す(あとから起動した別の Python の印は消さない)。"""
+def remove_desktop_marker(expect: Optional[dict] = None) -> None:
+    """自分の印だけを消す(あとから起動した別の Python の印は消さない)。
+
+    `expect` を渡したら、残った印の片付け(stop.bat): 読んだときと同じ pid・書いた時刻のときだけ消す。
+    """
     path = desktop_marker_path()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if int(raw.get("pid", 0)) == os.getpid():
+        if expect is not None:
+            mine = (int(raw.get("pid", 0)) == int(expect.get("pid", 0))
+                    and raw.get("started_at") == expect.get("started_at"))
+        else:
+            mine = int(raw.get("pid", 0)) == os.getpid()
+        if mine:
             path.unlink()
-    except (OSError, ValueError):
+            if expect is not None:
+                log.info("残っていたデスクトップ版の印を片付けました: %s", path)
+    except (OSError, ValueError, TypeError):
         pass
+
+
+def desktop_python_alive(raw: dict) -> Optional[bool]:
+    """印を書いた Python がまだ動いているか(番号と起動時刻で。分からなければ None)。"""
+    return is_same_process(int(raw.get("pid") or 0), float(raw.get("proc_started") or 0),
+                           float(raw.get("started_at") or 0))
+
+
+def desktop_exe_alive(raw: dict) -> Optional[bool]:
+    """印の窓(exe)がまだ動いているか。窓は Python より先に起動しているので、印を書いた時刻より
+    後に起動したプロセスは窓ではない(前の版の印でも確かめられる)。分からなければ None。"""
+    return is_same_process(int(raw.get("exe_pid") or 0), float(raw.get("exe_started") or 0),
+                           float(raw.get("started_at") or 0))
 
 
 def read_desktop_marker() -> Optional[dict]:
@@ -751,6 +862,9 @@ def desktop_running() -> Optional[dict]:
     except (OSError, ValueError, TypeError):
         return None
     if not is_process_alive(pid):
+        return None
+    # **番号の使い回し**(PC の終了・再起動のあと、別のプログラムが同じ番号)を本人と取り違えない(VER4.8.127)
+    if desktop_python_alive(raw) is False:
         return None
     command = process_command_line(pid)
     if command and "bridge.py" not in command:
