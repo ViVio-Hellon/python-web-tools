@@ -13,8 +13,8 @@ r"""配布用フォルダを作る
 配りたいときは、先に設定画面の「配布設定」で書き出しておいてください
 (ツールの直下の `配布設定\`。配った先が起動時に読み込みます)。
 
-    python scripts\make_dist.py                     # ツールの隣に「資材複合ツール_VERx.y.z」
-    python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定
+    python scripts\make_dist.py                     # ツールの隣に「資材複合ツール_VERx.y.z\資材ツール」
+    python scripts\make_dist.py --out D:\配布\今回   # 置き場所を指定(D:\配布\今回\資材ツール にできる)
     python scripts\make_dist.py --zip               # zip も作る
     python scripts\make_dist.py --no-settings       # 配布設定を入れない
 
@@ -58,6 +58,10 @@ EXE_NAME = "梱包資材総合ツール.exe"
 # 作る配布フォルダの名前(既定の置き場所 `ツールの隣\<これ>_VER版`)。現場の指示で「資材複合ツール」。
 # 中の exe の名前・画面の名前は変えない(フォルダの名前だけ)
 DIST_FOLDER_NAME = "資材複合ツール"
+# **版は親のフォルダ**(`資材複合ツール_VER版`)に入れ、**中身のフォルダは「資材ツール」**(版を入れない)。
+# 現場の指示(VER4.8.128)。中身のフォルダの名前が毎回同じなので、更新で丸ごと上書きしても置き場所(道)が変わらない
+# (ランチャー 1.8.9「道を変えない」)
+INNER_FOLDER_NAME = "資材ツール"
 # exe を探す場所(先に見つかったもの)。`--exe` で指定もできる
 EXE_CANDIDATES: tuple[str, ...] = (
     "PackagingTool.exe",
@@ -204,7 +208,8 @@ def build(out: Path, *, with_settings: bool = True, force: bool = False,
     (out / "配布メモ.txt").write_text(_memo(lines), encoding="utf-8-sig")
 
     if make_zip:
-        archive = shutil.make_archive(str(out), "zip", root_dir=out.parent,
+        # zip は親のフォルダの隣に親の名前で。開くと「資材ツール」フォルダが出る
+        archive = shutil.make_archive(str(out.parent), "zip", root_dir=out.parent,
                                       base_dir=out.name)
         lines.append(f"zip も作りました: {archive}")
     return out, lines
@@ -242,13 +247,14 @@ def _memo(lines: list[str]) -> str:
 
 
 def default_out() -> Path:
-    """既定の作る場所: ツールの隣の「資材複合ツール_VER版」。"""
-    return ROOT.parent / f"{DIST_FOLDER_NAME}_VER{_version()}"
+    """既定の作る場所: ツールの隣の「資材複合ツール_VER版」の中の「資材ツール」。"""
+    return ROOT.parent / f"{DIST_FOLDER_NAME}_VER{_version()}" / INNER_FOLDER_NAME
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="配布用フォルダを作る")
-    parser.add_argument("--out", help=f"作る場所(既定: ツールの隣に「{DIST_FOLDER_NAME}_VER版」)")
+    parser.add_argument("--out", help=(f"作る場所。この中に「{INNER_FOLDER_NAME}」を作る"
+                                       f"(既定: ツールの隣に「{DIST_FOLDER_NAME}_VER版\\{INNER_FOLDER_NAME}」)"))
     parser.add_argument("--no-settings", action="store_true",
                         help="配布設定(ツール直下の 配布設定 フォルダ)を入れない")
     parser.add_argument("--force", action="store_true",
@@ -257,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--exe", help="入れるデスクトップ版の exe(既定: 直下の PackagingTool.exe など)")
     args = parser.parse_args(argv)
 
-    out = Path(args.out) if args.out else default_out()
+    out = Path(args.out) / INNER_FOLDER_NAME if args.out else default_out()
     try:
         _out, lines = build(out, with_settings=not args.no_settings,
                             force=args.force, make_zip=args.zip,

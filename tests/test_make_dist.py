@@ -17,13 +17,26 @@ _spec.loader.exec_module(make_dist)
 
 
 class MakeDistTests(unittest.TestCase):
-    def test_既定の配布フォルダの名前は資材複合ツール_VER版(self) -> None:
-        """現場の指示「配布フォルダの名前を 資材複合ツール に」。中の exe の名前は変えない。"""
+    def test_既定の配布フォルダは_版を親に_中身は資材ツール(self) -> None:
+        """現場の指示「版は親フォルダーに入れ、中身は『資材ツール』に」(VER4.8.128)。中の exe の名前は変えない。"""
         version = json.loads((_ROOT / "config" / "app.json").read_text(encoding="utf-8"))["version"]
         out = make_dist.default_out()
-        self.assertEqual(out.name, f"資材複合ツール_VER{version}")
-        self.assertEqual(out.parent, _ROOT.parent)                 # ツールの隣
+        self.assertEqual(out.name, "資材ツール")                     # 中身(版を入れない)
+        self.assertEqual(out.parent.name, f"資材複合ツール_VER{version}")   # 版は親
+        self.assertEqual(out.parent.parent, _ROOT.parent)          # ツールの隣
         self.assertEqual(make_dist.EXE_NAME, "梱包資材総合ツール.exe")
+
+    def test_outを指定すれば_その中に資材ツールを作る(self) -> None:
+        import io
+        from contextlib import redirect_stdout
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(make_dist.main(["--out", str(self.tmp / "今回"), "--no-settings", "--zip"]), 0)
+        inner = self.tmp / "今回" / "資材ツール"
+        self.assertTrue((inner / "Start.vbs").is_file())
+        self.assertTrue((inner / "配布メモ.txt").is_file())
+        import zipfile
+        with zipfile.ZipFile(self.tmp / "今回.zip") as archive:
+            self.assertTrue(all(n.startswith("資材ツール/") for n in archive.namelist()))
 
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
