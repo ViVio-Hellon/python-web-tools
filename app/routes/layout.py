@@ -224,7 +224,7 @@ def add_base():
 def remove():
     body = request.get_json(silent=True) or {}
     session = _session()
-    return _apply(session, session.remove(str(body.get("name", ""))))
+    return _apply(session, session.remove(str(body.get("name", "")), get_db()))
 
 
 @bp.post("/api/layout/background")

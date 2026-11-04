@@ -128,9 +128,39 @@ def master_base_points(conn: Optional[sqlite3.Connection]) -> list[str]:
     return names
 
 
+def master_bases_known(conn: Optional[sqlite3.Connection]) -> Optional[list[str]]:
+    """マスタの拠点。**読めて行があるときだけ**(読めない・まだ取り込んでいない = None。「拠点は無い」にしない)。"""
+    if conn is None:
+        return None
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM BoardMaster").fetchone()[0]
+    except sqlite3.Error:
+        return None
+    if not count:
+        return None
+    return master_base_points(conn)
+
+
+def stale_plan_bases(conn: Optional[sqlite3.Connection], plan_names) -> list[str]:
+    """図にあるが、**マスタで消された**拠点(既定の L-1 / HVC / LVC は除く)。VER4.8.133。
+
+    マスタを読めないとき・まだ取り込んでいないときは空(消されたと決めつけない)。
+    """
+    master = master_bases_known(conn)
+    if master is None:
+        return []
+    keys = {base_key(n) for n in master} | {base_key(d) for d in floor_plan.DEFAULT_BASE_POINTS}
+    return [n for n in plan_names if base_key(n) not in keys]
+
+
 def base_point_names(conn: Optional[sqlite3.Connection] = None) -> list[str]:
-    """選べる拠点。配置図の拠点 + マスタで足した拠点(図と同じものは図の名前で1つ)。"""
+    """選べる拠点。配置図の拠点 + マスタで足した拠点(図と同じものは図の名前で1つ)。
+
+    **マスタで消された拠点は出さない**(VER4.8.133。図にまだ残っていても。現場の声「マスタで消せば棚から消える」)。
+    """
     plan_names = list(floor_plan.base_points())
+    stale = {base_key(n) for n in stale_plan_bases(conn, plan_names)}
+    plan_names = [n for n in plan_names if base_key(n) not in stale]
     keys = {base_key(n) for n in plan_names}
     return plan_names + [n for n in master_base_points(conn) if base_key(n) not in keys]
 

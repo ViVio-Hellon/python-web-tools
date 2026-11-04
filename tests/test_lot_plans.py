@@ -742,21 +742,106 @@ class AddBaseTests(unittest.TestCase):
     def test_編集中でなければ断る(self) -> None:
         self.assertFalse(self.session.add_base("大板", self.conn).ok)
 
-    def test_足した拠点は選んだ置き場を消すで消せる_マスタの行は残す(self) -> None:
-        """VER4.8.132: 現場の声「拠点が一度配置すると消せない」。"""
-        self.session.set_editing(True, self.conn)
-        patcher, _calls = self.fake_master()
-        with patcher:
-            self.assertTrue(self.session.add_base("SVC", self.conn).ok)
+    def source_master(self, labels):
+        """取り込み元の BoardMaster(データラベルの並び)。消す・直すは手元にも映す(取り込み直したのと同じ)。"""
+        import sqlite3 as _sqlite
+        from packaging_tool import master_admin
+        src = Path(tempfile.mkdtemp(prefix="master_")) / "梱包資材マスタ.sqlite3"
+        with _sqlite.connect(src) as raw:
+            raw.execute("CREATE TABLE BoardMaster (データラベル TEXT)")
+            raw.executemany("INSERT INTO BoardMaster VALUES (?)", [(v,) for v in labels])
+        calls = []
+
+        def mirror():
+            with _sqlite.connect(src) as raw:
+                now = [r[0] for r in raw.execute("SELECT データラベル FROM BoardMaster")]
+            self.conn.execute("DELETE FROM BoardMaster")
+            for value in now:
+                self.conn.execute("INSERT INTO BoardMaster (ボード幅, ボード丈, ボードタイプ, データラベル)"
+                                  " VALUES (0, 0, '拠点', ?)", (value,))
+
+        def delete_row(conn, table, key, **kw):
+            calls.append(("delete", key))
+            with _sqlite.connect(src) as raw:
+                raw.execute("DELETE FROM BoardMaster WHERE rowid = ?", (key,))
+            mirror()
+            return master_admin.Result(True, "消しました")
+
+        def save_row(conn, table, key, values, **kw):
+            calls.append(("save", key, values["データラベル"]))
+            with _sqlite.connect(src) as raw:
+                raw.execute("UPDATE BoardMaster SET データラベル = ? WHERE rowid = ?", (values["データラベル"], key))
+            mirror()
+            return master_admin.Result(True, "直しました")
+        mirror()
+        patches = (mock.patch.object(master_admin, "_ready", return_value=(src, None)),
+                   mock.patch.object(master_admin, "delete_row", side_effect=delete_row),
+                   mock.patch.object(master_admin, "save_row", side_effect=save_row))
+        return patches, calls
+
+    def test_足した拠点はマスタの行も消してから図から消す(self) -> None:
+        """VER4.8.132・4.8.133: 現場の声「拠点が一度配置すると消せない」「マスタの行も一緒に消したほうが良い」。"""
+        patches, calls = self.source_master(["拠点SVC", "lblItem36,拠点大板"])
+        self.session.set_editing(True, self.conn)                         # マスタの拠点が図に出る
+        self.assertIn("SVC", self.session.plan.base_point_names)
         self.assertTrue(self.session.select("SVC").ok)                     # 拠点も選べる
-        result = self.session.remove("SVC")
-        self.assertTrue(result.ok, result.message)
+        with patches[0], patches[1], patches[2]:
+            result = self.session.remove("SVC", self.conn)
+            self.assertTrue(result.ok, result.message)
+            self.assertTrue(self.session.remove("大板", self.conn).ok)
+        self.assertEqual(calls, [("delete", 1), ("save", 2, "lblItem36")])  # 印だけの行は消す・置き場の行は印だけ外す
         self.assertNotIn("SVC", self.session.plan.base_point_names)
-        self.assertEqual(self.session.selected, "")
-        self.assertIn("SVC", svc.master_base_points(self.conn))            # 共有のマスタの行は残す
-        self.assertIn("マスタ管理", result.message)
+        self.assertNotIn("SVC", svc.master_base_points(self.conn))
+        self.assertNotIn("SVC", svc.base_point_names(self.conn))
         self.assertTrue(self.session.set_editing(False, self.conn).ok)      # 終えると保存
         self.assertNotIn("SVC", floor_plan.load().base_point_names)
+        self.session.set_editing(True, self.conn)                         # 配置編集に入っても、もう出てこない
+        self.assertNotIn("SVC", self.session.plan.base_point_names)
+
+    def test_マスタで断られたら図も消さない(self) -> None:
+        from packaging_tool import master_admin
+        patches, calls = self.source_master(["拠点SVC"])
+        self.session.set_editing(True, self.conn)
+        refused = master_admin.Result(False, "管理者パスワードが要ります", "not_allowed")
+        with mock.patch.object(master_admin, "_ready", return_value=(None, refused)):
+            result = self.session.remove("SVC", self.conn)
+        self.assertFalse(result.ok)
+        self.assertIn("図も消していません", result.message)
+        self.assertIn("SVC", self.session.plan.base_point_names)
+        self.assertEqual(calls, [])
+
+    def test_マスタで消された拠点は_選択肢と図から消える(self) -> None:
+        patches, _calls = self.source_master(["拠点SVC", "lblItem1"])
+        self.session.set_editing(True, self.conn)
+        self.assertTrue(self.session.set_editing(False, self.conn).ok)      # SVC を図に置いて保存した
+        self.assertIn("SVC", floor_plan.load().base_point_names)
+        self.conn.execute("DELETE FROM BoardMaster WHERE データラベル = '拠点SVC'")   # ほかの端末がマスタで消した
+        self.assertNotIn("SVC", svc.base_point_names(self.conn))           # 選択肢からはすぐ消える
+        from packaging_tool import config, master_state
+        master_state.touch([config.TBL_BOARD_MASTER])
+        self.session.follow_master(self.conn)                             # 棚検索を開いた
+        self.assertNotIn("SVC", self.session.plan.base_point_names)
+        self.assertNotIn("SVC", floor_plan.load().base_point_names)        # 図のファイルからも
+        self.assertIn("SVC", self.session.master_note)
+
+    def test_マスタを読めない_空のときは図から消さない(self) -> None:
+        patches, _calls = self.source_master(["拠点SVC"])
+        self.session.set_editing(True, self.conn)
+        self.session.set_editing(False, self.conn)
+        self.conn.execute("DELETE FROM BoardMaster")                       # まだ取り込んでいない・空
+        self.assertEqual(svc.stale_plan_bases(self.conn, ["SVC"]), [])
+        self.assertEqual(self.session.drop_stale_bases(self.conn), [])
+        self.assertIn("SVC", floor_plan.load().base_point_names)
+
+    def test_マスタで消されても_いま選んでいる拠点は図に残す(self) -> None:
+        patches, _calls = self.source_master(["拠点SVC", "lblItem1"])
+        self.session.set_editing(True, self.conn)
+        self.session.set_editing(False, self.conn)
+        self.conn.execute("DELETE FROM BoardMaster WHERE データラベル = '拠点SVC'")
+        with mock.patch.object(layout_session.user_settings, "get_position", return_value="SVC"):
+            self.assertEqual(self.session.drop_stale_bases(self.conn), [])
+        self.assertIn("SVC", self.session.plan.base_point_names)
+        self.assertIn("切り替えて", self.session.master_note)
 
     def test_既定の拠点と_いま選んでいる拠点は消さない(self) -> None:
         self.session.set_editing(True, self.conn)
@@ -769,7 +854,7 @@ class AddBaseTests(unittest.TestCase):
                 self.assertFalse(result.ok, name)
                 self.assertIn("既定の拠点", result.message)
         with mock.patch.object(layout_session.user_settings, "get_position", return_value="大板"):
-            result = self.session.remove("大板")
+            result = self.session.remove("大板", self.conn)
         self.assertFalse(result.ok)
         self.assertIn("いま選んでいる拠点", result.message)
         self.assertIn("大板", self.session.plan.base_point_names)

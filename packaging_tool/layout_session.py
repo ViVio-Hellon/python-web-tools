@@ -140,6 +140,9 @@ class LayoutSession:
         from . import config, master_state
         revs = (master_state.table_rev(config.TBL_BOARD_MASTER),
                 master_state.table_rev(config.TBL_CORNERBOARD_MASTER))
+        if self.master_revs is None or revs != self.master_revs:
+            # 開いた最初と、マスタが変わったとき: マスタで消された拠点を図から消す(VER4.8.133)
+            self.drop_stale_bases(conn)
         if self.master_revs is None or revs == self.master_revs:
             self.master_revs = revs
             return
@@ -571,14 +574,14 @@ class LayoutSession:
             True, f"拠点 {text} を{said}図の中央に置きました。動かして置いてください"
                   "(編集を終えると保存します)。ほかの端末には次の取り込みで選択肢に出ます")
 
-    def remove(self, name: str) -> LayoutOpResult:
-        """置き場を消す(VBA `do_remove_label`)。**拠点も消せる**(VER4.8.132)。"""
+    def remove(self, name: str, conn: Any = None) -> LayoutOpResult:
+        """置き場を消す(VBA `do_remove_label`)。**拠点も消せる**(VER4.8.132。マスタの行も VER4.8.133)。"""
         if not self.editing:
             return LayoutOpResult(False, "先に「配置編集」をONにしてください。",
                                   REFUSE_BAD_INPUT)
         base = next((b for b in self.plan.base_points if b.name == name), None)
         if base is not None:
-            return self._remove_base(base)
+            return self._remove_base(base, conn)
         if not self.plan.remove_item(name):
             return LayoutOpResult(False, f"{name} は配置図にありません。",
                                   REFUSE_NOT_LISTED)
@@ -589,16 +592,17 @@ class LayoutSession:
         log.info("置き場を削除しました: %s", name)
         return LayoutOpResult(True, f"{name} を消しました")
 
-    def _remove_base(self, base: "floor_plan.MapItem") -> LayoutOpResult:
-        """拠点を図から消す(VER4.8.132)。
+    def _remove_base(self, base: "floor_plan.MapItem", conn: Any = None) -> LayoutOpResult:
+        """拠点を消す。**マスタ(BoardMaster の「拠点〇〇」)からも消してから**、図から消す(VER4.8.132・4.8.133)。
 
-        現場の声:「拠点が一度配置すると消せない」。前は「選んだ置き場を消す」が置き場だけを探し、
-        画面も拠点を押して選べなかった。
+        現場の声:「拠点が一度配置すると消せない」「マスタの行も一緒に消したほうが良いです」。
+        マスタに残すと、拠点・作業予定ラインの選択肢に残り、配置編集に入るとまた図に出ていた。
 
         - **既定の拠点(L-1 / HVC / LVC)は消さない**: 足し直せない(「拠点を追加」は既定を断る)ため。動かすことはできる
         - **この端末でいま選んでいる拠点は消さない**: 距離(疲労度)を測れなくなるため。先に拠点を切り替える
-        - **マスタ(BoardMaster の「拠点〇〇」の行)は消さない**: ほかの端末も使う共有の行なので、図から消すだけにする
-          (拠点・作業予定ラインの選択肢に残る。外したいときはマスタ管理でその行を消す)
+        - マスタを先に直す。**断られたら(管理者認証が無い・届かない)図も触らない**(図だけ消えてマスタに残る、を作らない)
+        - 拠点の印だけの行(ボード幅・丈 0、ボードタイプ 拠点)は行ごと消す。置き場のラベルと一緒に書いてある行は、
+          その印だけを外す(置き場は消さない)
         """
         key = svc.base_key(base.name)
         for default in floor_plan.DEFAULT_BASE_POINTS:
@@ -609,15 +613,87 @@ class LayoutSession:
             return LayoutOpResult(False, f"{base.name} はこの端末でいま選んでいる拠点なので消せません"
                                   "(消すと距離を測れなくなります)。先に拠点を切り替えてください。",
                                   REFUSE_BAD_INPUT)
+        said = ""
+        if conn is not None:
+            done = self._remove_base_from_master(base.name, conn)
+            if not done.ok:
+                return done
+            said = done.message
         self.plan.base_points.remove(base)
         self.dirty = True
         if self.selected == base.name:
             self.selected = ""
         self.highlight.discard(base.name)
-        log.info("拠点を図から消しました: %s", base.name)
-        return LayoutOpResult(True, f"拠点 {base.name} を図から消しました(編集を終えると保存します)。"
-                              f"マスタ(BoardMaster)の「{svc.BASE_PREFIX}{base.name}」の行は、ほかの端末も使うので"
-                              "残しています。拠点・作業予定ラインの選択肢から外すには、マスタ管理でその行を消してください")
+        log.info("拠点を消しました: %s(%s)", base.name, said or "マスタは触らず")
+        return LayoutOpResult(True, f"拠点 {base.name} を{said}図から消しました(編集を終えると保存します)。"
+                              "ほかの端末でも、次の取り込みで選択肢と図から消えます")
+
+    def _remove_base_from_master(self, name: str, conn: Any) -> LayoutOpResult:
+        """BoardMaster から拠点の印を消す。消した(元から無かった)なら ok(`message` は画面に添える一言)。"""
+        from . import master_admin, source_db
+        table = "BoardMaster"
+        key = svc.base_key(name)
+        path, refused = master_admin._ready(conn, table, None)
+        if refused:
+            return LayoutOpResult(False, f"拠点 {name} をマスタから消せませんでした(図も消していません): "
+                                  f"{refused.message}", REFUSE_NOT_ALLOWED if refused.reason == "not_allowed"
+                                  else REFUSE_FAILED)
+        try:
+            with source_db.connect(path) as src:
+                rows = src.query(f"SELECT rowid AS k, {source_db.quote_identifier('データラベル')} AS v "
+                                 f"FROM {source_db.quote_identifier(table)}")
+        except source_db.SourceError as exc:
+            return LayoutOpResult(False, f"拠点 {name} をマスタから消せませんでした(図も消していません): {exc}",
+                                  REFUSE_FAILED)
+        touched = 0
+        for row in rows:
+            tokens = [t.strip() for t in str(row["v"] or "").split(",") if t.strip()]
+            mine = [t for t in tokens if (svc._base_name_of(t) or "") and svc.base_key(svc._base_name_of(t)) == key]
+            if not mine:
+                continue
+            rest = [t for t in tokens if t not in mine]
+            seen = {"データラベル": row["v"]}
+            if rest:
+                result = master_admin.save_row(conn, table, row["k"], {"データラベル": ",".join(rest)},
+                                               path=path, seen=seen)
+            else:
+                result = master_admin.delete_row(conn, table, row["k"], path=path, seen=seen)
+            if not result.ok:
+                return LayoutOpResult(False, f"拠点 {name} をマスタから消せませんでした"
+                                      f"{'(途中まで消しています)' if touched else '(図も消していません)'}: "
+                                      f"{result.message}", REFUSE_FAILED)
+            touched += 1
+        return LayoutOpResult(True, f"マスタ(BoardMaster)の「{svc.BASE_PREFIX}{name}」から消し、" if touched else "")
+
+    def drop_stale_bases(self, conn: Any) -> list[str]:
+        """**マスタで消された拠点を図から消す**(VER4.8.133。現場の声「マスタで消せば棚から消える も必要」)。
+
+        マスタを読めない・まだ取り込んでいないときは何もしない(消されたと決めつけない)。
+        この端末でいま選んでいる拠点は残す(消すと距離を測れない。帯の一言で切り替えを促す)。
+        編集していない(保存していない変更が無い)なら、図のファイルにもすぐ書く。編集中なら、編集を終えたときに保存。
+        """
+        stale = svc.stale_plan_bases(conn, self.plan.base_point_names)
+        current = svc.base_key(user_settings.get_position())
+        keep = [n for n in stale if svc.base_key(n) == current]
+        drop = [n for n in stale if n not in keep]
+        if keep:
+            self.master_note = (f"拠点 {'・'.join(keep)} はマスタで消されましたが、この端末でいま選んでいる拠点なので"
+                                "図に残しています。拠点を切り替えてください")
+        if not drop:
+            return []
+        was_dirty = self.dirty
+        self.plan.base_points = [b for b in self.plan.base_points if b.name not in drop]
+        for name in drop:
+            self.highlight.discard(name)
+            if self.selected == name:
+                self.selected = ""
+        if was_dirty:
+            self.dirty = True
+        elif not floor_plan.save(self.plan):
+            self.dirty = True                     # 書けなければ保存していない変更として残す(閉じるときに訊く)
+        log.info("マスタで消された拠点を図から消しました: %s", drop)
+        self.master_note = f"マスタで消された拠点 {'・'.join(drop)} を図から消しました"
+        return drop
 
     def set_background(self, image: str) -> LayoutOpResult:
         """背景画像を差し替える(`data:` URL ごと持つ)。
