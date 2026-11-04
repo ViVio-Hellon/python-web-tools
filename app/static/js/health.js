@@ -12,6 +12,7 @@ import { api } from "./api.js";
 import * as nav from "./nav.js";
 import * as screen from "./screen.js";
 import * as unsaved from "./unsaved.js";
+import { toast } from "./toast.js";
 
 // 何回続けて失敗したら「切れた」と見なすか。
 // 1回の取りこぼしで赤帯を出すと、かえって信用されなくなる
@@ -106,6 +107,64 @@ function showBusy(items) {
   }
 }
 
+/* ================================================================
+   管理者以外停止のお願い (`packaging_tool/remote_stop.py`)
+
+   管理者が更新のため、ほかの PC のツールを止めようとしている。帯で知らせ、止まるまでの残りを数える。
+   保存していない図・実行中の処理が無くなれば自動で止まり、残っていても期限で強制で止まる
+   (保存していない図は控えに残し、次の起動で戻す)。止まったあとは「接続できません」ではなく理由を出す
+   ================================================================ */
+let stopState = null;
+let stopTimer = null;
+let stopOffset = 0;          // サーバの時計との差(ミリ秒)
+
+function stopLine() {
+  if (!stopState) return "";
+  const left = Math.max(0, stopState.deadline_ms - (Date.now() + stopOffset));
+  const min = Math.floor(left / 60000);
+  const sec = Math.floor((left % 60000) / 1000);
+  const rest = `${min}:${String(sec).padStart(2, "0")}`;
+  const items = (stopState.left || []).filter(Boolean);
+  const what = items.length
+    ? `残っているもの: ${items.join("、")}。保存する・処理が終わると自動で止まります。`
+    : "保存していない図・実行中の処理はありません。まもなく止まります。";
+  return `${stopState.text}。${what} あと ${rest} で強制で止めます(保存していない図は控えに残し、次の起動で戻します)。`;
+}
+
+function showStop(state) {
+  const band = document.getElementById("stopband");
+  if (!band) return;
+  stopState = state && state.id ? state : null;
+  if (!stopState) {
+    band.hidden = true;
+    if (stopTimer) { clearInterval(stopTimer); stopTimer = null; }
+    return;
+  }
+  if (typeof stopState.now_ms === "number") stopOffset = stopState.now_ms - Date.now();
+  const line = document.getElementById("stopbandLine");
+  const paint = () => { if (line) line.textContent = stopLine(); };
+  paint();
+  band.hidden = false;
+  if (!stopTimer) stopTimer = setInterval(paint, 1000);
+  const quit = document.getElementById("stopbandQuit");
+  if (quit && !quit.dataset.wired) {
+    quit.dataset.wired = "1";
+    // 帯の「終了」も、レールの「終了」と同じ道(保存していない図があれば訊く)
+    quit.addEventListener("click", () => { const q = document.getElementById("quit"); if (q) q.click(); });
+  }
+}
+
+function stoppedByAdmin() {
+  // お願いを受けていた画面が切れた = 管理者の停止で終わった。「接続できません」ではなく理由を出す
+  if (stopTimer) { clearInterval(stopTimer); stopTimer = null; }
+  unsaved.allowLeave();
+  document.body.innerHTML =
+    '<main style="padding:48px;font-family:var(--sans);max-width:42rem;line-height:1.8">' +
+    "<h1>管理者の更新のため終了しました</h1>" +
+    "<p>このタブは閉じてかまいません。更新が終わったら、いつもどおり起動してください。</p>" +
+    "<p>保存していない図があった場合は控えに残してあり、次に起動したときに戻します。</p></main>";
+}
+
 async function beat() {
   try {
     // `beat=1`: 画面の心拍。サーバはこのついでに、送れていない発注などを送り直す
@@ -127,6 +186,8 @@ async function beat() {
     else if (body && body.screen_ok === true) screen.clearTaken();
     if (body && Array.isArray(body.modes)) followModes(body.modes);
     if (body && Array.isArray(body.busy)) showBusy(body.busy);
+    if (body && "stop_request" in body) showStop(body.stop_request);
+    if (body && Array.isArray(body.notes)) body.notes.forEach((note) => toast(note, "warn"));
     // **このモードの権限が外れて、サーバが使えるモードへ切り替えた**(マスタ反映もれ #14)。
     // 出している画面は前のモードのものなので、切り替えた先の最初の画面へ移る
     // (帯の一言が「…の権限が外れたため…に切り替えました」と言う)。図の編集はサーバが持っているので消えない
@@ -152,7 +213,10 @@ async function beat() {
       unsaved.fromServer(body.unsaved);
     }
   } catch {
-    if (++misses === MISSES_BEFORE_OFFLINE) setOffline(true);
+    if (++misses === MISSES_BEFORE_OFFLINE) {
+      if (stopState) stoppedByAdmin();
+      else setOffline(true);
+    }
   }
 }
 

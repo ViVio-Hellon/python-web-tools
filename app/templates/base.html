@@ -42,6 +42,15 @@
   <span class="busyband__lines" id="busylines"></span>
 </div>
 
+{# 管理者以外停止のお願い(`js/health.js`・`packaging_tool/remote_stop.py`) #}
+<div class="stopband" id="stopband" hidden role="alert">
+  <div class="stopband__text">
+    <b id="stopbandTitle">管理者が更新のため停止を求めています</b>
+    <span id="stopbandLine"></span>
+  </div>
+  <button class="btn btn--danger" type="button" id="stopbandQuit">保存を確かめて終了する</button>
+</div>
+
 <header class="ribbon">
   {#
     アプリの名前と版。**どの画面でも消えない。**

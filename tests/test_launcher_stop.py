@@ -184,7 +184,9 @@ class StopDesktopTests(_LocalDir):
         kill.assert_not_called()
 
     def test_窓が居なくて_Pythonだけ残っていれば止める(self) -> None:
-        got, ask, kill = self.stop(alive=lambda pid: pid == 100)
+        # 仮の番号 100 のコマンドラインは固定する(この PC で番号 100 が別のプロセスのことがある)
+        with mock.patch.object(launch_guard, "process_command_line", return_value="python C:/tool/bridge.py"):
+            got, ask, kill = self.stop(alive=lambda pid: pid == 100)
         self.assertTrue(got.stopped)
         ask.assert_not_called()
         kill.assert_called_once_with(100)

@@ -581,3 +581,50 @@ def _with_conn(func):
 
 def _error(code: str, message: str) -> dict:
     return {"error": {"code": code, "message": message}}
+
+
+# ------------------------------------------------------------------
+# 管理者以外停止モード(VER4.8.129。`packaging_tool/remote_stop.py`)
+# ------------------------------------------------------------------
+def _remote_stop_state() -> dict:
+    from packaging_tool import access_control, remote_stop
+    view = remote_stop.overview().to_dict()
+    try:
+        view["administrator"] = bool(access_control.is_administrator(get_db()))
+    except Exception:                       # noqa: BLE001 - 判定できなければ「無い」として押させない
+        view["administrator"] = False
+    return view
+
+
+@bp.get("/api/settings/remote-stop")
+def remote_stop_state():
+    """いまのお願いと、各 PC の様子(管理者の画面が数秒ごとに見る)。"""
+    return jsonify(_remote_stop_state())
+
+
+@bp.post("/api/settings/remote-stop/start")
+def remote_stop_start():
+    """お願いを出す。`{"password": …, "reason": …}`。管理者パスワード **かつ** この端末に Administrator。"""
+    from packaging_tool import remote_stop
+    body = request.get_json(silent=True) or {}
+    result = remote_stop.issue(str(body.get("password", "")), get_db(), str(body.get("reason", "")))
+    return _remote_stop_reply(result)
+
+
+@bp.post("/api/settings/remote-stop/clear")
+def remote_stop_clear():
+    """解除する(更新が終わった)。`{"password": …}`。"""
+    from packaging_tool import remote_stop
+    body = request.get_json(silent=True) or {}
+    result = remote_stop.clear(str(body.get("password", "")), get_db())
+    return _remote_stop_reply(result)
+
+
+def _remote_stop_reply(result):
+    from packaging_tool import remote_stop
+    payload = {"message": result.message, "state": _remote_stop_state()}
+    if result.ok:
+        return jsonify(payload)
+    status = {remote_stop.REFUSE_PASSWORD: 403, remote_stop.REFUSE_NOT_ADMIN: 403,
+              remote_stop.REFUSE_ALREADY: 409, remote_stop.REFUSE_NOT_ACTIVE: 409}.get(result.reason, 422)
+    return jsonify({**payload, **_error(result.reason, result.message)}), status

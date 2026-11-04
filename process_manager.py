@@ -551,6 +551,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                       f"ready={health['ready']} 起動={lock['started']}")
         return 0
 
+    # **管理者以外停止モード中は使わない**(VER4.8.129。ランチャーの「全 PC で止める」と同時に使わない、現場の決め)
+    from packaging_tool import remote_stop
+    refusal = remote_stop.stop_bat_refusal()
+    if refusal:
+        print(f"止められませんでした: {refusal}")
+        return EXIT_FAILED
+
     results = [stop(mode, force=args.force) for mode in targets]
     for window in desktop_targets(desktop):
         results.append(stop_desktop(window, force=args.force))

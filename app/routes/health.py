@@ -161,6 +161,10 @@ def health():
         # **予定ロットの変わった回数**(VER4.8.113)。取り込み直して変わったら、開いている倉庫連携の
         # 「作業予定ライン」がそのロットの予定を引き直す(ラインで押した作業済みが長の端末に出る)
         "lot_plans_rev": _screen_plans_rev(),
+        # **管理者以外停止のお願い**(VER4.8.129。`remote_stop`)。あれば画面が帯を出し、止まるまでの残りを数える
+        "stop_request": _screen_stop_request(),
+        # 一度だけ出す一言(前に強制で止められて控えた図を戻した・お願いが取り下げられた)
+        "notes": _screen_notes(),
         # いま走っているものの一言。**起動待機画面はこれを読む** ──
         # 取り込みが終わるまで待たせるので、何をどこまでやっているかを
         # 出さないと「止まっている」と受け取られる
@@ -206,6 +210,22 @@ def unsaved_edits() -> dict[str, str]:
     if pallet_map_session.has_unsaved():
         out["inventory"] = pallet_map_session.UNSAVED_LABEL
     return out
+
+
+def _screen_stop_request() -> Optional[dict]:
+    """画面からの問い合わせなら、管理者以外停止のお願い(帯に出すもの)。"""
+    if not request.headers.get(screen_lock.HEADER):
+        return None
+    from packaging_tool import remote_stop
+    return remote_stop.screen_state()
+
+
+def _screen_notes() -> list[str]:
+    """画面の心拍なら、一度だけ出す一言。"""
+    if not request.headers.get(screen_lock.HEADER) or request.args.get("beat") != "1":
+        return []
+    from packaging_tool import remote_stop
+    return remote_stop.take_notes()
 
 
 def _screen_auth() -> Optional[dict]:

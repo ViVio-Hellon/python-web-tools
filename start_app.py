@@ -357,6 +357,10 @@ def start(mode: str, *, open_browser: bool = True) -> int:
             print(f"起動しました: {srv.url}")
         log().info("待機画面まで %.2f秒", time.monotonic() - _BOOT_AT)
 
+        # --- 管理者以外停止モード中(更新中)なら起動しない(VER4.8.129) ---
+        if _blocked_by_remote_stop(srv, thread):
+            return 0
+
         # --- 本体を組み立てて差し替える ---
         try:
             srv.build()
@@ -372,6 +376,7 @@ def start(mode: str, *, open_browser: bool = True) -> int:
         _hold_until_stopped(srv, thread)
         return 0
     finally:
+        _leave_remote_stop()
         launch_guard.remove_lock(mode, owner_pid=os.getpid())
         log().info("終了しました: mode=%s", mode)
 
@@ -415,6 +420,7 @@ def _hard_exit() -> None:
     import logging
 
     _stop_children()
+    _leave_remote_stop()
     logging.shutdown()
     os._exit(0)
 
@@ -456,6 +462,9 @@ def start_bridge(mode: str, *, token: str = "", server_factory) -> int:
     launch_guard.write_desktop_marker(mode)
     log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)
     try:
+        # 管理者以外停止モード中(更新中)なら起動しない(VER4.8.129)。理由を窓に出し、しばらくして閉じる
+        if _blocked_by_remote_stop(srv, thread):
+            return 0
         try:
             srv.build()
         except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
@@ -469,6 +478,7 @@ def start_bridge(mode: str, *, token: str = "", server_factory) -> int:
         log().info("終了しました: mode=%s(デスクトップ版)", mode)
         return 0
     finally:
+        _leave_remote_stop()
         launch_guard.remove_desktop_marker()
 
 
@@ -507,6 +517,9 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
         log().exception("初期化に失敗しました")
         srv.mark_error(f"初期化に失敗しました: {exc}")
         return
+
+    # 管理者以外停止モード(VER4.8.129): お願いを見張る。前に強制で止められて控えた図があれば戻す
+    _watch_remote_stop(srv, kind="browser" if watch_idle else "desktop")
 
     # 画面が居なくなったら終わる(基盤仕様書 2.8)。
     # **窓が無いアプリなので、タブを閉じたら終わったつもりになる。**
@@ -597,6 +610,51 @@ def _watch_for_idle(srv) -> None:
         return bool(unsaved_edits())
 
     idle_exit.install(srv.stop, busy, unsaved=unsaved)
+
+
+def _blocked_by_remote_stop(srv, thread) -> bool:
+    """管理者以外停止モード中(更新中)なら、理由を待機画面に出して、しばらくして終わる。止めたら True。
+
+    **本体を組み立てる前に**見る(更新の上書きの途中のファイルを読み込まない)。お願いを出した PC は止めない。
+    """
+    try:
+        from packaging_tool import remote_stop
+        why = remote_stop.startup_block()
+    except Exception as exc:                      # noqa: BLE001 - 判定で起動を止めない
+        log().warning("管理者以外停止のお願いを確かめられませんでした: %s", exc)
+        return False
+    if not why:
+        return False
+    srv.boot.mark_error(why)
+    timer = threading.Timer(remote_stop.BLOCK_SHOW_SEC, srv.stop)
+    timer.daemon = True
+    timer.start()
+    _hold_until_stopped(srv, thread)
+    return True
+
+
+def _watch_remote_stop(srv, *, kind: str) -> None:
+    """管理者以外停止のお願いを見張る(VER4.8.129)。止め方は `/api/shutdown` と同じ道(`srv.stop`)。"""
+    try:
+        from app.routes.health import _running_jobs, unsaved_edits
+        from packaging_tool import remote_stop, stop_keep
+        for note in stop_keep.restore():
+            remote_stop.user_note(note)
+        remote_stop.install(srv.stop, unsaved_edits, _running_jobs, kind=kind,
+                            mode=str(getattr(srv, "mode", "") or ""),
+                            before_force=stop_keep.save_unsaved)
+    except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
+        log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
+
+
+def _leave_remote_stop() -> None:
+    mod = sys.modules.get("packaging_tool.remote_stop")
+    if mod is None:
+        return
+    try:
+        mod.leave()
+    except Exception:                             # noqa: BLE001 - 終わるときの後始末で止まらない
+        pass
 
 
 IMPORT_WAIT_LIMIT_SEC = 120

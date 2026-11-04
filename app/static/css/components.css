@@ -442,6 +442,21 @@ select.input { cursor: pointer; }
 .offline[hidden] { display: none; }
 
 /* ================================================================
+   管理者以外停止のお願いの帯 (`js/health.js`)
+   止まるまでの残りと、残っているもの(保存していない図・実行中の処理)
+   ================================================================ */
+.stopband {
+  position: sticky; top: 0; z-index: 41;
+  background: var(--warn-bg); color: var(--warn-fg);
+  border-bottom: 3px solid var(--state-error);
+  padding: 8px 16px; font-size: var(--fs-sm);
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.stopband[hidden] { display: none; }
+.stopband__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 320px; }
+.stopband__text b { font-size: var(--fs-md, 1rem); }
+
+/* ================================================================
    裏で長く動いている処理の帯 (`js/health.js`)
    何をしていて、どこまで進んだか。待たされている理由を見せる
    ================================================================ */

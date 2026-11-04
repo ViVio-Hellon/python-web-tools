@@ -191,6 +191,47 @@
     </div>
   </section>
 
+  {# 管理者以外停止モード(`packaging_tool/remote_stop.py`・`js/views/remote_stop.js`)。
+     ランチャーを介さず、管理者の PC から、ほかの起動中の PC のツールを止める #}
+  <section class="card" id="remoteStopCard">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">止</i>
+      <h3>管理者以外停止モード(更新のため、ほかの PC を止める)</h3>
+      <span class="st st--ok" id="rsState">確かめています…</span>
+    </header>
+    <div class="pad">
+      <p class="status status--ng" id="rsWhy" hidden></p>
+      <p class="why" id="rsRequest" hidden></p>
+      <div class="field">
+        <label for="rsPassword">管理者パスワード</label>
+        <input class="input" id="rsPassword" type="password" autocomplete="current-password" style="max-width:16em">
+      </div>
+      <div class="field">
+        <label for="rsReason">理由(ほかの PC の帯に出ます)</label>
+        <input class="input" id="rsReason" value="更新のため" maxlength="200" style="max-width:28em">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn--danger" type="button" id="rsStart">ほかの PC を止める</button>
+        <button class="btn btn--commit" type="button" id="rsClear" hidden>更新が終わった(解除する)</button>
+      </div>
+      <div id="rsPcsWrap" hidden>
+        <table class="table">
+          <thead><tr><th>PC</th><th>ログインID</th><th>版</th><th>様子</th><th>残っているもの・理由</th><th>最後の知らせ</th></tr></thead>
+          <tbody id="rsPcs"></tbody>
+        </table>
+      </div>
+      <p class="why">
+        管理者パスワードと、この端末のアクセス権限の <b>Administrator</b> の両方が要ります。押すと、共有の梱包資材マスタの
+        フォルダにお願いを置き、<b>この PC 以外</b>の起動中のツールに帯で知らせます。保存していない図・実行中の処理が
+        無い PC はまもなく止まり、残っている PC は利用者が保存・終了するのを待ちます。<b>5分たっても止まらなければ
+        強制で止めます</b>(保存していない図は、その PC の手元に控えとして残し、次の起動で戻します)。
+        お願いが出ているあいだ、ほかの PC では<b>起動できません</b>(更新中)。更新が終わったら「解除する」を押してください。
+        この PC のツールは止めないので、更新の前に自分で閉じてください。
+        ランチャーの「全 PC で止める」とは同時に使いません(お願いが出ているあいだ stop.bat は断ります)。
+      </p>
+    </div>
+  </section>
+
       </section>
       <section class="tabpanel tabpanel--scroll" id="panel-status" role="tabpanel" aria-labelledby="tab-status" hidden>
   <!-- 1. いまの状態 -->
