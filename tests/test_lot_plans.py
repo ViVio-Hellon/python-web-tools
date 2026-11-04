@@ -161,7 +161,13 @@ class LineTests(unittest.TestCase):
             access_row(self.conn, permission=text)
         self.assertEqual(access_control.lines(self.conn, self.me), [])
         self.assertEqual(line_names.OFFICIAL, ("L-1", "LVC", "HVC", "機側", "AIM", "コイル",
-                                               "トット", "バランサー", "NS1"))
+                                               "トット", "バランサー", "NS1", "SVC"))
+
+    def test_SVCも正規の呼び名として読む(self) -> None:
+        """VER4.8.131: 現場の声「正規の呼び名に SVC を追加したい」。全角で書いても読む。"""
+        access_row(self.conn, permission="ＳＶＣ")
+        self.assertEqual(access_control.lines(self.conn, self.me), ["SVC"])
+        self.assertEqual(line_names.official("svc"), "")              # 大文字小文字は揃えない(ほかの呼び名と同じ)
 
     def test_登録が無ければ空(self) -> None:
         self.assertEqual(access_control.lines(self.conn, self.me), [])
@@ -201,7 +207,7 @@ class LineTests(unittest.TestCase):
         from packaging_tool.presenters import settings as presenter
         with mock.patch.dict(os.environ, ME):
             checks = {c.label: c for c in presenter._access_section(self.conn).checks}
-        self.assertEqual(checks["登録ライン"].value, "2 / 9 ライン")
+        self.assertEqual(checks["登録ライン"].value, f"2 / {len(line_names.OFFICIAL)} ライン")
         self.assertIn("L-1: PC-A, PC-B", checks["登録ライン"].detail)
         self.assertIn("NS1: なし", checks["登録ライン"].detail)
 

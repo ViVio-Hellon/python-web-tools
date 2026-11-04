@@ -113,9 +113,10 @@ def _plans_state(conn, *, refresh: bool = False) -> dict:
                "そのラインの端末に届きます。この端末にも届けたいときは、この端末の行の「権限」に"
                "ラインを書きます(すべてなら Administrator)。")
     else:
+        from packaging_tool import line_names as _line_names
         why = (f"この端末({identity.label()})の作業ラインが登録されていません。"
                f"{access_control.TABLE} のこの端末の行の「権限」にラインを正規の呼び名で書くと"
-               "(L-1 / LVC / HVC / 機側 / AIM / コイル / トット / バランサー / NS1。L1・LS は読みません)、"
+               f"({_line_names.official_text()}。L1・LS は読みません)、"
                "そのラインに入った予定ロットがここに届きます。" + state.near_text())
     return {
         "lines": lines,

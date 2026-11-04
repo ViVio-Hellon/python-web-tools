@@ -1219,7 +1219,7 @@ def _access_section(conn, startup_modes=None) -> Section:
         OK if mine else INFO,
         ("このラインに入れた予定ロットが、ロット検索に知らせとして届きます。" if mine else
          (f"{access_control.TABLE} の、この端末({grant.identity.label()})の行の「権限」にラインを"
-          "正規の呼び名で書くと(L-1 / LVC / HVC / 機側 / AIM / コイル / トット / バランサー / NS1。"
+          f"正規の呼び名で書くと({_line_names_text()}。"
           "L1・LS は読みません)、そのラインの予定ロットがロット検索に知らせとして届きます。"
           + state.near_text()))))
     # 表ぜんたいの登録ライン(VER4.8.90。「いまの状態: 登録ラインを出してください」)。
@@ -1974,3 +1974,8 @@ def delete_lot_filter(name: str) -> SaveResult:
     """よく使う条件を1つ消す。"""
     result = lot_browse_session.get_session().delete_saved(name)
     return SaveResult(result.ok, result.message, result.reason)
+
+
+def _line_names_text() -> str:
+    from packaging_tool import line_names
+    return line_names.official_text()
