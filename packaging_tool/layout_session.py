@@ -572,10 +572,13 @@ class LayoutSession:
                   "(編集を終えると保存します)。ほかの端末には次の取り込みで選択肢に出ます")
 
     def remove(self, name: str) -> LayoutOpResult:
-        """置き場を消す(VBA `do_remove_label`)。"""
+        """置き場を消す(VBA `do_remove_label`)。**拠点も消せる**(VER4.8.132)。"""
         if not self.editing:
             return LayoutOpResult(False, "先に「配置編集」をONにしてください。",
                                   REFUSE_BAD_INPUT)
+        base = next((b for b in self.plan.base_points if b.name == name), None)
+        if base is not None:
+            return self._remove_base(base)
         if not self.plan.remove_item(name):
             return LayoutOpResult(False, f"{name} は配置図にありません。",
                                   REFUSE_NOT_LISTED)
@@ -585,6 +588,36 @@ class LayoutSession:
         self.highlight.discard(name)
         log.info("置き場を削除しました: %s", name)
         return LayoutOpResult(True, f"{name} を消しました")
+
+    def _remove_base(self, base: "floor_plan.MapItem") -> LayoutOpResult:
+        """拠点を図から消す(VER4.8.132)。
+
+        現場の声:「拠点が一度配置すると消せない」。前は「選んだ置き場を消す」が置き場だけを探し、
+        画面も拠点を押して選べなかった。
+
+        - **既定の拠点(L-1 / HVC / LVC)は消さない**: 足し直せない(「拠点を追加」は既定を断る)ため。動かすことはできる
+        - **この端末でいま選んでいる拠点は消さない**: 距離(疲労度)を測れなくなるため。先に拠点を切り替える
+        - **マスタ(BoardMaster の「拠点〇〇」の行)は消さない**: ほかの端末も使う共有の行なので、図から消すだけにする
+          (拠点・作業予定ラインの選択肢に残る。外したいときはマスタ管理でその行を消す)
+        """
+        key = svc.base_key(base.name)
+        for default in floor_plan.DEFAULT_BASE_POINTS:
+            if svc.base_key(default) == key:
+                return LayoutOpResult(False, f"{base.name} は既定の拠点なので消せません(動かすことはできます)。",
+                                      REFUSE_BAD_INPUT)
+        if svc.base_key(user_settings.get_position()) == key:
+            return LayoutOpResult(False, f"{base.name} はこの端末でいま選んでいる拠点なので消せません"
+                                  "(消すと距離を測れなくなります)。先に拠点を切り替えてください。",
+                                  REFUSE_BAD_INPUT)
+        self.plan.base_points.remove(base)
+        self.dirty = True
+        if self.selected == base.name:
+            self.selected = ""
+        self.highlight.discard(base.name)
+        log.info("拠点を図から消しました: %s", base.name)
+        return LayoutOpResult(True, f"拠点 {base.name} を図から消しました(編集を終えると保存します)。"
+                              f"マスタ(BoardMaster)の「{svc.BASE_PREFIX}{base.name}」の行は、ほかの端末も使うので"
+                              "残しています。拠点・作業予定ラインの選択肢から外すには、マスタ管理でその行を消してください")
 
     def set_background(self, image: str) -> LayoutOpResult:
         """背景画像を差し替える(`data:` URL ごと持つ)。

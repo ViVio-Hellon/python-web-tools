@@ -742,6 +742,38 @@ class AddBaseTests(unittest.TestCase):
     def test_編集中でなければ断る(self) -> None:
         self.assertFalse(self.session.add_base("大板", self.conn).ok)
 
+    def test_足した拠点は選んだ置き場を消すで消せる_マスタの行は残す(self) -> None:
+        """VER4.8.132: 現場の声「拠点が一度配置すると消せない」。"""
+        self.session.set_editing(True, self.conn)
+        patcher, _calls = self.fake_master()
+        with patcher:
+            self.assertTrue(self.session.add_base("SVC", self.conn).ok)
+        self.assertTrue(self.session.select("SVC").ok)                     # 拠点も選べる
+        result = self.session.remove("SVC")
+        self.assertTrue(result.ok, result.message)
+        self.assertNotIn("SVC", self.session.plan.base_point_names)
+        self.assertEqual(self.session.selected, "")
+        self.assertIn("SVC", svc.master_base_points(self.conn))            # 共有のマスタの行は残す
+        self.assertIn("マスタ管理", result.message)
+        self.assertTrue(self.session.set_editing(False, self.conn).ok)      # 終えると保存
+        self.assertNotIn("SVC", floor_plan.load().base_point_names)
+
+    def test_既定の拠点と_いま選んでいる拠点は消さない(self) -> None:
+        self.session.set_editing(True, self.conn)
+        patcher, _calls = self.fake_master()
+        with patcher:
+            self.assertTrue(self.session.add_base("大板", self.conn).ok)
+        for name in ("L-1", "HVC", "LVC"):
+            if name in self.session.plan.base_point_names:
+                result = self.session.remove(name)
+                self.assertFalse(result.ok, name)
+                self.assertIn("既定の拠点", result.message)
+        with mock.patch.object(layout_session.user_settings, "get_position", return_value="大板"):
+            result = self.session.remove("大板")
+        self.assertFalse(result.ok)
+        self.assertIn("いま選んでいる拠点", result.message)
+        self.assertIn("大板", self.session.plan.base_point_names)
+
     def test_既定の拠点はいつも選べる(self) -> None:
         self.assertEqual(floor_plan.DEFAULT_BASE_POINTS, ("L-1", "HVC", "LVC"))
         with mock.patch.object(floor_plan, "load", return_value=floor_plan.FloorPlan()):

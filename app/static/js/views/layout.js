@@ -110,6 +110,8 @@ function renderMap(next) {
   }
   for (const base of next.bases) {
     const group = box(base, "shelf shelf--base");
+    // 拠点も選べる(「選んだ置き場を消す」の対象にする。編集中だけ)
+    if (base.name === next.selected) group.classList.add("is-selected");
     if (next.editing) group.appendChild(mapedit.grip(base));
     parts.push(group);
   }
@@ -277,8 +279,13 @@ function startDragging() {
     find: (name) => (state.shelves.find((s) => s.name === name)
                      || state.bases.find((s) => s.name === name) || null),
     onTap: (name, group) => {
-      // 拠点は「中身」を持たないので、押しても何も出さない
-      if (group && !group.classList.contains("shelf--base")) onTapShelf(name);
+      // 拠点は「中身」を持たないので、ふだんは押しても何も出さない。**編集中は選ぶ**(消す対象にする)。
+      // 前は編集中も選べず、「選んだ置き場を消す」で拠点を消せなかった(現場の声:「拠点が一度配置すると消せない」)
+      if (group && group.classList.contains("shelf--base")) {
+        if (state && state.editing) send("/api/layout/select", { name });
+        return;
+      }
+      onTapShelf(name);
     },
     onMove: (name, x, y) => send("/api/layout/move", { name, x, y }),
     onResize: (name, w, h) => send("/api/layout/resize", { name, w, h }),
