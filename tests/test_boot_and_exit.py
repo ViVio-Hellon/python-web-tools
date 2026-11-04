@@ -884,6 +884,8 @@ class StaleInstanceTests(unittest.TestCase):
         return (
             mock.patch.object(self.guard, "read_lock", return_value=self.info),
             mock.patch.object(self.guard, "is_process_alive", return_value=True),
+            # 仮の番号の起動時刻は見に行かない(この PC でその番号が別のプロセスのことがある)
+            mock.patch.object(self.guard, "process_started_at", return_value=None),
             mock.patch.object(self.guard, "probe_health", return_value=health),
         )
 

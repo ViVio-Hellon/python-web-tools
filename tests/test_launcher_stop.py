@@ -146,6 +146,7 @@ class StopDesktopTests(_LocalDir):
     def stop(self, info=None, *, force=False, alive=True, sent=1, gone=True):
         with mock.patch.object(launch_guard, "is_process_alive",
                                side_effect=alive if callable(alive) else (lambda pid: alive)), \
+                mock.patch.object(launch_guard, "process_started_at", return_value=None), \
                 mock.patch.object(process_manager, "_ask_windows_to_close", return_value=sent) as ask, \
                 mock.patch.object(process_manager, "_kill_tree") as kill, \
                 mock.patch.object(process_manager, "_wait_pid_gone", return_value=gone):
@@ -207,6 +208,7 @@ class DesktopTargetsTests(_LocalDir):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"pid": 1, "exe_pid": 99, "exe_pid_from": "env"}), encoding="utf-8")
         with mock.patch.object(launch_guard, "is_process_alive", side_effect=lambda pid: pid == 99), \
+                mock.patch.object(launch_guard, "process_started_at", return_value=None), \
                 mock.patch.object(process_manager, "_looks_like_our_exe", return_value=True), \
                 mock.patch.object(process_manager, "_our_exe_pids", return_value=set()):
             found = process_manager.desktop_targets(None)

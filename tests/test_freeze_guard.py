@@ -510,6 +510,10 @@ class RelaunchTests(unittest.TestCase):
         self.version = mock.patch.object(launch_guard.app_config, "version", return_value="9.9.9")
         self.version.start()
         self.addCleanup(self.version.stop)
+        # 仮の番号(4242)の起動時刻は見に行かない(この PC で 4242 が別のプロセスのことがある。VER4.8.127 の確かめ方)
+        started = mock.patch.object(launch_guard, "process_started_at", return_value=None)
+        started.start()
+        self.addCleanup(started.stop)
 
     def test_モードを切り替えたプロセスも自分と分かる(self) -> None:
         """資材で起動して現場へ切り替えたプロセスは、資材のロックのまま「現場」と答える。"""

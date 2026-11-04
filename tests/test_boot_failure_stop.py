@@ -180,6 +180,7 @@ class VerifyGoneTests(unittest.TestCase):
     def test_強制終了しても残っていれば止めたと言わない(self) -> None:
         result = process_manager.StopResult("field")
         with mock.patch.object(launch_guard, "is_process_alive", return_value=True), \
+             mock.patch.object(launch_guard, "process_started_at", return_value=None), \
              mock.patch.object(process_manager, "_looks_like_our_process", return_value=True), \
              mock.patch.object(process_manager.os, "kill") as kill, \
              mock.patch.object(process_manager, "_wait_pid_gone", return_value=False), \
