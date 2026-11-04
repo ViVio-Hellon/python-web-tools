@@ -372,6 +372,26 @@ class ExOrderPageTests(WarehouseWebTestCase):
         self.assertIn('id="exNote"', html)
         self.assertIn("EXの実データは別の職場から届き", html)
 
+    def test_管理者以外停止の控えから戻した下書きが倉庫連携に出る(self) -> None:
+        """VER4.8.130: 強制で止める前に控えた「送っていない下書き」を、次の起動で戻す。"""
+        import tempfile
+        from packaging_tool import config, stop_keep, work_context
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(config, "DB_PATH", Path(tmp.name) / "packaging_tool.db"):
+            context = work_context.get_context()
+            context.set_pending_orders([{"lot_no": "4102781", "hinmei": "パレット 1122×2502",
+                                         "hatchu_code": "P-1", "tani": "台", "hatchu_suu": "2"}])
+            self.assertEqual(stop_keep.save_unsaved(), ["倉庫連携の送っていない発注の下書き(1行・Lot 4102781)"])
+            context.take_pending_orders()                     # 止まって、起動し直した
+            notes = stop_keep.restore()
+        self.addCleanup(work_context.get_context().take_pending_orders)
+        self.assertEqual(len(notes), 1)
+        self.assertTrue(work_context.get_context().pending_restored)
+        html = self.clients["field"].get("/warehouse", headers=self.auth()).get_data(as_text=True)
+        self.assertIn("P-1", html)
+
     def test_下書きの錠の説明が画面にある(self) -> None:
         """**打てない理由と、打ちたいときの逃げ道を一緒に置く。**
 

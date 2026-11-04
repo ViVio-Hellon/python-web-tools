@@ -588,11 +588,14 @@ def _error(code: str, message: str) -> dict:
 # ------------------------------------------------------------------
 def _remote_stop_state() -> dict:
     from packaging_tool import access_control, remote_stop
-    view = remote_stop.overview().to_dict()
     try:
-        view["administrator"] = bool(access_control.is_administrator(get_db()))
+        administrator = bool(access_control.is_administrator(get_db()))
     except Exception:                       # noqa: BLE001 - 判定できなければ「無い」として押させない
-        view["administrator"] = False
+        administrator = False
+    # 各 PC の知らせ(共有のフォルダの一覧)を読むのは Administrator の端末だけ。ほかの端末は、お願いが
+    # 出ているかだけ(設定画面を開いている全 PC が数秒ごとに共有の一覧を読みに行かないように)
+    view = remote_stop.overview(full=administrator).to_dict()
+    view["administrator"] = administrator
     return view
 
 

@@ -11,6 +11,10 @@
   ください」と出す。保存していないので、閉じるときはいつもどおり「保存していない変更があります」と訊く
 - 戻した控えは `停止控え\\戻した\\` へ移して残す(もう一度戻さない。念のため消さない)
 
+**倉庫送信の下書き**(資材選択の「倉庫送信」が作り、倉庫連携でまだ送っていない発注。VER4.8.130)も同じ扱い。
+プロセスが預かっているだけなので、止めると消え、倉庫に何も届かない。控えに書き、次の起動で戻す
+(倉庫連携の画面にまた出る。資材選択の作業状態からは作り直さない: `WorkContext.pending_restored`)。
+
 打ちかけ(送る・登録する前の入力)は、もともと打つたびに画面の側(ブラウザ・窓)に置いてあるので、強制で
 止めても残る(docs/ランチャー連携.md の 9)。ここでは扱わない。
 """
@@ -31,6 +35,19 @@ DIR_NAME = "停止控え"
 DONE_NAME = "戻した"
 LAYOUT = "floor_plan"
 INVENTORY = "pallet_map"
+ORDERS = "orders"
+ORDERS_LABEL = "倉庫連携の送っていない発注の下書き"
+
+
+def pending_orders_left() -> dict[str, str]:
+    """送っていない倉庫送信の下書き {鍵: 呼び名}。**作業状態を作らない**(無ければ空)。"""
+    from . import work_context
+    context = work_context._context
+    held = context.peek_pending_orders() if context is not None else []
+    if not held:
+        return {}
+    lot = str(held[0].get("lot_no") or "").strip()
+    return {ORDERS: f"{ORDERS_LABEL}({len(held)}行{'・Lot ' + lot if lot else ''})"}
 
 
 def keep_dir() -> Path:
@@ -70,7 +87,27 @@ def save_unsaved() -> list[str]:
             log.warning("保存していない図を控えに残しました(管理者以外停止で強制で止める前): %s", label,
                         extra={"keep": True, "kind": "管理者以外停止"})
             saved.append(label)
+    saved += save_orders(stamp)
     return saved
+
+
+def save_orders(stamp: str = "") -> list[str]:
+    """送っていない倉庫送信の下書きを控えに書く。書けたら呼び名を返す。
+
+    強制で止める前のほか、**お願いが出ているあいだに利用者が自分で終えた**ときにも呼ぶ(終了は下書きを
+    訊かないので、黙って消えないように)。
+    """
+    left = pending_orders_left()
+    if not left:
+        return []
+    from . import work_context
+    data = {"kind": ORDERS, "label": left[ORDERS], "saved_at": time.time(),
+            "orders": work_context._context.peek_pending_orders()}
+    if not _write(keep_dir() / f"{ORDERS}-{stamp or time.strftime('%Y%m%d-%H%M%S')}.json", data):
+        return []
+    log.warning("送っていない発注の下書きを控えに残しました(管理者以外停止): %s",
+                left[ORDERS], extra={"keep": True, "kind": "管理者以外停止"})
+    return [left[ORDERS]]
 
 
 def _latest(key: str) -> Optional[Path]:
@@ -125,4 +162,34 @@ def restore() -> list[str]:
         log.warning("%s", note, extra={"keep": True, "kind": "管理者以外停止"})
         notes.append(note)
         _done(path)
+    notes += _restore_orders()
     return notes
+
+
+def _restore_orders() -> list[str]:
+    from . import work_context
+    path = _latest(ORDERS)
+    if path is None:
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        orders = [dict(o) for o in data["orders"]]
+        if not orders or not all(isinstance(o, dict) for o in orders):
+            raise ValueError("下書きが空です")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        log.warning("送っていない発注の下書きの控えを読めないので戻しませんでした(控えは残しています: %s): %s",
+                    path, exc, extra={"keep": True, "kind": "管理者以外停止"})
+        return []
+    context = work_context.get_context()
+    if context.peek_pending_orders():
+        log.warning("送っていない発注の下書きの控えがありますが、いま別の下書きがあるので戻しません(控えは残しています): %s",
+                    path, extra={"keep": True, "kind": "管理者以外停止"})
+        return []
+    context.set_pending_orders(orders)
+    context.pending_restored = True
+    when = time.strftime("%m/%d %H:%M", time.localtime(float(data.get("saved_at") or 0)))
+    note = (f"{when} に管理者の停止で送れなかった{data.get('label') or ORDERS_LABEL}を戻しました(まだ送っていません)。"
+            "倉庫連携の画面で確かめて送ってください。要らなければ「入力を消す」で捨ててください")
+    log.warning("%s", note, extra={"keep": True, "kind": "管理者以外停止"})
+    _done(path)
+    return [note]

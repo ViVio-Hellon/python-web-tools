@@ -426,6 +426,7 @@ select.input { cursor: pointer; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 .toast--ok    { border-left-color: var(--state-ok); }
 .toast--warn  { border-left-color: var(--state-warn); }
+.toast--note  { border-left-color: var(--state-warn); }
 .toast--error { border-left-color: var(--state-error); }
 .toast .btn { min-height: 32px; padding: 4px 10px; font-size: var(--fs-sm); }
 

@@ -367,6 +367,7 @@ def start(mode: str, *, open_browser: bool = True) -> int:
         except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
             log().exception("アプリを組み立てられませんでした")
             srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+            _watch_remote_stop(srv, kind="browser")       # 理由の画面のままでも、お願いで止まる
             _hold_until_stopped(srv, thread)
             return 1
 
@@ -470,6 +471,7 @@ def start_bridge(mode: str, *, token: str = "", server_factory) -> int:
         except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
             log().exception("アプリを組み立てられませんでした")
             srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+            _watch_remote_stop(srv, kind="desktop")       # 理由の画面のままでも、お願いで止まる
             _hold_until_stopped(srv, thread)
             return 1
         # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない
@@ -490,6 +492,10 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
     """
     from packaging_tool import (config, db, selection_log_store, source_db,
                                 user_log)
+
+    # 管理者以外停止モード(VER4.8.129): お願いを見張る。前に強制で止められて控えた図・下書きがあれば戻す。
+    # **初期化より先に**立てる(初期化に失敗して理由の画面のまま残った PC も、お願いで止まるように。VER4.8.130)
+    _watch_remote_stop(srv, kind="browser" if watch_idle else "desktop")
 
     try:
         srv.mark_stage("アプリを準備中")
@@ -517,9 +523,6 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
         log().exception("初期化に失敗しました")
         srv.mark_error(f"初期化に失敗しました: {exc}")
         return
-
-    # 管理者以外停止モード(VER4.8.129): お願いを見張る。前に強制で止められて控えた図があれば戻す
-    _watch_remote_stop(srv, kind="browser" if watch_idle else "desktop")
 
     # 画面が居なくなったら終わる(基盤仕様書 2.8)。
     # **窓が無いアプリなので、タブを閉じたら終わったつもりになる。**
@@ -634,15 +637,39 @@ def _blocked_by_remote_stop(srv, thread) -> bool:
 
 
 def _watch_remote_stop(srv, *, kind: str) -> None:
-    """管理者以外停止のお願いを見張る(VER4.8.129)。止め方は `/api/shutdown` と同じ道(`srv.stop`)。"""
+    """管理者以外停止のお願いを見張る(VER4.8.129)。止め方は `/api/shutdown` と同じ道(`srv.stop`)。
+
+    本体を組み立てられなかった(理由の画面のまま)ときも立てる(VER4.8.130)。そのときは図も処理も無いので、
+    お願いを受ければまもなく止まる。
+    """
+    try:
+        from packaging_tool import remote_stop, stop_keep
+    except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
+        log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
+        return
     try:
         from app.routes.health import _running_jobs, unsaved_edits
-        from packaging_tool import remote_stop, stop_keep
-        for note in stop_keep.restore():
-            remote_stop.user_note(note)
-        remote_stop.install(srv.stop, unsaved_edits, _running_jobs, kind=kind,
+        bare = False
+    except Exception:                             # noqa: BLE001 - 本体を組み立てられなかった
+        bare = True
+
+        def unsaved_edits() -> dict:
+            return {}
+
+        def _running_jobs() -> list:
+            return []
+    try:
+        if not bare:
+            for note in stop_keep.restore():
+                remote_stop.user_note(note)
+
+        def left() -> dict:
+            # 保存していない図と、送っていない倉庫送信の下書き(どちらも止めると消える)
+            return {**unsaved_edits(), **stop_keep.pending_orders_left()}
+
+        remote_stop.install(srv.stop, left, _running_jobs, kind=kind,
                             mode=str(getattr(srv, "mode", "") or ""),
-                            before_force=stop_keep.save_unsaved)
+                            before_force=stop_keep.save_unsaved, on_leave=stop_keep.save_orders)
     except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
         log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
 

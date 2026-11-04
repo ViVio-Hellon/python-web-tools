@@ -147,8 +147,8 @@ def read_json(path: Path, *, retry: bool = True) -> Optional[dict]:
     raise Unreadable(f"{path}: {last}")
 
 
-def write_json(path: Path, data: dict) -> bool:
-    """丸ごと書いてから入れ替える(書きかけを読ませない)。書けたら True。"""
+def write_json(path: Path, data: dict, *, warn: bool = True) -> bool:
+    """丸ごと書いてから入れ替える(書きかけを読ませない)。書けたら True。`warn=False` なら記録は控えめに。"""
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,7 +160,7 @@ def write_json(path: Path, data: dict) -> bool:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
-        log.warning("管理者以外停止のファイルを書けませんでした(%s): %s", path, exc)
+        (log.warning if warn else log.debug)("管理者以外停止のファイルを書けませんでした(%s): %s", path, exc)
         return False
 
 
@@ -302,8 +302,8 @@ class Overview:
                 "pcs": self.pcs, "me_pc": self.me_pc, "grace_sec": GRACE_SEC}
 
 
-def overview() -> Overview:
-    """いまのお願いと、各 PC の様子。"""
+def overview(*, full: bool = True) -> Overview:
+    """いまのお願いと、各 PC の様子。`full=False` ならお願いだけ(各 PC の知らせは読まない)。"""
     pc, _login = _identity()
     base = folder()
     if not config.master_db_dir().is_dir():
@@ -317,6 +317,8 @@ def overview() -> Overview:
         view.request_text = describe_request(view.request)
     rid = (view.request or {}).get("id")
     now = time.time()
+    if not full:
+        return view
     try:
         files = sorted((base / PRESENCE_DIR).glob("*.json"))
     except OSError:
@@ -377,7 +379,9 @@ def startup_block() -> Optional[str]:
         return None
     message = ("管理者が更新のためツールを止めています(管理者以外停止モード)。更新が終わるまで起動できません。"
                f"\n{describe_request(req)}"
-               f"\nこの画面は {int(BLOCK_SHOW_SEC)}秒後に閉じます。しばらくしてから起動し直してください。")
+               f"\nこの画面は {int(BLOCK_SHOW_SEC)}秒後に閉じます。しばらくしてから起動し直してください。"
+               f"\n(管理者へ: お願いを出した PC で解除できないときは、{request_path()} を"
+               "別の名前に変えると解除できます)")
     log.warning("管理者以外停止モード中のため起動しません: %s", describe_request(req),
                 extra={"keep": True, "kind": "管理者以外停止"})
     return message
@@ -404,11 +408,13 @@ class Watcher:
     def __init__(self, stop: Callable[[], None], unsaved: Callable[[], dict],
                  busy: Callable[[], list], *, kind: str = "browser", mode: str = "",
                  before_force: Optional[Callable[[], list[str]]] = None,
+                 on_leave: Optional[Callable[[], list[str]]] = None,
                  clock: Callable[[], float] = time.time) -> None:
         self._stop = stop
         self._unsaved = unsaved
         self._busy = busy
         self._before_force = before_force
+        self._on_leave = on_leave
         self._clock = clock
         self.kind = kind
         self.mode = mode
@@ -423,6 +429,8 @@ class Watcher:
         self.notice_until = 0.0
         self.stopping = False
         self._last_beat = 0.0
+        self._beat_failing = False
+        self._stop_called = False
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._halt = threading.Event()
@@ -438,18 +446,41 @@ class Watcher:
         if not config.master_db_dir().is_dir():
             return
         self._last_beat = now
-        write_json(self.presence_path(), {
+        ok = write_json(self.presence_path(), {
             "pc": self.pc, "login": self.login, "pid": os.getpid(), "kind": self.kind, "mode": self.mode,
             "version": _version(), "started_at": self.started_at, "beat_at": now,
             "state": self.state, "detail": self.detail,
             "request_id": (self.request or {}).get("id", ""),
-        })
+        }, warn=not self._beat_failing)
+        # 書けないあいだは1分ごとに記録をためない(最初の1回と、直ったときだけ)
+        if not ok and not self._beat_failing:
+            log.warning("管理者以外停止の知らせを共有に書けません(書けるようになるまで記録しません): %s",
+                        self.presence_path())
+        elif ok and self._beat_failing:
+            log.info("管理者以外停止の知らせを共有に書けるようになりました")
+        self._beat_failing = not ok
 
     def leave(self) -> None:
-        """終わるとき。止まった答えは残す(管理者が見る)、ふだんの終わりなら消す。"""
+        """終わるとき。止まった答えは残す(管理者が見る)、ふだんの終わりなら消す。
+
+        **お願いを受けている最中に利用者が自分で終えた**(帯の「終了」・タブや窓を閉じた)ときも、
+        「止まりました」を残す(消すと管理者の一覧から消えて、止まったのか分からない)。
+        """
         self._halt.set()
-        if self.state in (STATE_STOPPED, STATE_FORCED):
-            return
+        with self._lock:
+            if self.state in (STATE_STOPPED, STATE_FORCED):
+                return
+            if self.request is not None:
+                kept = []
+                if self._on_leave is not None:
+                    try:
+                        kept = list(self._on_leave() or [])
+                    except Exception:         # noqa: BLE001 - 控えに失敗しても終わりは止めない
+                        log.exception("終わるときの控えを残せませんでした")
+                self.state = STATE_STOPPED
+                self.detail = "利用者が終了しました" + (f"(控えに残しました: {'、'.join(kept)})" if kept else "")
+                self._beat(force=True)
+                return
         try:
             self.presence_path().unlink(missing_ok=True)
         except OSError:
@@ -473,9 +504,17 @@ class Watcher:
             self._halt.wait(POLL_SEC)
 
     def tick(self) -> None:
-        """1回ぶん見る。"""
+        """1回ぶん見る。**止めるのは錠の外で**(止めると終わりの後始末 `leave` が同じ錠を取りに来る)。"""
         with self._lock:
             self._tick()
+            stop_now = self.stopping and not self._stop_called
+            if stop_now:
+                self._stop_called = True
+        if stop_now:
+            try:
+                self._stop()
+            except Exception:                 # noqa: BLE001
+                log.exception("管理者以外停止で止められませんでした")
 
     def _tick(self) -> None:
         if self.stopping:
@@ -542,10 +581,6 @@ class Watcher:
         self.stopping = True
         self._beat(force=True)
         log.warning("管理者以外停止: %s", detail, extra={"keep": True, "kind": "管理者以外停止"})
-        try:
-            self._stop()
-        except Exception:                     # noqa: BLE001
-            log.exception("管理者以外停止で止められませんでした")
 
     # --- 画面へ --------------------------------------------------------
     def screen_state(self) -> Optional[dict]:
@@ -572,11 +607,13 @@ _notes_lock = threading.Lock()
 
 def install(stop: Callable[[], None], unsaved: Callable[[], dict], busy: Callable[[], list], *,
             kind: str = "browser", mode: str = "",
-            before_force: Optional[Callable[[], list[str]]] = None) -> Watcher:
+            before_force: Optional[Callable[[], list[str]]] = None,
+            on_leave: Optional[Callable[[], list[str]]] = None) -> Watcher:
     global _watcher
     if _watcher is not None:
         return _watcher
-    _watcher = Watcher(stop, unsaved, busy, kind=kind, mode=mode, before_force=before_force)
+    _watcher = Watcher(stop, unsaved, busy, kind=kind, mode=mode, before_force=before_force,
+                       on_leave=on_leave)
     _watcher.start()
     return _watcher
 

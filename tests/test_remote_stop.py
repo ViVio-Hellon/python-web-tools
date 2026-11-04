@@ -220,6 +220,41 @@ class WatcherTests(_Base):
             w.tick()
         self.assertEqual(self.stopped, [True])
 
+    def test_お願いの最中に利用者が自分で終えたら_止まりましたを残し下書きを控える(self) -> None:
+        self.issue()
+        kept = []
+        with self.as_pc("PC-LINE1"):
+            w = self.watcher(unsaved={"layout": "棚検索の配置図"})
+            w._on_leave = lambda: kept.append(1) or ["倉庫連携の送っていない発注の下書き(1行)"]
+            w.tick()
+            w.leave()
+        answer = self.answer(w)
+        self.assertEqual(answer["state"], remote_stop.STATE_STOPPED)
+        self.assertIn("利用者が終了しました", answer["detail"])
+        self.assertIn("控えに残しました", answer["detail"])
+        self.assertEqual(kept, [1])
+
+    def test_共有に書けないあいだは記録をためない(self) -> None:
+        w = self.watcher()
+        with mock.patch.object(remote_stop, "write_json", return_value=False) as write, \
+                self.assertLogs("packaging_tool.remote_stop", "WARNING") as logs:
+            for _ in range(3):
+                self.now += remote_stop.BEAT_SEC
+                w.tick()
+        self.assertEqual(write.call_count, 3)
+        self.assertEqual(len([r for r in logs.records if "書けません" in r.getMessage()]), 1)
+
+    def test_止める処理は錠の外で呼ぶ(self) -> None:
+        """止めると終わりの後始末(leave)が同じ錠を取りに来る。錠を持ったまま止めると待ち合う。"""
+        self.issue()
+        with self.as_pc("PC-LINE1"):
+            w = self.watcher()
+            w._stop = lambda: self.stopped.append(w._lock.locked())
+            w.tick()
+            self.now += remote_stop.NOTICE_SEC
+            w.tick()
+        self.assertEqual(self.stopped, [False])
+
     def test_ふだんの終わりなら知らせを消す(self) -> None:
         w = self.watcher()
         w.tick()
@@ -251,6 +286,22 @@ class OverviewTests(_Base):
         self.assertIn("応答なし", rows["PC-OLD"]["label"])
 
 
+class LightOverviewTests(_Base):
+    def test_Administratorでない端末は各PCの知らせを読まない(self) -> None:
+        self.issue()
+        with self.as_pc("PC-LINE1"):
+            remote_stop.Watcher(lambda: None, lambda: {}, lambda: []).tick()
+        view = remote_stop.overview(full=False)
+        self.assertIsNotNone(view.request)
+        self.assertEqual(view.pcs, [])
+
+    def test_起動を止めた画面に_解除できないときの逃げ道を出す(self) -> None:
+        self.issue()
+        with self.as_pc("PC-LINE1"):
+            why = remote_stop.startup_block()
+        self.assertIn(str(remote_stop.request_path()), why)
+
+
 class KeepTests(_Base):
     def setUp(self) -> None:
         super().setUp()
@@ -274,6 +325,32 @@ class KeepTests(_Base):
         self.assertEqual((restored.plan.width, restored.dirty, restored.editing), (1234.0, True, True))
         self.assertEqual(stop_keep.restore(), [], "一度戻した控えはもう戻さない")
         self.assertTrue(any((stop_keep.keep_dir() / stop_keep.DONE_NAME).glob("floor_plan-*.json")))
+
+    def test_送っていない下書きも数えて控え_戻したら作り直さない(self) -> None:
+        from packaging_tool import work_context
+        work_context._context = None
+        self.addCleanup(setattr, work_context, "_context", None)
+        self.assertEqual(stop_keep.pending_orders_left(), {})
+        work_context.get_context().set_pending_orders([{"lot_no": "4102781", "hatchu_code": "P-1"}])
+        self.assertIn("Lot 4102781", stop_keep.pending_orders_left()[stop_keep.ORDERS])
+        self.assertEqual(len(stop_keep.save_unsaved()), 1)
+        work_context._context = None                            # 止まって、起動し直した
+        self.assertEqual(len(stop_keep.restore()), 1)
+        context = work_context.get_context()
+        self.assertEqual(context.peek_pending_orders(), [{"lot_no": "4102781", "hatchu_code": "P-1"}])
+        self.assertTrue(context.pending_restored)
+        context.drop_pending_orders()
+        self.assertFalse(context.pending_restored)
+
+    def test_いま別の下書きがあれば控えの下書きは戻さず残す(self) -> None:
+        from packaging_tool import work_context
+        work_context._context = None
+        self.addCleanup(setattr, work_context, "_context", None)
+        work_context.get_context().set_pending_orders([{"lot_no": "1"}])
+        stop_keep.save_orders()
+        work_context.get_context().set_pending_orders([{"lot_no": "2"}])
+        self.assertEqual(stop_keep.restore(), [])
+        self.assertTrue(any(stop_keep.keep_dir().glob("orders-*.json")))
 
     def test_保存していなければ何も書かない(self) -> None:
         self.assertEqual(stop_keep.save_unsaved(), [])

@@ -435,7 +435,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         """倉庫連携の下書き(パレットを決めたときに作ったもの)を、いまの行で作り直す。送れなければ捨てる。"""
         from .presenters import outputs
         context = work_context.get_context()
-        if not context.peek_pending_orders():
+        if not context.peek_pending_orders() or context.pending_restored:
             return
         if outputs.send_refusal(self) is None:
             context.set_pending_orders(outputs.build_orders(self))

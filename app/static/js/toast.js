@@ -8,11 +8,12 @@
 const HOST = () => document.getElementById("toasts");
 
 /** 種類ごとの表示時間(ms)。読む量に比例させる。0 は自動で消さない。 */
-const LIFETIME = { ok: 4000, info: 5000, warn: 8000, error: 0 };
+// note: 読んでもらうまで残す知らせ(控えから戻した図・下書きなど)。見た目は warn と同じで、閉じるまで消えない
+const LIFETIME = { ok: 4000, info: 5000, warn: 8000, error: 0, note: 0 };
 
 /**
  * @param {string} message 現場向けの日本語。文言はサーバが持つ
- * @param {"ok"|"info"|"warn"|"error"} kind
+ * @param {"ok"|"info"|"warn"|"error"|"note"} kind
  * @param {{label:string, onClick:Function}} [action] 「元に戻す」など
  */
 export function toast(message, kind = "info", action = null) {

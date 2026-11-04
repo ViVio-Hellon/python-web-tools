@@ -187,7 +187,7 @@ async function beat() {
     if (body && Array.isArray(body.modes)) followModes(body.modes);
     if (body && Array.isArray(body.busy)) showBusy(body.busy);
     if (body && "stop_request" in body) showStop(body.stop_request);
-    if (body && Array.isArray(body.notes)) body.notes.forEach((note) => toast(note, "warn"));
+    if (body && Array.isArray(body.notes)) body.notes.forEach((note) => toast(note, "note"));
     // **このモードの権限が外れて、サーバが使えるモードへ切り替えた**(マスタ反映もれ #14)。
     // 出している画面は前のモードのものなので、切り替えた先の最初の画面へ移る
     // (帯の一言が「…の権限が外れたため…に切り替えました」と言う)。図の編集はサーバが持っているので消えない

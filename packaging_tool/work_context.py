@@ -74,6 +74,9 @@ class WorkContext:
     # (tkinter版も `frmSendConfirm` に切り替えて確認させていた)。
     # 発注は取り消しに人手が要るので、送る前に画面で見せる
     pending_orders: list[dict[str, Any]] = field(default_factory=list)
+    # 下書きを、管理者以外停止で強制で止める前の控えから戻した(VER4.8.130。`stop_keep`)。
+    # 戻した下書きは資材選択の作業状態から作り直さない(作業状態は止まったときに消えているので、作り直すと捨ててしまう)
+    pending_restored: bool = False
 
     # 資材選択の「置き場をまとめて見る」が渡した資材。
     # **棚検索が読んで、置き場をまとめて光らせる**(旧版 `btnMap`)。
@@ -180,6 +183,7 @@ class WorkContext:
     def set_pending_orders(self, orders: list[dict[str, Any]]) -> None:
         """倉庫送信の下書きを預かる。"""
         self.pending_orders = list(orders)
+        self.pending_restored = False
         log.info("倉庫送信の下書き: %s行 (Lot %s)",
                  len(self.pending_orders), self.lot_no)
 
@@ -199,6 +203,7 @@ class WorkContext:
 
     def drop_pending_orders(self) -> None:
         """下書きを手放す(送った・捨てた)。"""
+        self.pending_restored = False
         if self.pending_orders:
             log.info("倉庫送信の下書きを手放しました: %s行 (Lot %s)",
                      len(self.pending_orders), self.lot_no)
