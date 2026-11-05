@@ -360,13 +360,29 @@ export function start(options) {
       send("/api/lot/list/search", { text: el.listText.value });
     }, 220);
   };
+  /*
+    **英数字だけを打っているときは7桁で止める**(ロット番号は7桁。R6545E0 のように英字も混ざる。
+    現場の声「7桁以上入力できてしまう」)。空白・かな・漢字が混ざっていれば止めない ── この欄は用途名・
+    材質・寸法でも探す(ｼﾞﾃﾝｼﾔ 自転車・A5052 H112 など)。変換中は触らない(IME の文字が重なる)。
+    確定したあとに切る。全角の英数字(１２３・ＡＢＣ)も英数字として数える
+  */
+  const capLotDigits = () => {
+    const limit = Number((el.listText.dataset || {}).lotDigits) || 7;
+    const value = el.listText.value;
+    if (/^[0-9A-Za-z０-９Ａ-Ｚａ-ｚ]+$/.test(value) && value.length > limit) {
+      el.listText.value = value.slice(0, limit);
+      toast(`ロット番号は${limit}桁です(${limit + 1}桁目からは入れません)`, "info");
+    }
+  };
   el.listText.addEventListener("compositionstart", () => { composing = true; });
   el.listText.addEventListener("compositionend", () => {
     composing = false;
+    capLotDigits();
     searchSoon();                  // 確定した文字で探す(確定のあとに input が来ないことがある)
   });
   el.listText.addEventListener("input", (e) => {
     if (e?.isComposing || composing) return;
+    capLotDigits();
     searchSoon();
   });
 

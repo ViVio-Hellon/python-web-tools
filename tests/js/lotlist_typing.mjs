@@ -195,6 +195,18 @@ pending.shift().resolve(view("L816X51", 1, ["L816X51"]));
 await pressed;
 check("その結果が1件なら開く", opened, ["R6545E0", "L816X51"]);
 
+// 8) 英数字だけなら7桁で止める(ロット番号は7桁。VER4.8.134)。空白・かな・漢字が混ざれば止めない
+type("12345678");
+check("数字は7桁で止める", box.value, "1234567");
+type("R6545E01");
+check("英字の混ざるロット番号も7桁で止める", box.value, "R6545E0");
+type("１２３４５６７８");
+check("全角の数字も7桁で止める", box.value, "１２３４５６７");
+type("A5052 H112");
+check("空白があれば止めない", box.value, "A5052 H112");
+type("ｼﾞﾃﾝｼﾔ 自転車です");
+check("かな・漢字があれば止めない", box.value, "ｼﾞﾃﾝｼﾔ 自転車です");
+
 if (failed) {
   console.log(`${failed}件 失敗`);
   process.exit(1);

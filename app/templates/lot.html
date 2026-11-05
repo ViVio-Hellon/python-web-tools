@@ -93,7 +93,10 @@
            (IME をオフにはできない。日本語で探すときは 半角/全角 キーで切り替えられる)。
            **欄の文字は書き換えない**(変換中に書き換えると IME の文字が重なる)。全角の英数字は
            サーバが探すときに半角に直す(`lot_browse_session.set_text`)。大文字・小文字は区別しない #}
+        {# **数字だけを打っているときは7桁で止める**(ロット番号は7桁。用途・材質・寸法の文字は長くてもよいので
+           maxlength は付けない。`js/views/lotlist.js` の capLotDigits) #}
         <input class="input seek__input" id="listText" type="search"
+               data-lot-digits="{{ list_view.lot_digits }}"
                inputmode="url" autocapitalize="characters" spellcheck="false"
                autocomplete="off" autofocus
                placeholder="ロット番号・用途・材質・寸法…"

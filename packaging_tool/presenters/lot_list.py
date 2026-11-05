@@ -78,6 +78,8 @@ class LotListViewModel:
 
     # 検索欄の下に出す案内。**入口が1つしかないことを言葉でも示す**
     search_hint: str = ""
+    # ロット番号の桁数。数字だけを打っているときは、ここで止める(画面の欄。VER4.8.134)
+    lot_digits: int = 7
     # 表の使い方。ダブルクリックは見ただけでは分からない操作なので、
     # 覚えていることを前提にしない(認識は再生に勝る)
     row_hint: str = ""
@@ -104,6 +106,7 @@ class LotListViewModel:
             "can_save": self.can_save,
             "save_why": self.save_why,
             "search_hint": self.search_hint,
+            "lot_digits": self.lot_digits,
             "row_hint": self.row_hint,
         }
 

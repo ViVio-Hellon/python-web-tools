@@ -191,6 +191,23 @@ class FilterTests(ListWebTestCase):
         body = self.post("/api/lot/list/search", {"text": "A1050"})
         self.assertEqual(self.lots(body), ["2222222"])
 
+    def test_数字だけなら7桁で止める_文字が混ざれば止めない(self) -> None:
+        """VER4.8.134: 現場の声「ロット検索で7桁以上入力できてしまうので7桁で止まるように」。"""
+        body = self.post("/api/lot/list/search", {"text": "11111119"})
+        self.assertEqual(body["text"], "1111111")
+        self.assertEqual(self.lots(body), ["1111111"])
+        body = self.post("/api/lot/list/search", {"text": "１１１１１１１９"})       # 全角の数字も
+        self.assertEqual(body["text"], "1111111")
+        body = self.post("/api/lot/list/search", {"text": "R6545E01"})            # 英字の混ざるロット番号も
+        self.assertEqual(body["text"], "R6545E0")
+        body = self.post("/api/lot/list/search", {"text": "A5052 H112"})          # 空白・かな・漢字があれば止めない
+        self.assertEqual(body["text"], "A5052 H112")
+        body = self.post("/api/lot/list/search", {"text": "ｼﾞﾃﾝｼﾔ 自転車"})
+        self.assertEqual(body["text"], "ｼﾞﾃﾝｼﾔ 自転車")
+        self.assertEqual(body["lot_digits"], 7)
+        html = self.client.get("/lot", headers=self.auth()).get_data(as_text=True)
+        self.assertIn('data-lot-digits="7"', html)
+
     def test_全角で打った英数字でも見つかる(self) -> None:
         """現場の声: IME が日本語のまま打つと見つからない。全角の英数字は半角にして探す(貼り付けも)。"""
         body = self.post("/api/lot/list/search", {"text": "ａ１０５０"})

@@ -119,7 +119,7 @@ class LotBrowseSession:
         # 全角の英数字・記号は半角に(**画面は欄を書き換えない**ので、直すのはここだけ。
         # 画面の `halfwidth.searchText` はこれと同じ形にそろえて見比べるだけ)。
         # 照合は大文字・小文字を区別しないので、ここでは大文字にしない
-        self.text = (text or "").translate(_HALF).strip()
+        self.text = cap_lot_digits((text or "").translate(_HALF).strip())
         return OpResult(True, "")
 
     # ------------------------------------------------------------------
@@ -248,3 +248,15 @@ def reset_session() -> LotBrowseSession:
     global _session
     _session = LotBrowseSession()
     return _session
+
+
+def cap_lot_digits(text: str) -> str:
+    """**英数字だけなら、ロット番号の桁数(7桁)で切る**(VER4.8.134。現場の声「7桁以上入力できてしまう」)。
+
+    ロット番号は R6545E0 のように英字も混ざる。画面の欄も同じところで止める(`lotlist.js` の capLotDigits)。
+    空白・かな・漢字が混ざっていれば切らない(用途名・材質・寸法でも探す欄なので)。
+    """
+    from .lot_service import LOT_NO_LENGTH
+    if text.isascii() and text.isalnum() and len(text) > LOT_NO_LENGTH:
+        return text[:LOT_NO_LENGTH]
+    return text
