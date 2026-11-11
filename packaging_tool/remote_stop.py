@@ -342,12 +342,20 @@ def overview(*, full: bool = True) -> Overview:
             label = "応答なし(知らせが途絶えています)"
         elif rid and not answered and not same_pc(data.get("pc", ""), (view.request or {}).get("by_pc", "")):
             label = "まだお願いを受けていません"
-        if same_pc(data.get("pc", ""), (view.request or {}).get("by_pc", "")) and rid:
+        issuer = bool(rid) and same_pc(data.get("pc", ""), (view.request or {}).get("by_pc", ""))
+        me = same_pc(data.get("pc", ""), pc)
+        if issuer and me:
+            # **見ている自分の PC がお願いを出した PC**(VER4.8.136。現場の声「この案内が自分の場合は別の表示に」)。
+            # 自分のツールは止まらないので、更新の前に自分で閉じることを言う
+            label = "この PC(あなたがお願いを出した PC)。止めません。更新の前に、このツールを閉じてください"
+        elif issuer:
             label += "(お願いを出した PC。止めません)"
+        elif me:
+            label += "(この PC)"
         view.pcs.append({
             "pc": data.get("pc", ""), "login": data.get("login", ""), "kind": data.get("kind", ""),
             "version": data.get("version", ""), "state": state, "label": label,
-            "detail": data.get("detail", ""), "stale": stale,
+            "detail": data.get("detail", ""), "stale": stale, "me": me,
             "beat": time.strftime("%H:%M:%S", time.localtime(float(data.get("beat_at") or 0))),
         })
     return view

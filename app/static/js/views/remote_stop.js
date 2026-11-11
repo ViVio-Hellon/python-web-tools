@@ -48,6 +48,8 @@ function paint(view) {
   for (const pc of view.pcs || []) {
     const tr = document.createElement("tr");
     if (pc.stale) tr.dataset.level = "warn";
+    // 自分の PC の行は太字で見分けられるように(案内の字も「この PC」と言う)
+    if (pc.me) tr.style.fontWeight = "700";
     tr.append(cell(pc.pc), cell(pc.login), cell(pc.version), cell(pc.label), cell(pc.detail), cell(pc.beat));
     el.rsPcs.append(tr);
   }

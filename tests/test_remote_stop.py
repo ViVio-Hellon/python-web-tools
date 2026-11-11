@@ -276,6 +276,19 @@ class OverviewTests(_Base):
         self.assertEqual(rows["PC-LINE1"]["label"], "利用者を待っています")
         self.assertEqual(rows["PC-LINE1"]["detail"], "棚検索の配置図")
 
+    def test_お願いを出したPCが自分なら_自分向けの案内を出す(self) -> None:
+        """VER4.8.136: 現場の声「動いています(お願いを出した PC。止めません) この案内が自分の場合は別の表示に」。"""
+        self.issue()
+        remote_stop.Watcher(lambda: None, lambda: {}, lambda: []).tick()          # 自分(PC-ADMIN)
+        rows = {r["pc"]: r for r in remote_stop.overview().pcs}
+        self.assertTrue(rows["PC-ADMIN"]["me"])
+        self.assertIn("あなたがお願いを出した PC", rows["PC-ADMIN"]["label"])
+        self.assertIn("閉じてください", rows["PC-ADMIN"]["label"])
+        with self.as_pc("PC-ADMIN2"):                                           # ほかの管理者の PC から見る
+            rows = {r["pc"]: r for r in remote_stop.overview().pcs}
+        self.assertFalse(rows["PC-ADMIN"]["me"])
+        self.assertIn("(お願いを出した PC。止めません)", rows["PC-ADMIN"]["label"])
+
     def test_知らせが途絶えたPCは応答なし(self) -> None:
         self.issue()
         remote_stop.presence_dir().mkdir(parents=True, exist_ok=True)
