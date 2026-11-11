@@ -948,11 +948,11 @@ class OrderDetailTests(WarehouseWebTestCase):
             "材質", "調質", "厚", "幅", "丈", "用途コード", "納入先"])
 
     def test_大きく出すのはVBAが目立たせていた2つ(self) -> None:
-        """発注コード(青字・下線・枠)と発注数(Font.Size 13・色)。"""
+        """発注コード(青字・下線・枠)と発注数(Font.Size 13・色)。品名も発注コードと同じ大きさ(VER4.8.135)。"""
         body = self.clients["material"].get(
             "/api/warehouse/orders", headers=self.auth()).get_json()
         big = {f["label"] for f in body["detail_fields"] if f["big"]}
-        self.assertEqual(big, {"発注コード", "発注数"})
+        self.assertEqual(big, {"品名", "発注コード", "発注数"})
 
     def test_控えるのは発注コードだけ(self) -> None:
         """VBA `evtHatchu_Click` が控えていたのは発注コード。"""

@@ -146,7 +146,13 @@
 /* 発注1件を大きく出すモーダル(発注一覧の行を押したとき)。
    **一覧は詰めて並べるので小さい。** どの発注だったかを確かめる場所は
    別に要る(現場の指摘:「選択したものが別ウィンドウで大きく表示」) */
-.modal--order { width: min(720px, 92vw); }
+/* **今の1.5倍**(現場の声「現場倉庫ともに倉庫連携での確認画面を今の1.5倍に」)。幅と、中の字の大きさ
+   (アプリの字の大きさの段 --fs-* をこの窓の中だけ1.5倍にする。見出し・値・やり取り・ボタンがそろって大きくなる) */
+.modal--order {
+  width: min(1080px, 96vw);
+  --fs-2xs: 15px; --fs-xs: 16.5px; --fs-sm: 18px; --fs-md: 19.5px; --fs-lg: 22.5px; --fs-xl: 28.5px;
+  font-size: var(--fs-md);
+}
 .modal--order .pad { overflow: auto; }
 .fields--order { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 /* 打ち写す値(発注コード・LotNo・発注数)は、離れて見ても読める大きさに */

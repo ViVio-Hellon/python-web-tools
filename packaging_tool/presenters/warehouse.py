@@ -121,7 +121,8 @@ ORDER_VIEW: tuple[ViewColumn, ...] = (
 ORDER_DETAIL: tuple[tuple[str, str, bool], ...] = (
     ("登録日時", "登録日時", False),
     ("LotNo", "LotNo", False),
-    ("品名", "品名", False),
+    # 品名も発注コードと同じ大きさ(VER4.8.135。現場の声「品名、発注コードのフォントサイズを同じに」)
+    ("品名", "品名", True),
     ("発注コード", "発注コード", True),
     ("発注数", "発注数", True),
     ("単位", "単位", False),
