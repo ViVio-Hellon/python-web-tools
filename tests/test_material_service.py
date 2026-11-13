@@ -48,6 +48,12 @@ class CheckConditionTests(unittest.TestCase):
     def test_range_all_blank_means_no_restriction(self):
         self.assertTrue(svc._check_range(None, None, None, 100))
 
+    def test_空欄が0で入っていても範囲の条件なし(self):
+        """VER4.8.141: 手元へ取り込むと空欄が 0 になる。0〜0 と読んで当たらなかった。"""
+        self.assertTrue(svc._check_range(0.0, 0.0, 0.0, 1.0))
+        self.assertTrue(svc._check_range("", "", "", 1.0))
+        self.assertTrue(svc._check_range(1.01, 999.0, 0, 110.0))
+
     def test_range_check(self):
         self.assertTrue(svc._check_range(1.0, 3.0, None, 2.0))
         self.assertFalse(svc._check_range(1.0, 3.0, None, 5.0))

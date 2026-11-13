@@ -135,10 +135,24 @@ def _check_range(lower, upper, middle, value) -> bool:
     下限・上限・中央列(表示用、比較には使わない)が3つとも空欄なら
     無条件でTrue(範囲制限なし)。それ以外は下限<=value<=上限か判定する。
     """
-    if lower is None and upper is None and middle is None:
+    def blank(x) -> bool:
+        if x is None or (isinstance(x, str) and not x.strip()):
+            return True
+        try:
+            return float(x) == 0.0
+        except (TypeError, ValueError):
+            return False
+
+    # **下限・上限が空欄(手元へ取り込むと 0 になる)なら範囲の条件なし**(VER4.8.141)。
+    # 前は 0〜0 の範囲と読み、寸法の条件が無い行(建材パネル・保険の行など)にどのロットも当たらず
+    # 「一致なし」→ 上下共用にならなかった(現場の梱包資材マスタ・L5251M0 で再現)
+    if blank(lower) and blank(upper):
         return True
-    lo = float(lower) if lower is not None else 0.0
-    hi = float(upper) if upper is not None else 0.0
+    try:
+        lo = float(lower) if not blank(lower) else 0.0
+        hi = float(upper) if not blank(upper) else float("inf")
+    except (TypeError, ValueError):
+        return False
     try:
         v = float(value)
     except (TypeError, ValueError):
