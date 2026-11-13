@@ -682,6 +682,9 @@ def build_label(session: Any) -> printing.Report:
     result = presenter.lot_result
     lot, odr, hiki = result.lot, result.odr, result.hiki
     industry, symbol, code, unit = _pallet_info(session)
+    # **上下共用は台(下)と蓋(上)で1組**(VER4.8.140。現場の声「上下共用モード発火で 台 は 組 に変更」)
+    if presenter.is_shared_board_mode and unit == "台":
+        unit = "組"
     materials = presenter.materials_1p0113
     qty = session.qty_1p0113
 

@@ -101,7 +101,7 @@ class LabelSheetTests(unittest.TestCase):
 
     def test_package_count_uses_the_pallet_unit(self):
         html = reports.build_label_sheet(_label(total_packages=4, pallet_unit="組"))
-        self.assertIn(">4</span>組", html)
+        self.assertRegex(html, r">4</span><span[^>]*data-edit=\"pkg_unit\"[^>]*>組<")
 
     def test_zero_packages_leaves_a_blank_to_write_in(self):
         """**台数が確定できないことがある。**
@@ -113,7 +113,17 @@ class LabelSheetTests(unittest.TestCase):
         html = reports.build_label_sheet(_label(total_packages=0))
         self.assertIn('class="pkg"', html)
         self.assertIn('data-edit="pkg"', html)
-        self.assertIn('data-edit="pkg" data-placeholder="—"></span>台', html)
+        self.assertIn('data-edit="pkg" data-placeholder="—"></span>', html)
+        self.assertIn('data-edit="pkg_unit"', html)
+
+    def test_単位も直せる_上下共用なら組(self):
+        """VER4.8.140: 「上下共用モード発火で 台 は 組 に変更 かつ 印刷プレビューで xxx台 も修正可能対象に」。"""
+        html = reports.build_label_sheet(_label(total_packages=1))
+        self.assertRegex(html, r'data-edit="pkg_unit"[^>]*>台<')
+        html = reports.build_label_sheet(_label(total_packages=1, pallet_unit="組"))
+        self.assertRegex(html, r'data-edit="pkg_unit"[^>]*>組<')
+        html = reports.build_label_sheet(_label(total_packages=1, edits={"pkg_unit": "ケース"}))
+        self.assertRegex(html, r'data-edit="pkg_unit"[^>]*>ケース<')
 
     def test_1p0113_replaces_the_pallet_line_and_hides_the_count(self):
         html = reports.build_label_sheet(_label(

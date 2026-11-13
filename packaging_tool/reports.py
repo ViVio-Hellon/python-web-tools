@@ -216,7 +216,9 @@ def _label_left_cells(data: LabelData) -> list[str]:
         cells[5] = (
             f'<span class="pkg">'
             f'{printing.editable("pkg", data.edits.get("pkg", str(data.total_packages or "")), placeholder="—")}'
-            f'{printing.escape(data.pallet_unit)}</span>')
+            # 単位(台・組)も直せる(VER4.8.140。現場の声「印刷プレビューで xxx台 も修正可能対象に」)
+            f'{printing.editable("pkg_unit", data.edits.get("pkg_unit", data.pallet_unit), placeholder="台")}'
+            f'</span>')
 
     cells[6] = f'<span class="lot">{printing.escape(data.lot_no)}</span>'
     return cells
