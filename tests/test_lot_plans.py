@@ -313,6 +313,59 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(lot_plans.last_done(self.leader, "N7120D0").terminal, "LINE1")
 
 
+class UnsentKeepTests(HandoffTests):
+    """VER4.8.143: まだ送っていない行があっても、共有の新しい予定を受け取る(送っていない行は残す)。"""
+
+    def test_共有に書けないあいだも新しい予定が届き_作業済みも残る(self) -> None:
+        lot_plans.send(self.leader, "N7120D0", "L-1", terminal="LEADER", sender="cho")
+        data_sync.write_back(self.leader, self.src)
+        lot_plans.refresh_if_changed(self.line, self.src)
+        pid = lot_plans.current(self.line, "N7120D0").plan_id
+        lot_plans.finish(self.line, pid, lines=["L-1"], terminal="LINE1")     # 共有に書けず、送れていない
+        self.assertIn(config.TBL_LOT_PLAN, sync_writeback._unsent_writeback_tables(self.line))
+        lot_plans.send(self.leader, "N9999A0", "L-1", terminal="LEADER", sender="cho")
+        data_sync.write_back(self.leader, self.src)
+        self.assertTrue(lot_plans.refresh_if_changed(self.line, self.src))
+        self.assertEqual([p.lot_no for p in lot_plans.for_lines(self.line, ["L-1"])], ["N9999A0"])
+        self.assertIsNone(lot_plans.current(self.line, "N7120D0"), "送っていない作業済みが残る")
+        # 送れるようになったら、作業済みは1行だけ共有に届く
+        result = data_sync.write_back(self.line, self.src)
+        self.assertEqual(result.sent.get(config.TBL_LOT_PLAN), 1, result.errors)
+        lot_plans.forget_seen_stamp()
+        self.assertTrue(lot_plans.refresh_if_changed(self.line, self.src))
+        conn = sqlite3.connect(self.src)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute(f'SELECT COUNT(*) FROM "{config.TBL_LOT_PLAN}"').fetchone()[0], 3)
+        self.assertEqual(self.line.execute(f'SELECT COUNT(*) FROM "{config.TBL_LOT_PLAN}"').fetchone()[0], 3)
+        self.assertNotIn(config.TBL_LOT_PLAN, sync_writeback._unsent_writeback_tables(self.line))
+        self.assertEqual(lot_plans.last_done(self.line, "N7120D0").terminal, "LINE1")
+
+    def test_送っている最中に共有に届いた行は2つにしない(self) -> None:
+        lot_plans.send(self.leader, "N0000Z0", "HVC", terminal="LEADER")    # 共有に表ができる
+        data_sync.write_back(self.leader, self.src)
+        lot_plans.send(self.line, "N1111A0", "L-1", terminal="LINE1")
+        mine = lot_plans.current(self.line, "N1111A0").plan_id
+        conn = sqlite3.connect(self.src)                  # 共有には届いたが、手元はまだ「済」になっていない
+        conn.execute(f'INSERT INTO "{config.TBL_LOT_PLAN}" (予定ID, LotNo, ライン, 状態, 送った日時)'
+                     " VALUES (?, 'N1111A0', 'L-1', '予定', '2026-11-13 10:00:00')", (mine,))
+        conn.commit()
+        conn.close()
+        self.assertTrue(lot_plans.refresh_if_changed(self.line, self.src))
+        self.assertEqual(self.line.execute(f'SELECT COUNT(*) FROM "{config.TBL_LOT_PLAN}" WHERE 予定ID = ?',
+                                           (mine,)).fetchone()[0], 1)
+
+    def test_読めなければ手元を変えない(self) -> None:
+        from packaging_tool import sync_sources
+        lot_plans.send(self.leader, "N0000Z0", "HVC", terminal="LEADER")    # 共有に表ができる
+        data_sync.write_back(self.leader, self.src)
+        lot_plans.send(self.line, "N1111A0", "L-1", terminal="LINE1")
+        before = self.line.execute(f'SELECT COUNT(*) FROM "{config.TBL_LOT_PLAN}"').fetchone()[0]
+        with mock.patch.object(sync_sources, "read_table", side_effect=sync_sources.SyncError("WinError 59")):
+            self.assertFalse(lot_plans.refresh_if_changed(self.line, self.src))
+        self.assertEqual(self.line.execute(f'SELECT COUNT(*) FROM "{config.TBL_LOT_PLAN}"').fetchone()[0], before)
+        self.assertTrue(lot_plans.refresh_if_changed(self.line, self.src), "覚えずに次でやり直す")
+
+
 class CycleTests(unittest.TestCase):
     """複数の予定ロットを各ラインに入れ、各ラインで作業済みにして回す(端末5台・共有越し。VER4.8.112)。
 

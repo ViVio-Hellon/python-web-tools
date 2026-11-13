@@ -388,7 +388,9 @@ def _refresh_if_changed(conn: sqlite3.Connection, path: Optional[Path]) -> bool:
     if stamp is None or _seen_stamp.get(str(path)) == stamp:
         return False
     if TABLE in sync_writeback._unsent_writeback_tables(conn):
-        return False
+        # **まだ送っていない行があっても、共有の予定は受け取る**(VER4.8.143)。総入れ替えはしない
+        # (送っていない行が消える)。送っていない行を残して、それ以外を共有の中身に入れ替える
+        return _merge_keeping_unsent(conn, path, stamp)
     result = sync_import.import_tables(
         conn, path, {TABLE: import_specs.IMPORT_SPECS[TABLE]},
         required=import_specs.REQUIRED_KEY_COLUMNS,
@@ -405,6 +407,71 @@ def _refresh_if_changed(conn: sqlite3.Connection, path: Optional[Path]) -> bool:
     # 開いている画面(倉庫連携の作業予定ラインなど)が見張りの `lot_plans_rev` で気づいて引き直す
     # (`import_tables` の終わりでも進むが、ここで進んだことをはっきりさせる)
     from . import master_state
+    master_state.touch([TABLE])
+    return True
+
+
+def _merge_keeping_unsent(conn: sqlite3.Connection, path: Path, stamp: tuple[int, int]) -> bool:
+    """**この端末でまだ送っていない予定ロットの行を残したまま**、共有の予定ロットを取り込む(VER4.8.143)。
+
+    前は、まだ送っていない行が1つでもあると取り込みを見送った(総入れ替えで消えるため)。ラインの端末が
+    作業済みを押したあと共有に書けない状態が続くと、そのあいだ**新しい予定が届かなかった**(点検の ②)。
+    予定ロットは足すだけの表(行は書き直さない・予定IDは世界で1つ)なので、まぜても壊れない:
+
+        残す       まだ送っていない行・送っている最中の行(同期記録が「済」でない、この端末で作った行)
+        入れ替える それ以外(取り込んだ行・送り終えた行)を、共有の行に
+        共有の行のうち、残した行と同じ予定IDのもの(送っている最中に届いた)は入れない(同じ行が2つにならない)
+
+    残した行は共有番号が空なので、いまの予定を決める順では共有の行のあと(`_ORDER`)。送れたら、次の取り込みで
+    共有の行に置き換わる。**読めなければ何も変えない**(次の見張りでやり直す)。
+    """
+    from . import import_specs, master_state, outbox_sync, shared_link, sync_sources, sync_writeback
+    from .sync_sources import SyncError
+    spec = next(s for s in sync_writeback.WRITEBACK_SPECS if s.sqlite_table == TABLE)
+    if shared_link.bind(conn, path).why():
+        return False                                 # 別の共有向けの未送信がある(混ぜない)
+    try:
+        rows = sync_sources.read_table(path, TABLE)
+    except SyncError as exc:
+        from . import source_db
+        if source_db.is_missing_error(str(exc)):
+            _seen_stamp[str(path)] = stamp           # 共有にまだ表が無い(読めて、無いと確かめた)
+        else:
+            log.warning("予定ロットを読めないので、取り込み直しを見送りました(次の見張りでやり直します): %s", exc)
+        return False
+    columns = import_specs.IMPORT_SPECS[TABLE]
+    names = [c for c, _s, _f in columns] + [spec.origin_column]
+    outbox_sync.ensure_sync_table(conn)              # 確定するので、取引の前に
+    imported = 0
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            kept = {int(r[spec.key_column]): str(r["予定ID"])
+                    for r in outbox_sync.pending_rows(conn, spec, ensure=False)}
+            keep_ids = ",".join(str(k) for k in kept) or "NULL"
+            conn.execute(f'DELETE FROM "{TABLE}" WHERE 管理番号 NOT IN ({keep_ids})')
+            conn.execute(f"DELETE FROM [{outbox_sync.SYNC_LOG_TABLE}] WHERE テーブル名 = ?"
+                         f" AND CAST(行ID AS INTEGER) NOT IN ({keep_ids})", (TABLE,))
+            kept_plans = set(kept.values())
+            marks = ", ".join(f'"{n}"' for n in names)
+            holes = ", ".join("?" for _ in names)
+            for row in rows:
+                values = [conv(row.get(src)) for _c, src, conv in columns]
+                values = [import_specs.NULL_FALLBACKS.get(conv) if v is None and col != "共有番号" else v
+                          for (col, _s, conv), v in zip(columns, values)]
+                plan_id = str(values[0] or "").strip()
+                if not plan_id or plan_id in kept_plans:
+                    continue
+                cursor = conn.execute(f'INSERT INTO "{TABLE}" ({marks}) VALUES ({holes})',
+                                      values + [outbox_sync.ORIGIN_IMPORTED])
+                conn.execute(f"INSERT INTO [{outbox_sync.SYNC_LOG_TABLE}] (テーブル名, 行ID, 状態) VALUES (?, ?, ?)",
+                             (TABLE, cursor.lastrowid, outbox_sync.SYNC_DONE))
+                imported += 1
+    except sqlite3.Error as exc:
+        log.warning("予定ロットの取り込み直しを見送りました(手元はそのまま): %s", exc)
+        return False
+    _seen_stamp[str(path)] = stamp
+    log.info("予定ロットを取り込み直しました(まだ送っていない %s件は残しました): %s件", len(kept), imported)
     master_state.touch([TABLE])
     return True
 
