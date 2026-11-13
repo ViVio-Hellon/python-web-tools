@@ -336,7 +336,16 @@ def _open(path: Path, *, read_only: bool,
     移れないので、ここで1文引いて確かめてから返します。
     """
     path = Path(path)
-    if not _exists_retrying(path):
+    try:
+        found = _exists_retrying(path)
+    except OSError as exc:
+        # **このプロセスからだけ読めないのか、PC ごと届かないのかを確かめ、別のプロセスで読めればそれで続ける**
+        # (VER4.8.138。現場: 240638 で仕掛台帳だけ WinError 59。手で dir・python では読める)
+        rescued = _rescue_copy(path, exc)
+        if rescued is None:
+            raise
+        path, found = rescued, True
+    if not found:
         raise SourceError(f"ファイルが見つかりません: {path}")
     # 絶対の道にするだけ。**共有には問い合わせない。**
     # `resolve()` は実体を開いて確かめに行くので、共有の上では
@@ -602,8 +611,59 @@ def sweep_old_copies(keep_hours: float = 6.0) -> int:
     return removed
 
 
-# 共有が一度だけ応答しなかったときに、待ってから聞き直す間(秒)。VER4.8.137
-NET_RETRY_SEC = (1.0, 2.0, 4.0)
+# 共有が応答しなかったときに、聞き直すまでの間(秒)。VER4.8.137 は 1・2・4秒 待ったが、待っても効かなかった
+# (現場のログ: 3回とも同じ失敗)ので、VER4.8.138 から短く1回だけ
+NET_RETRY_SEC = (0.5,)
+# 別のプロセスで確かめる・写すときの上限(秒)
+RESCUE_TIMEOUT_SEC = 60
+
+
+def _run(args: list[str], timeout: float) -> tuple[int, str]:
+    import subprocess
+    try:
+        done = subprocess.run(args, capture_output=True, text=True, errors="replace", timeout=timeout,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return done.returncode, ((done.stdout or "") + (done.stderr or "")).strip()[-300:]
+    except (OSError, subprocess.SubprocessError) as exc:
+        return -1, str(exc)
+
+
+def _rescue_copy(path: Path, exc: OSError) -> Optional[Path]:
+    """このプロセスで読めなかったとき、**別のプロセスで**確かめて、読めればそちらで手元へ写す(VER4.8.138)。
+
+    確かめた結果は必ず記録に残す(原因の切り分け):
+      - 別のプロセスでは読めた → このツールのプロセスの中だけの問題。写したもので取り込みを続ける
+      - 別のプロセスでも読めない → その瞬間は PC ごとサーバに届いていない(ネットワーク・サーバ側)
+    写せなければ None(呼び手は元の失敗を出す)。
+    """
+    import sys
+    checks = []
+    if os.name == "nt":
+        rc, out = _run(["cmd", "/c", "dir", str(path)], 30)
+        checks.append(f"dir={'読めた' if rc == 0 else '読めない'}({out[-120:]})")
+    rc, out = _run([sys.executable, "-c", "import os,sys;os.stat(sys.argv[1])", str(path)], 30)
+    other_ok = rc == 0
+    checks.append(f"別のPython={'読めた' if other_ok else '読めない'}({out[-120:]})")
+    dest: Optional[Path] = None
+    if other_ok:
+        global _COPY_DIR
+        if _COPY_DIR is None:
+            _COPY_DIR = Path(tempfile.mkdtemp(prefix=_COPY_PREFIX))
+            atexit.register(shutil.rmtree, _COPY_DIR, True)
+        dest = _COPY_DIR / f"rescue_{abs(hash(str(path))):x}{path.suffix}"
+        rc, out = _run([sys.executable, "-c", "import shutil,sys;shutil.copyfile(sys.argv[1],sys.argv[2])",
+                        str(path), str(dest)], RESCUE_TIMEOUT_SEC)
+        if rc != 0 or not dest.exists():
+            checks.append(f"別のプロセスで写せない({out[-120:]})")
+            dest = None
+        else:
+            checks.append("別のプロセスで写して続けます")
+    where = ("このツールのプロセスの中だけで読めない" if other_ok
+             else "その瞬間は PC からサーバに届いていない(ネットワーク・サーバ側)")
+    log.warning("共有のファイルを読めませんでした: %s(%s)。確かめた結果: %s → %s",
+                path, exc, " / ".join(checks), where,
+                extra={"keep": True, "kind": "共有を読めない(切り分け)"})
+    return dest
 
 
 def _exists_retrying(path: Path) -> bool:

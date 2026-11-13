@@ -22,7 +22,7 @@ class NetRetryTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.path = Path(tmp.name) / "SIKALOT.sqlite3"
         self.path.write_bytes(b"x")
-        patcher = mock.patch.object(source_db, "NET_RETRY_SEC", (0.0, 0.0, 0.0))
+        patcher = mock.patch.object(source_db, "NET_RETRY_SEC", (0.0,))
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -50,3 +50,33 @@ class NetRetryTests(unittest.TestCase):
 
     def test_無いファイルは聞き直さない(self) -> None:
         self.assertFalse(source_db._exists_retrying(self.path.with_name("無い.sqlite3")))
+
+    def test_このプロセスで読めなくても_別のプロセスで読めれば写して続ける(self) -> None:
+        """VER4.8.138: 確かめた結果を記録に残し、別のプロセスで写したもので開く。"""
+        import sqlite3
+        db = self.path.with_name("本物.sqlite3")
+        with sqlite3.connect(db) as raw:
+            raw.execute("CREATE TABLE t (a)")
+            raw.execute("INSERT INTO t VALUES (1)")
+        raw.close()
+        real = Path.stat
+
+        def stat(path, *a, **kw):
+            if str(path) == str(db):
+                raise OSError(59, "予期しないネットワーク エラーが発生しました。")
+            return real(path, *a, **kw)
+        with mock.patch.object(Path, "stat", stat), \
+                self.assertLogs("packaging_tool.source_db", "WARNING") as logs:
+            rows = source_db.read_table(db, "t")
+        self.assertEqual([r["a"] for r in rows], [1])
+        text = "\n".join(logs.output)
+        self.assertIn("別のPython=読めた", text)
+        self.assertIn("このツールのプロセスの中だけで読めない", text)
+
+    def test_別のプロセスでも読めなければ元の失敗を出し_PCごと届かないと記録する(self) -> None:
+        missing = self.path.with_name("届かない.sqlite3")
+        with mock.patch.object(source_db, "_exists_retrying", side_effect=OSError(59, "net")), \
+                self.assertLogs("packaging_tool.source_db", "WARNING") as logs, \
+                self.assertRaises(OSError):
+            source_db.read_table(missing, "t")
+        self.assertIn("PC からサーバに届いていない", "\n".join(logs.output))
