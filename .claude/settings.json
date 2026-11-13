@@ -8,6 +8,28 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh"
           }
         ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_state.py\" sessionstart || python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_state.py\" sessionstart || true",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_state.py\" precompact || python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_state.py\" precompact || true",
+            "timeout": 30
+          }
+        ]
       }
     ]
   }

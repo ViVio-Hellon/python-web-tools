@@ -59,3 +59,4 @@ src-tauri/target/
 src-tauri/gen/
 # GitHub Actions から取ってきて直下に置いた exe(配布のときに make_dist が入れる)
 /PackagingTool.exe
+.claude/state_backups/
