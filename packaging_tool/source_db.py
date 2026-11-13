@@ -25,6 +25,7 @@ import shutil
 import re
 import sqlite3
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -335,7 +336,7 @@ def _open(path: Path, *, read_only: bool,
     移れないので、ここで1文引いて確かめてから返します。
     """
     path = Path(path)
-    if not path.exists():
+    if not _exists_retrying(path):
         raise SourceError(f"ファイルが見つかりません: {path}")
     # 絶対の道にするだけ。**共有には問い合わせない。**
     # `resolve()` は実体を開いて確かめに行くので、共有の上では
@@ -599,6 +600,38 @@ def sweep_old_copies(keep_hours: float = 6.0) -> int:
     if removed:
         log.info("前の起動が残した取り込み元の写しを %d 件片づけました", removed)
     return removed
+
+
+# 共有が一度だけ応答しなかったときに、待ってから聞き直す間(秒)。VER4.8.137
+NET_RETRY_SEC = (1.0, 2.0, 4.0)
+
+
+def _exists_retrying(path: Path) -> bool:
+    """ファイルがあるか。**共有がいったん応答しないときは、待って聞き直す**(VER4.8.137)。
+
+    現場の声:「どのツールも仕掛をとるのを失敗しまくる」。ログでは毎回、仕掛台帳のサーバ(nlmsrvngy03)への
+    **最初の1回**(ファイルがあるかの問い合わせ)で `[WinError 59] 予期しないネットワーク エラー` が出て、
+    取り込みごと落ちていた。同じ取り込みの中で、もう1つのサーバ(マスタ・看板・閾値)は読めている。
+    しばらく使っていない共有の接続を Windows・サーバが切っていて、つなぎ直す最初の1回が失敗する形。
+    同じ手で読むほかのツールも同じところで落ちる。聞き直せば通るので、ここで聞き直す。
+    **無い(FileNotFoundError)ときは聞き直さない**(本当に無い)。聞き直しても読めなければ元の失敗をそのまま出す。
+    """
+    last: Optional[OSError] = None
+    for wait in (0.0, *NET_RETRY_SEC):
+        if wait:
+            log.info("共有が応答しませんでした(%s)。%.0f秒待って聞き直します: %s", last, wait, path)
+            time.sleep(wait)
+        try:
+            path.stat()
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            last = exc
+            continue
+        if last is not None:
+            log.info("聞き直したら読めました: %s", path)
+        return True
+    raise last  # type: ignore[misc]
 
 
 def _copy_of(resolved: Path) -> Path:
