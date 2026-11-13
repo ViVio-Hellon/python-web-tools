@@ -389,7 +389,10 @@ CREATE TABLE IF NOT EXISTS 予定ロット (
     送った端末  TEXT NOT NULL DEFAULT '',
     送った人    TEXT NOT NULL DEFAULT '',
     送った日時  TEXT NOT NULL DEFAULT '',
-    要約        TEXT NOT NULL DEFAULT ''
+    要約        TEXT NOT NULL DEFAULT '',
+    -- 共有での管理番号(取り込みで入れる。手元で入れてまだ送っていない行は空)。**いまの予定はこの順で決める**
+    -- (VER4.8.142。送った端末の時計は PC ごとにずれるので使わない)。手元だけの列で、共有へは送らない
+    共有番号    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_lot_plan_id ON 予定ロット(予定ID);
 CREATE INDEX IF NOT EXISTS idx_lot_plan_lot ON 予定ロット(LotNo);

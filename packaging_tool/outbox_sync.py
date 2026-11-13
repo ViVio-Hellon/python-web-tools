@@ -144,6 +144,8 @@ class WriteBackSpec:
         default=None, compare=False)
     number_column: str = ""
     optional_columns: tuple[str, ...] = ()
+    # 手元だけの列(取り込みで入れる控えなど)。**送らない**
+    local_columns: tuple[str, ...] = ()
     identity_columns: tuple[str, ...] = ()
     origin_column: str = ""
     # 外せる印 (印の列, その日時の列)。倉庫の「確認を外す」。`mark_unset_pending`
@@ -1057,6 +1059,7 @@ def write_back(conn: sqlite3.Connection,
         op_id_ready = spec.use_op_id_guard and ensure_op_id_column(source, spec)
         identity_ready = bool(spec.identity_columns) and ensure_identity_index(source, spec)
         local_only = {c for c in (spec.mark_pending, spec.source_key, spec.origin_column) if c}
+        local_only |= set(spec.local_columns)
         if spec.optional_columns:
             # 送り先に無い列は送らない。混ぜると1行も入らなくなる
             try:

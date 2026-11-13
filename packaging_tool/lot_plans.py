@@ -126,15 +126,22 @@ def short_time(at: str) -> str:
 # ------------------------------------------------------------------
 # 読む
 # ------------------------------------------------------------------
+# **古い順 = 共有に入った順**(VER4.8.142)。共有の管理番号(取り込んだ `共有番号`)の順に並べ、まだ共有へ
+# 送っていない手元の行(`共有番号` が空)はそのあと、手元で入れた順。
+# 前は「送った日時」(送った PC の時計)で並べていたので、時計の遅れた PC で入れ直す・外す・作業済みにすると
+# 前の行に負けて効かなかった(現場の点検で見つけた。HVC へ入れ直しても L-1 のまま)。
+_ORDER = " ORDER BY (共有番号 IS NULL), 共有番号, 管理番号"
+
+
 def _events(conn: sqlite3.Connection, where: str = "",
             params: tuple = ()) -> list[Plan]:
-    """行を古い順に(送った日時、同じなら共有に入った順 = 管理番号)。表が無ければ空。"""
+    """行を古い順に(共有に入った順。`_ORDER`)。表が無ければ空。"""
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
             f"SELECT 予定ID, LotNo, ライン, 状態, 送った端末, 送った人, 送った日時, 要約"
             f" FROM {TABLE} WHERE 予定ID <> ''{where}"
-            " ORDER BY 送った日時, 管理番号", params).fetchall()
+            f"{_ORDER}", params).fetchall()
     except sqlite3.Error as exc:
         if "no such table" not in str(exc).lower():
             # **読めないのを「1件も無い」にしない**(VER4.8.122)。無いと答えると、送るときに同じものを

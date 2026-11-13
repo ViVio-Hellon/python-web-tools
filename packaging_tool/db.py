@@ -310,7 +310,9 @@ def _add_rule_columns(conn: sqlite3.Connection) -> None:
     """
     from . import kanban_shelves, pallet_limit_rules
     for table, added in ((pallet_limit_rules.TABLE, pallet_limit_rules.ADDED_COLUMNS),
-                         (kanban_shelves.TABLE, kanban_shelves.ADDED_COLUMNS)):
+                         (kanban_shelves.TABLE, kanban_shelves.ADDED_COLUMNS),
+                         # 予定ロットの共有番号(VER4.8.142。`lot_plans._events`)
+                         (config.TBL_LOT_PLAN, (("共有番号", "INTEGER"),))):
         have = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
         if not have:
             continue

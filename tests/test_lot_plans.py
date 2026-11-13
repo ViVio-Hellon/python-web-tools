@@ -253,9 +253,14 @@ class SyncSpecTests(unittest.TestCase):
         local = _web.memory_db()
         self.addCleanup(local.close)
         mine = [r[1] for r in local.execute(f'PRAGMA table_info("{config.TBL_LOT_PLAN}")')]
-        self.assertEqual(shared, [c for c in mine if c != sync_writeback.ORIGIN_COLUMN])
+        # 共有番号は手元だけ(共有の管理番号を取り込んだ控え。VER4.8.142)。送らない
+        self.assertEqual(spec.local_columns, ("共有番号",))
+        self.assertEqual(shared, [c for c in mine
+                                  if c not in (sync_writeback.ORIGIN_COLUMN, *spec.local_columns)])
         imported = [c for c, _s, _f in import_specs.IMPORT_SPECS[config.TBL_LOT_PLAN]]
-        self.assertEqual(imported, [c for c in shared if c != "管理番号"])
+        self.assertEqual(imported, [c for c in shared if c != "管理番号"] + ["共有番号"])
+        self.assertEqual(dict((c, s) for c, s, _f in import_specs.IMPORT_SPECS[config.TBL_LOT_PLAN])["共有番号"],
+                         "管理番号")
         # 確認(知らせを消した)は端末ごと。共有へは送らない
         self.assertNotIn(config.TBL_LOT_PLAN_SEEN,
                          {s.sqlite_table for s in sync_writeback.WRITEBACK_SPECS})
@@ -908,6 +913,44 @@ class BaseL1RenameTests(unittest.TestCase):
         js = (root / "app/static/js/views/layout.js").read_text(encoding="utf-8")
         self.assertIn('"/api/layout/base/add"', js)
         self.assertIn("renderBaseOptions(next.base_points)", js)
+
+
+class SharedOrderTests(unittest.TestCase):
+    """VER4.8.142: いまの予定は**共有に入った順**で決める(送った PC の時計は見ない)。"""
+
+    def setUp(self) -> None:
+        self.conn = _web.memory_db()
+        self.addCleanup(self.conn.close)
+
+    def row(self, pid, line, state, at, shared=None):
+        self.conn.execute(
+            f"INSERT INTO {config.TBL_LOT_PLAN} (予定ID, LotNo, ライン, 状態, 送った日時, 共有番号)"
+            " VALUES (?, '4102781', ?, ?, ?, ?)", (pid, line, state, at, shared))
+        self.conn.commit()
+
+    def test_時計の遅れたPCで入れ直しても新しいラインが勝つ(self) -> None:
+        self.row("a", "L-1", lot_plans.PLANNED, "2026-11-13 10:00:00", 1)
+        self.row("b", "HVC", lot_plans.PLANNED, "2026-11-13 09:55:00", 2)   # 時計が7分遅れ
+        self.assertEqual(lot_plans.current(self.conn, "4102781").line, "HVC")
+        self.assertEqual([p.plan_id for p in lot_plans.for_lines(self.conn, ["HVC"])], ["b"])
+        self.assertEqual(lot_plans.for_lines(self.conn, ["L-1"]), [])
+
+    def test_時計の遅れたPCで外しても効く(self) -> None:
+        self.row("a", "L-1", lot_plans.PLANNED, "2026-11-13 10:00:00", 1)
+        self.row("b", "L-1", lot_plans.CANCELLED, "2026-11-13 09:00:00", 2)
+        self.assertIsNone(lot_plans.current(self.conn, "4102781"))
+
+    def test_時計の遅れたPCで作業済みにしても消える(self) -> None:
+        self.row("a", "L-1", lot_plans.PLANNED, "2026-11-13 10:00:00", 1)
+        self.row("b", "L-1", lot_plans.DONE, "2026-11-13 09:00:00", 2)
+        self.assertEqual(lot_plans.for_lines(self.conn, ["L-1"]), [])
+        self.assertEqual(lot_plans.last_done(self.conn, "4102781").plan_id, "b")
+
+    def test_まだ送っていない手元の行は共有の行のあと(self) -> None:
+        self.row("a", "L-1", lot_plans.PLANNED, "2026-11-13 10:00:00", 5)
+        result = lot_plans.send(self.conn, "4102781", "HVC", terminal="PC-LEADER")   # 共有番号は空
+        self.assertTrue(result.changed)
+        self.assertEqual(lot_plans.current(self.conn, "4102781").line, "HVC")
 
 
 if __name__ == "__main__":

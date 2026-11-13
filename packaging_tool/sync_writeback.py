@@ -100,7 +100,9 @@ WRITEBACK_SPECS: list[WriteBackSpec] = [
     WriteBackSpec(sqlite_table=config.TBL_LOT_PLAN,
                   access_table=config.TBL_LOT_PLAN,
                   key_column="管理番号",
-                  number_column="管理番号"),
+                  number_column="管理番号",
+                  # 共有の管理番号を取り込んだ手元だけの列(VER4.8.142)。送らない
+                  local_columns=("共有番号",)),
 ]
 
 # **取り込んだ行は送らない**(全表)。送るのは、この端末で作った行だけ。

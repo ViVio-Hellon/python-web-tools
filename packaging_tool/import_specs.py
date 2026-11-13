@@ -220,6 +220,8 @@ IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
         ("送った人", "送った人", to_text),
         ("送った日時", "送った日時", to_text),
         ("要約", "要約", to_text),
+        # 共有での管理番号 = 共有に入った順(VER4.8.142。いまの予定はこの順で決める)
+        ("共有番号", "管理番号", to_int),
     ],
     # 発注に在庫を充てた記録(引当・持出)。全端末が書き戻しで足していく
     config.TBL_STOCK_RESERVE: [
@@ -550,6 +552,8 @@ OPTIONAL_COLUMNS: dict[str, frozenset[str]] = {
     "仕掛ロット": frozenset({"BOX実績_枚本数", "前々工程実績_枚本数", "前工程実績_枚本数"}),
     # 最初に送った端末が共有に足す列(`sync_writeback.SHARED_ADDED_COLUMNS`)
     config.TBL_WAREHOUSE_ORDER: frozenset({"送信端末", "発注キー", "受注番号", "ロットの受注"}),
+    # 無ければ手元で入れた順(取り込んだ順)で並べる
+    config.TBL_LOT_PLAN: frozenset({"管理番号"}),
 }
 
 # 梱包資材マスタ.sqlite3 ではなく、**看板マスタ.sqlite3(別ファイル)** から
