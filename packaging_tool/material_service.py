@@ -172,45 +172,28 @@ def get_upper_part_material(
     どちらのパスでも一致しなければ "一致なし" を返す。
     """
     pack = (pack or "").strip()
-    if not pack:
-        log.debug("get_upper_part_material: 包装仕様書Noが空のため対象外")
-        return ""
+    # **包装仕様NOでは絞らない**(VER4.8.139。現場の声「梱包保護材の条件で包装仕様NO関係なくないですか?」)。
+    # 前は 包装仕様NOが空なら対象外、表の「包装仕様書」が埋まった行は包装仕様NOが合うときだけ当てていたため、
+    # 材質・調質・用途コード・寸法が合っていても「一致なし」になり、上下共用にならなかった。
+    # 表の「包装仕様書」の列は読まない。旧VBAの対象8件に絞る切り替え(環境変数)だけは残す
     if not HOSOZAI_APPLY_ALL_PACKS and pack not in TARGET_HOSONOS:
         log.debug("get_upper_part_material: 対象外 pack=%s", pack)
         return ""
 
-    def _matches(row: sqlite3.Row, *, check_pack: bool) -> bool:
-        if check_pack and not check_condition(row["包装仕様書"], pack, blank_flag="NoBlank"):
-            return False
-        return (
-            check_condition(row["材質"], zai)
-            and check_condition(row["調質"], tyo)
-            and check_condition(row["用途コード"], you)
-            and _check_range(row["板厚下"], row["板厚上"], row["板厚"], atu)
-            and _check_range(row["板幅下"], row["板幅上"], row["板幅"], hab)
-            and _check_range(row["板丈下"], row["板丈上"], row["板丈"], tak)
-        )
-
-    pass1_rows = db.fetch_all(
-        conn,
-        "SELECT * FROM 梱包保護材 WHERE 包装仕様書 IS NOT NULL AND 包装仕様書 <> '' ORDER BY 管理番号",
-        caller_name="get_upper_part_material.pass1",
+    rows = db.fetch_all(
+        conn, "SELECT * FROM 梱包保護材 ORDER BY 管理番号",
+        caller_name="get_upper_part_material",
     ) or []
-    for row in pass1_rows:
-        if _matches(row, check_pack=True):
+    for row in rows:
+        if (check_condition(row["材質"], zai)
+                and check_condition(row["調質"], tyo)
+                and check_condition(row["用途コード"], you)
+                and _check_range(row["板厚下"], row["板厚上"], row["板厚"], atu)
+                and _check_range(row["板幅下"], row["板幅上"], row["板幅"], hab)
+                and _check_range(row["板丈下"], row["板丈上"], row["板丈"], tak)):
             result = row["使用保護材"] or ""
-            log.debug("get_upper_part_material Pass1ヒット 使用保護材=%s", result)
-            return result
-
-    pass2_rows = db.fetch_all(
-        conn,
-        "SELECT * FROM 梱包保護材 WHERE 包装仕様書 IS NULL OR 包装仕様書 = '' ORDER BY 管理番号",
-        caller_name="get_upper_part_material.pass2",
-    ) or []
-    for row in pass2_rows:
-        if _matches(row, check_pack=False):
-            result = row["使用保護材"] or ""
-            log.debug("get_upper_part_material Pass2ヒット 使用保護材=%s", result)
+            log.debug("get_upper_part_material ヒット 管理番号=%s 使用保護材=%s",
+                      row["管理番号"] if "管理番号" in row.keys() else "?", result)
             return result
 
     log.debug("get_upper_part_material: 一致なし pack=%s", pack)

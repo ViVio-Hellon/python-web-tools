@@ -68,11 +68,15 @@ class GetUpperPartMaterialTests(unittest.TestCase):
         self.conn.execute(f"INSERT INTO 梱包保護材 ({cols}) VALUES ({placeholders})", list(kwargs.values()))
         self.conn.commit()
 
-    def test_blank_pack_returns_empty(self):
-        result = svc.get_upper_part_material(
-            self.conn, pack="", zai="A5052", tyo="H34", you="", atu=1, hab=100, tak=100,
-        )
-        self.assertEqual(result, "")
+    def test_包装仕様NOは見ない_空でも違っても当たる(self):
+        """VER4.8.139: 現場の声「梱包保護材の条件で包装仕様NO関係なくないですか?」。"""
+        self._insert(包装仕様書="1P0001", 材質="A5052", 調質="H34", 用途コード="", 使用保護材="上蓋")
+        for pack in ("", "1P1125", "1P0001"):
+            with self.subTest(pack=pack):
+                result = svc.get_upper_part_material(
+                    self.conn, pack=pack, zai="A5052", tyo="H34", you="", atu=1, hab=100, tak=100,
+                )
+                self.assertEqual(result, "上蓋")
 
     def test_pack_outside_target_hosonos_is_now_covered_by_default(self):
         """【仮運用】既定(HOSOZAI_APPLY_ALL_PACKS=True)では、旧VBAの
@@ -98,6 +102,14 @@ class GetUpperPartMaterialTests(unittest.TestCase):
                 self.conn, pack="9P9999", zai="A5052", tyo="H34", you="", atu=1, hab=100, tak=100,
             )
         self.assertEqual(result, "")
+
+    def test_表の上から順に最初に当たった行(self):
+        self._insert(包装仕様書="", 材質="A5052", 調質="", 用途コード="", 使用保護材="上蓋")
+        self._insert(包装仕様書="1P0001", 材質="A5052", 調質="H34", 用途コード="", 使用保護材="アングル")
+        result = svc.get_upper_part_material(
+            self.conn, pack="1P0001", zai="A5052", tyo="H34", you="", atu=1, hab=100, tak=100,
+        )
+        self.assertEqual(result, "上蓋")
 
     def test_pass1_exact_pack_match(self):
         self._insert(包装仕様書="1P0001", 材質="A5052", 調質="H34", 用途コード="", 使用保護材="アングル")

@@ -351,8 +351,10 @@ class HosozaiTests(PresenterTestCase):
                 self.assertEqual(p.apply_hosozai(hosozai).show_angle, p.show_angle)
 
     def test_保護材が引けなくても止まらない(self) -> None:
-        """マスタが空でも例外を出さず、安全側("")に倒す。"""
-        self.assertEqual(self.p.lookup_hosozai(_make_result()), "")
+        """マスタが空でも例外を出さず、上下共用にしない(VER4.8.139 からは包装仕様NOを見ないので「一致なし」)。"""
+        self.assertEqual(self.p.lookup_hosozai(_make_result()), "一致なし")
+        self.p.apply_hosozai(self.p.lookup_hosozai(_make_result()))
+        self.assertFalse(self.p.is_shared_board_mode)
 
 
 # ==================================================================
