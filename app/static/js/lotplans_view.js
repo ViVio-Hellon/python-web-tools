@@ -25,15 +25,37 @@ let known = new Set();        // 知らせ済み(トーストを2度出さない
 let watch = 0;
 let foldOpen = false;         // 確認済みを出しているか(見張りで出し直しても保つ)
 let last = null;              // いちばん新しい状態(開け閉めで出し直す)
+// 欄ごと畳んでいるか。**この端末に覚える**(読めない・書けないときは開いたまま)
+const FOLD_KEY = "lotPlans.folded";
+
+function folded() {
+  try { return window.localStorage.getItem(FOLD_KEY) === "1"; } catch { return false; }
+}
+
+function setFolded(value) {
+  try { window.localStorage.setItem(FOLD_KEY, value ? "1" : "0"); } catch { /* 覚えられなくても畳む */ }
+  paintFold(value);
+}
+
+function paintFold(value) {
+  if (!el.planToggle || !el.planBody) return;
+  el.planBody.hidden = value;
+  el.planToggle.textContent = value ? "▾ 開く" : "▴ 畳む";
+  el.planToggle.setAttribute("aria-expanded", value ? "false" : "true");
+}
 
 /** 動かす。`initial` はサーバが埋めた状態、`open(lotNo)` はロット情報を開く関数。 */
 export function startPlans(initial, open) {
   for (const id of ["planCard", "planLines", "planUnseen", "planNews", "planWhy",
-                    "planList", "planEmpty", "planSeenAll", "planFold", "planSeenList"]) {
+                    "planList", "planEmpty", "planSeenAll", "planFold", "planSeenList", "planToggle", "planBody"]) {
     el[id] = document.getElementById(id);
   }
   onOpen = open;
   if (!el.planCard) return;
+  if (el.planToggle) {
+    paintFold(folded());
+    el.planToggle.addEventListener("click", () => setFolded(!el.planBody.hidden));
+  }
   foldOpen = false;
   if (el.planFold) el.planFold.addEventListener("click", () => {
     foldOpen = !foldOpen;

@@ -52,6 +52,8 @@ globalThis.window = {
   addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
   removeEventListener() {},
   dispatchEvent(event) { (listeners[event.type] || []).forEach((fn) => fn(event)); return true; },
+  // 欄ごと畳んだかを覚える場所(VER4.8.148)
+  localStorage: { store: {}, getItem(k) { return this.store[k] ?? null; }, setItem(k, v) { this.store[k] = String(v); } },
 };
 globalThis.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
 
@@ -102,6 +104,17 @@ announce(3);
 check("同じ世代なら見に行かない", globalThis.gets.length, before);
 announce(4);
 check("世代が変わったら見に行く", globalThis.gets.slice(before), ["/api/lot/plans?refresh=1"]);
+
+// 欄ごと畳む(VER4.8.148。現場の声「予定ロットを確認しないと高さがかさんで仕掛一覧が見れなくなる」)
+check("最初は開いている", els.planBody.hidden, false);
+els.planToggle.click();
+check("畳むと中身を隠す", [els.planBody.hidden, els.planToggle.textContent], [true, "▾ 開く"]);
+check("この端末に覚える", window.localStorage.store["lotPlans.folded"], "1");
+mod.render({ ...state, items: [item("N9", false)] });
+check("見張りで出し直しても畳んだまま", els.planBody.hidden, true);
+check("畳んでも未確認の件数は見出しに出る", [els.planUnseen.hidden, els.planUnseen.textContent], [false, "未確認 1件"]);
+els.planToggle.click();
+check("開く", [els.planBody.hidden, window.localStorage.store["lotPlans.folded"]], [false, "0"]);
 
 if (failed) { console.log(`${failed} 件 NG`); process.exit(1); }
 console.log("OK");

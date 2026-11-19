@@ -64,8 +64,11 @@
       <span class="eyebrow" id="planLines">{{ plans.label }}</span>
       <span class="badge badge--todo" id="planUnseen"{% if not plans.unseen %} hidden{% endif %}>未確認 {{ plans.unseen }}件</span>
       <button class="btn plans__all" type="button" id="planSeenAll" hidden>すべて確認</button>
+      {# 畳む(現場の声「予定ロットを確認しないと高さがかさんで仕掛一覧が見れなくなる」)。畳んでも見出しの
+         「未確認 N件」は出る。開け閉めはこの端末に覚える #}
+      <button class="btn plans__toggle" type="button" id="planToggle" aria-expanded="true" aria-controls="planBody">▴ 畳む</button>
     </header>
-    <div class="pad plans__body">
+    <div class="pad plans__body" id="planBody">
       <p class="status status--ng" id="planNews" role="status"{% if not plans.unseen %} hidden{% endif %}></p>
       <p class="why" id="planWhy"{% if not plans.why %} hidden{% endif %}>{{ plans.why }}</p>
       {# 「開く」の進み具合(ロットを開く → 発注を取り込む → パレットを決める)。ボタンの秒数より大きく出す #}
@@ -200,9 +203,14 @@
   /* ---- 予定ロット。並びすぎても一覧を押し出さないよう高さを切る ---- */
   .plans { flex: none; }
   .plans__all { margin-left: auto; }
-  .plans__body { display: flex; flex-direction: column; gap: 6px; }
+  .plans__toggle { margin-left: 6px; }
+  .plans__all[hidden] + .plans__toggle { margin-left: auto; }
+  /* 欄の中身は**高さを切って1つのスクロール**にまとめる(未確認と確認済みが並んでも、仕掛一覧を押し出さない) */
+  .plans__body { display: flex; flex-direction: column; gap: 6px;
+                 max-height: min(32vh, 16em); overflow-y: auto; }
+  .plans__body[hidden] { display: none; }
   .plans__body > p { margin: 0; }
-  .plans__list { list-style: none; margin: 0; padding: 0; max-height: 13em; overflow-y: auto;
+  .plans__list { list-style: none; margin: 0; padding: 0;
                  display: flex; flex-direction: column; gap: 4px; }
   .plans__row { display: flex; align-items: center; gap: 10px; padding: 4px 8px;
                 border-radius: 6px; border: 1px solid var(--rule); }
