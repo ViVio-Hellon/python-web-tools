@@ -208,6 +208,55 @@ class WarehouseTests(SelectionWebTestCase):
         self.assertEqual(res.status_code, 200, res.get_json())
         self.assertIsNone(lot_plans.current(self.conn, "7654321"))
 
+    # ---- 失敗しても送信は止めない(発注は登録済み。エラーを返すと送り直して二重になる) ----
+    def assert_sent_once(self, res, lot_no: str = "7654321") -> None:
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertTrue(res.get_json()["ok"])
+        n = self.conn.execute("SELECT COUNT(*) FROM 資材パレット注文管理 WHERE LotNo = ?", (lot_no,)).fetchone()[0]
+        self.assertEqual(n, 1)
+
+    def test_選べるラインを読めなくても送信は通る(self) -> None:
+        from app.routes import warehouse as wh_routes
+        with mock.patch.object(wh_routes, "plan_lines", side_effect=RuntimeError("拠点を読めない")):
+            res = self.send_lot("7654321")
+        self.assert_sent_once(res)
+        self.assertIn("自動で入れられませんでした(発注は登録済みです)", res.get_json()["message"])
+        self.assertIsNone(lot_plans.current(self.conn, "7654321"))
+
+    def test_判定で例外が出ても送信は通る(self) -> None:
+        with mock.patch.object(work_lines, "decide", side_effect=ValueError("壊れた条件表")):
+            res = self.send_lot("7654321")
+        self.assert_sent_once(res)
+        self.assertIsNone(lot_plans.current(self.conn, "7654321"))
+
+    def test_予定を書けなくても送信は通る(self) -> None:
+        with mock.patch.object(lot_plans, "send", side_effect=sqlite3.OperationalError("database is locked")):
+            res = self.send_lot("7654321")
+        self.assert_sent_once(res)
+
+    def test_条件表が壊れていても送信は通る(self) -> None:
+        (self.dir / work_lines.FILE_NAME).write_bytes(b"not a sqlite file" * 100)
+        work_lines._cache.clear()
+        res = self.send_lot("7654321")
+        self.assert_sent_once(res)
+        self.assertIsNone(lot_plans.current(self.conn, "7654321"))
+
+    def test_共有が見えないときは条件表を探さず送信は通る(self) -> None:
+        with mock.patch("packaging_tool.data_sync.shared_reachable", return_value=False), \
+                mock.patch.object(work_lines, "decide") as decide:
+            res = self.send_lot("7654321")
+        self.assert_sent_once(res)
+        decide.assert_not_called()
+        self.assertIn("自動で入れていません", res.get_json()["message"])
+
+    def test_送信が断られたら予定にも入れない(self) -> None:
+        from packaging_tool import warehouse_service
+        refused = mock.Mock(ok=False, message="断りました", mgr_nos=[])
+        with mock.patch.object(warehouse_service, "create_orders", return_value=refused):
+            res = self.send_lot("7654321")
+        self.assertEqual(res.status_code, 422)
+        self.assertIsNone(lot_plans.current(self.conn, "7654321"))
+
 
 class SettingsTests(SelectionWebTestCase):
     def setUp(self) -> None:

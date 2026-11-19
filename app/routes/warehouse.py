@@ -520,10 +520,19 @@ def send():
                    "届いていません。つながると自動で送ります(一覧に「未送信」と出ている間は届いていません)。")
         log.warning("共有フォルダが見えないため、発注を手元に預かりました: 管理番号=%s", result.mgr_nos)
     message += stock_note
-    planned = _auto_plan(conn, [o["lot_no"] for o in orders])
-    if planned:
-        message += " " + planned
-        data_sync.write_back_in_background()
+    # 作業予定ラインに自動で入れる(`work_lines`)。**発注はもう登録済み** ── ここで何が起きても送信の答えは変えない
+    # (エラーを返すと、利用者が送り直して二重の発注になる)。共有が見えないときは条件表を探しに行かない(待たせない)
+    if queued:
+        message += " 共有フォルダに届かないため、作業予定ラインには自動で入れていません(あとで手で入れてください)。"
+    else:
+        try:
+            planned = _auto_plan(conn, [o["lot_no"] for o in orders])
+        except Exception:                        # noqa: BLE001 - 発注は済んでいる。止めない
+            log.exception("作業予定ラインに自動で入れられませんでした(発注は登録済み)")
+            planned = "作業予定ラインには自動で入れられませんでした(発注は登録済みです)。"
+        if planned:
+            message += " " + planned
+            data_sync.write_back_in_background()
     return jsonify({"ok": True, "message": message, "queued": queued,
                     "mgr_no": result.mgr_nos[0], "mgr_nos": result.mgr_nos})
 
