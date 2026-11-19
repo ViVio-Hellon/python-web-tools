@@ -168,9 +168,8 @@ def search_pallet_direct(
     製品サイズが未入力のときに使う、パレット自身の幅・丈を対象とした
     ±50mmの単純検索。**入れた辺だけで絞る**(幅だけ・丈だけ・両方)。
 
-    EXオンリー(`ex_only`)は、資材選択の「パレット 幅・丈」から呼ぶときは効かせる
-    (製品 幅・丈で探すときと同じ絞り込みにする。現場の声:「製品の入力検索方法を引き継いで」)。
-    元VBA の「パレット検索」ボタン(`/api/selection/pallet/search`)は渡さないので、今までどおり考慮しない。
+    EXオンリー(`ex_only`)は、EX受注で ON なら EX の行だけにする(資材選択の「パレット 幅・丈」の欄からも、
+    「パレット検索」ボタンからも。VER4.8.149。前のボタンは VBA のまま見ていなかった)。
     """
     ex_only_mode = is_ex_order and ex_only
     pw = int(float(pallet_width_text)) if _is_numeric(pallet_width_text) else 0

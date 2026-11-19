@@ -499,6 +499,17 @@ class SearchTests(SelectionWebTestCase):
                           {"pallet_width": "1100"})
         self.assertTrue(state["direct"])
 
+    def test_直接検索でもEXオンリーONならEXだけ(self) -> None:
+        """VER4.8.149: 現場の声「パレットの寸法で直接探すだけで EX を探さないのは正、
+        直接探す and EXオンリー ON で EX を探さないのは誤」。"""
+        insert_pallet(self.conn, width=1110, length=2010, symbol="EXﾀｲﾄ", code="EX1")
+        self.session().presenter.is_ex_order = True
+        state = self.post("/api/selection/pallet/search", {"pallet_width": "1100", "pallet_length": "2000"})
+        self.assertEqual(sorted(r["width"] for r in state["rows"]), [1100], "EXオンリー OFF は EX を出さない")
+        state = self.post("/api/selection/toggle/ex_only")
+        self.assertTrue(state["ex_only"])
+        self.assertEqual([(r["width"], r["is_ex"]) for r in state["rows"]], [(1110, True)])
+
     def test_直接検索も引き直す(self) -> None:
         """条件だけ覚えているので、絞り込みを触っても文脈が残る。"""
         self.post("/api/selection/pallet/search",

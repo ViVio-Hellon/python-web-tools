@@ -1975,11 +1975,12 @@ def list_rows(session: Any) -> list[Any]:
             **flags)
 
     if session.list_mode == ss.LIST_DIRECT:
-        # 直接検索はEXオンリーを見ない(VBA 仕様どおり)
+        # パレットの寸法で直接探す。**EXオンリーが ON なら EX だけ**(VER4.8.149。現場の声「パレットの寸法で直接探す
+        # だけで EX を探さないのは正、直接探す and EXオンリー ON で EX を探さないのは誤」)。前は VBA のまま見ていなかった
         return svc.search_pallet_direct(
             conn, pallet_width_text=session.direct_width,
             pallet_length_text=session.direct_length,
-            show_all=session.show_all,
+            show_all=session.show_all, ex_only=session.ex_only,
             last_hosozai=session.presenter.last_hosozai,
             is_1p1185_mode=session.presenter.mode_1p1185,
             is_ex_order=session.presenter.is_ex_order)
