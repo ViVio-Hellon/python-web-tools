@@ -63,8 +63,46 @@ def _lines(*parts: object) -> str:
 # ==================================================================
 # Lot貼付用 (VBA `CreateLabelLayout`)
 # ==================================================================
-# 元シートの行高(pt)。1行目だけ低く、6行目は少し低い
-LABEL_ROW_HEIGHTS_PT = (37, 91, 91, 91, 91, 55, 91)
+# 行高(pt)。元シートは (37, 91, 91, 91, 91, 55, 91)。
+# 現場の声:「用紙のギリギリまで大きくしないと少し遠めに行くと見えない。K を今よりやや小さく、製品サイズ・
+# パレットサイズ・台数を今より大きく。サイズと台数を大きくするために K を縮めることになっても仕方ない」
+# → K の2行を 182 → 160pt(丸は 61 → 54mm)に縮め、製品サイズ・パレット・台数の行に回す。
+#    Lot の行は 50pt の字が入る高さまで詰める。合計 537pt = 189mm(紙 210 − 余白 12mm に収まる)
+LABEL_ROW_HEIGHTS_PT = (32, 80, 80, 75, 120, 85, 65)
+
+# 左半分で字に使える幅(mm)。A4横 − 余白で 285mm、その 47.74% = 136mm から、セルの余白と見込み違いの分を引く
+LABEL_TEXT_W_MM = 126.0
+# 大きくする字の上限(pt)。行の高さに収まる大きさ
+LABEL_DIM_MAX_PT = 52.0
+LABEL_PAL_MAX_PT = 52.0
+LABEL_PKG_MAX_PT = 72.0
+
+
+def _em(text: str) -> float:
+    """字の幅の合計(em)。数字 0.55・点と空白 0.28・全角と × は 1.0。
+
+    現場の PC は Meiryo UI で印刷する。日本語のフォントは × を全角の幅で描くことがあるので、× は全角で見込む
+    (少し小さめになるが、はみ出して切れるよりよい)。
+    """
+    total = 0.0
+    for ch in text:
+        if ch.isdigit():
+            total += 0.55
+        elif ch in " .,-":
+            total += 0.28
+        elif ch == "×" or ord(ch) >= 0x2E80:
+            total += 1.0
+        else:
+            total += 0.62
+    return total
+
+
+def fit_pt(text: str, cap: float, width_mm: float = LABEL_TEXT_W_MM) -> float:
+    """左半分の幅いっぱいに入る字の大きさ(pt)。`cap` を超えない。"""
+    em = _em(text)
+    if em <= 0:
+        return cap
+    return round(min(cap, width_mm / (em * PT_MM)), 1)
 
 # 元シートの列幅から求めた各ブロックの幅比率。
 # A(9.625) + B:J(6.25x9) = 65.875 が左半分、K(6.25)が仕切り、
@@ -81,7 +119,7 @@ LABEL_CSS = """
 table.label { width: 100%; height: 100%; border-collapse: collapse;
               table-layout: fixed; }
 table.label td { padding: 0 2px; overflow: hidden; }
-td.lmain { text-align: center; vertical-align: middle; font-size: 38pt; }
+td.lmain { text-align: center; vertical-align: middle; font-size: 38pt; line-height: 1.1; }
 td.gap { border-right: 1px solid #000; }
 td.cap { font-size: 8pt; color: #505050; text-align: right;
          vertical-align: middle; white-space: pre-line; }
@@ -193,9 +231,10 @@ def _label_left_cells(data: LabelData) -> list[str]:
         cells[1] = (f'<div class="circle-k" style="width:{size:.1f}mm;'
                     f'height:{size:.1f}mm;font-size:{size * 0.8:.1f}mm">K</div>')
 
-    cells[3] = (f'<span class="dim">'
-                f'{printing.escape(product_size_text(data.thickness, data.width, data.length))}'
-                f'</span>')
+    # 製品サイズ・パレットサイズ・台数は**左半分の幅いっぱいまで大きく**(長い数字なら小さくなる)
+    dim = product_size_text(data.thickness, data.width, data.length)
+    cells[3] = (f'<span class="dim" style="font-size:{fit_pt(dim, LABEL_DIM_MAX_PT)}pt">'
+                f'{printing.escape(dim)}</span>')
 
     if data.is_1p0113:
         # 裸梱包は角材・松板の本数/枚数を出す(パレット欄の代わり)
@@ -210,11 +249,13 @@ def _label_left_cells(data: LabelData) -> list[str]:
         if data.pallet_width:
             prefix = " ".join(p for p in (data.pallet_industry, data.pallet_symbol) if p)
             size = f"{data.pallet_width} × {data.pallet_length}"
-            body = _lines(prefix, f"  {size}") if prefix else printing.escape(size)
-            cells[4] = f'<div class="pal">{body}</div>'
+            body = _lines(prefix, size) if prefix else printing.escape(size)
+            pal_pt = min(fit_pt(size, LABEL_PAL_MAX_PT), fit_pt(prefix, LABEL_PAL_MAX_PT))
+            cells[4] = f'<div class="pal" style="font-size:{pal_pt}pt">{body}</div>'
         # **梱包数は直せる。** 台数が確定できないまま貼ることがある
+        count_text = f"{data.edits.get('pkg', str(data.total_packages or ''))}{data.edits.get('pkg_unit', data.pallet_unit)}"
         cells[5] = (
-            f'<span class="pkg">'
+            f'<span class="pkg" style="font-size:{fit_pt(count_text, LABEL_PKG_MAX_PT)}pt">'
             f'{printing.editable("pkg", data.edits.get("pkg", str(data.total_packages or "")), placeholder="—")}'
             # 単位(台・組)も直せる(VER4.8.140。現場の声「印刷プレビューで xxx台 も修正可能対象に」)
             f'{printing.editable("pkg_unit", data.edits.get("pkg_unit", data.pallet_unit), placeholder="台")}'
@@ -331,7 +372,7 @@ def build_label_report(data: LabelData) -> printing.Report:
 
     VBA は余白0だったが、プリンターは紙の縁から約4mmに印刷できないので、
     縁の罫線や文字が欠けていた。**余白は `printing.SAFE_MARGIN_MM`(6mm)。**
-    行の高さの合計(193mm)は余白を取っても紙(210 − 12mm)に収まる。
+    行の高さの合計(189mm。`LABEL_ROW_HEIGHTS_PT`)は余白を取っても紙(210 − 12mm)に収まる。
     """
     report = printing.Report(
         title=f"Lot貼付用 {data.lot_no}".strip(),

@@ -586,3 +586,31 @@ class CutFactsFromPlacementTests(unittest.TestCase):
         self.assertEqual(facts.length_cut_info, {"U_1250x2500": 1201})
         self.assertEqual(facts.length_cut_count, {"U_1250x2500": 1})
         self.assertFalse(facts.narrow_lower or facts.narrow_upper)
+
+
+class LabelBigTextTests(unittest.TestCase):
+    """VER4.8.146: 現場の声「用紙のギリギリまで大きくしないと少し遠めに行くと見えない。K を今よりやや小さく、
+    製品サイズ・パレットサイズ・台数を今より大きく(K を縮めることになっても仕方ない)」。"""
+
+    def sizes(self, html: str) -> dict:
+        import re
+        return {cls: float(pt) for cls, pt in re.findall(r'class="(dim|pal|pkg)" style="font-size:([\d.]+)pt"', html)}
+
+    def test_製品サイズ_パレット_台数は前より大きく_Kはやや小さく(self) -> None:
+        import re
+        html = reports.build_label_sheet(_label(thickness=4.0, width=1000.0, length=2000.0, pallet_width="1015",
+                                                pallet_length="2015", pallet_symbol="1×2", total_packages=1))
+        got = self.sizes(html)
+        self.assertGreater(got["dim"], 32)          # 前は 32pt
+        self.assertGreater(got["pal"], 24)          # 前は 24pt
+        self.assertGreater(got["pkg"], 28)          # 前は 28pt
+        k = float(re.search(r'circle-k" style="width:([\d.]+)mm', html).group(1))
+        self.assertLess(k, 61.0)                    # 前は 61mm
+        self.assertGreater(k, 50.0, "やや小さく(大きくは変えない)")
+
+    def test_長い数字は幅に収まるように小さくなる_紙に収まる(self) -> None:
+        short = self.sizes(reports.build_label_sheet(_label(thickness=4.0, width=1000.0, length=2000.0)))["dim"]
+        long_ = self.sizes(reports.build_label_sheet(_label(thickness=125.5, width=1525.0, length=13050.0)))["dim"]
+        self.assertLess(long_, short)
+        self.assertLessEqual(reports._em("125.50 × 1525 × 13050") * long_ * reports.PT_MM, reports.LABEL_TEXT_W_MM + 0.5)
+        self.assertLessEqual(sum(reports.LABEL_ROW_HEIGHTS_PT) * reports.PT_MM, 210 - 12)
