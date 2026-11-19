@@ -70,12 +70,50 @@ def _lines(*parts: object) -> str:
 #    Lot の行は 50pt の字が入る高さまで詰める。合計 537pt = 189mm(紙 210 − 余白 12mm に収まる)
 LABEL_ROW_HEIGHTS_PT = (32, 80, 80, 75, 120, 85, 65)
 
+# 紙の上の左半分の幅(mm)= A4横 297 − 余白 6×2 の 47.74%(セルの内側の余白 2px ずつを引く)
+LABEL_ROOM_MM = round((297 - 2 * 6) * 47.74 / 100 - 1.1, 1)
 # 左半分で字に使える幅(mm)。A4横 − 余白で 285mm、その 47.74% = 136mm から、セルの余白と見込み違いの分を引く
 LABEL_TEXT_W_MM = 126.0
 # 大きくする字の上限(pt)。行の高さに収まる大きさ
 LABEL_DIM_MAX_PT = 52.0
 LABEL_PAL_MAX_PT = 52.0
 LABEL_PKG_MAX_PT = 72.0
+
+
+# **印刷する PC のフォントで測って、欄の幅に収まる大きさにする**(VER4.8.147)。
+# 現場の声:「あー惜しい 製品サイズが折り返してる」── 字の幅の見込み(`fit_pt`)は印刷する PC のフォント
+# (Meiryo UI)より狭かった。見込みは最初の大きさにだけ使い、画面を開いたとき・印刷の直前・直したときに、
+# 上限(`data-fit`)から 0.5pt ずつ下げて、欄(セルの内側)の幅と行の高さに収まる大きさに決める
+LABEL_FIT_SCRIPT = """<script>
+(function () {
+  function fit(el) {
+    var cell = el.closest("td");
+    if (!cell) return;
+    var cs = getComputedStyle(cell);
+    // 画面で測った幅と印刷の幅は 2% ほど違うことがある(字の描き方の差)。4% 残して、刷っても切れないように
+    // 紙の上の左半分の幅(mm)より広くは測らない(印刷の直前はウィンドウの幅で並び直すことがある)
+    var paper = parseFloat(el.getAttribute("data-room-mm")) * 96 / 25.4;
+    var room = Math.min(cell.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+                        paper || Infinity) * 0.96;
+    var tall = cell.clientHeight - 2;
+    var size = parseFloat(el.getAttribute("data-fit")) || 40;
+    el.style.fontSize = size + "pt";
+    while (size > 8 && (el.scrollWidth > room || el.getBoundingClientRect().width > room
+                        || el.getBoundingClientRect().height > tall)) {
+      size -= 0.5;
+      el.style.fontSize = size + "pt";
+    }
+  }
+  function all() { document.querySelectorAll("[data-fit]").forEach(fit); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", all); else all();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(all);
+  window.addEventListener("beforeprint", all);
+  document.addEventListener("input", function (e) {
+    var el = e.target.closest && e.target.closest("[data-fit]");
+    if (el) fit(el);
+  });
+}());
+</script>"""
 
 
 def _em(text: str) -> float:
@@ -140,6 +178,8 @@ td.val { font-size: 12pt; font-weight: bold; text-align: left;
 .unit { font-size: 11pt; }
 .code { font-size: 10pt; }
 /* VC表が無いときの「K」丸印(VBA DrawCircleK: 枠線3pt・文字は円の80%) */
+/* 大きくする字(製品サイズ・パレット・台数)は**折り返さない**。幅に入らなければ `LABEL_FIT_SCRIPT` が縮める */
+[data-fit] { white-space: nowrap; display: inline-block; }
 .circle-k { border: 3px solid #000; border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
             font-weight: bold; margin: 0 auto; }
@@ -233,7 +273,7 @@ def _label_left_cells(data: LabelData) -> list[str]:
 
     # 製品サイズ・パレットサイズ・台数は**左半分の幅いっぱいまで大きく**(長い数字なら小さくなる)
     dim = product_size_text(data.thickness, data.width, data.length)
-    cells[3] = (f'<span class="dim" style="font-size:{fit_pt(dim, LABEL_DIM_MAX_PT)}pt">'
+    cells[3] = (f'<span class="dim" data-room-mm="{LABEL_ROOM_MM}" data-fit="{LABEL_DIM_MAX_PT}" style="font-size:{fit_pt(dim, LABEL_DIM_MAX_PT)}pt">'
                 f'{printing.escape(dim)}</span>')
 
     if data.is_1p0113:
@@ -251,11 +291,13 @@ def _label_left_cells(data: LabelData) -> list[str]:
             size = f"{data.pallet_width} × {data.pallet_length}"
             body = _lines(prefix, size) if prefix else printing.escape(size)
             pal_pt = min(fit_pt(size, LABEL_PAL_MAX_PT), fit_pt(prefix, LABEL_PAL_MAX_PT))
-            cells[4] = f'<div class="pal" style="font-size:{pal_pt}pt">{body}</div>'
+            cells[4] = (f'<div class="pal" data-room-mm="{LABEL_ROOM_MM}" data-fit="{LABEL_PAL_MAX_PT}" style="font-size:{pal_pt}pt">'
+                        f'{body}</div>')
         # **梱包数は直せる。** 台数が確定できないまま貼ることがある
         count_text = f"{data.edits.get('pkg', str(data.total_packages or ''))}{data.edits.get('pkg_unit', data.pallet_unit)}"
         cells[5] = (
-            f'<span class="pkg" style="font-size:{fit_pt(count_text, LABEL_PKG_MAX_PT)}pt">'
+            f'<span class="pkg" data-room-mm="{LABEL_ROOM_MM}" data-fit="{LABEL_PKG_MAX_PT}"'
+            f' style="font-size:{fit_pt(count_text, LABEL_PKG_MAX_PT)}pt">'
             f'{printing.editable("pkg", data.edits.get("pkg", str(data.total_packages or "")), placeholder="—")}'
             # 単位(台・組)も直せる(VER4.8.140。現場の声「印刷プレビューで xxx台 も修正可能対象に」)
             f'{printing.editable("pkg_unit", data.edits.get("pkg_unit", data.pallet_unit), placeholder="台")}'
@@ -381,6 +423,7 @@ def build_label_report(data: LabelData) -> printing.Report:
                                  extra_css=LABEL_CSS),
     )
     report.add_sheet(build_label_sheet(data))
+    report.script = LABEL_FIT_SCRIPT
     return report
 
 

@@ -594,7 +594,7 @@ class LabelBigTextTests(unittest.TestCase):
 
     def sizes(self, html: str) -> dict:
         import re
-        return {cls: float(pt) for cls, pt in re.findall(r'class="(dim|pal|pkg)" style="font-size:([\d.]+)pt"', html)}
+        return {cls: float(pt) for cls, pt in re.findall(r'class="(dim|pal|pkg)"[^>]* style="font-size:([\d.]+)pt"', html)}
 
     def test_製品サイズ_パレット_台数は前より大きく_Kはやや小さく(self) -> None:
         import re
@@ -614,3 +614,19 @@ class LabelBigTextTests(unittest.TestCase):
         self.assertLess(long_, short)
         self.assertLessEqual(reports._em("125.50 × 1525 × 13050") * long_ * reports.PT_MM, reports.LABEL_TEXT_W_MM + 0.5)
         self.assertLessEqual(sum(reports.LABEL_ROW_HEIGHTS_PT) * reports.PT_MM, 210 - 12)
+
+
+class LabelFitTests(unittest.TestCase):
+    """VER4.8.147: 現場の声「あー惜しい 製品サイズが折り返してる」。折り返さず、印刷する PC のフォントで測って縮める。"""
+
+    def test_大きくする字は折り返さず_測って縮める(self) -> None:
+        html = reports.build_label_sheet(_label(thickness=4.0, width=1000.0, length=2000.0, pallet_width="1015",
+                                                pallet_length="2015", total_packages=1))
+        for cls in ("dim", "pal", "pkg"):
+            self.assertRegex(html, rf'class="{cls}" data-room-mm="[\d.]+" data-fit="[\d.]+"')
+        self.assertIn("[data-fit] { white-space: nowrap", reports.LABEL_CSS)
+        self.assertNotIn("<script", html, "紙面の中には置かない")
+        from packaging_tool import printing
+        page = printing.render_html(reports.build_label_report(_label()))
+        self.assertIn("beforeprint", page)
+        self.assertLess(reports.LABEL_ROOM_MM, (297 - 12) * reports.LABEL_W_LEFT / 100)

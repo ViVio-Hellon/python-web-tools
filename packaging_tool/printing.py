@@ -147,6 +147,8 @@ class Report:
     title: str
     sheets: list[str] = field(default_factory=list)
     setup: PageSetup = field(default_factory=PageSetup)
+    # 帳票が自分で持つ小さなスクリプト(紙面の外に置く。紙面の中身は値をエスケープして並べるだけ)
+    script: str = ""
 
     def add_sheet(self, body_html: str) -> None:
         self.sheets.append(body_html)
@@ -442,7 +444,7 @@ def render_html(report: Report, *, edit_url: str = "", send_url: str = "",
         f"{report.setup.screen_css()}\n{extra_css}\n"
         f"{report.setup.extra_css}</style>"
         f"</head><body>{print_bar(note or _PRINT_NOTE, send_url=send_url)}"
-        f"{hint}{sheets}{script}</body></html>"
+        f"{hint}{sheets}{report.script}{script}</body></html>"
     )
 
 
