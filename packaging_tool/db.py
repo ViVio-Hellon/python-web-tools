@@ -224,8 +224,9 @@ def _migrate_before_schema(conn: sqlite3.Connection) -> None:
                              ("前々工程実績_枚本数", "前工程実績_枚本数",
                               "BOX最終実績_設備名", "BOX最終実績_板厚",
                               "BOX最終実績_板幅", "BOX最終実績_板丈",
-                              "BOX最終実績_枚本数", "検査番号"),
-                             "前工程まわりと BOX最終実績・検査番号")
+                              "BOX最終実績_枚本数", "検査番号",
+                              "オーダー材質", "VC", "比重", "形状"),
+                             "前工程まわりと BOX最終実績・検査番号・作業ラインの判定の列")
     _drop_if_missing_columns(conn, "仕掛引当", ("検査番号",), "検査番号")
     _park_old_board_usage(conn)
     _park_old_comment_read(conn)

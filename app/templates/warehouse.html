@@ -144,12 +144,14 @@
         <select class="input" id="lotPlanLine"{% if not lot_plan.can_send %} disabled{% endif %}>
           <option value="">選んでください</option>
           {% for name in lot_plan.lines %}
-          <option value="{{ name }}"{% if lot_plan.selected_line == name %} selected{% endif %}>{{ name }}</option>
+          <option value="{{ name }}"{% if (lot_plan.selected_line or lot_plan.suggested_line) == name %} selected{% endif %}>{{ name }}</option>
           {% endfor %}
         </select>
       </div>
       {# 選べるのは拠点に登録してあるライン名だけ。出していない拠点・1つも無いときの一言 #}
       <p class="why" id="lotPlanLinesNote"{% if not lot_plan.lines_note %} hidden{% endif %}>{{ lot_plan.lines_note }}</p>
+      {# 条件表で決まるライン(`work_lines`)。まだ予定に入っていなければ選んでおき、「倉庫へ送信」で自動で入れる #}
+      <p class="why" id="lotPlanSuggest"{% if lot_plan.plan or not lot_plan.suggest_note %} hidden{% endif %}>{{ lot_plan.suggest_note }}</p>
       <div class="btn-row" style="margin-top:10px">
         <button class="btn btn--commit" type="button" id="lotPlanSend"{% if not lot_plan.can_send %} disabled{% endif %}>予定に入れる</button>
         <button class="btn" type="button" id="lotPlanCancel"{% if not lot_plan.plan or not lot_plan.can_send %} hidden{% endif %}>

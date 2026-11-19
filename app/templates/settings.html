@@ -781,6 +781,47 @@
     </div>
   </section>
       </section>
+      <section class="tabpanel tabpanel--scroll" id="panel-worklines" role="tabpanel" aria-labelledby="tab-worklines" hidden>
+  <section class="card" id="workLinesCard">
+    <header>
+      <i class="ib ib--sm" aria-hidden="true">線</i>
+      <h3>作業ライン(どのロットがどのラインの作業になるか)</h3>
+      <span class="eyebrow" id="wlSource">確かめています…</span>
+    </header>
+    <div class="pad">
+      <p class="status status--ng" id="wlWhy" hidden></p>
+      <div class="field">
+        <label for="wlLot">ロットNO でテスト</label>
+        <div class="btn-row">
+          <input class="input" id="wlLot" maxlength="20" style="max-width:12em" autocomplete="off">
+          <button class="btn btn--commit" type="button" id="wlTest">判定する</button>
+        </div>
+      </div>
+      <p class="status" id="wlResult" hidden></p>
+      <p class="why" id="wlValues" hidden></p>
+      <div class="tablewrap" id="wlStepsWrap" hidden>
+        <table class="table">
+          <thead><tr><th>順</th><th class="t">グループ</th><th class="t">ライン</th><th class="t">結果</th><th class="t">外れた項目</th></tr></thead>
+          <tbody id="wlSteps"></tbody>
+        </table>
+      </div>
+      <h4>条件表</h4>
+      <div class="tablewrap">
+        <table class="table">
+          <thead><tr><th>順</th><th class="t">グループ</th><th class="t">作業ライン</th><th>VC優先</th><th class="t">条件</th><th class="t">除外</th></tr></thead>
+          <tbody id="wlGroups"></tbody>
+        </table>
+      </div>
+      <p class="why">
+        実績ダッシュボードが「条件表の出力先」に書く <b>actualsdashboard_条件表.sqlite3</b> を、梱包資材マスタと同じフォルダから
+        読みます(このツールは書きません。条件を直すときは実績ダッシュボードで)。見る順番の順に見て最初に当たったグループに入り、
+        VC 付きのロット(仕掛の VC が 01)は VC優先のグループ(SVC・LVC・HVC など)に当たればそちらが優先です。
+        グループ名がラインの呼び名(L-1・LVC・HVC・SVC・トット・バランサー …)に当たるものだけが作業ラインです。
+        倉庫連携では、このラインを作業予定ラインに選んでおき、「倉庫へ送信」を押したときにまだ予定に入っていなければ自動で入れます。
+      </p>
+    </div>
+  </section>
+      </section>
       <section class="tabpanel tabpanel--scroll" id="panel-boards" role="tabpanel" aria-labelledby="tab-boards" hidden>
   <!-- 6. ボード人気度 -->
   {#

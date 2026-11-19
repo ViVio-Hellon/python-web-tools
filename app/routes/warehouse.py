@@ -520,6 +520,10 @@ def send():
                    "届いていません。つながると自動で送ります(一覧に「未送信」と出ている間は届いていません)。")
         log.warning("共有フォルダが見えないため、発注を手元に預かりました: 管理番号=%s", result.mgr_nos)
     message += stock_note
+    planned = _auto_plan(conn, [o["lot_no"] for o in orders])
+    if planned:
+        message += " " + planned
+        data_sync.write_back_in_background()
     return jsonify({"ok": True, "message": message, "queued": queued,
                     "mgr_no": result.mgr_nos[0], "mgr_nos": result.mgr_nos})
 
@@ -1002,7 +1006,13 @@ def _lot_plan_state(conn, lot_no: str) -> dict:
     lines, others = plan_lines(conn)
     identity = access_control.current_identity()
     leader = access_control.is_leader(conn, identity)
+    # まだどのラインの予定でもなければ、条件表で決まるラインを選んでおく(VER4.8.144。`work_lines`)
+    suggested, suggest_note = ("", "")
+    if lot and plan is None:
+        suggested, suggest_note = _suggest_line(conn, lot, lines)
     return {"lot_no": lot,
+            "suggested_line": suggested,
+            "suggest_note": suggest_note,
             # 送れるのは作業長の端末だけ(VER4.8.88)。送れないときの一文
             "can_send": leader,
             "send_why": "" if leader else _NOT_LEADER_WHY.format(who=identity.label()),
@@ -1015,6 +1025,51 @@ def _lot_plan_state(conn, lot_no: str) -> dict:
             "selected_line": _choice_of(plan.line, lines) if plan else "",
             # この端末で入れた・外したが、まだ共有へ届いていない
             "unsent": bool(plan and plan.plan_id in unsent)}
+
+
+def _suggest_line(conn, lot_no: str, lines: list[str]) -> tuple[str, str]:
+    """条件表で決まる作業ライン(選択肢の名前)と一言。決まらなければ ("", 理由)。"""
+    from packaging_tool import work_lines
+    try:
+        decision = work_lines.decide(conn, lot_no)
+    except Exception as exc:                     # noqa: BLE001 - 判定できなくても画面は出す
+        log.warning("作業ラインを判定できません(Lot %s): %s", lot_no, exc)
+        return "", "作業ラインを判定できませんでした(ログを見てください)。"
+    if not decision.line:
+        return "", decision.why
+    choice = _choice_of(decision.line, lines)
+    if not choice:
+        return "", (f"条件表では {decision.line}(グループ「{decision.group}」)ですが、{decision.line} は"
+                    "作業予定ラインの選択肢(拠点)にありません。")
+    return choice, f"条件表で {choice}(グループ「{decision.group}」)に決まります。"
+
+
+def _auto_plan(conn, lot_nos) -> str:
+    """**倉庫へ送信したとき、作業予定ラインに入っていなければ自動で入れる**(VER4.8.144)。画面に足す一言を返す。
+
+    入れるのは、条件表で作業ラインに決まったロットだけ。もう予定に入っている・作業済みにしたロットは触らない
+    (作業済みのロットへ追加の発注をしても、ラインの端末にもう一度知らせない)。判定できなければ入れない。
+    """
+    from packaging_tool import lot_plans
+    lines, _others = plan_lines(conn)
+    said: list[str] = []
+    for lot in dict.fromkeys(lot_plans.normalize_lot(n) for n in lot_nos if n):
+        try:
+            if lot_plans.current(conn, lot) is not None or lot_plans.last_done(conn, lot) is not None:
+                continue
+            choice, note = _suggest_line(conn, lot, lines)
+            if not choice:
+                log.info("作業予定ラインに自動で入れませんでした(Lot %s): %s", lot, note)
+                continue
+            result = lot_plans.send(conn, lot, choice, terminal=svc.this_terminal(),
+                                    sender=access_control.current_identity().login_id,
+                                    summary=(_lot_plan_summary(lot) + " 自動(条件表)").strip())
+        except Exception as exc:                 # noqa: BLE001 - 発注は済んでいる。予定に入れられなくても止めない
+            log.warning("作業予定ラインに自動で入れられませんでした(Lot %s): %s", lot, exc)
+            continue
+        if result.ok and result.changed:
+            said.append(f"Lot {lot} を作業予定ライン {choice} に自動で入れました。")
+    return " ".join(said)
 
 
 _NOT_LEADER_WHY = ("作業予定ラインを送れるのは作業長の端末だけです。{who} を作業長にするには、"

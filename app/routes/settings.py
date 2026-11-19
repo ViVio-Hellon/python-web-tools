@@ -599,6 +599,35 @@ def _remote_stop_state() -> dict:
     return view
 
 
+# ------------------------------------------------------------------
+# 作業ライン(VER4.8.144)── 実績ダッシュボードの条件表で、ロットがどのラインの作業になるか
+# ------------------------------------------------------------------
+@bp.get("/api/settings/work-lines")
+def work_lines_state():
+    """条件表(グループ・当たるライン・決まり方)。読めなければ理由。"""
+    from packaging_tool import work_lines
+    try:
+        table = work_lines.load()
+    except work_lines.Unreadable as exc:
+        return jsonify({"ok": False, "why": str(exc), "groups": [], "info": {}})
+    return jsonify({
+        "ok": True, "path": str(table.path), "basis": table.basis, "info": table.info,
+        "groups": [{"rank": g.rank, "name": g.name, "line": g.line, "vc_first": g.vc_first,
+                    "use_not": g.use_not,
+                    "cond": {k: v for k, v in g.cond.items()
+                             if v not in (None, "") and k not in ("見る順番", "番号", "グループ名", "VC優先", "除外を使う")},
+                    "not_cond": {k: v for k, v in g.not_cond.items() if v not in (None, "")} if g.use_not else {}}
+                   for g in table.groups]})
+
+
+@bp.post("/api/settings/work-lines/test")
+def work_lines_test():
+    """ロット1件がどの作業ラインになるか(なぜか)。`{"lot_no": …}`。何も書かない。"""
+    from packaging_tool import work_lines
+    body = request.get_json(silent=True) or {}
+    return jsonify(work_lines.decide(get_db(), str(body.get("lot_no") or "")).to_dict())
+
+
 @bp.get("/api/settings/remote-stop")
 def remote_stop_state():
     """いまのお願いと、各 PC の様子(管理者の画面が数秒ごとに見る)。"""

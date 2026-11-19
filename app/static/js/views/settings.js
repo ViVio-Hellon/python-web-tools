@@ -37,6 +37,7 @@ const VERSION_QUERY = new URL(import.meta.url).search;
 const master = await import(`./master.js${VERSION_QUERY}`);
 // 管理者以外停止モードの欄。`master.js` と同じ理由で版クエリを付けて読む
 const remoteStop = await import(`./remote_stop.js${VERSION_QUERY}`);
+const workLines = await import(`./work_lines.js${VERSION_QUERY}`);
 
 const el = {};
 let unwatch = null;
@@ -553,6 +554,7 @@ export function start(state, jobState, masterFrame) {
   lastJobId = "";       // 再入場のたびに真っさらから(`nav.js`)
   master.start(masterFrame || {});
   remoteStop.attach();
+  workLines.attach();
   tabs.attachAll();
   rememberLocked();
   // ログの面を繋いでから、開いている面を見る(先に見ると、ログの面で

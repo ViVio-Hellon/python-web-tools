@@ -14,11 +14,13 @@ import { toast, toastError } from "./toast.js";
 const el = {};
 let asked = "";
 let timer = 0;
+// 前に描いたロット。同じロットを描き直すときは、利用者が選び直したラインを条件表の答えで上書きしない
+let shownLot = "";
 
 /** カードを動かす。`lotInput` は新規発注の LotNo の欄(無ければ、いま開いているロットを使う)。 */
 export function startLotPlanCard(lotInput) {
   for (const id of ["lotPlanCard", "lotPlanNow", "lotPlanLine", "lotPlanSend", "lotPlanCancel", "lotPlanWhy",
-                    "lotPlanLinesNote"]) {
+                    "lotPlanLinesNote", "lotPlanSuggest"]) {
     el[id] = document.getElementById(id);
   }
   el.lotInput = lotInput || null;
@@ -76,6 +78,15 @@ export function render(state) {
   if (el.lotPlanLinesNote) {
     el.lotPlanLinesNote.hidden = !state.lines_note;
     el.lotPlanLinesNote.textContent = state.lines_note || "";
+  }
+  // 条件表で決まるライン(`work_lines`)。まだ予定に入っていなければ選んでおく(「倉庫へ送信」で自動で入る)
+  if (!plan && state.suggested_line && state.lot_no !== shownLot) el.lotPlanLine.value = state.suggested_line;
+  shownLot = state.lot_no || "";
+  if (el.lotPlanSuggest) {
+    const note = plan ? "" : (state.suggest_note || "");
+    el.lotPlanSuggest.hidden = !note;
+    el.lotPlanSuggest.textContent = note
+      + (note && state.suggested_line ? " まだ予定に入っていなければ、「倉庫へ送信」を押したときに自動で入れます。" : "");
   }
   const now = el.lotPlanNow;
   now.textContent = "";

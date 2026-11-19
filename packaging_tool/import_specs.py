@@ -549,7 +549,9 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
 # (例: 列名が変わってロット番号が空になった件)が埋もれる。無ければ 0 で入る。
 # **鍵や判断に使う列はここに入れないこと。**
 OPTIONAL_COLUMNS: dict[str, frozenset[str]] = {
-    "仕掛ロット": frozenset({"BOX実績_枚本数", "前々工程実績_枚本数", "前工程実績_枚本数"}),
+    "仕掛ロット": frozenset({"BOX実績_枚本数", "前々工程実績_枚本数", "前工程実績_枚本数",
+                            # 作業ラインの判定だけに使う(無ければ判定が「分かりません」になるだけ。VER4.8.144)
+                            "ｵｰﾀﾞｰ材質", "VC", "比重", "形状"}),
     # 最初に送った端末が共有に足す列(`sync_writeback.SHARED_ADDED_COLUMNS`)
     config.TBL_WAREHOUSE_ORDER: frozenset({"送信端末", "発注キー", "受注番号", "ロットの受注"}),
     # 無ければ手元で入れた順(取り込んだ順)で並べる
@@ -628,6 +630,11 @@ LOT_IMPORT_SPECS: dict[str, list[tuple[str, str, object]]] = {
         ("品質グレード_表面処理", "品質ｸﾞﾚｰﾄﾞ_表面処理", to_text),
         # 検査番号(VER4.8.124)。まだ決まっていないと0埋めか空(そのときは仕掛引当の検査番号を見る)
         ("検査番号", "検査番号", to_text),
+        # 作業ラインの判定に使う(VER4.8.144。`work_lines`)
+        ("オーダー材質", "ｵｰﾀﾞｰ材質", to_text),
+        ("VC", "VC", to_text),
+        ("比重", "比重", to_real),
+        ("形状", "形状", to_text),
     ],
     "仕掛引当": [
         ("ロット番号", "ﾛｯﾄ番号", to_text),

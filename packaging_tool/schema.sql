@@ -632,7 +632,12 @@ CREATE TABLE IF NOT EXISTS 仕掛ロット (
     品質グレード_表面処理  TEXT NOT NULL DEFAULT '',
     -- 検査番号(VER4.8.124。ロット情報の画面に出す)。ロットに1つ決まる値だが、まだ決まっていないと
     -- 0埋め(例 00000000)か空。そのときは仕掛引当(SIKAHIKI)の検査番号を見る(`lot_service._inspection_no`)
-    検査番号  TEXT NOT NULL DEFAULT ''
+    検査番号  TEXT NOT NULL DEFAULT '',
+    -- 作業ラインの判定に使う(VER4.8.144。`work_lines`。実績ダッシュボードの条件表と照らす)
+    オーダー材質  TEXT NOT NULL DEFAULT '',
+    VC            TEXT NOT NULL DEFAULT '',
+    比重          REAL NOT NULL DEFAULT 0,
+    形状          TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_sikakari_lot_no ON 仕掛ロット(ロット番号);
