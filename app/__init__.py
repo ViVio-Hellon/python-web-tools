@@ -809,6 +809,9 @@ def _register_routes(app: Flask) -> None:
     # 現場モードを足しても開き直すまで画面が出なかった。**モードを切り替えられる**ので、
     # いま資材モードで開いていても URL は要る(レールに出すかは `shell.nav_items` がモードで決める)
     app.register_blueprint(log_routes.bp)
+    # メモ(VER4.9.0。Excel 風。この PC だけに保存)
+    from .routes import memo as memo_routes
+    app.register_blueprint(memo_routes.bp)
     app.register_blueprint(selection.bp)
     app.register_blueprint(layout.bp)
     if not grant.allows_mode(modes.FIELD):

@@ -47,6 +47,9 @@ FIELD_NAV: tuple[tuple[str, str, str, str], ...] = (
     ("layout", "棚検索", "/layout", "最寄りの置き場を探す"),
     ("log", "選定ログ", "/log", "何が起きたかを追う"),
     ("settings", "設定", "/settings", "取り込み元と端末"),
+    # Excel 風のメモ(VER4.9.0。この PC だけに保存。現場モードだけ)。**いちばん後ろに置く** ── 画面切替の
+    # F1〜F7 は並び順で決まるので、途中に入れると設定(F7)の割り当てが変わってしまう
+    ("memo", "メモ", "/memo", "表に書いて残す"),
 )
 
 # 資材モード。受け取って確認するのが主だが、**届いた発注のLotを
@@ -93,7 +96,7 @@ def _nav_source(mode: str) -> tuple[tuple[str, str, str, str], ...]:
 # **無いなら無いと言う画面**を出す(基盤仕様書の考え方と同じで、
 # 黙って何も起きない状態を作らない)。
 READY_SCREENS = frozenset({"lot", "selection", "inventory", "warehouse",
-                           "layout", "log", "settings"})
+                           "layout", "log", "settings", "memo"})
 
 # 準備中の画面の説明。「いつ」と「それまでどうするか」まで書く。
 #   key: (作る予定, 何ができるようになるか, いま使う画面)

@@ -261,9 +261,10 @@ class PendingScreenTests(unittest.TestCase):
 class NavTests(unittest.TestCase):
     """レールの組み立て(画面なしで確認できる)。"""
 
-    def test_現場は7画面(self) -> None:
+    def test_現場は8画面(self) -> None:
+        """VER4.9.0 でメモを足した(いちばん後ろ。F1〜F7 の割り当ては変えない)。"""
         from app.shell import nav_items
-        self.assertEqual(len(nav_items(modes.FIELD)), 7)
+        self.assertEqual(len(nav_items(modes.FIELD)), 8)
 
     def test_資材は絞られる(self) -> None:
         """資材は現場より狭い。**発注を出す前の段(棚検索・選定ログ)は

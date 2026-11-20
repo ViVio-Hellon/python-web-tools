@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}メモ — {{ display_name }}{% endblock %}
+
+{#
+  メモ ── Excel 風の簡易表。**この PC の手元の DB に保存**(`packaging_tool/memo_store.py`)。
+  上: 書式と操作の帯 / 中: セルの表(行番号・列番号つき)/ 下: シートのタブ。
+  表の中身・選択・編集・保存は `memo.js` が持つ。
+#}
+{% block content %}
+<div class="pane memo" id="memoPane">
+  <div class="memo__bar" role="toolbar" aria-label="メモの操作">
+    <button class="btn memo__tool" type="button" id="mBold" title="太字 (Ctrl+B)"><b>B</b></button>
+    <label class="memo__color" title="文字色">字<input type="color" id="mColor" value="#c00000"></label>
+    <button class="btn memo__tool" type="button" id="mColorApply" title="文字色を付ける">字色</button>
+    <label class="memo__color" title="背景色">背<input type="color" id="mBg" value="#fff2a8"></label>
+    <button class="btn memo__tool" type="button" id="mBgApply" title="背景色を付ける">背景</button>
+    <select class="input memo__sel" id="mBorder" title="罫線" aria-label="罫線">
+      <option value="">罫線…</option>
+      <option value="all">格子</option>
+      <option value="outer">外枠</option>
+      <option value="bottom">下線</option>
+      <option value="none">罫線なし</option>
+    </select>
+    <span class="memo__group" role="group" aria-label="配置">
+      <button class="btn memo__tool" type="button" data-align="left" title="左ぞろえ">左</button>
+      <button class="btn memo__tool" type="button" data-align="center" title="中央">中</button>
+      <button class="btn memo__tool" type="button" data-align="right" title="右ぞろえ">右</button>
+    </span>
+    <button class="btn memo__tool" type="button" id="mWrap" title="折り返して全体を表示">折返</button>
+    <button class="btn memo__tool" type="button" id="mClearFmt" title="書式を消す">書式消</button>
+    <span class="memo__sep" aria-hidden="true"></span>
+    <button class="btn memo__tool" type="button" id="mCopy" title="コピー (Ctrl+C)">コピー</button>
+    <button class="btn memo__tool" type="button" id="mPaste" title="貼り付け (Ctrl+V)">貼付</button>
+    <span class="memo__sep" aria-hidden="true"></span>
+    <button class="btn memo__tool" type="button" id="mRowIns" title="選んだ行の上に行を足す">行+</button>
+    <button class="btn memo__tool" type="button" id="mRowDel" title="選んだ行を消す">行−</button>
+    <button class="btn memo__tool" type="button" id="mColIns" title="選んだ列の左に列を足す">列+</button>
+    <button class="btn memo__tool" type="button" id="mColDel" title="選んだ列を消す">列−</button>
+    <span class="memo__sep" aria-hidden="true"></span>
+    <select class="input memo__sel" id="mPrint" aria-label="印刷">
+      <option value="">印刷…</option>
+      <option value="sheet">このシート</option>
+      <option value="range">選んだ範囲</option>
+      <option value="all">全シート</option>
+    </select>
+    <span class="memo__status" id="mStatus" role="status">読み込んでいます…</span>
+    <button class="btn btn--commit" type="button" id="mSave" title="保存 (Ctrl+S)">保存</button>
+  </div>
+  <div class="memo__formula">
+    <span class="memo__addr" id="mAddr">A1</span>
+    <span class="memo__value" id="mValue"></span>
+  </div>
+
+  <div class="memo__grid" id="mGrid">
+    <div class="memo__corner" id="mCorner" title="すべて選ぶ"></div>
+    <div class="memo__colhead" id="mColHead"><div class="memo__inner" id="mColInner"></div></div>
+    <div class="memo__rowhead" id="mRowHead"><div class="memo__inner" id="mRowInner"></div></div>
+    <div class="memo__view" id="mView">
+      <div class="memo__inner" id="mCells">
+        <div class="memo__sel-box" id="mSelBox" hidden></div>
+        <div class="memo__active" id="mActive"></div>
+      </div>
+    </div>
+    {# 入力はいつもこの欄が受ける(日本語の変換もそのまま)。編集していないときは見えない #}
+    <textarea class="memo__editor" id="mEditor" spellcheck="false" aria-label="セルの入力"></textarea>
+  </div>
+
+  <div class="memo__tabs" role="tablist" aria-label="シート">
+    <div class="memo__tablist" id="mTabs"></div>
+    <button class="btn memo__tool" type="button" id="mAddSheet" title="シートを足す">+</button>
+    <button class="btn memo__tool" type="button" id="mSheetMenu" title="このシートの名前変更・複製・削除">シート…</button>
+    <div class="memo__menu" id="mMenu" hidden>
+      <button class="btn" type="button" data-sheet="rename">名前を変える</button>
+      <button class="btn" type="button" data-sheet="duplicate">複製する</button>
+      <button class="btn" type="button" data-sheet="left">◀ 左へ</button>
+      <button class="btn" type="button" data-sheet="right">右へ ▶</button>
+      <button class="btn btn--danger" type="button" data-sheet="delete">削除する</button>
+      <button class="btn" type="button" data-sheet="trash">消したシートを戻す…</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  .memo { display: flex; flex-direction: column; gap: 6px; min-height: 0; height: calc(100vh - 24px); }
+  .memo__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .memo__tool { min-height: 30px; padding: 3px 9px; font-size: var(--fs-sm); }
+  .memo__sel { width: auto; min-height: 30px; padding: 2px 6px; font-size: var(--fs-sm); }
+  .memo__color { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-sm); color: var(--muted); }
+  .memo__color input { width: 28px; height: 26px; padding: 0; border: 1px solid var(--rule); background: none; }
+  .memo__sep { width: 1px; align-self: stretch; background: var(--rule); margin: 2px 4px; }
+  .memo__group { display: inline-flex; gap: 2px; }
+  .memo__status { margin-left: auto; font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; }
+  .memo__status[data-level="ok"] { color: var(--state-ok); }
+  .memo__status[data-level="warn"] { color: var(--state-warn); }
+  .memo__status[data-level="ng"] { color: var(--state-error); font-weight: 700; }
+  .memo__formula { display: flex; gap: 8px; align-items: center; border: 1px solid var(--rule); border-radius: var(--radius-sm);
+                   padding: 2px 8px; font-size: var(--fs-sm); min-height: 26px; background: var(--surface); }
+  .memo__addr { font-family: var(--mono); min-width: 5em; color: var(--muted); }
+  .memo__value { white-space: pre; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+
+  /* 表。左上・列見出し・行見出し・セルの4つ。セルだけがスクロールし、見出しは合わせて動かす */
+  .memo__grid { position: relative; flex: 1; min-height: 200px; display: grid;
+                grid-template-columns: 46px 1fr; grid-template-rows: 24px 1fr;
+                border: 1px solid var(--rule); background: #fff; color: #000; user-select: none; }
+  .memo__corner { background: #eef0f3; border-right: 1px solid #c8cdd4; border-bottom: 1px solid #c8cdd4; cursor: pointer; }
+  .memo__colhead, .memo__rowhead { overflow: hidden; position: relative; background: #eef0f3; }
+  .memo__colhead { border-bottom: 1px solid #c8cdd4; }
+  .memo__rowhead { border-right: 1px solid #c8cdd4; }
+  .memo__view { overflow: auto; position: relative; outline: none; }
+  .memo__inner { position: relative; }
+  .memo__hd { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+              font-size: var(--fs-sm); color: #444; border-right: 1px solid #d5d9df; border-bottom: 1px solid #d5d9df; }
+  .memo__hd.is-on { background: #d7e4f5; color: #000; font-weight: 700; }
+  .memo__grip-c { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 2; }
+  .memo__grip-r { position: absolute; left: 0; bottom: -3px; height: 6px; width: 100%; cursor: row-resize; z-index: 2; }
+  .memo__c { position: absolute; box-sizing: border-box; padding: 1px 3px; font-size: var(--fs-md); line-height: 1.35;
+             border-right: 1px solid #e3e6ea; border-bottom: 1px solid #e3e6ea; overflow: hidden; white-space: pre;
+             font-family: "Meiryo UI", "Yu Gothic UI", sans-serif; }
+  .memo__c.is-wrap { white-space: pre-wrap; word-break: break-all; }
+  .memo__c.is-num { text-align: right; }
+  .memo__sel-box { position: absolute; background: rgba(33, 115, 70, .12); border: 1px solid #217346; pointer-events: none; z-index: 3; }
+  .memo__active { position: absolute; border: 2px solid #217346; pointer-events: none; z-index: 4; box-sizing: border-box; }
+  .memo__editor { position: absolute; z-index: 5; box-sizing: border-box; margin: 0; resize: none; overflow: hidden;
+                  border: 2px solid #217346; padding: 1px 3px; font: var(--fs-md)/1.35 "Meiryo UI", "Yu Gothic UI", sans-serif;
+                  background: #fff; color: #000; outline: none; opacity: 0; pointer-events: none; }
+  /* 編集していないときは見えず、クリックも下のセルへ通す(重なって選べなくならないように) */
+  .memo__editor.is-editing { opacity: 1; pointer-events: auto; box-shadow: 0 2px 6px rgba(0,0,0,.2); }
+  .memo__tabs { display: flex; align-items: center; gap: 4px; position: relative; }
+  .memo__tablist { display: flex; gap: 2px; overflow-x: auto; min-width: 0; flex: 0 1 auto; }
+  .memo__tab { border: 1px solid var(--rule); border-top: none; border-radius: 0 0 6px 6px; padding: 3px 12px;
+               background: var(--sunken); cursor: pointer; white-space: nowrap; font-size: var(--fs-sm); color: var(--ink); }
+  .memo__tab.is-on { background: var(--surface); font-weight: 700; color: var(--accent); border-color: var(--accent); }
+  .memo__menu { position: absolute; bottom: 36px; left: 0; display: flex; flex-direction: column; gap: 4px; z-index: 20;
+                background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-sm);
+                padding: 6px; box-shadow: var(--shadow-pop); }
+  .memo__menu[hidden] { display: none; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { start } from "{{ url_for('static', filename='js/views/memo.js') }}";
+  start({{ sheets | tojson }}, {{ limits | tojson }});
+</script>
+{% endblock %}

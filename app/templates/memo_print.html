@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>メモの印刷</title>
+{#
+  メモの印刷(`app/routes/memo.py` の `/memo/print`)。帳票と同じく、窓の印刷(Ctrl+P)を使う。
+  **ページの割り付けはここで決める**(行・列をページに分けて、1ページ1枚の紙として並べる)。
+  画面に見える紙と、刷る紙は同じ HTML・同じ割り付けなので、見たとおりに刷れる。
+  行番号・列番号・シートのタブ・ボタンは刷らない(この窓には表と設定しか無く、設定は刷らない)。
+#}
+<style id="pageStyle"></style>
+<style>
+  /* 字の大きさはツールと同じ階段(この窓は tokens.css を読まないので、使う段だけ写す) */
+  :root { --fs-sm: 12px; --fs-md: 13px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Meiryo UI", "Yu Gothic UI", sans-serif; color: #000; background: #e9ecef; }
+  .bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+         padding: 8px 12px; background: #fff; border-bottom: 1px solid #c8cdd4; font-size: var(--fs-md); }
+  .bar label { display: inline-flex; align-items: center; gap: 4px; }
+  .bar select, .bar input { font: inherit; padding: 2px 4px; }
+  .bar input[type=number] { width: 4.5em; }
+  .bar button { font: inherit; font-weight: 700; padding: 5px 14px; cursor: pointer; }
+  .bar .note { color: #555; }
+  .why { margin: 24px; color: #b00020; font-weight: 700; }
+  .papers { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 18px; }
+  .paper { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.25); position: relative; overflow: hidden; }
+  .paper__body { position: absolute; overflow: hidden; }
+  .paper__foot { position: absolute; left: 0; right: 0; text-align: center; font-size: 9pt; color: #333; }
+  table.sheet { border-collapse: collapse; table-layout: fixed; transform-origin: 0 0; }
+  table.sheet td { border: 0.5px solid #d0d4da; padding: 1px 3px; font-size: var(--fs-md); line-height: 1.35; overflow: hidden;
+                   white-space: pre; vertical-align: middle; }
+  table.sheet.no-grid td { border-color: transparent; }
+  table.sheet td.wrap { white-space: pre-wrap; word-break: break-all; }
+  /* 行の高さは画面と同じに保つ(改行のあるセルで行が伸びて、紙の外へ押し出さないように) */
+  table.sheet td .v { overflow: hidden; white-space: inherit; }
+  table.sheet td.num { text-align: right; }
+  @media print {
+    body { background: #fff; }
+    .bar { display: none; }
+    .papers { padding: 0; gap: 0; display: block; }
+    .paper { box-shadow: none; break-after: page; page-break-after: always; }
+    .paper:last-child { break-after: auto; page-break-after: auto; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="bar">
+  <label>用紙 <select id="paper"><option>A4</option><option>A3</option><option>B4</option><option>B5</option></select></label>
+  <label>向き <select id="orient"><option value="portrait">縦</option><option value="landscape">横</option></select></label>
+  <label>余白(mm) <input type="number" id="margin" value="10" min="0" max="40" step="1"></label>
+  <label>拡大縮小 <select id="fit">
+    <option value="scale">倍率</option>
+    <option value="width">用紙の幅に合わせる</option>
+    <option value="page">1ページに収める</option>
+  </select></label>
+  <label>倍率(%) <input type="number" id="scale" value="100" min="10" max="400" step="5"></label>
+  <label><input type="checkbox" id="grid" checked> セルの枠線も刷る</label>
+  <span class="note" id="count"></span>
+  <button type="button" id="go">印刷する(Ctrl+P)</button>
+</div>
+{% if why %}<p class="why">{{ why }}</p>{% endif %}
+<div class="papers" id="papers"></div>
+<script>
+(function () {
+  var DATA = {{ data | tojson }};
+  var RANGE = {{ rng | tojson }};
+  var SIZES = { A4: [210, 297], A3: [297, 420], B4: [257, 364], B5: [182, 257] };
+  var MM = 96 / 25.4, DW = 80, DH = 22, FOOT_MM = 6;
+  var $ = function (id) { return document.getElementById(id); };
+  var KEY = "memo.print";
+  try { var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+        ["paper", "orient", "margin", "fit", "scale"].forEach(function (k) { if (saved[k] != null) $(k).value = saved[k]; });
+        if (saved.grid != null) $("grid").checked = saved.grid; } catch (e) {}
+
+  function used(sheet) {
+    // 刷る範囲: 選んだ範囲か、中身・書式のある範囲
+    if (RANGE && DATA.length === 1) return { r0: RANGE[0], c0: RANGE[1], r1: RANGE[2], c1: RANGE[3] };
+    var r1 = -1, c1 = -1;
+    sheet.cells.forEach(function (c) { if (c.r > r1) r1 = c.r; if (c.c > c1) c1 = c.c; });
+    return r1 < 0 ? null : { r0: 0, c0: 0, r1: r1, c1: c1 };
+  }
+  function cssOf(f) {
+    var s = [];
+    if (!f) return "";
+    if (f.b) s.push("font-weight:700");
+    if (f.i) s.push("font-style:italic");
+    if (f.color) s.push("color:" + f.color);
+    if (f.bg) s.push("background:" + f.bg);
+    if (f.align) s.push("text-align:" + f.align);
+    if (f.bt) s.push("border-top:1px solid #000");
+    if (f.bb) s.push("border-bottom:1px solid #000");
+    if (f.bl) s.push("border-left:1px solid #000");
+    if (f.br) s.push("border-right:1px solid #000");
+    return s.join(";");
+  }
+  function esc(v) { return String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  // 大きさ(合計が limit を超えないように区切る)。1つで limit を超えるものは1つで1区切り
+  function chunks(sizes, limit) {
+    var out = [], start = 0, sum = 0;
+    for (var i = 0; i < sizes.length; i++) {
+      if (sum + sizes[i] > limit && i > start) { out.push([start, i - 1]); start = i; sum = 0; }
+      sum += sizes[i];
+    }
+    if (sizes.length) out.push([start, sizes.length - 1]);
+    return out;
+  }
+  function build() {
+    var paper = SIZES[$("paper").value] || SIZES.A4;
+    var land = $("orient").value === "landscape";
+    var pw = land ? paper[1] : paper[0], ph = land ? paper[0] : paper[1];
+    var margin = Math.max(0, Math.min(40, Number($("margin").value) || 0));
+    var fit = $("fit").value;
+    $("scale").disabled = fit !== "scale";
+    var settings = { paper: $("paper").value, orient: $("orient").value, margin: margin, fit: fit,
+                     scale: $("scale").value, grid: $("grid").checked };
+    try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch (e) {}
+    // 紙は余白0(@page)で、余白はこちらで取る ── 画面の紙と刷る紙を同じ寸法にするため
+    $("pageStyle").textContent = "@page { size: " + pw + "mm " + ph + "mm; margin: 0; }"
+      + " .paper { width: " + pw + "mm; height: " + ph + "mm; }";
+    var bodyW = (pw - margin * 2) * MM, bodyH = (ph - margin * 2 - FOOT_MM) * MM;
+    var papers = [];
+    DATA.forEach(function (sheet) {
+      var u = used(sheet);
+      if (!u) return;
+      var cw = [], rh = [];
+      for (var c = u.c0; c <= u.c1; c++) cw.push(Number(sheet.col_widths[c]) || DW);
+      for (var r = u.r0; r <= u.r1; r++) rh.push(Number(sheet.row_heights[r]) || DH);
+      var totalW = cw.reduce(function (a, b) { return a + b; }, 0);
+      var totalH = rh.reduce(function (a, b) { return a + b; }, 0);
+      var zoom = Math.max(0.1, Math.min(4, (Number($("scale").value) || 100) / 100));
+      totalW += cw.length + 2; totalH += rh.length + 2;
+      if (fit === "width") zoom = Math.min(1, bodyW / totalW);
+      if (fit === "page") zoom = Math.min(1, bodyW / totalW, bodyH / totalH);
+      var map = {};
+      sheet.cells.forEach(function (c) { map[c.r + "," + c.c] = c; });
+      // 枠線の分(1マスにつき 1px)も入れて割り付ける(行・列が多いと積み重なってはみ出すため)
+      var plus1 = function (a) { return a.map(function (x) { return x + 1; }); };
+      var colParts = chunks(plus1(cw), bodyW / zoom - 2), rowParts = chunks(plus1(rh), bodyH / zoom - 2);
+      // 「縦に下へ」の順(Excel の既定と同じ)
+      colParts.forEach(function (cp) {
+        rowParts.forEach(function (rp) {
+          var html = '<table class="sheet' + ($("grid").checked ? "" : " no-grid") + '" style="transform:scale(' + zoom + ')"><colgroup>';
+          for (var c = cp[0]; c <= cp[1]; c++) html += '<col style="width:' + cw[c] + 'px">';
+          html += "</colgroup>";
+          for (var r = rp[0]; r <= rp[1]; r++) {
+            html += '<tr style="height:' + rh[r] + 'px">';
+            for (var c2 = cp[0]; c2 <= cp[1]; c2++) {
+              var cell = map[(u.r0 + r) + "," + (u.c0 + c2)];
+              var v = cell ? cell.v : "", f = cell && cell.f;
+              var cls = (f && f.wrap ? "wrap" : "") + (!(f && f.align) && /^[-+]?[\d,]*\.?\d+%?$/.test(v) ? " num" : "");
+              html += '<td' + (cls.trim() ? ' class="' + cls.trim() + '"' : "") + (f ? ' style="' + cssOf(f) + '"' : "")
+                + '><div class="v" style="height:' + Math.max(1, rh[r] - 3) + 'px">' + esc(v) + "</div></td>";
+            }
+            html += "</tr>";
+          }
+          papers.push({ html: html + "</table>", name: sheet.name });
+        });
+      });
+    });
+    var box = $("papers");
+    box.innerHTML = "";
+    papers.forEach(function (p, i) {
+      var div = document.createElement("div");
+      div.className = "paper";
+      div.innerHTML = '<div class="paper__body" style="left:' + margin + "mm;top:" + margin + "mm;width:" + (pw - margin * 2)
+        + "mm;height:" + (ph - margin * 2 - FOOT_MM) + 'mm">' + p.html + '</div><div class="paper__foot" style="bottom:'
+        + Math.max(2, margin - 4) + 'mm">' + esc(p.name) + "  " + (i + 1) + " / " + papers.length + "</div>";
+      box.appendChild(div);
+    });
+    $("count").textContent = papers.length ? papers.length + " ページ" : "刷るものがありません(中身のあるセルがありません)";
+  }
+  ["paper", "orient", "margin", "fit", "scale", "grid"].forEach(function (id) {
+    $(id).addEventListener("change", build);
+    $(id).addEventListener("input", build);
+  });
+  $("go").addEventListener("click", function () { window.print(); });
+  window.MEMO_PRINT = { build: build };
+  build();
+}());
+</script>
+</body>
+</html>

@@ -301,6 +301,10 @@ def _migrate_after_schema(conn: sqlite3.Connection) -> None:
     # schema.sql に書かずに定数から作る(名前を直すのが1か所で済む)
     from . import pattern_store
     pattern_store.ensure_tables(conn)
+    # メモページ(VER4.9.0。`memo_store`)。この PC だけの表
+    from . import memo_store
+    memo_store.ensure_tables(conn)
+    conn.commit()
 
 
 def _add_rule_columns(conn: sqlite3.Connection) -> None:
