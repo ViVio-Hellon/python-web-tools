@@ -388,6 +388,30 @@ async function restoreBackup() {
   let saved = null;
   try { saved = JSON.parse(window.localStorage.getItem(BACKUP_KEY + sheet.id) || "null"); } catch { saved = null; }
   if (!saved || !Array.isArray(saved.ops) || !saved.ops.length) return;
+  // **もう保存されている分は訊かない。** 閉じる間際の送信は届いたが、控えを消す前にページが閉じた、がよくある
+  // (モードの切替・タブを閉じる)。保存されている中身と同じセル・大きさは控えから外す
+  const same = (a, b) => JSON.stringify(a || {}) === JSON.stringify(b || {});
+  if (saved.ops.every((op) => op.op === "cells" || op.op === "size")) {
+    saved.ops = saved.ops.map((op) => {
+      if (op.op === "cells") {
+        return { ...op, cells: op.cells.filter((c) => {
+          const cur = cells.get(key(c.r, c.c));
+          const f = c.f && Object.keys(c.f).length ? c.f : null;
+          return (cur ? cur.v : "") !== (c.v ?? "") || !same(cur && cur.f, f);
+        }) };
+      }
+      const differs = ["rows", "cols"].some((k) => op[k] !== undefined && op[k] > sheet[k])
+        || (op.col_widths && !same(op.col_widths, sheet.col_widths))
+        || (op.row_heights && !same(op.row_heights, sheet.row_heights));
+      return differs ? op : null;
+    }).filter((op) => op && (op.op !== "cells" || op.cells.length));
+    if (!saved.ops.length) {
+      try { window.localStorage.removeItem(BACKUP_KEY + sheet.id); } catch { /* */ }
+      return;
+    }
+    // 残った分はいまの版に重ねて戻す(戻すと決めたのは利用者。自分の古い控えとぶつかったことにしない)
+    saved.rev = sheet.rev;
+  }
   const n = saved.ops.reduce((s, op) => s + (op.op === "cells" ? op.cells.length : 1), 0);
   if (!(await confirmBox(`このシートに保存できなかった変更が残っています(${n}件)。戻して保存しますか?\n「やめる」で捨てます。`,
     { ok: "戻して保存する" }))) {
