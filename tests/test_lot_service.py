@@ -216,6 +216,28 @@ class HikiAndOdrTests(unittest.TestCase):
         result = svc.search_lot(self.conn, "1234567")
         self.assertEqual([h.order_no for h in result.hiki], ["O1", "O2", "O3"])
 
+    def test_複数引当なら1番目の引当の受注を出す(self):
+        """VER4.9.2: 現場の声「複数引当ある場合はデフォルト選択を1番引当に。先に検索にかかったものを
+        デフォ選択しているように見える」── 受注の表で先に見つかった受注ではなく、引当番号が先頭の受注。"""
+        insert_odr(self.conn, order_no="04097234", 納入先名称="3番目")      # 受注の表では先に入っている
+        insert_odr(self.conn, order_no="04097713", 納入先名称="2番目")
+        insert_odr(self.conn, order_no="04097549", 納入先名称="1番目")
+        insert_hiki(self.conn, order_no="04097549", no="61121046")
+        insert_hiki(self.conn, order_no="04097713", no="61121047")
+        insert_hiki(self.conn, order_no="04097234", no="61121048")
+        result = svc.search_lot(self.conn, "1234567")
+        self.assertEqual((result.odr.order_no, result.odr.delivery_name), ("04097549", "1番目"))
+        from packaging_tool.presenters import lot as lot_presenter
+        self.assertEqual([h["selected"] for h in lot_presenter.build(result).hiki], [True, False, False])
+
+    def test_同じ受注番号の引当が2行でも選ぶのは先の1行だけ(self):
+        insert_odr(self.conn, order_no="O1")
+        insert_hiki(self.conn, order_no="O1", no="60717001")
+        insert_hiki(self.conn, order_no="O1", no="60717002")
+        from packaging_tool.presenters import lot as lot_presenter
+        self.assertEqual([h["selected"] for h in lot_presenter.build(svc.search_lot(self.conn, "1234567")).hiki],
+                         [True, False])
+
     def test_the_hiki_number_stays_a_plain_number_string(self):
         """数値で持つと 6.0717e+07 と指数表記になり、現場が読めなくなる。"""
         insert_hiki(self.conn, order_no="O1", no="60717000")

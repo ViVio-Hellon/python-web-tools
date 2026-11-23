@@ -7,6 +7,7 @@
 - VER4.9.0 メモページの Windows CI を確かめる。現場での実機確認待ち(Excel 往復コピー・WebView2・プリンター)
 
 ## 完了した作業(直近のみ)
+- VER4.9.2 ロット詳細: 複数引当の既定を1番目の引当(引当番号順の先頭)に。前は受注番号の最小
 - VER4.9.1 メモの消えない点検 13 場面 OK(e2e3.js)。保存済みの控えは訊かずに消す
 - VER4.9.0 メモページ(memo_store.py・routes/memo.py・views/memo.js・memo.html・memo_print.html)。手元DB・現場モード・レール最後尾(F1〜F7 不変)。ブラウザ試験 e2e 34+4 項目・印刷 10 項目 OK(スクリプトは scratchpad/memo/)
 - VER4.8.149 パレット検索(直接)+EXオンリーON で EX だけ。EX の台・枚がずれた寸法はマスタのとおり(報告済み)

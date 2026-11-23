@@ -604,10 +604,15 @@ def _load_odr(conn: sqlite3.Connection, order_nos: list[str]) -> OdrInfo:
         return OdrInfo()
 
     marks = ", ".join("?" for _ in order_nos)
-    row = db.fetch_one(
+    # **1番目の引当(引当番号の小さい順の先頭)の受注を出す**(VER4.9.2)。前は並び順を決めずに1件引いていたので、
+    # 表の中で先に見つかった受注が出た(現場の声「複数引当ある場合はデフォルト選択を1番引当に。先に検索に
+    # かかったものをデフォ選択しているように見える」)
+    rows = db.fetch_all(
         conn, f"SELECT * FROM 仕掛受注 WHERE 受注番号 IN ({marks})", tuple(order_nos),
         caller_name="lot_service._load_odr",
-    )
+    ) or []
+    rank = {no: i for i, no in enumerate(order_nos)}
+    row = min(rows, key=lambda r: rank.get(r["受注番号"], len(rank)), default=None)
     if row is None:
         return OdrInfo()
 

@@ -219,8 +219,10 @@ def build(result: lot_service.LotSearchResult) -> LotViewModel:
                     for group, items in LOT_FIELD_GROUPS
                     for label, key in items],
         odr_fields=[_odr_field(odr, label, key) for label, key in ODR_FIELDS],
-        hiki=[_hiki_row(row, selected=(row.order_no == odr.order_no))
-              for row in result.hiki],
+        # 選んでいる行は1つだけ(同じ受注番号の引当が2行あっても、先の行だけ)
+        hiki=[_hiki_row(row, selected=(i == next((j for j, r in enumerate(result.hiki)
+                                                  if r.order_no == odr.order_no), -1)))
+              for i, row in enumerate(result.hiki)],
         packaging_spec=odr.packaging_spec,
         specific_gravity=f"{odr.specific_gravity:g}",
         final_process_count=lot.final_process_count,

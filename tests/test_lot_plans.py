@@ -975,6 +975,12 @@ class SharedOrderTests(unittest.TestCase):
         self.conn = _web.memory_db()
         self.addCleanup(self.conn.close)
 
+    @staticmethod
+    def ago(minutes: int) -> str:
+        """いまから何分前か(一覧は送ってから7日以内だけ出すので、日付は固定にしない)。"""
+        from datetime import datetime, timedelta
+        return (datetime.now() - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
+
     def row(self, pid, line, state, at, shared=None):
         self.conn.execute(
             f"INSERT INTO {config.TBL_LOT_PLAN} (予定ID, LotNo, ライン, 状態, 送った日時, 共有番号)"
@@ -982,25 +988,25 @@ class SharedOrderTests(unittest.TestCase):
         self.conn.commit()
 
     def test_時計の遅れたPCで入れ直しても新しいラインが勝つ(self) -> None:
-        self.row("a", "L-1", lot_plans.PLANNED, "2026-11-13 10:00:00", 1)
-        self.row("b", "HVC", lot_plans.PLANNED, "2026-11-13 09:55:00", 2)   # 時計が7分遅れ
+        self.row("a", "L-1", lot_plans.PLANNED, self.ago(60), 1)
+        self.row("b", "HVC", lot_plans.PLANNED, self.ago(65), 2)   # 時計が7分遅れ
         self.assertEqual(lot_plans.current(self.conn, "4102781").line, "HVC")
         self.assertEqual([p.plan_id for p in lot_plans.for_lines(self.conn, ["HVC"])], ["b"])
         self.assertEqual(lot_plans.for_lines(self.conn, ["L-1"]), [])
 
     def test_時計の遅れたPCで外しても効く(self) -> None:
-        self.row("a", "L-1", lot_plans.PLANNED, "2026-11-13 10:00:00", 1)
-        self.row("b", "L-1", lot_plans.CANCELLED, "2026-11-13 09:00:00", 2)
+        self.row("a", "L-1", lot_plans.PLANNED, self.ago(60), 1)
+        self.row("b", "L-1", lot_plans.CANCELLED, self.ago(120), 2)
         self.assertIsNone(lot_plans.current(self.conn, "4102781"))
 
     def test_時計の遅れたPCで作業済みにしても消える(self) -> None:
-        self.row("a", "L-1", lot_plans.PLANNED, "2026-11-13 10:00:00", 1)
-        self.row("b", "L-1", lot_plans.DONE, "2026-11-13 09:00:00", 2)
+        self.row("a", "L-1", lot_plans.PLANNED, self.ago(60), 1)
+        self.row("b", "L-1", lot_plans.DONE, self.ago(120), 2)
         self.assertEqual(lot_plans.for_lines(self.conn, ["L-1"]), [])
         self.assertEqual(lot_plans.last_done(self.conn, "4102781").plan_id, "b")
 
     def test_まだ送っていない手元の行は共有の行のあと(self) -> None:
-        self.row("a", "L-1", lot_plans.PLANNED, "2026-11-13 10:00:00", 5)
+        self.row("a", "L-1", lot_plans.PLANNED, self.ago(60), 5)
         result = lot_plans.send(self.conn, "4102781", "HVC", terminal="PC-LEADER")   # 共有番号は空
         self.assertTrue(result.changed)
         self.assertEqual(lot_plans.current(self.conn, "4102781").line, "HVC")

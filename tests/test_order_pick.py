@@ -86,9 +86,10 @@ class OrderPickTests(SelectionWebTestCase):
         self.open_lot()
         self.pick_pallet()
         draft = work_context.get_context().peek_pending_orders()[0]
-        # 受注情報に出ていたオーダー(受注番号のいちばん小さい A100)。以前と同じ
-        self.assertEqual((draft["nounyusaki"], draft["hatchu_suu"]), ("A社", "3"))
-        self.assertEqual(draft["juchu_no"], "A100・Z300・M200")
+        # 受注情報に出ていたオーダー = **1番目の引当の Z300**(VER4.9.2。前は受注番号のいちばん小さい A100 だった。
+        # 現場の声「複数引当ある場合はデフォルト選択を1番引当に」)
+        self.assertEqual((draft["nounyusaki"], draft["hatchu_suu"]), ("Z社", "3"))
+        self.assertEqual(draft["juchu_no"], "Z300・M200・A100")
 
     def test_ロット検索で選んだオーダーの納入先と梱包数になる(self) -> None:
         self.open_lot()
@@ -103,13 +104,13 @@ class OrderPickTests(SelectionWebTestCase):
     def test_パレットを決めたあとで選び直しても倉庫連携を開くと合わせ直す(self) -> None:
         self.open_lot()
         self.pick_pallet()
-        self.click("00000003")                          # A100(1梱包)
+        self.click("00000001")                          # Z300(いま出ているもの。1梱包)
         drafts = self.drafts_on_page()
-        self.assertEqual((drafts[0]["nounyusaki"], drafts[0]["hatchu_suu"]), ("A社", "1"))
+        self.assertEqual((drafts[0]["nounyusaki"], drafts[0]["hatchu_suu"]), ("Z社", "1"))
         block = drafts[0]["orders"]
         self.assertIn("オーダーが 3件", block["lead"])
         self.assertEqual([(i["order_no"], i["packages"], i["picked"], i["checked"]) for i in block["items"]],
-                         [("Z300", 1, False, False), ("M200", 1, False, False), ("A100", 1, True, True)])
+                         [("Z300", 1, True, True), ("M200", 1, False, False), ("A100", 1, False, False)])
 
     def test_見るだけの窓で押しても選んだことにしない(self) -> None:
         self.open_lot()
@@ -142,7 +143,7 @@ class OrderPickTests(SelectionWebTestCase):
     def test_同じオーダーを押し直しただけなら外さない(self) -> None:
         self.open_lot()
         self.pick_pallet()
-        self.click("00000003")                          # A100(いま出ているもの)
+        self.click("00000001")                          # Z300(いま出ているもの。1番目の引当)
         self.assertTrue(self.session().palette.is_set)
         self.assertTrue(work_context.get_context().peek_pending_orders())
 
@@ -214,9 +215,10 @@ class PickedOrderModeTests(OrderPickTests):
         return selection_session.get_session(self.conn).presenter
 
     def test_開いただけなら先頭のオーダーのモード(self) -> None:
+        """先頭 = 1番目の引当の Z300(1P0113)。VER4.9.2 までは受注番号のいちばん小さい A100(普通)だった。"""
         self.open_lot()
         self.assertFalse(self.presenter().is_ex_order)
-        self.assertFalse(self.presenter().mode_1p0113)
+        self.assertTrue(self.presenter().mode_1p0113)
 
     def test_EXのオーダーを選ぶと資材選択がEXになる(self) -> None:
         self.open_lot()
@@ -280,7 +282,7 @@ class PickedOrderModeTests(OrderPickTests):
 
     def test_このロットに無いオーダーは使わない(self) -> None:
         result = lot_service.search_lot(self.conn, LOT, order_pick="X999")
-        self.assertEqual(result.odr.order_no, "A100")
+        self.assertEqual(result.odr.order_no, "Z300", "1番目の引当のオーダー")
 
 
 class OrderSummaryTests(unittest.TestCase):
