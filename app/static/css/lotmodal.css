@@ -38,17 +38,23 @@
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px; padding: 16px; overflow: auto; min-height: 0;
 }
-/* 図面が無いときは1カラム。ただし幅は切る ── 画面いっぱいに
-   伸ばすと見出しと値が離れすぎて、どの値がどの項目か目で追えない
-   (行長は 90文字程度までが読みやすい) */
-.modal__body:has(> .modal__col--spec[hidden]) {
-  grid-template-columns: minmax(0, 1fr); justify-items: center;
-}
-.modal__body:has(> .modal__col--spec[hidden]) > .modal__col { width: min(100%, 900px); }
+/* 左: ロット情報 → 包装仕様書。右: 試験指示票 → 引当情報 → 受注情報(図面が無くても2列のまま) */
 .modal__col { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.modal__spec[hidden] { display: none; }
+/* **ひとまとまりずつ枠で区切る**(現場の声:「ロット・引当・受注・試験指示票の情報は区切って見やすく」) */
+.mblock {
+  border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  background: var(--sunken); padding: 10px 12px;
+}
 .mblock h3 {
-  font-size: var(--fs-xs); letter-spacing: .02em; color: var(--faint);
-  font-weight: 600; margin: 0 0 7px; display: flex; align-items: baseline; gap: 8px;
+  font-size: var(--fs-sm); letter-spacing: .02em; color: var(--ink);
+  font-weight: 700; margin: 0 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--rule);
+  display: flex; align-items: baseline; gap: 8px;
+}
+/* **ロット詳細の字はぜんぶ 1.2 倍**(現場の声。字の階段ごと 1.2 倍にする: 10→12・11→13.2・12→14.4・13→15.6・15→18・19→22.8) */
+#lotModal {
+  --fs-2xs: 12px; --fs-xs: 13.2px; --fs-sm: 14.4px; --fs-md: 15.6px; --fs-lg: 18px; --fs-xl: 22.8px;
+  font-size: var(--fs-md);
 }
 
 .modal__foot {

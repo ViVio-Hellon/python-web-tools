@@ -23,14 +23,43 @@
   </header>
 
   <div class="modal__body">
-    {# 左: 数値と文字。読む順は VBA のフレーム順のまま
-       (ロット情報 → 引当情報 → 受注情報) #}
+    {# 左: ロット情報と、その下に包装仕様書(図面)。右: 試験指示票・引当情報・受注情報。
+       現場の声:「包装仕様書と試験指示・引当情報・受注情報の位置の入れ替え(包装仕様書を下へ)。
+       ロット・引当・受注・試験指示票の情報は区切って見やすく」 #}
     <div class="modal__col">
       <section class="mblock">
         <h3 id="lotHeader">ロット情報</h3>
         <div id="lotFields"></div>
       </section>
 
+      {# 包装仕様書が無いロットでは隠す(`lotdetail.js`) #}
+      <div class="modal__spec" id="specCard" hidden>
+      <section class="mblock">
+        <h3>包装仕様書 <span class="eyebrow num" id="specNo" role="button" tabindex="0"
+              title="クリックでコピー"></span></h3>
+        <div class="specbar">
+          {# 「枠に収める」と「実寸」は片方だけが有効。押されているほうを
+             色で示す。「幅に合わせる」ではなく「収める」なのは、小さい図を
+             引き伸ばしてぼかさないため ── 縮めることしかしない #}
+          <div class="btn-row" role="group" aria-label="表示の大きさ">
+            <button class="btn btn--on" type="button" id="specFit"
+                    aria-pressed="true">枠に収める</button>
+            <button class="btn" type="button" id="specFull"
+                    aria-pressed="false">実寸</button>
+          </div>
+          <button class="btn" type="button" id="specReload"><span class="gl">↻</span>再取得</button>
+          <a class="btn btn--nav" id="specOpen" href="{{ url_hoso }}"
+             target="_blank" rel="noopener">閲覧システム<span class="gl">▸</span></a>
+        </div>
+        <div class="specview" id="specView">
+          <p class="why" id="specMsg">図面を取得しています…</p>
+        </div>
+        <p class="why" id="specSource"></p>
+      </section>
+      </div>
+    </div>
+
+    <div class="modal__col">
       <section class="mblock">
         <h3>試験指示票</h3>
         <div class="field" style="margin:0">
@@ -67,32 +96,6 @@
             <span class="badges" id="odrBadges"></span></h3>
         <div id="odrFields"></div>
         <p class="why">材質_比重: <span class="num" id="gravity">---</span></p>
-      </section>
-    </div>
-
-    {# 右: 図面。読みながら見比べるものなので、横に並べる #}
-    <div class="modal__col modal__col--spec" id="specCard" hidden>
-      <section class="mblock">
-        <h3>包装仕様書 <span class="eyebrow num" id="specNo" role="button" tabindex="0"
-              title="クリックでコピー"></span></h3>
-        <div class="specbar">
-          {# 「枠に収める」と「実寸」は片方だけが有効。押されているほうを
-             色で示す。「幅に合わせる」ではなく「収める」なのは、小さい図を
-             引き伸ばしてぼかさないため ── 縮めることしかしない #}
-          <div class="btn-row" role="group" aria-label="表示の大きさ">
-            <button class="btn btn--on" type="button" id="specFit"
-                    aria-pressed="true">枠に収める</button>
-            <button class="btn" type="button" id="specFull"
-                    aria-pressed="false">実寸</button>
-          </div>
-          <button class="btn" type="button" id="specReload"><span class="gl">↻</span>再取得</button>
-          <a class="btn btn--nav" id="specOpen" href="{{ url_hoso }}"
-             target="_blank" rel="noopener">閲覧システム<span class="gl">▸</span></a>
-        </div>
-        <div class="specview" id="specView">
-          <p class="why" id="specMsg">図面を取得しています…</p>
-        </div>
-        <p class="why" id="specSource"></p>
       </section>
     </div>
   </div>
