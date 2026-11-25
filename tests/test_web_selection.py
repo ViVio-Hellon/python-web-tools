@@ -3126,6 +3126,49 @@ class SendTests(SelectionWebTestCase):
         self.assertTrue(orders[1]["hinmei"].startswith(spk.MATSUITA_SIZE_LABEL))
 
 
+    def _bare(self, width=1000, length=1800):
+        from packaging_tool import special_packaging as spk
+        for name, atsu, haba, lo, hi, code in (
+            (spk.KAKUZAI_NAME, spk.KAKUZAI_ATSU, spk.KAKUZAI_HABA, 1, 1000, "K001"),
+            (spk.KAKUZAI_NAME, spk.KAKUZAI_ATSU, spk.KAKUZAI_HABA, 1001, 9999, "K002"),
+            (spk.MATSUITA_NAME, spk.MATSUITA_ATSU, spk.MATSUITA_HABA, 1, 1000, "M001"),
+            (spk.MATSUITA_NAME, spk.MATSUITA_ATSU, spk.MATSUITA_HABA, 1001, 9999, "M002"),
+        ):
+            self.conn.execute(
+                "INSERT INTO 松板角材 (品名, 厚, 幅, 丈min, 丈max, コード, 単位, 備考)"
+                " VALUES (?,?,?,?,?,?,?,?)", (name, atsu, haba, lo, hi, code, "本", ""))
+        self.conn.commit()
+        work_context.get_context().product_width = width
+        work_context.get_context().product_length = length
+        return self.session()
+
+    def test_1P0113強制だけで倉庫連携の下書きができる(self) -> None:
+        """現場の声:「1P0113 強制しても倉庫連携に持っていけない(倉庫連携を開いても空)」(VER4.9.4)。"""
+        self._bare()
+        work_context.get_context().drop_pending_orders()
+        self.post("/api/selection/1p0113/force")
+        orders = work_context.get_context().peek_pending_orders()
+        self.assertEqual([o["hatchu_code"] for o in orders], ["K001", "M001"], orders)
+        # 外したら裸梱包の下書きは捨てる(パレットの発注と取り違えない)
+        self.post("/api/selection/1p0113/force")
+        self.assertEqual(work_context.get_context().peek_pending_orders(), [])
+
+    def test_BOX実績寸法を打ち直すと角材松板とコードが変わる(self) -> None:
+        """現場の声:「Gコースはサイズがデータ通りでない場合がある。BOX実績寸法を変更できるように」(VER4.9.4)。"""
+        self._bare()
+        self.post("/api/selection/1p0113/force")
+        body = self.post("/api/selection/1p0113/size", {"width": 1200, "length": 2000})
+        self.assertIn("溝切角材 1010→1210mm(コード K001→K002)", body["message"])
+        self.assertIn("松板 950→1600mm(コード M001→M002)", body["message"])
+        orders = work_context.get_context().peek_pending_orders()
+        self.assertEqual(orders[0]["hatchu_code"], "K002")
+
+    def test_寸法の打ち直しは数でなければ断る(self) -> None:
+        self._bare()
+        self.post("/api/selection/1p0113/force")
+        self.post("/api/selection/1p0113/size", {"width": "x", "length": 2000}, expect=400)
+
+
 class WarehouseDraftOnDecideTests(SelectionWebTestCase):
     """パレット決定の時点で倉庫連携の下書きを先に用意する(現場の要望)。
 

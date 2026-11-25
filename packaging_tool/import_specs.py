@@ -477,6 +477,29 @@ IMPORT_SPECS[KANBAN_SHELF_TABLE] = [
     ("丈", "丈", to_int),
 ] + _THRESHOLD_TAIL
 
+# 外注条件・外注条件明細(包装仕様NOの決め打ち。`outsource_rules`。VER4.9.4)。現場が梱包資材マスタに足した表。
+# **管理番号は取り込み元のまま持つ**(明細の 条件管理番号 が外注条件の 管理番号 を指すため)
+from .outsource_rules import DETAIL_TABLE as OUTSOURCE_DETAIL_TABLE  # noqa: E402
+from .outsource_rules import TABLE as OUTSOURCE_RULE_TABLE  # noqa: E402
+IMPORT_SPECS[OUTSOURCE_RULE_TABLE] = [
+    ("管理番号", "管理番号", to_int),
+    ("条件名", "条件名", lambda v: to_text(v) or ""),
+    ("戻り値", "戻り値", lambda v: to_text(v) or ""),
+    ("優先順位", "優先順位", lambda v: to_int(v) or 0),
+    ("有効", "有効", to_flag),
+    ("備考", "備考", lambda v: to_text(v) or ""),
+]
+IMPORT_SPECS[OUTSOURCE_DETAIL_TABLE] = [
+    ("管理番号", "管理番号", to_int),
+    ("条件管理番号", "条件管理番号", lambda v: to_int(v) or 0),
+    ("条件番号", "条件番号", lambda v: to_int(v) or 0),
+    ("対象項目", "対象項目", lambda v: to_text(v) or ""),
+    ("判定方法", "判定方法", lambda v: to_text(v) or ""),
+    ("判定値", "判定値", lambda v: to_text(v) or ""),
+    ("有効", "有効", to_flag),
+    ("備考", "備考", lambda v: to_text(v) or ""),
+]
+
 for _threshold_table, _head in _THRESHOLD_HEAD.items():
     IMPORT_SPECS[_threshold_table] = _head + _THRESHOLD_TAIL
 
@@ -535,7 +558,9 @@ OPTIONAL_TABLES: frozenset[str] = (frozenset({"アクセス権限", config.TBL_B
                                                config.TBL_LOT_PLAN,
                                                PROTEC_RULE_TABLE,
                                                PALLET_LIMIT_TABLE,
-                                               KANBAN_SHELF_TABLE})
+                                               KANBAN_SHELF_TABLE,
+                                               OUTSOURCE_RULE_TABLE,
+                                               OUTSOURCE_DETAIL_TABLE})
                                    | frozenset(THRESHOLD_TABLES))
 
 # **取り込み元に無くても知らせない列**(表 → 取り込み元の列名)。

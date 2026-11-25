@@ -414,7 +414,7 @@ function renderDetail(view) {
     ? absentWhy
     : view.found
       ? (view.can_expand
-          ? "製造板幅・板丈を製品サイズ欄に入れて資材選択へ移ります。"
+          ? (view.expand_reason || "製造板幅・板丈を製品サイズ欄に入れて資材選択へ移ります。")
           : view.expand_reason)
       : "先にロットを選んでください。";
   // **資材モードには資材展開のボタンが無い。** 役割が違う操作なので

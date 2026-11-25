@@ -443,10 +443,25 @@ function render1P0113(p1) {
     const count = document.createElement("span");
     count.className = "p1count";
     count.textContent = m.count_caption;
-    button.append(name, size, count);
+    // 資材ごとの発注コード(寸法を変えるとここが変わる)
+    const code = document.createElement("span");
+    code.className = "p1code";
+    const cd = /CD:(\S+)/.exec(m.info || "");
+    code.textContent = `コード ${cd ? cd[1] : "---"}`;
+    button.append(name, size, code, count);
     return button;
   }));
 
+  // BOX実績寸法の打ち直し。打っている途中の欄は書き換えない
+  if (document.activeElement !== el.p1W) el.p1W.value = p1.width || "";
+  if (document.activeElement !== el.p1L) el.p1L.value = p1.length || "";
+  el.p1SizeSource.textContent = p1.size_source || "BOX実績寸法";
+  el.p1Edited.hidden = !p1.edited;
+  el.p1SizeLot.textContent = p1.lot_width
+    ? `ロット(仕掛台帳)の値: ${p1.lot_width}×${p1.lot_length}`
+    : "ロット(仕掛台帳)に使える寸法がありません。現物の寸法を打ち込んでください";
+  el.p1SizeReset.disabled = !p1.lot_width || !p1.edited;
+  el.p1Rule.textContent = p1.rule;
   el.p1Tip.textContent = p1.tip;
   el.p1Tip.className = `status status--${p1.ready ? "ok" : "ng"}`;
   el.p1Qty.value = p1.qty;
@@ -474,6 +489,7 @@ function renderOutputs(outputs) {
   el.sendWarehouse.disabled = !outputs.can_send;
   // 見出しの「倉庫送信」(畳んでも見える)。送れるときだけ出す
   el.sendWarehouseHead.hidden = !outputs.can_send;
+  el.sendWarehouseP1.hidden = !outputs.can_send;
   if (outputs.send_why) reasons.push(`倉庫送信: ${outputs.send_why}`);
 
   // 「使用する」。押したあとは**押せないまま札を替える** ── 消すと
@@ -816,7 +832,7 @@ export function start(initial) {
                     // 1P0113 / 出す / 管理者
                     "sizeCard", "p1Card", "p1Materials", "p1Tip", "p1Qty",
                     "p1Why", "force1p", "forceProtec",
-                    "sendWarehouse", "sendWarehouseHead", "outputWhy", "useBoards", "useWhy", "useLabel",
+                    "sendWarehouse", "sendWarehouseHead", "sendWarehouseP1", "p1W", "p1L", "p1SizeApply", "p1SizeReset", "p1SizeSource", "p1Edited", "p1SizeLot", "p1Rule", "outputWhy", "useBoards", "useWhy", "useLabel",
                     "adminState", "authWhere", "savePattern",
                     "saveWhy", "patternsNote", "patternRows", "usageRows",
                     // 作業の段と、結果の面
@@ -1020,6 +1036,12 @@ export function start(initial) {
 
   // --- 1P0113 -----------------------------------------------------
   el.force1p.addEventListener("click", () => send("/api/selection/1p0113/force"));
+  const applyP1Size = () => send("/api/selection/1p0113/size", { width: el.p1W.value, length: el.p1L.value });
+  el.p1SizeApply.addEventListener("click", applyP1Size);
+  for (const box of [el.p1W, el.p1L]) {
+    box.addEventListener("keydown", (event) => { if (event.key === "Enter") applyP1Size(); });
+  }
+  el.p1SizeReset.addEventListener("click", () => send("/api/selection/1p0113/size", { reset: true }));
   // プロテック強制。ボード種別・選定・配置・切断依頼がプロテックの挙動になる(ロット切替で解除)
   el.forceProtec.addEventListener("click", () => send("/api/selection/protec/force"));
   el.p1Qty.addEventListener("change", () =>
@@ -1064,5 +1086,6 @@ export function start(initial) {
   el.sendWarehouse.addEventListener("click", sendToWarehouse);
   // 見出しの「倉庫送信」も同じ送り方(押した先を2つに分けない)
   el.sendWarehouseHead.addEventListener("click", sendToWarehouse);
+  el.sendWarehouseP1.addEventListener("click", sendToWarehouse);
 
 }

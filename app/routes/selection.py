@@ -520,6 +520,28 @@ def set_qty_1p0113():
     return _apply(session, session.set_qty_1p0113(qty))
 
 
+@bp.post("/api/selection/1p0113/size")
+def set_size_1p0113():
+    """裸梱包の BOX実績寸法(製品サイズ)を打ち直す(VER4.9.4)。`{"width","length"}` か `{"reset": true}`。
+
+    `reset` はロット(仕掛台帳)の寸法に戻す。松板・溝切角材を引き直し、前と後を返事に出す。
+    """
+    body = request.get_json(silent=True) or {}
+    session = _session()
+    if body.get("reset"):
+        lot = session.presenter.lot_result.lot if session.presenter.lot_result is not None else None
+        width = int(lot.width or 0) if lot is not None else 0
+        length = int(lot.length or 0) if lot is not None else 0
+        if width <= 0 or length <= 0:
+            return jsonify(_error("no_lot_size", "ロットの寸法がありません(仕掛台帳に無いか、使えない値です)。"
+                                  "幅・丈を打ち込んでください。")), 422
+    else:
+        width, length = _parse_int(body.get("width")), _parse_int(body.get("length"))
+        if width is None or length is None:
+            return jsonify(_error("bad_size", "幅・丈は数字で入れてください。", field="width")), 400
+    return _apply(session, session.set_size_1p0113(width, length))
+
+
 # ------------------------------------------------------------------
 # ボード選定
 # ------------------------------------------------------------------

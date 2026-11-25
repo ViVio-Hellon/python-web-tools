@@ -70,6 +70,21 @@ from .user_log import get_user_log
 log = get_logger("selection_session")
 
 
+# 裸梱包の寸法を打ち直すときの上限(mm。打ち間違いの桁あふれを断る)
+SIZE_1P0113_MAX = 20000
+
+
+def _material_change(name: str, before_len: int, after_len: int, before: Any, after: Any) -> str:
+    """「松板 1600→1700mm(コード 251010→251011)」。変わらなければ「松板 1600mm(コード 251010 のまま)」。"""
+    def code(hit: Any) -> str:
+        return (hit.code or "---") if hit.is_ok else f"なし({hit.info})"
+    length = (f"{after_len}mm" if before_len == after_len or not before_len
+              else f"{before_len}→{after_len}mm")
+    if code(before) == code(after):
+        return f"{name} {length}(コード {code(after)} のまま)"
+    return f"{name} {length}(コード {code(before)}→{code(after)})"
+
+
 @dataclass
 class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
     """資材選択画面で決まっていること。"""
@@ -897,7 +912,36 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
             return BoardOpResult(
                 False, f"数量は{QTY_MIN}〜{QTY_MAX}で指定してください。", REFUSE_BAD_INPUT)
         self.qty_1p0113 = qty
+        self.follow_1p0113_draft()
         return BoardOpResult(True, f"数量: ×{qty}")
+
+    def set_size_1p0113(self, width: int, length: int) -> BoardOpResult:
+        """裸梱包の BOX実績寸法(製品サイズ)を打ち直す(VER4.9.4)。
+
+        現場の声:「Gコースを含む場合、サイズがデータ通りでない場合があるので、BOX実績寸法を変更できるようにし、
+        松板・溝切角材のサイズが変更できるようにする。発注コードがどう変わるのかがわかるように」。
+        1P0113 ではパレット欄(製品サイズの「セット」)ごと隠れていて、打ち直す場所が無かった。
+        溝切角材は幅、松板と角材の本数は丈から決まるので、ここで打ち直した寸法で引き直し、
+        **前と後(長さ・発注コード)を返事に並べる**。ロット(仕掛台帳)の値は書き換えない。
+        """
+        if not (0 < width <= SIZE_1P0113_MAX and 0 < length <= SIZE_1P0113_MAX):
+            return BoardOpResult(False, f"幅・丈は 1〜{SIZE_1P0113_MAX} の数で入れてください。",
+                                 REFUSE_BAD_INPUT)
+        if not self.presenter.mode_1p0113:
+            return BoardOpResult(False, "裸梱包(1P0113)のときだけ使えます。", REFUSE_NEEDS_SIZES)
+        before = self.presenter.materials_1p0113
+        context = work_context.get_context()
+        old = (context.product_width, context.product_length)
+        context.product_width, context.product_length = width, length
+        self.reload_1p0113_materials()
+        after = self.presenter.materials_1p0113
+        changes = [_material_change(name, b_len, a_len, b_hit, a_hit) for name, b_len, a_len, b_hit, a_hit in (
+            ("松板", before.a_value, after.a_value, before.matsuita, after.matsuita),
+            ("溝切角材", before.kakuzai_length, after.kakuzai_length, before.kakuzai, after.kakuzai))]
+        self.presenter.user_log.log(
+            f"[1P0113] BOX実績寸法を {old[0]}×{old[1]} → {width}×{length} に打ち直しました: "
+            + " / ".join(changes), emphasis=True)
+        return BoardOpResult(True, f"寸法 {width}×{length}: " + " / ".join(changes))
 
     def toggle_force_1p0113(self) -> BoardOpResult:
         """強制1P0113(VBA `lblForce1P0113_Click`)。
@@ -910,6 +954,7 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         change = self.presenter.toggle_force_1p0113(
             product_width=width, product_length=length)
         self._reset_qty(change)
+        self.follow_1p0113_draft()
         now = self.presenter.force_1p0113
         return BoardOpResult(
             True, f"1P0113強制: {'ON' if now else 'OFF'}")
@@ -946,6 +991,29 @@ class SelectionSession(TilingMixin, AngleMixin, RecordsMixin):
         width, length = self.product_input()
         self._reset_qty_value(
             self.presenter.load_1p0113_materials(width, length))
+        self.follow_1p0113_draft()
+
+    def follow_1p0113_draft(self) -> None:
+        """裸梱包(1P0113)の倉庫連携の下書きを、いまの角材・松板で用意し直す(VER4.9.4)。
+
+        現場の声:「1P0113 強制で裸梱包にしても、倉庫連携に持っていけない(倉庫連携を開いても空)」。
+        下書きはパレットを決めたとき(`_prepare_warehouse_draft`)にしか作っていなかったので、パレットを
+        使わない裸梱包では、レールから倉庫連携を開くと空だった。**登録まではしない**(パレットのときと同じ)。
+        1P0113 を外したら、裸梱包の下書き(角材・松板の行)は捨てる(残すとパレットの発注と取り違える)。
+        """
+        from . import special_packaging as spk
+        from .presenters import outputs
+        context = work_context.get_context()
+        if context.pending_restored:
+            return                    # 倉庫連携で打ち直している下書きは触らない
+        if self.presenter.mode_1p0113:
+            if outputs.send_refusal(self) is None:
+                context.set_pending_orders(outputs.build_orders(self))
+            return
+        labels = (spk.KAKUZAI_SIZE_LABEL, spk.MATSUITA_SIZE_LABEL)
+        pending = context.peek_pending_orders()
+        if pending and all(str(o.get("hinmei", "")).startswith(labels) for o in pending):
+            context.drop_pending_orders()
 
     def _reset_qty(self, change: Any) -> None:
         self._reset_qty_value(getattr(change, "reset_qty_to", None))

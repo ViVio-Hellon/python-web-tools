@@ -192,6 +192,9 @@ def _seed_thresholds(conn: sqlite3.Connection) -> None:
     pallet_limit_rules.seed(conn)
     # 看板置き場(看板と置き場の対応。VER4.8.68)も同じ
     kanban_shelves.seed(conn)
+    # 外注条件・外注条件明細(包装仕様NOの決め打ち。VER4.9.4)も同じ
+    from . import outsource_rules
+    outsource_rules.seed(conn)
 
 
 def _migrate_before_schema(conn: sqlite3.Connection) -> None:

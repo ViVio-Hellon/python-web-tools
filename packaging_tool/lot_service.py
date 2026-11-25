@@ -50,14 +50,8 @@ ADVANCE_CHECK_THICKNESS_LIMIT = 3.0
 # 増やすときはここに追記するだけ、というVBA側のコメントを踏襲する
 BOX_COURSES = ("GFS", "GCT", "GSS")
 
-# 全フラグ成立時に書き換える包装仕様NO(VBA `lblOdr(1).caption = "1P0122"`)
+# 外注梱包_75S系 の戻り値(VBA `lblOdr(1).caption = "1P0122"`)。判定は外注条件の表(`outsource_rules`)
 PACKAGING_SPEC_OVERRIDE = "1P0122"
-
-# フラグ4の判定に使う製造板厚(VBA `Val(...) = 6.75`)
-FLAG_THICKNESS = 6.75
-
-# フラグ3の判定に使う用途コード
-FLAG_YOTO_CODES = ("K434", "K435")
 
 # kg梱包で「1梱包に入れてよい重量」の余裕率(VBA `konVal * 1.05`)
 PACK_WEIGHT_TOLERANCE = 1.05
@@ -192,6 +186,9 @@ class LotInfo:
     # (AdvanceCheck flag1)のどちらも BOX実績に差し替える前の「製造板厚」を
     # 見るため、表示用の thickness とは別に保持する
     manufactured_thickness: float = 0.0
+    # 外注条件(`outsource_rules`)の 幅・丈 も製造の寸法で見る(VER4.9.4)
+    manufactured_width: float = 0.0
+    manufactured_length: float = 0.0
     # BOX最終実績の寸法が空か HOT のとき、2つ目の置き場所から控えた候補(`BoxChoice`)。
     # BOX実績寸法のロットのときだけ付く。`box_pick` は選ばれた候補の鍵(空 = 1つ目のまま)
     box_choices: list = field(default_factory=list)
@@ -310,6 +307,7 @@ class OdrInfo:
     order_no: str = ""          # いま表示している受注番号(引当行との対応付けに使う)
     delivery_name: str = ""     # lblOdr(0) 納入先名称
     packaging_spec: str = ""    # lblOdr(1) 包装仕様NO
+    spec_rule: str = ""         # 包装仕様NOを書き換えた外注条件(空 = 受注のまま。VER4.9.4)
     customer_name: str = ""     # lblOdr(2) 取引先名称
     ship_to_name: str = ""      # lblOdr(3) 送り先名称
     delivery_comment: str = ""  # lblOdr(4) 納送用コメント
@@ -364,21 +362,14 @@ def _detect_box_course(design_course: str) -> str:
     return ""
 
 
-def _needs_spec_override(lot: LotInfo) -> bool:
-    """包装仕様NOを1P0122に書き換えるか(VBA の flag(1)〜flag(5) の全AND)。
+def _spec_override(conn: Optional[sqlite3.Connection], lot: LotInfo):
+    """包装仕様NOを書き換える条件(外注条件の表。`outsource_rules`)。当たらなければ None。
 
-        flag1: 製造材質が "*75S" で終わる
-        flag2: 製造調質が "T6" で始まる
-        flag3: 用途コードが K434 か K435
-        flag4: 製造板厚(BOX実績ではなく製造側)が 6.75
-        flag5: BOXコース
+    VER4.9.4 まではここに VBA の flag(1)〜flag(5)(1P0122 の判定)を書いていた。いまは表の
+    「外注梱包_75S系」の行が同じ判定をする(現場の声:「テーブルの条件を読んで発火させてください」)。
     """
-    flag1 = lot.zaishitsu.endswith("75S")
-    flag2 = lot.choshitsu.startswith("T6")
-    flag3 = lot.yoto_code in FLAG_YOTO_CODES
-    flag4 = lot.manufactured_thickness == FLAG_THICKNESS
-    flag5 = lot.is_box
-    return flag1 and flag2 and flag3 and flag4 and flag5
+    from . import outsource_rules
+    return outsource_rules.find(outsource_rules.load(conn), lot)
 
 
 def _final_count(row: Any) -> Any:
@@ -543,6 +534,8 @@ def _load_lot_info(conn: sqlite3.Connection, lot_no: str,
         final_process_text=_count_text(_final_count(row)),
         quality_surface=str(row["品質グレード_表面処理"] or ""),
         manufactured_thickness=row["製造板厚"],
+        manufactured_width=row["製造板幅"] or 0,
+        manufactured_length=row["製造板丈"] or 0,
     )
     lot.inspection_no, lot.inspection_from = _inspection_no(conn, lot_no, _row_get(row, "検査番号"))
     if not course:
@@ -711,7 +704,7 @@ def search_lot(conn: sqlite3.Connection, lot_no: str, box_pick: str = "",
             odr = dataclasses.replace(
                 chosen, pack_unit_weight=odr.pack_unit_weight,
                 pack_unit_count=odr.pack_unit_count, delivery_names=odr.delivery_names)
-    _apply_spec_override(odr, lot)
+    _apply_spec_override(conn, odr, lot)
 
     return LotSearchResult(found=True, message=f"ロット {lot_no}", lot=lot, hiki=hiki, odr=odr)
 
@@ -762,21 +755,23 @@ def load_odr_for_hiki_row(
         return None
 
     odr = _load_odr(conn, [picked_row.order_no])
-    _apply_spec_override(odr, lot)
+    _apply_spec_override(conn, odr, lot)
     return odr, hiki, lot
 
 
-def _apply_spec_override(odr: OdrInfo, lot: LotInfo) -> None:
-    """1P0113判定用に包装仕様NOを上書きする(該当ロットのみ)。
+def _apply_spec_override(conn: Optional[sqlite3.Connection], odr: OdrInfo, lot: LotInfo) -> None:
+    """外注条件に当たったロットの包装仕様NOを書き換える(1P0122・1P0113 など。`outsource_rules`)。
 
     `search_lot` と `load_odr_for_order` の両方で同じ判断をするので、
     ここに1つだけ置く(**同じ事実を2か所で判断すると、片方だけ
-    直し忘れる**)。
+    直し忘れる**)。どの条件で書き換えたかは `spec_rule` に残す(画面に出す)。
     """
-    if _needs_spec_override(lot):
-        log.debug("_apply_spec_override: 包装仕様NO → %s に書き換え",
-                 PACKAGING_SPEC_OVERRIDE)
-        odr.packaging_spec = PACKAGING_SPEC_OVERRIDE
+    rule = _spec_override(conn, lot)
+    if rule is not None:
+        log.info("外注条件「%s」に当たりました: Lot %s 包装仕様NO %s → %s",
+                 rule.name, lot.lot_no, odr.packaging_spec or "(空)", rule.spec)
+        odr.spec_rule = f"{rule.name}(元の包装仕様NO {odr.packaging_spec or '空'})"
+        odr.packaging_spec = rule.spec
 
 
 def has_lot_data(conn: sqlite3.Connection) -> bool:

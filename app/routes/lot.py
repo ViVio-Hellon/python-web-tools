@@ -220,13 +220,21 @@ def _plan_stay(conn, lot_no: str, message: str = "", detail: Optional[dict] = No
     return jsonify({**detail, "next": "", "message": message})
 
 
+def _bare_session():
+    """資材選択の状態(裸梱包かを見るため)。"""
+    return selection_session.get_session(get_db())
+
+
 def _plan_open(conn, lot_no: str):
     """ロットを開いて資材展開する。ここで終わるとき(移らない・1P0113)は応答、続けるなら None。"""
     detail = _select(conn, lot_no)
     if current_mode() != modes.FIELD or not detail.get("found"):
         return _plan_stay(conn, lot_no, detail=detail)
     context = work_context.get_context()
-    if not context.expand_materials():
+    expanded = context.expand_materials()
+    if not expanded and _bare_session().presenter.mode_1p0113:
+        return _go(f"Lot {context.lot_no}: 裸梱包です。資材選択の BOX実績寸法(幅・丈)を打ち込んでください", context)
+    if not expanded:
         return _plan_stay(conn, lot_no, "製造板幅・板丈が取得できていないので、資材選択へは移りません"
                                         "(ロット情報を開きました)。", detail=detail)
     session = selection_session.get_session(conn)
@@ -625,7 +633,13 @@ def expand():
             "code": "wrong_mode", "message": EXPAND_ABSENT_WHY}}), 403
 
     context = work_context.get_context()
-    if not context.expand_materials():
+    expanded = context.expand_materials()
+    if not expanded and context.lot_no and _bare_session().presenter.mode_1p0113:
+        # 裸梱包(1P0113)で寸法が無い。資材選択の「BOX実績寸法」の欄で打ち込む(VER4.9.4)
+        return jsonify({"ok": True, "next": "/selection",
+                        "message": f"Lot {context.lot_no}: 裸梱包です。BOX実績寸法(幅・丈)を打ち込んでください",
+                        "ribbon": context.ribbon()})
+    if not expanded:
         return jsonify({"error": {
             "code": "cannot_expand",
             "message": ("先にロットを検索してください"

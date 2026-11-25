@@ -1411,6 +1411,10 @@
           background:none; color:inherit; font:inherit; text-align:left;
           cursor:pointer; }
   .mrow:hover { background:var(--act-idle); }
+  /* パレット選定にかかわる条件の表は別の枠にまとめる */
+  .mgroup { display:grid; gap:2px; margin:6px 0; padding:4px 4px 6px;
+            border:1px solid var(--rule); border-radius:var(--radius-sm); background:var(--sunken); }
+  .mgroup__head { margin:2px 6px 4px; font-size: var(--fs-xs); font-weight:700; color:var(--muted); }
   .mrow[aria-current="true"] { background:var(--accent-soft);
                                border-color:var(--accent-line); }
   .mrow[aria-current="true"] .mrow__name { font-weight:700; color:var(--accent); }

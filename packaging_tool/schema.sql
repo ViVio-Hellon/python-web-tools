@@ -902,3 +902,27 @@ CREATE TABLE IF NOT EXISTS PalletComboMaster (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS UX_業界記号 ON PalletComboMaster(業界, 記号);
+
+-- 外注条件(`outsource_rules`。VER4.9.4)。包装仕様NOを決め打つ条件。優先順位の小さい順に見て、最初に当たった行の
+-- 戻り値を包装仕様NOにする(1P0122・1P0113 など)。中身は 外注条件明細(条件管理番号 = 管理番号)。
+-- 管理番号は明細から指されるので、取り込み元の番号をそのまま持つ
+CREATE TABLE IF NOT EXISTS 外注条件 (
+    管理番号         INTEGER PRIMARY KEY,
+    条件名           TEXT NOT NULL DEFAULT '',
+    戻り値           TEXT NOT NULL DEFAULT '',
+    優先順位         INTEGER NOT NULL DEFAULT 0,
+    有効            INTEGER NOT NULL DEFAULT 1,
+    備考            TEXT NOT NULL DEFAULT ''
+);
+
+-- 外注条件明細。同じ条件番号どうしは「または」、違う条件番号どうしは「かつ」、条件番号が戻ったら別の組
+CREATE TABLE IF NOT EXISTS 外注条件明細 (
+    管理番号         INTEGER PRIMARY KEY,
+    条件管理番号      INTEGER NOT NULL DEFAULT 0,
+    条件番号         INTEGER NOT NULL DEFAULT 0,
+    対象項目         TEXT NOT NULL DEFAULT '',
+    判定方法         TEXT NOT NULL DEFAULT '',
+    判定値           TEXT NOT NULL DEFAULT '',
+    有効            INTEGER NOT NULL DEFAULT 1,
+    備考            TEXT NOT NULL DEFAULT ''
+);

@@ -48,6 +48,12 @@ class Managed:
     label: str
     mark: str
     note: str
+    # 一覧で別の枠にまとめる名前(空 = まとめない)。現場の声:「パレット選定にかかわるマスタは別枠に」(VER4.9.4)
+    group: str = ""
+
+
+# パレット選定にかかわる条件の表(プロテック条件・パレット限定条件・外注条件・外注条件明細)の枠
+GROUP_PALLET_RULES = "パレット選定にかかわる条件"
 
 
 # **直せるのは資材課が持っている表だけ。**
@@ -65,13 +71,22 @@ MANAGED: tuple[Managed, ...] = (
             "品名・厚・幅・丈の範囲と発注コード"),
     Managed("アクセス権限", "アクセス権限", "権",
             "誰がどのモードを使えるか"),
+    # ---- パレット選定にかかわる条件(別の枠。VER4.9.4) ----
+    # 外注条件(`outsource_rules`)。ロットを読んだとき包装仕様NOを決め打つ(1P0122・1P0113 裸梱包など)
+    Managed(import_specs.OUTSOURCE_RULE_TABLE, "外注条件", "外",
+            "包装仕様NOを決め打つ条件(優先順位の順に見て、最初に当たった行の戻り値にする)",
+            GROUP_PALLET_RULES),
+    Managed(import_specs.OUTSOURCE_DETAIL_TABLE, "外注条件明細", "明",
+            "外注条件の中身。同じ条件番号は「または」、違う条件番号は「かつ」、条件番号が戻ったら別の組",
+            GROUP_PALLET_RULES),
     # プロテックモードの発火条件(`protec_rules`)。行を足すと、その包装仕様NO・
     # オーダー寸法でプロテックになる
     Managed(import_specs.PROTEC_RULE_TABLE, "プロテック条件", "プ",
-            "プロテックにする包装仕様NOと、ｵｰﾀﾞｰ厚・幅・丈の範囲(空なら見ない)"),
+            "プロテックにする包装仕様NOと、ｵｰﾀﾞｰ厚・幅・丈の範囲(空なら見ない)", GROUP_PALLET_RULES),
     # 1P1185モード(パレットを決め打つ)の発火条件と、決め打つパレット(`pallet_limit_rules`)
     Managed(import_specs.PALLET_LIMIT_TABLE, "パレット限定条件(1P1185モード)", "限",
-            "パレットを決め打つ包装仕様NO・取引先・製造板幅/丈の範囲と、決め打つ業界・パレット幅/丈"),
+            "パレットを決め打つ包装仕様NO・取引先・製造板幅/丈の範囲と、決め打つ業界・パレット幅/丈",
+            GROUP_PALLET_RULES),
     # 看板と置き場の対応(`kanban_shelves`。VER4.8.68)。在庫考慮で、看板が出ている置き場を外す
     Managed(import_specs.KANBAN_SHELF_TABLE, "看板置き場", "看",
             "どの看板がどの置き場の看板か(看板_L1 → lblItem1,lblItem2…)。在庫考慮で使う"),
@@ -442,6 +457,10 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
     if table == import_specs.PALLET_LIMIT_TABLE:
         # 開いているロットも判定し直す(VER4.8.100。`SelectionSession._follow_limit_master`)
         notes.append("この端末では開いているロットにもすぐ効きます(限定に合わないパレットは外します)。"
+                     "ほかの端末は、次の取り込みのあとから効きます")
+    if table in (import_specs.OUTSOURCE_RULE_TABLE, import_specs.OUTSOURCE_DETAIL_TABLE):
+        # 包装仕様NOの決め打ちはロットを読むときに決まる(VER4.9.4)
+        notes.append("次にロットを開いたときから効きます(開いているロットは、ロット検索から開き直してください)。"
                      "ほかの端末は、次の取り込みのあとから効きます")
     if table == import_specs.KANBAN_SHELF_TABLE:
         # 在庫考慮の地図もすぐ作り直す(VER4.8.101。`SelectionSession._follow_stock_master`)

@@ -180,8 +180,33 @@
       <span class="stepno">{{ step.size.number }}</span>
       <h3>裸梱包(1P0113)</h3>
       <span class="eyebrow stepsum">パレット・ボードは使わず角材+松板で組みます</span>
+      {# パレット欄の見出しの「倉庫送信」と同じ(1P0113 ではパレット欄ごと隠れるので、こちらにも置く) #}
+      <button class="btn btn--commit btn--inhead" type="button" id="sendWarehouseP1"
+              title="「出す」の「倉庫送信」と同じです。角材・松板の2行を倉庫連携の画面へ渡します"
+              {% if not view.outputs.can_send %}hidden{% endif %}>
+        倉庫送信<span class="gl">▸</span></button>
     </header>
     <div class="pad">
+      {# BOX実績寸法の打ち直し。現場の声:「Gコースを含む場合、サイズがデータ通りでない場合がある。
+         BOX実績寸法を変更でき、松板・溝切角材のサイズと発注コードがどう変わるのかが分かるように」。
+         変えると下の松板・溝切角材とコードが引き直され、前と後がお知らせに出る #}
+      <div class="p1edit" id="p1Edit">
+        <p class="p1edit__head">
+          <b id="p1SizeSource">{{ view.p1.size_source or "BOX実績寸法" }}</b>
+          <span class="badge badge--todo" id="p1Edited" {% if not view.p1.edited %}hidden{% endif %}>打ち直し中</span>
+          <span class="p1edit__lot" id="p1SizeLot"></span>
+        </p>
+        <div class="p1edit__row">
+          <label for="p1W">幅</label>
+          <input class="input input--num" id="p1W" type="number" min="1" inputmode="numeric" value="{{ view.p1.width or '' }}">
+          <span aria-hidden="true">×</span>
+          <label for="p1L">丈</label>
+          <input class="input input--num" id="p1L" type="number" min="1" inputmode="numeric" value="{{ view.p1.length or '' }}">
+          <button class="btn btn--primary" type="button" id="p1SizeApply">寸法を変える</button>
+          <button class="btn" type="button" id="p1SizeReset">ロットの値に戻す</button>
+        </div>
+        <p class="p1edit__rule" id="p1Rule">{{ view.p1.rule }}</p>
+      </div>
       <div class="p1grid" id="p1Materials"></div>
       {# 通常はコード/単位。資材を押すとその資材のフル情報に差し替わる
          (VBA `Show1P0113LabelTip`)。ホバーでは出さない ── タッチ端末に
@@ -985,6 +1010,15 @@
   .legend__item i { width:12px; height:12px; border-radius:var(--radius-xs); display:inline-block; }
 
   /* 1P0113。松板=青系 / 角材=茶系 の色分けはVBAのまま */
+  /* BOX実績寸法の打ち直し */
+  .p1edit { border:1px dashed var(--accent-line); border-radius:var(--radius-sm); padding:8px 10px;
+            margin-bottom:10px; background:var(--accent-soft); }
+  .p1edit__head { margin:0 0 6px; display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; font-size: var(--fs-md); }
+  .p1edit__lot { color:var(--muted); font-size: var(--fs-sm); }
+  .p1edit__row { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .p1edit__row .input--num { width:7em; }
+  .p1edit__rule { margin:6px 0 0; color:var(--muted); font-size: var(--fs-xs); }
+  .p1mat .p1code { font-family:var(--mono); font-size: var(--fs-sm); color:var(--muted); }
   .p1grid { display:grid; gap:8px; }
   .p1mat {
     display:flex; align-items:center; gap:10px; flex-wrap:wrap;

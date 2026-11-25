@@ -45,12 +45,14 @@ class TableInfo:
     why: str = ""
     # 取り込み元に無い(が、作れる)表。**隠さずに出す**
     missing: bool = False
+    # 一覧で別の枠にまとめる名前(`Managed.group`。VER4.9.4)
+    group: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {"table": self.table, "label": self.label, "mark": self.mark,
                 "note": self.note, "rows": self.rows,
                 "editable": self.editable, "why": self.why,
-                "missing": self.missing}
+                "missing": self.missing, "group": self.group}
 
 
 def tables(path: Optional[Path],
@@ -89,14 +91,14 @@ def tables(path: Optional[Path],
                     table=managed.table, label=managed.table,
                     mark=managed.mark, note=managed.note, rows=0,
                     editable=not master_common.fit_locked(managed.table), missing=True,
-                    why=master_schema._create_why(managed.table)))
+                    why=master_schema._create_why(managed.table), group=managed.group))
             continue
         # 適合範囲を決める表はパレット適合設定で直す(ここでは見るだけ。VER4.8.116)
         out.append(TableInfo(
             table=managed.table, label=managed.table, mark=managed.mark,
             note=managed.note, rows=counts[managed.table],
             editable=not master_common.fit_locked(managed.table),
-            why=master_common.fit_table_why(managed.table)))
+            why=master_common.fit_table_why(managed.table), group=managed.group))
     # 「表を持ってくる」で足した表は、直せる表として資材課の表のすぐ後に出す。
     # 記録の表そのもの(`REGISTRIES`: 足した表・足した列)は出さない
     brought = master_common.brought_tables(path)

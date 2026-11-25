@@ -260,6 +260,32 @@ function headerCell(name, page) {
   return th;
 }
 
+// 同じ枠(`group`)の表を1つの枠にまとめる(現場の声:「パレット選定にかかわるマスタは別枠に」)。
+// 枠は、その枠の最初の表があった位置に置く(並びはサーバの `MANAGED` のまま)
+function groupRows(tables, items) {
+  const out = [];
+  const boxes = new Map();
+  items.forEach((item, i) => {
+    const group = (tables[i] && tables[i].group) || "";
+    if (!group) { out.push(item); return; }
+    let box = boxes.get(group);
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "mgroup";
+      box.setAttribute("role", "group");
+      box.setAttribute("aria-label", group);
+      const head = document.createElement("p");
+      head.className = "mgroup__head";
+      head.textContent = group;
+      box.append(head);
+      boxes.set(group, box);
+      out.push(box);
+    }
+    box.append(item);
+  });
+  return out;
+}
+
 function render(next) {
   view = next;
   const page = view.page || {};
@@ -299,7 +325,7 @@ function render(next) {
          || "梱包資材マスタが見つかりません。「取り込み元」の面で置き場所を確かめてください。");
     items.push(note);
   }
-  el.mTables.replaceChildren(...items);
+  el.mTables.replaceChildren(...groupRows(view.tables || [], items));
 
   // --- 右: 見出し ---
   const info = (view.tables || []).find((t) => t.table === view.table);

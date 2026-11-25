@@ -307,6 +307,11 @@ def _seed_source(src: source_db.SourceConnection, table: str) -> int:
         seed_rows = pallet_limit_rules.SEED
     if table == kanban_shelves.TABLE:
         seed_rows = kanban_shelves.SEED
+    from . import outsource_rules
+    if table == outsource_rules.TABLE:
+        seed_rows = outsource_rules.SEED
+    if table == outsource_rules.DETAIL_TABLE:
+        seed_rows = outsource_rules.DETAIL_SEED
     if not seed_rows:
         return 0
     columns = list(seed_rows[0])

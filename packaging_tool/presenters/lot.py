@@ -226,10 +226,12 @@ def build(result: lot_service.LotSearchResult) -> LotViewModel:
         packaging_spec=odr.packaging_spec,
         specific_gravity=f"{odr.specific_gravity:g}",
         final_process_count=lot.final_process_count,
-        can_expand=bool(lot.width and lot.length),
+        # 裸梱包(1P0113)は寸法が無くても資材選択へ移れる(資材選択の裸梱包の段で BOX実績寸法を打ち込む。VER4.9.4)
+        can_expand=bool(lot.width and lot.length) or _bare_without_size(lot, odr),
         expand_reason=("" if lot.width and lot.length
                        else "BOX実績寸法の横の欄で、使う寸法を選んでください"
                        if lot.box_choices and not lot.box_pick
+                       else BARE_NO_SIZE_NOTE if _bare_without_size(lot, odr)
                        else "製造板幅・板丈が取得できていません"),
     )
 
@@ -259,6 +261,16 @@ def _lot_badges(lot: lot_service.LotInfo) -> list[Badge]:
     return badges
 
 
+BARE_NO_SIZE_NOTE = ("裸梱包(1P0113)です。仕掛台帳に使える寸法が無いので、資材選択の"
+                     "「BOX実績寸法」の欄に現物の幅・丈を打ち込んでください")
+
+
+def _bare_without_size(lot: lot_service.LotInfo, odr: lot_service.OdrInfo) -> bool:
+    """裸梱包(1P0113)で、使える寸法が無いロットか(資材選択で寸法を打ち込む。VER4.9.4)。"""
+    from .. import special_packaging as spk
+    return spk.is_1p0113(odr.packaging_spec) and not (lot.width and lot.length)
+
+
 def _odr_badges(lot: lot_service.LotInfo, odr: lot_service.OdrInfo) -> list[Badge]:
     """VBA `fraOdrInfo.caption` の `EX` と設備コース。
 
@@ -269,6 +281,9 @@ def _odr_badges(lot: lot_service.LotInfo, odr: lot_service.OdrInfo) -> list[Badg
         badges.append(Badge("EX", "alert"))
     if lot.box_course:
         badges.append(Badge(lot.box_course))
+    if odr.spec_rule:
+        # 包装仕様NOを外注条件で書き換えた(VER4.9.4)。受注の値と違うので、どの条件かを見せる
+        badges.append(Badge(f"外注条件: {odr.spec_rule}", "alert"))
     return badges
 
 

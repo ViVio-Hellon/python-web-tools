@@ -899,6 +899,14 @@ class Mode1P0113ViewModel:
     # 資材が引けているか。引けていないと倉庫送信も帳票も通せない
     ready: bool = False
     why: str = ""
+    # BOX実績寸法(資材を引いている製品サイズ)と、ロット(仕掛台帳)の寸法。違えば打ち直してある(VER4.9.4)
+    width: int = 0
+    length: int = 0
+    lot_width: int = 0
+    lot_length: int = 0
+    size_source: str = ""      # 「BOX実績寸法」「製造寸法」
+    edited: bool = False
+    rule: str = ""             # 寸法から長さ・本数がどう決まるか
 
 
 @dataclass
@@ -1312,7 +1320,8 @@ def _apply_steps(view: SelectionViewModel) -> None:
              title="裸梱包(1P0113)" if view.mode_1p0113 else "パレットを決める",
              summary=(view.p1.tip if view.mode_1p0113
                       else _size_summary(view)),
-             state=STEP_DONE if (view.mode_1p0113 or size_done) else STEP_TODO,
+             # 裸梱包は角材・松板が引けるまで開いておく(BOX実績寸法を打ち込む欄が畳まれて見えなくならないように。VER4.9.4)
+             state=STEP_DONE if ((view.mode_1p0113 and view.p1.ready) or size_done) else STEP_TODO,
              open=lid_pending),
         Step(key="boards", number=3, title="ボード",
              summary=(view.boards.summary if boards_done
@@ -1522,11 +1531,27 @@ def build_1p0113(session: Any) -> Mode1P0113ViewModel:
     view.tip = (f"コード: {spk.parse_info(m.kakuzai.full_info, 'CD') or '---'}"
                 f"   単位: {spk.parse_info(m.kakuzai.full_info, '単位') or '---'}")
 
+    # BOX実績寸法の打ち直し(VER4.9.4)。資材は入力欄の値(`product_input`)で引いている
+    view.width, view.length = session.product_input()
+    if presenter.lot_result is not None:
+        lot = presenter.lot_result.lot
+        view.lot_width, view.lot_length = int(lot.width or 0), int(lot.length or 0)
+        view.size_source = f"{lot.dimension_source}寸法"
+    view.edited = bool(view.lot_width and (view.width, view.length) != (view.lot_width, view.lot_length))
+    view.rule = (f"溝切角材の長さ = 幅 + {spk.KAKUZAI_MARGIN}mm(コードは幅で引く)。"
+                 f"本数は丈で決まる(〜{spk.KAKUZAI_THR1}: {spk.KAKUZAI_CNT1}本 / 〜{spk.KAKUZAI_THR2}: "
+                 f"{spk.KAKUZAI_CNT2}本 / それより長い: {spk.KAKUZAI_CNT3}本)。"
+                 f"松板の長さは丈で決まる(〜{spk.A_THR1}: 丈のまま / 〜{spk.A_THR2}: {spk.A_VAL1} / "
+                 f"〜{spk.A_THR3}: {spk.A_VAL2} / それより長い: {spk.A_VAL3})。")
+    # コードは資材ごとに出す(前は角材のコードだけで、松板のコードが見えなかった)
+    view.tip = (f"溝切角材 コード: {m.kakuzai.code or '---'} 単位: {m.kakuzai.unit or '---'}"
+                f"   松板 コード: {m.matsuita.code or '---'} 単位: {m.matsuita.unit or '---'}")
+
     view.ready = m.kakuzai.is_ok and m.matsuita.is_ok
     if not view.ready:
         missing = [hit.name for hit in (m.kakuzai, m.matsuita) if not hit.is_ok]
         view.why = (f"{'・'.join(missing)} をマスタから引けていません。"
-                    f"製品サイズを入れてください。")
+                    f"BOX実績寸法(幅・丈)を入れてください。")
     return view
 
 
@@ -2205,6 +2230,13 @@ def p1_to_dict(view: Mode1P0113ViewModel) -> dict[str, Any]:
         "qty_max": view.qty_max,
         "ready": view.ready,
         "why": view.why,
+        "width": view.width,
+        "length": view.length,
+        "lot_width": view.lot_width,
+        "lot_length": view.lot_length,
+        "size_source": view.size_source,
+        "edited": view.edited,
+        "rule": view.rule,
     }
 
 
