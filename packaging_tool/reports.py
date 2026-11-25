@@ -278,11 +278,14 @@ def _label_left_cells(data: LabelData) -> list[str]:
 
     if data.is_1p0113:
         # 裸梱包は角材・松板の本数/枚数を出す(パレット欄の代わり)
+        # パレットサイズと同じく**欄の幅いっぱいまで大きく**(VER4.9.5。現場の声「1P0113 の LOT 印刷の資材サイズが小さい」)。
+        # いちばん長い行で大きさを決める
+        bare_lines = ("裸梱包", f"{data.kakuzai_count_caption} ({data.kakuzai_size})",
+                      f"{data.matsuita_count_caption} ({data.matsuita_size})")
+        bare_pt = min(fit_pt(line, LABEL_PAL_MAX_PT) for line in bare_lines)
         cells[4] = (
-            '<div class="bare">'
-            + _lines("裸梱包",
-                     f"{data.kakuzai_count_caption} ({data.kakuzai_size})",
-                     f"{data.matsuita_count_caption} ({data.matsuita_size})")
+            f'<div class="bare" data-room-mm="{LABEL_ROOM_MM}" data-fit="{LABEL_PAL_MAX_PT}" style="font-size:{bare_pt}pt">'
+            + _lines(*bare_lines)
             + "</div>")
         # 1P0113では梱包数(6行目)は出さない
     else:

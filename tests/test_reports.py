@@ -135,6 +135,8 @@ class LabelSheetTests(unittest.TestCase):
         self.assertIn("裸梱包", html)
         self.assertIn("溝切角材: 16本 (1262mm)", html)
         self.assertIn("松板: 8枚 (2330mm)", html)
+        # 裸梱包の資材サイズもパレットサイズと同じく欄の幅いっぱいまで大きくする(VER4.9.5)
+        self.assertRegex(html, r'class="bare" data-room-mm="[\d.]+" data-fit="[\d.]+"')
         # 梱包数の行は出さない
         self.assertNotIn('class="pkg"', html)
         # 右半分は単位/コードではなく資材の明細になる
